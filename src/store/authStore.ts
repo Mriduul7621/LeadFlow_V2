@@ -2,15 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User } from '../types';
 
-const AUTH_STORAGE_KEY = 'leadflow-auth';
-
 interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
   isInitialized: boolean;
   isOfflineMode: boolean;
-  login: (user: User, isOffline?: boolean, token?: string | null) => void;
+  login: (user: User, token?: string, isOffline?: boolean) => void;
   logout: () => void;
   setInitialized: (val: boolean) => void;
   setOfflineMode: (val: boolean) => void;
@@ -24,14 +22,12 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isInitialized: false,
       isOfflineMode: false,
-      login: (user, isOffline = false, token: string | null = null) => {
+      login: (user, token, isOffline = false) => {
         localStorage.setItem('leadflow_last_activity', Date.now().toString());
-        const authSnapshot = { user, token, isAuthenticated: true, isOfflineMode: isOffline };
-        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authSnapshot));
-        set({ user, token, isAuthenticated: true, isOfflineMode: isOffline });
+        set({ user, token: token || null, isAuthenticated: true, isOfflineMode: isOffline });
       },
       logout: () => {
-        localStorage.removeItem(AUTH_STORAGE_KEY);
+        localStorage.removeItem('leadflow-auth');
         localStorage.removeItem('leadflow_last_activity');
         set({ user: null, token: null, isAuthenticated: false, isOfflineMode: false });
       },
@@ -39,7 +35,7 @@ export const useAuthStore = create<AuthState>()(
       setOfflineMode: (val) => set({ isOfflineMode: val }),
     }),
     {
-      name: AUTH_STORAGE_KEY,
+      name: 'leadflow-auth',
       partialize: (state) => ({
         user: state.user,
         token: state.token,
@@ -49,3 +45,4 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+

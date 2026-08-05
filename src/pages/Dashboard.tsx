@@ -13,6 +13,8 @@ import { UserRole, LeadStatus } from '../types';
 import { leadService } from '../services/leadService';
 import { userService } from '../services/userService';
 import { settingsService } from '../services/settingsService';
+import { metadataService } from '../services/metadataService';
+import { workflowService } from '../services/workflowService';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import TaskCalendar from './TaskCalendar';
@@ -27,19 +29,9 @@ const CAMPAIGN_TREND_DATA = [
   { date: '31 May', value: 110 },
 ];
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'Interested': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-    case 'Follow Up': return 'bg-blue-100 text-blue-700 border-blue-200';
-    case 'Appointment Fixed': return 'bg-purple-100 text-purple-700 border-purple-200';
-    case 'Untouched': return 'bg-slate-100 text-slate-500 border-slate-200';
-    case 'Contacted': return 'bg-amber-100 text-amber-700 border-amber-200';
-    case 'Converted': return 'bg-emerald-600 text-white border-emerald-700';
-    case 'Not Interested': return 'bg-red-100 text-red-700 border-red-200';
-    case 'Callback Required': return 'bg-orange-100 text-orange-700 border-orange-200';
-    default: return 'bg-slate-100 text-slate-600';
-  }
-};
+import { getLeadStatusColorClasses } from '../utils/leadStatusMeta';
+
+const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
 
 export default function Dashboard() {
   const { user } = useAuthStore();
@@ -91,6 +83,11 @@ export default function Dashboard() {
   const [formSumAssured, setFormSumAssured] = useState<number>(0);
   const [formProductName, setFormProductName] = useState('');
   const [formProjectedNCP, setFormProjectedNCP] = useState<number>(0);
+  const [formLossReason, setFormLossReason] = useState('');
+  const [formMeetingType, setFormMeetingType] = useState('');
+  const [workflowRules, setWorkflowRules] = useState<any[]>([]);
+  const [lossReasonOptions, setLossReasonOptions] = useState<string[]>([]);
+  const [meetingTypeOptions, setMeetingTypeOptions] = useState<string[]>([]);
 
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
   const [productOptions, setProductOptions] = useState<string[]>([]);
@@ -393,6 +390,11 @@ export default function Dashboard() {
         const prodRes = await settingsService.getOptionsByType('Product');
         setProductOptions(prodRes || []);
 
+        const rules = await workflowService.getRules();
+        setWorkflowRules(rules);
+        setLossReasonOptions(await metadataService.getActiveValues('LossReason'));
+        setMeetingTypeOptions(await metadataService.getActiveValues('MeetingType'));
+
         const usersList = await userService.getAllUsers();
         setAllUsers(usersList);
       } catch (err) {
@@ -424,6 +426,17 @@ export default function Dashboard() {
     }
     if ((formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && !formNextFollowUpDate) {
       toast.error(`Next Follow-up Date is mandatory for ${formStatus} status!`);
+      return;
+    }
+
+    // Workflow Engine: admin-configured requirements for entering this status
+    const targetRule = workflowRules.find((r: any) => r.status === formStatus);
+    if (targetRule?.requiresLossReason && !formLossReason) {
+      toast.error(`Loss Reason is mandatory for ${formStatus} status!`);
+      return;
+    }
+    if (targetRule?.requiresMeetingType && !formMeetingType) {
+      toast.error(`Meeting Type is mandatory for ${formStatus} status!`);
       return;
     }
     if (formStatus === 'Meeting Completed' && !formSubStatus) {
@@ -479,7 +492,9 @@ export default function Dashboard() {
         formStatus === 'Meeting Fixed' ? formMeetingDate : undefined,
         (isPipelineLocked || isConverted) ? formSumAssured : undefined,
         (isPipelineLocked || isConverted) ? formProductName : undefined,
-        isPipelineLocked ? formProjectedNCP : undefined
+        isPipelineLocked ? formProjectedNCP : undefined,
+        formLossReason || undefined,
+        formMeetingType || undefined
       );
       toast.success('Lead status and remarks logged successfully!');
       
@@ -1229,15 +1244,47 @@ export default function Dashboard() {
                                     if (newStatus !== 'Meeting Fixed') setFormMeetingDate('');
                                     if (newStatus !== 'Follow-up Set' && newStatus !== 'Interested' && newStatus !== 'Busy') setFormNextFollowUpDate('');
                                     if (newStatus !== 'Meeting Completed') setFormSubStatus('');
+                                    setFormLossReason('');
+                                    setFormMeetingType('');
                                  }}
                                  className="w-full bg-[#FBFAF8] border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
                               >
                                  <option value="">-- SELECT STATUS --</option>
-                                 {statusOptions.map(opt => (
+                                 {workflowService.getAllowedNextStatuses(selectedLead?.currentStatus || '', statusOptions, workflowRules).map(opt => (
                                     <option key={opt} value={opt}>{opt}</option>
                                  ))}
                               </select>
                            </div>
+
+                           {/* Workflow Engine: Loss Reason (admin-configurable requirement) */}
+                           {workflowRules.find((r: any) => r.status === formStatus)?.requiresLossReason && (
+                              <div className="space-y-1">
+                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Loss Reason <span className="text-red-500">*</span></p>
+                                 <select 
+                                    value={formLossReason}
+                                    onChange={(e) => setFormLossReason(e.target.value)}
+                                    className="w-full bg-[#FBFAF8] border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
+                                 >
+                                    <option value="">-- SELECT REASON --</option>
+                                    {lossReasonOptions.map(r => <option key={r} value={r}>{r}</option>)}
+                                 </select>
+                              </div>
+                           )}
+
+                           {/* Workflow Engine: Meeting Type (admin-configurable requirement) */}
+                           {workflowRules.find((r: any) => r.status === formStatus)?.requiresMeetingType && (
+                              <div className="space-y-1">
+                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Type <span className="text-red-500">*</span></p>
+                                 <select 
+                                    value={formMeetingType}
+                                    onChange={(e) => setFormMeetingType(e.target.value)}
+                                    className="w-full bg-[#FBFAF8] border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
+                                 >
+                                    <option value="">-- SELECT TYPE --</option>
+                                    {meetingTypeOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                                 </select>
+                              </div>
+                           )}
 
                            {/* Conditional Field: No Response -> Next Call Date */}
                            {formStatus === 'No Response' && (

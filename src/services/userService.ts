@@ -1,40 +1,30 @@
 import { User } from '../types';
 import { localDb } from './localDb';
 
-function sanitizeUserForTransport(user: Partial<User> | undefined) {
-  if (!user) return {};
-  const payload = { ...user } as Partial<User> & Record<string, unknown>;
-  if (payload.password === undefined) {
-    delete payload.password;
-  }
-  return payload;
-}
-
 export const userService = {
   async createUser(user: User) {
-    const safeUser = sanitizeUserForTransport(user) as User;
-    delete safeUser.password;
-    localDb.createUser(safeUser);
+    // Always write to localDb first for immediate local consistency
+    localDb.createUser(user);
 
     try {
       const res = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sanitizeUserForTransport(user))
+        body: JSON.stringify(user)
       });
       if (res.ok) {
         const saved = await res.json();
-        return (saved.user || saved) as User;
+        return saved as User;
       }
     } catch (error) {
       console.warn('PostgreSQL write fallback to local db:', error);
     }
-    return safeUser;
+    return user;
   },
 
   async updateUser(userId: string, data: Partial<User>) {
-    const safeData = sanitizeUserForTransport(data) as Partial<User>;
-    localDb.updateUser(userId, safeData);
+    // Always write to localDb first for immediate local consistency
+    localDb.updateUser(userId, data);
 
     const existing = localDb.getUser(userId);
     if (!existing) return true;
@@ -43,7 +33,7 @@ export const userService = {
       await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...existing, ...safeData, id: userId })
+        body: JSON.stringify(existing)
       });
     } catch (error) {
       console.warn('PostgreSQL write fallback to local db:', error);
@@ -66,36 +56,6 @@ export const userService = {
       console.warn('PostgreSQL get fallback to local db:', error);
     }
     return localDb.getUser(userId);
-  },
-
-  async login(employeeId: string, password: string, rememberMe = false) {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employeeId, password, rememberMe })
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Authentication failed.');
-    }
-    return res.json();
-  },
-
-  async registerInitialAdmin(user: User) {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(user)
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Initial administrator setup failed.');
-    }
-    return res.json();
-  },
-
-  async logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
   },
 
   async getAllUsers(): Promise<User[]> {
@@ -159,30 +119,6 @@ export const userService = {
     } catch (error) {
       console.warn('PostgreSQL delete user fallback to local db:', error);
     }
-  },
-
-  async changePassword(currentPassword: string, newPassword: string) {
-    const res = await fetch('/api/auth/verify-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ currentPassword, newPassword })
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Password change failed.');
-    }
-    return res.json();
-  },
-
-  async validateCurrentPassword(password: string): Promise<boolean> {
-    const res = await fetch('/api/auth/validate-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    if (!res.ok) return false;
-    const body = await res.json();
-    return body.valid === true;
   },
 
   async checkAdminExists(): Promise<boolean> {

@@ -7,11 +7,48 @@ import { useAuthStore } from '../store/authStore';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
+import { MOCK_USERS } from '../mock/data';
 import { localDb } from '../services/localDb';
 import { userService } from '../services/userService';
 import { syncService } from '../services/syncService';
 import { User, UserRole } from '../types';
 import { useTranslation } from '../utils/translations';
+import { preloadLeadStatuses, invalidateLeadStatusCache } from '../utils/leadStatusMeta';
+
+function detectRoleFromEmployeeId(empId: string): UserRole {
+  const norm = empId.trim().toUpperCase();
+  if (norm === 'ADMIN' || norm.startsWith('ADM')) return UserRole.ADMIN;
+  if (norm.startsWith('RO')) return UserRole.RO;
+  if (norm.startsWith('RM')) return UserRole.RM;
+  if (norm.startsWith('ASM')) return UserRole.ASM;
+  if (norm.startsWith('BDM')) return UserRole.BDM;
+  if (norm.startsWith('BE')) return UserRole.BUSINESS_EXECUTIVE;
+  if (norm.startsWith('BH')) return UserRole.BUSINESS_HEAD;
+
+  // Contains search fallback
+  if (norm.includes('ADMIN')) return UserRole.ADMIN;
+  if (norm.includes('BH') || norm.includes('BUSINESSHEAD')) return UserRole.BUSINESS_HEAD;
+  if (norm.includes('BE') || norm.includes('BUSINESSEXECUTIVE') || norm.includes('EXEC')) return UserRole.BUSINESS_EXECUTIVE;
+  if (norm.includes('BDM') || norm.includes('DEVELOPMENT')) return UserRole.BDM;
+  if (norm.includes('ASM')) return UserRole.ASM;
+  if (norm.includes('RM') || norm.includes('MANAGER')) return UserRole.RM;
+  if (norm.includes('RO') || norm.includes('OFFICER')) return UserRole.RO;
+
+  return UserRole.RO; // default dynamic fallback
+}
+
+function getDesignationFromRole(role: UserRole): string {
+  switch (role) {
+    case UserRole.ADMIN: return 'Administrator';
+    case UserRole.RO: return 'Relationship Officer';
+    case UserRole.RM: return 'Relationship Manager';
+    case UserRole.ASM: return 'Area Sales Manager';
+    case UserRole.BDM: return 'Business Development Manager';
+    case UserRole.BUSINESS_EXECUTIVE: return 'Business Executive';
+    case UserRole.BUSINESS_HEAD: return 'Business Head';
+    default: return 'Office Employee';
+  }
+}
 
 // @ts-ignore
 import bgImage from '../assets/images/income_planner_bg_1779253838380.png';
@@ -78,16 +115,33 @@ export default function Login() {
         designation: 'Administrator',
         status: 'Active',
         createdDate: new Date().toISOString(),
-        password: data.password,
-        mustChangePassword: false,
+        password: data.password
       };
 
-      await userService.registerInitialAdmin(newUser);
-      const authResponse = await userService.login(empId, data.password, false);
-      const secureUser = authResponse.user as User;
-      login(secureUser, false, authResponse.token);
-      localDb.createUser(secureUser);
-      setIsFirstTimeSetup(false);
+      // Create the first ADMIN account. The server only allows this
+      // specific call (role=ADMIN, no auth header) when no admin exists
+      // yet - see POST /api/users bootstrap check on the server.
+      const created = await userService.createUser(newUser);
+
+      // Immediately authenticate through the real login endpoint so we
+      // get back a valid session token (rather than trusting the client).
+      const loginRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeId: empId, password: data.password }),
+      });
+
+      if (!loginRes.ok) {
+        toast.error('Super Admin account created, but automatic login failed. Please log in manually.');
+        setIsFirstTimeSetup(false);
+        return;
+      }
+
+      const { token, user: serverUser } = await loginRes.json();
+      localDb.createUser({ ...serverUser, password: undefined });
+      invalidateLeadStatusCache();
+      preloadLeadStatuses();
+      login(serverUser, token, false);
       toast.success("Super Admin console initialized successfully!");
       syncService.syncToDatabase();
       navigate('/');
@@ -102,19 +156,41 @@ export default function Login() {
       const empId = data.username.toUpperCase().trim();
       const enteredPassword = data.password;
 
-      const authResponse = await userService.login(empId, enteredPassword, false);
-      if (!authResponse?.success || !authResponse.user || !authResponse.token) {
-        throw new Error('Authentication failed.');
+      // Server-side login: the password is verified against the bcrypt
+      // hash in the database - it is never fetched to, or compared in,
+      // the browser.
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeId: empId, password: enteredPassword }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || 'Authentication failed: Invalid credentials.');
+        return;
       }
 
-      const secureUser = authResponse.user as User;
-      login(secureUser, false, authResponse.token);
-      localDb.createUser(secureUser);
-      toast.success(t('welcomeMessage', { name: secureUser.name }));
+      const { token, user: matchedUser } = await res.json();
+
+      // Keep the offline cache in sync for offline-mode support.
+      const localUsers = localDb.getUsers();
+      const existsLocally = localUsers.some(u => u.id === matchedUser.id);
+      if (!existsLocally) {
+        localDb.createUser(matchedUser);
+      } else {
+        localDb.updateUser(matchedUser.id, matchedUser);
+      }
+
+      invalidateLeadStatusCache();
+      preloadLeadStatuses();
+      login(matchedUser, token, false);
+      toast.success(t('welcomeMessage', { name: matchedUser.name }));
+      syncService.syncToDatabase();
       navigate('/');
     } catch (err: any) {
       console.error('Authentication process failed:', err);
-      toast.error(err?.message || 'Authentication failed.');
+      toast.error('Login failed. Please check your connection and try again.');
     }
   };
 

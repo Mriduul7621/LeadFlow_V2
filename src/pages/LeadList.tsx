@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Search, 
   Filter, 
@@ -27,20 +27,9 @@ import { leadService } from '../services/leadService';
 import { settingsService } from '../services/settingsService';
 import { userService } from '../services/userService';
 import AdvancedFilterPanel from '../components/AdvancedFilterPanel';
+import { getLeadStatusColorClasses, getLeadStatusOrder } from '../utils/leadStatusMeta';
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'Interested': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-    case 'Follow Up': return 'bg-blue-100 text-blue-700 border-blue-200';
-    case 'Appointment Fixed': return 'bg-purple-100 text-purple-700 border-purple-200';
-    case 'Untouched': return 'bg-slate-100 text-slate-500 border-slate-200';
-    case 'Contacted': return 'bg-amber-100 text-amber-700 border-amber-200';
-    case 'Converted': return 'bg-emerald-600 text-white border-emerald-700';
-    case 'Not Interested': return 'bg-red-100 text-red-700 border-red-200';
-    case 'Callback Required': return 'bg-orange-100 text-orange-700 border-orange-200';
-    default: return 'bg-slate-100 text-slate-600';
-  }
-};
+const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
 
 const formatToDateTimeLocal = (dateStr?: string) => {
   if (!dateStr) return '';
@@ -62,6 +51,7 @@ const formatToDateTimeLocal = (dateStr?: string) => {
 export default function LeadList() {
   const { user } = useAuthStore();
   const location = useLocation();
+  const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[]>([]);
   const [sortLogic, setSortLogic] = useState<'Recency' | 'Economic Potential' | 'Priority Status'>('Recency');
@@ -341,22 +331,7 @@ export default function LeadList() {
         const potB = (b.collectedNCP || 0) + (b.projectedNCP || 0);
         return potB - potA;
       } else if (sortLogic === 'Priority Status') {
-        const getPriorityWeight = (status: string) => {
-          switch (status) {
-            case 'Converted': return 10;
-            case 'Pipeline Locked': return 9;
-            case 'Meeting Fixed': return 8;
-            case 'Meeting Completed': return 7;
-            case 'Follow-up Set': return 6;
-            case 'Interested': return 5;
-            case 'Contacted': return 4;
-            case 'Busy': return 3;
-            case 'No Response': return 2;
-            case 'Untouched': return 1;
-            default: return 0;
-          }
-        };
-        return getPriorityWeight(b.currentStatus) - getPriorityWeight(a.currentStatus);
+        return getLeadStatusOrder(b.currentStatus) - getLeadStatusOrder(a.currentStatus);
       }
       return 0;
     });
@@ -567,6 +542,13 @@ export default function LeadList() {
                         <div className="font-black text-brand-text text-[13px] group-hover:text-[#978C21] transition-colors tracking-tight uppercase italic flex items-center gap-2">
                            {lead.prospectName || 'Unknown Prospect'}
                            {(lead.collectedNCP || 0) > 100000 && <span className="w-2 h-2 rounded-full bg-[#978C21]" />}
+                           <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
+                              title="View full timeline"
+                              className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0 normal-case not-italic"
+                           >
+                              Timeline
+                           </button>
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold flex items-center gap-1 uppercase tracking-tight mt-1 opacity-60">
                           <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || 'No Mobile'} • {lead.area || 'No Area'}

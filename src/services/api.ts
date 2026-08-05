@@ -1,52 +1,21 @@
-function getStoredSessionToken() {
-  try {
-    const raw = localStorage.getItem('leadflow-auth');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed?.state?.token || parsed?.token || null;
-  } catch {
-    return null;
-  }
-}
+import { GoogleGenAI } from "@google/genai";
 
-const originalFetch = globalThis.fetch.bind(globalThis);
+// This is a placeholder service. In a real app, you'd fetch from your GAS endpoint.
+// For now, it provides mock data or logic.
 
-export function installAuthFetchInterceptor() {
-  if ((globalThis as typeof globalThis & { __leadflowAuthPatched?: boolean }).__leadflowAuthPatched) {
-    return;
-  }
+export const fetchLeads = async (filters: any) => {
+  // Simulate API delay
+  await new Promise(resolve => setTimeout(resolve, 800));
+  // In production: const response = await fetch(`${process.env.VITE_GAS_API_URL}?action=getLeads&...`);
+  return [];
+};
 
-  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const headers = new Headers(init.headers || {});
-    const token = getStoredSessionToken();
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-      headers.set('x-session-token', token);
-    }
-
-    if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
-      headers.set('Content-Type', 'application/json');
-    }
-
-    return originalFetch(input, { ...init, headers });
+export const fetchDashboardStats = async () => {
+  await new Promise(resolve => setTimeout(resolve, 500));
+  return {
+    newLeads: 440,
+    agentResponses: 12,
+    pipelineVolume: 709500,
+    immediateAlerts: 4,
   };
-
-  (globalThis as typeof globalThis & { __leadflowAuthPatched?: boolean }).__leadflowAuthPatched = true;
-}
-
-installAuthFetchInterceptor();
-
-export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  const headers = new Headers(init.headers || {});
-  const token = getStoredSessionToken();
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-    headers.set('x-session-token', token);
-  }
-
-  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  return globalThis.fetch(input, { ...init, headers });
-}
+};

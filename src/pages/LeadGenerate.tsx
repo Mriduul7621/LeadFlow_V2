@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -15,42 +15,65 @@ import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 import { motion } from 'framer-motion';
 import { leadService } from '../services/leadService';
-import { settingsService } from '../services/settingsService';
+import { metadataService } from '../services/metadataService';
+import { formBuilderService } from '../services/formBuilderService';
+import { FormField } from '../types';
 import { useAuthStore } from '../store/authStore';
 import { usePermissions } from '../hooks/usePermissions';
 import { BANGLADESH_GEOGRAPHY } from '../utils/bangladeshGeography';
 
-const leadSchema = z.object({
-  prospectName: z.string().min(3, 'Required'),
-  mobile: z.string()
-    .length(11, 'Mobile number must be exactly 11 digits')
-    .refine(val => /^\d+$/.test(val), 'Mobile number must contain only numbers')
-    .refine(val => val.startsWith('01'), 'Mobile number must start with 01'),
-  profession: z.string().min(1, 'Required'),
-  maritalStatus: z.string().min(1, 'Required'),
-  noOfChildren: z.string().optional(),
-  division: z.string().min(1, 'Required'),
-  district: z.string().min(1, 'Required'),
-  thana: z.string().min(1, 'Required'),
-  source: z.string().min(1, 'Required'),
-  productName: z.string().min(1, 'Required'),
-  campaignName: z.string().min(1, 'Required'),
-  residenceAddress: z.string().optional(),
-  officeAddress: z.string().optional(),
-  otherInfo: z.string().optional(),
-  familyMember: z.string().optional(),
-}).superRefine((data, ctx) => {
-  const needsChild = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
-  if (needsChild) {
-    if (!data.noOfChildren || data.noOfChildren.trim() === '') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Number of children is required',
-        path: ['noOfChildren'],
-      });
+// System fields whose presence/format is essential to a lead record -
+// these stay in the form regardless of admin visibility settings, so
+// the Form Builder can't be used to accidentally break lead creation.
+const ALWAYS_VISIBLE_FIELDS = new Set(['prospectName', 'mobile']);
+
+/**
+ * Builds the Zod validation schema dynamically from the admin's Form
+ * Builder configuration - a field's "Required" toggle in Settings >
+ * Form Builder directly controls whether Zod enforces it here.
+ */
+function buildLeadSchema(fieldConfigMap: Record<string, FormField>) {
+  const isMandatory = (key: string, fallback: boolean) =>
+    fieldConfigMap[key] ? fieldConfigMap[key].isMandatory : fallback;
+
+  const req = (key: string, fallback: boolean, message = 'Required') =>
+    isMandatory(key, fallback) ? z.string().min(1, message) : z.string().optional().default('');
+
+  return z.object({
+    prospectName: z.string().min(3, 'Required'),
+    mobile: z.string()
+      .length(11, 'Mobile number must be exactly 11 digits')
+      .refine(val => /^\d+$/.test(val), 'Mobile number must contain only numbers')
+      .refine(val => val.startsWith('01'), 'Mobile number must start with 01'),
+    profession: req('profession', true),
+    occupation: req('occupation', false),
+    priority: req('priority', false),
+    maritalStatus: req('maritalStatus', true),
+    noOfChildren: z.string().optional(),
+    familyMember: req('familyMember', false),
+    division: req('division', true),
+    district: req('district', true),
+    thana: req('thana', true),
+    residenceAddress: req('residenceAddress', false),
+    officeAddress: req('officeAddress', false),
+    source: req('source', true),
+    productName: req('productName', true),
+    campaignName: req('campaignName', true),
+    otherInfo: req('otherInfo', false),
+    customFields: z.record(z.string(), z.string()).optional(),
+  }).superRefine((data, ctx) => {
+    const needsChild = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
+    if (needsChild) {
+      if (!data.noOfChildren || data.noOfChildren.trim() === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Number of children is required',
+          path: ['noOfChildren'],
+        });
+      }
     }
-  }
-});
+  });
+}
 
 export default function LeadGenerate() {
   const { user } = useAuthStore();
@@ -76,12 +99,30 @@ export default function LeadGenerate() {
     );
   }
   const [options, setOptions] = useState<any>({});
+  const [fieldConfigs, setFieldConfigs] = useState<FormField[]>([]);
+  const fieldConfigMap = useMemo(() => {
+    const map: Record<string, FormField> = {};
+    fieldConfigs.forEach(f => { map[f.fieldKey] = f; });
+    return map;
+  }, [fieldConfigs]);
+  const customFieldDefs = useMemo(
+    () => fieldConfigs.filter(f => !f.isSystem && f.isVisible).sort((a, b) => a.sortOrder - b.sortOrder),
+    [fieldConfigs]
+  );
+  const isFieldVisible = (key: string) => {
+    if (ALWAYS_VISIBLE_FIELDS.has(key)) return true;
+    return fieldConfigMap[key] ? fieldConfigMap[key].isVisible : true;
+  };
+  const leadSchema = useMemo(() => buildLeadSchema(fieldConfigMap), [fieldConfigMap]);
+
   const { register, handleSubmit, watch, reset, setValue, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(leadSchema),
     defaultValues: {
       prospectName: '',
       mobile: '',
       profession: '',
+      occupation: '',
+      priority: '',
       maritalStatus: '',
       noOfChildren: '',
       division: '',
@@ -93,16 +134,25 @@ export default function LeadGenerate() {
       residenceAddress: '',
       officeAddress: '',
       otherInfo: '',
-      familyMember: ''
+      familyMember: '',
+      customFields: {} as Record<string, string>,
     }
   });
 
   useEffect(() => {
     const loadOptions = async () => {
-      const types = ['Profession', 'MaritalStatus', 'Area', 'Source', 'Product', 'Campaign'];
-      const results = await Promise.all(types.map(t => settingsService.getOptionsByType(t)));
+      const types = ['Profession', 'Occupation', 'MaritalStatus', 'Area', 'Source', 'Product', 'Campaign', 'Priority'];
+      const results = await Promise.all(types.map(t => metadataService.getActiveValues(t)));
       const newOptions: any = {};
       types.forEach((t, i) => { newOptions[t] = results[i]; });
+      // Also preload values for any custom dropdown field's metadata type
+      const fields = await formBuilderService.getFields();
+      setFieldConfigs(fields);
+      const customDropdownTypes = fields
+        .filter(f => !f.isSystem && f.fieldType === 'dropdown' && f.metadataTypeKey)
+        .map(f => f.metadataTypeKey!);
+      const customResults = await Promise.all(customDropdownTypes.map(t => metadataService.getActiveValues(t)));
+      customDropdownTypes.forEach((t, i) => { newOptions[t] = customResults[i]; });
       setOptions(newOptions);
     };
     loadOptions();
@@ -208,28 +258,61 @@ export default function LeadGenerate() {
               {errors.mobile && <p className="text-[10px] text-red-500 font-black italic">{errors.mobile.message}</p>}
             </div>
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">পেশা (Occupation)</label>
-              <select 
-                {...register('profession')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">পেশা নির্বাচন করুন (Select Profession)</option>
-                {options.Profession?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
+            {isFieldVisible('profession') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">পেশা (Occupation){fieldConfigMap.profession?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('profession')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">পেশা নির্বাচন করুন (Select Profession)</option>
+                  {options.Profession?.map((p: string) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {errors.profession && <p className="text-[10px] text-red-500 font-black italic">{errors.profession.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">বৈবাহিক অবস্থা (Marital Status)</label>
-              <select 
-                {...register('maritalStatus')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">বৈবাহিক অবস্থা নির্বাচন করুন</option>
-                {options.MaritalStatus?.map((m: string) => <option key={m} value={m}>{m}</option>)}
-              </select>
-              {errors.maritalStatus && <p className="text-[10px] text-red-500 font-black italic">{errors.maritalStatus.message}</p>}
-            </div>
+            {isFieldVisible('occupation') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">উপ-পেশা (Occupation){fieldConfigMap.occupation?.isMandatory && ' *'}</label>
+                <select 
+                  {...register('occupation')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">উপ-পেশা নির্বাচন করুন (Select Occupation)</option>
+                  {options.Occupation?.map((p: string) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {errors.occupation && <p className="text-[10px] text-red-500 font-black italic">{errors.occupation.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('priority') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">অগ্রাধিকার (Priority){fieldConfigMap.priority?.isMandatory && ' *'}</label>
+                <select 
+                  {...register('priority')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">অগ্রাধিকার নির্বাচন করুন (Select Priority)</option>
+                  {options.Priority?.map((p: string) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {errors.priority && <p className="text-[10px] text-red-500 font-black italic">{errors.priority.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('maritalStatus') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">বৈবাহিক অবস্থা (Marital Status){fieldConfigMap.maritalStatus?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('maritalStatus')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">বৈবাহিক অবস্থা নির্বাচন করুন</option>
+                  {options.MaritalStatus?.map((m: string) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                {errors.maritalStatus && <p className="text-[10px] text-red-500 font-black italic">{errors.maritalStatus.message as string}</p>}
+              </div>
+            )}
 
             {['Married', 'Divorced', 'Widowed', 'Widow'].includes(maritalStatus) && (
               <div className="space-y-3">
@@ -242,6 +325,18 @@ export default function LeadGenerate() {
                   placeholder="সন্তানের সংখ্যা লিখুন"
                 />
                 {errors.noOfChildren && <p className="text-[10px] text-red-500 font-black italic">{errors.noOfChildren.message}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('familyMember') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">পরিবারের সদস্য সংখ্যা (Family Members){fieldConfigMap.familyMember?.isMandatory && ' *'}</label>
+                <input 
+                  {...register('familyMember')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                  placeholder="পরিবারের সদস্য সংখ্যা"
+                />
+                {errors.familyMember && <p className="text-[10px] text-red-500 font-black italic">{errors.familyMember.message as string}</p>}
               </div>
             )}
           </div>
@@ -260,81 +355,187 @@ export default function LeadGenerate() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">বিভাগ (Division) *</label>
-              <select 
-                {...register('division')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">বিভাগ নির্বাচন করুন</option>
-                {divisions.map((d: string) => <option key={d} value={d}>{d.toUpperCase()}</option>)}
-              </select>
-              {errors.division && <p className="text-[10px] text-red-500 font-black italic">{errors.division.message}</p>}
-            </div>
+            {isFieldVisible('division') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">বিভাগ (Division){fieldConfigMap.division?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('division')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">বিভাগ নির্বাচন করুন</option>
+                  {divisions.map((d: string) => <option key={d} value={d}>{d.toUpperCase()}</option>)}
+                </select>
+                {errors.division && <p className="text-[10px] text-red-500 font-black italic">{errors.division.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">জেলা (District) *</label>
-              <select 
-                {...register('district')}
-                disabled={!selectedDivision}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <option value="">জেলা নির্বাচন করুন</option>
-                {districts.map((d: string) => <option key={d} value={d}>{d.toUpperCase()}</option>)}
-              </select>
-              {errors.district && <p className="text-[10px] text-red-500 font-black italic">{errors.district.message}</p>}
-            </div>
+            {isFieldVisible('district') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">জেলা (District){fieldConfigMap.district?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('district')}
+                  disabled={!selectedDivision}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <option value="">জেলা নির্বাচন করুন</option>
+                  {districts.map((d: string) => <option key={d} value={d}>{d.toUpperCase()}</option>)}
+                </select>
+                {errors.district && <p className="text-[10px] text-red-500 font-black italic">{errors.district.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">থানা / উপজেলা (Thana) *</label>
-              <select 
-                {...register('thana')}
-                disabled={!selectedDistrict}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <option value="">থানা নির্বাচন করুন</option>
-                {thanas.map((t: string) => <option key={t} value={t}>{t.toUpperCase()}</option>)}
-              </select>
-              {errors.thana && <p className="text-[10px] text-red-500 font-black italic">{errors.thana.message}</p>}
-            </div>
+            {isFieldVisible('thana') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">থানা / উপজেলা (Thana){fieldConfigMap.thana?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('thana')}
+                  disabled={!selectedDistrict}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <option value="">থানা নির্বাচন করুন</option>
+                  {thanas.map((t: string) => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+                </select>
+                {errors.thana && <p className="text-[10px] text-red-500 font-black italic">{errors.thana.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">পরিকল্পিত প্রোডাক্ট (Product) *</label>
-              <select 
-                {...register('productName')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">প্রোডাক্ট নির্বাচন করুন</option>
-                {options.Product?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-              </select>
-              {errors.productName && <p className="text-[10px] text-red-500 font-black italic">{errors.productName.message}</p>}
-            </div>
+            {isFieldVisible('residenceAddress') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">বাসার ঠিকানা (Residence Address){fieldConfigMap.residenceAddress?.isMandatory && ' *'}</label>
+                <input 
+                  {...register('residenceAddress')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                  placeholder="বাসার ঠিকানা লিখুন"
+                />
+                {errors.residenceAddress && <p className="text-[10px] text-red-500 font-black italic">{errors.residenceAddress.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">উৎস (Lead Source) *</label>
-              <select 
-                {...register('source')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">উৎস নির্বাচন করুন</option>
-                {options.Source?.map((s: string) => <option key={s} value={s}>{s}</option>)}
-              </select>
-              {errors.source && <p className="text-[10px] text-red-500 font-black italic">{errors.source.message}</p>}
-            </div>
+            {isFieldVisible('officeAddress') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">অফিসের ঠিকানা (Office Address){fieldConfigMap.officeAddress?.isMandatory && ' *'}</label>
+                <input 
+                  {...register('officeAddress')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                  placeholder="অফিসের ঠিকানা লিখুন"
+                />
+                {errors.officeAddress && <p className="text-[10px] text-red-500 font-black italic">{errors.officeAddress.message as string}</p>}
+              </div>
+            )}
 
-            <div className="space-y-3">
-              <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">ক্যাম্পেইন (Campaign) *</label>
-              <select 
-                {...register('campaignName')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-              >
-                <option value="">ক্যাম্পেইন নির্বাচন করুন</option>
-                {options.Campaign?.map((c: string) => <option key={c} value={c}>{c}</option>)}
-              </select>
-              {errors.campaignName && <p className="text-[10px] text-red-500 font-black italic">{errors.campaignName.message}</p>}
-            </div>
+            {isFieldVisible('productName') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">পরিকল্পিত প্রোডাক্ট (Product){fieldConfigMap.productName?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('productName')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">প্রোডাক্ট নির্বাচন করুন</option>
+                  {options.Product?.map((p: string) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {errors.productName && <p className="text-[10px] text-red-500 font-black italic">{errors.productName.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('source') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">উৎস (Lead Source){fieldConfigMap.source?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('source')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">উৎস নির্বাচন করুন</option>
+                  {options.Source?.map((s: string) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {errors.source && <p className="text-[10px] text-red-500 font-black italic">{errors.source.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('campaignName') && (
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">ক্যাম্পেইন (Campaign){fieldConfigMap.campaignName?.isMandatory !== false && ' *'}</label>
+                <select 
+                  {...register('campaignName')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">ক্যাম্পেইন নির্বাচন করুন</option>
+                  {options.Campaign?.map((c: string) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {errors.campaignName && <p className="text-[10px] text-red-500 font-black italic">{errors.campaignName.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('otherInfo') && (
+              <div className="space-y-3 md:col-span-2">
+                <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">অন্যান্য তথ্য (Other Information){fieldConfigMap.otherInfo?.isMandatory && ' *'}</label>
+                <textarea 
+                  {...register('otherInfo')}
+                  rows={3}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-bold focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                  placeholder="অতিরিক্ত কোনো তথ্য থাকলে লিখুন"
+                />
+                {errors.otherInfo && <p className="text-[10px] text-red-500 font-black italic">{errors.otherInfo.message as string}</p>}
+              </div>
+            )}
           </div>
         </motion.section>
+
+        {/* Section 3: Additional (admin-added custom fields via Form Builder) */}
+        {customFieldDefs.length > 0 && (
+          <motion.section 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm"
+          >
+            <div className="flex items-center gap-4 mb-12 border-b border-slate-50 pb-6">
+              <Briefcase className="w-6 h-6 text-[#978C21]" />
+              <h2 className="font-black text-[14px] uppercase tracking-wider text-brand-text italic serif">অতিরিক্ত তথ্য (Additional Information)</h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+              {customFieldDefs.map(field => (
+                <div key={field.id} className={cn("space-y-3", field.fieldType === 'textarea' && "md:col-span-2")}>
+                  <label className="text-[11px] font-black text-slate-600 uppercase tracking-wide">
+                    {field.label}{field.isMandatory && ' *'}
+                  </label>
+                  {field.fieldType === 'dropdown' ? (
+                    <select
+                      {...register(`customFields.${field.fieldKey}` as any)}
+                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    >
+                      <option value="">নির্বাচন করুন</option>
+                      {(options[field.metadataTypeKey || ''] || []).map((v: string) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  ) : field.fieldType === 'textarea' ? (
+                    <textarea
+                      {...register(`customFields.${field.fieldKey}` as any)}
+                      rows={3}
+                      placeholder={field.placeholder}
+                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-bold focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
+                    />
+                  ) : field.fieldType === 'checkbox' ? (
+                    <select
+                      {...register(`customFields.${field.fieldKey}` as any)}
+                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    >
+                      <option value="">-</option>
+                      <option value="true">হ্যাঁ (Yes)</option>
+                      <option value="false">না (No)</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={field.fieldType === 'number' ? 'number' : field.fieldType === 'date' ? 'date' : 'text'}
+                      {...register(`customFields.${field.fieldKey}` as any)}
+                      placeholder={field.placeholder}
+                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </motion.section>
+        )}
 
         <div className="flex items-center justify-end gap-6 mt-16 group">
           <div className="flex items-center gap-2 mr-auto italic opacity-40">

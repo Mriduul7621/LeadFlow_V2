@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Search, 
   Trash2, 
@@ -33,6 +34,7 @@ import AdvancedFilterPanel from '../components/AdvancedFilterPanel';
 export default function AllLeads() {
   const { user } = useAuthStore();
   const { canAccess, userRole } = usePermissions();
+  const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
@@ -168,8 +170,13 @@ export default function AllLeads() {
     }
 
     try {
-      const isPasswordValid = await userService.validateCurrentPassword(deleteConfirmPassword);
-      if (!isPasswordValid) {
+      const verifyRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeId: user?.employeeId, password: deleteConfirmPassword }),
+      });
+
+      if (!verifyRes.ok) {
         toast.error('Deletion aborted: Incorrect password provided');
         return;
       }
@@ -513,7 +520,16 @@ export default function AllLeads() {
                            </td>
                            {/* Demographics Name */}
                            <td className="p-4 px-6 text-slate-950 font-black uppercase tracking-tight select-all">
-                              <div>{lead.prospectName || 'Anonymous Candidate'}</div>
+                              <div className="flex items-center gap-2">
+                                 <span>{lead.prospectName || 'Anonymous Candidate'}</span>
+                                 <button
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
+                                    title="View full timeline"
+                                    className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0"
+                                 >
+                                    Timeline
+                                 </button>
+                              </div>
                               {lead.email && <div className="text-[9px] text-slate-400 font-normal lowercase tracking-normal mt-0.5">{lead.email}</div>}
                            </td>
 

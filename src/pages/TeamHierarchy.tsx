@@ -506,7 +506,7 @@ export default function TeamHierarchy() {
                       handleDeleteNode(node.id);
                     }}
                     className="p-1 text-red-500 hover:bg-red-50 rounded-sm"
-                    title="সরিয়ে ফেলুন (Remove Node)"
+                    title="মুছে ফেলুন (Delete Node)"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -555,10 +555,10 @@ export default function TeamHierarchy() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
         <div>
           <h1 className="text-3xl font-black tracking-tight text-slate-900 uppercase italic">
-            রিপোর্টিং স্ট্রাকচার (Reporting Structure)
+            দলগত চেইন রেখাচিত্র (Organizational Hierarchy)
           </h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5 italic">
-            Define reporting levels, designations, and employee routing paths
+            Establish dynamic department levels, designations, and employee routing maps
           </p>
         </div>
 

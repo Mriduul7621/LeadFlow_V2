@@ -87,7 +87,9 @@
       meetingDate?: string,
       sumAssured?: number,
       productName?: string,
-      projectedNCP?: number
+      projectedNCP?: number,
+      lossReason?: string,
+      meetingType?: string
     ): boolean {
       const lead = this.getLead(leadId);
       if (!lead) return false;
@@ -103,6 +105,8 @@
         sumAssured,
         productName,
         updatedBy,
+        lossReason,
+        meetingType,
       };
 
       const updateData: Partial<Lead> = {
@@ -130,6 +134,12 @@
       }
       if (projectedNCP !== undefined) {
         updateData.projectedNCP = projectedNCP;
+      }
+      if (lossReason !== undefined) {
+        updateData.lossReason = lossReason;
+      }
+      if (meetingType !== undefined) {
+        updateData.meetingType = meetingType;
       }
       this.updateLead(leadId, updateData);
       return true;
@@ -185,7 +195,7 @@
       try {
         const data = localStorage.getItem(KEYS.USERS);
         if (!data) {
-          const initialized = MOCK_USERS.map(u => ({ ...u, password: undefined }));
+          const initialized = MOCK_USERS.map(u => ({ ...u }));
           localStorage.setItem(KEYS.USERS, JSON.stringify(initialized));
           return initialized;
         }
@@ -218,32 +228,30 @@
         // Auto-restore any missing mock users from the template configuration to prevent cross-browser login failure
         for (const mock of MOCK_USERS) {
           if (!users.some(u => u.employeeId === mock.employeeId)) {
-            users.push({ ...mock, password: undefined });
+            users.push({ ...mock });
             changed = true;
           }
         }
-        users = users.map(u => {
-          if (u.password !== undefined) {
-            delete u.password;
-            changed = true;
-          }
-          return u;
-        });
+        // NOTE: previously this forcibly assigned a hardcoded fallback
+        // password ('shanta123') to any user missing one, which meant a
+        // fixed, guessable password worked for every account. Real
+        // authentication is verified server-side against a bcrypt hash
+        // (see POST /api/auth/login) - the client no longer needs, and
+        // must not fabricate, password values.
         if (changed) {
           localStorage.setItem(KEYS.USERS, JSON.stringify(users));
         }
         return users;
       } catch (e) {
         console.warn('Error reading or parsing users from local storage, resetting to default:', e);
-        const initialized = MOCK_USERS.map(u => ({ ...u, password: undefined }));
+        const initialized = MOCK_USERS.map(u => ({ ...u }));
         localStorage.setItem(KEYS.USERS, JSON.stringify(initialized));
         return initialized;
       }
     },
 
     saveUsers(users: User[]) {
-      const sanitized = users.map(user => ({ ...user, password: undefined }));
-      localStorage.setItem(KEYS.USERS, JSON.stringify(sanitized));
+      localStorage.setItem(KEYS.USERS, JSON.stringify(users));
     },
 
     getUser(id: string): User | null {
@@ -256,12 +264,11 @@
 
     createUser(user: User): User {
       const users = this.getUsers();
-      const sanitizedUser = { ...user, password: undefined };
       const existingIdx = users.findIndex(u => u.id === user.id || (u.employeeId && u.employeeId.toUpperCase() === user.employeeId?.toUpperCase()));
       if (existingIdx > -1) {
-        users[existingIdx] = sanitizedUser;
+        users[existingIdx] = user;
       } else {
-        users.push(sanitizedUser);
+        users.push(user);
       }
       this.saveUsers(users);
       try {
@@ -269,15 +276,14 @@
         const filtered = deleted.filter((id: string) => id !== user.id);
         localStorage.setItem('shanta_deleted_user_ids', JSON.stringify(filtered));
       } catch (e) {}
-      return sanitizedUser;
+      return user;
     },
 
     updateUser(id: string, data: Partial<User>): User | null {
       const users = this.getUsers();
       const idx = users.findIndex(u => u.id === id);
       if (idx === -1) return null;
-      const nextUser = { ...users[idx], ...data, password: undefined };
-      users[idx] = nextUser;
+      users[idx] = { ...users[idx], ...data };
       this.saveUsers(users);
       return users[idx];
     },

@@ -13,6 +13,9 @@ import {
   Save,
   X,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
+  Power,
   Radio,
   Wifi,
   CheckCircle2,
@@ -23,20 +26,40 @@ import { useAuthStore } from '../store/authStore';
 import { usePermissions } from '../hooks/usePermissions';
 import { motion, AnimatePresence } from 'framer-motion';
 import { settingsService } from '../services/settingsService';
+import { metadataService } from '../services/metadataService';
+import { formBuilderService } from '../services/formBuilderService';
+import { workflowService } from '../services/workflowService';
 import { userService } from '../services/userService';
 import { leadService } from '../services/leadService';
 import { syncService } from '../services/syncService';
-import { DropdownOption, UserRole } from '../types';
+import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../types';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
+
+const STATUS_COLOR_CHOICES = ['slate', 'blue', 'amber', 'orange', 'teal', 'indigo', 'purple', 'violet', 'yellow', 'green', 'red'];
+const STATUS_COLOR_HEX: Record<string, string> = {
+  slate: '#94a3b8', blue: '#3b82f6', amber: '#f59e0b', orange: '#f97316',
+  teal: '#14b8a6', indigo: '#6366f1', purple: '#a855f7', violet: '#8b5cf6',
+  yellow: '#eab308', green: '#22c55e', red: '#ef4444',
+};
 
 export default function Settings() {
   const { user, logout, login, isOfflineMode } = useAuthStore();
   const { canAccess } = usePermissions();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>('overview');
   const [options, setOptions] = useState<DropdownOption[]>([]);
+  const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
   const [editingOption, setEditingOption] = useState<{type: string, value: string}>({ type: 'Area', value: '' });
+  const [newTypeForm, setNewTypeForm] = useState({ label: '', description: '' });
+  const [isAddingType, setIsAddingType] = useState(false);
+  const [formFields, setFormFields] = useState<FormField[]>([]);
+  const [isAddingField, setIsAddingField] = useState(false);
+  const [newFieldForm, setNewFieldForm] = useState<{ label: string; fieldType: FormFieldType; metadataTypeKey: string; isMandatory: boolean }>({
+    label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false,
+  });
+  const [workflowRules, setWorkflowRules] = useState<WorkflowRule[]>([]);
+  const [allStatuses, setAllStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [newName, setNewName] = useState(user?.name || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || '');
@@ -81,7 +104,7 @@ export default function Settings() {
     try {
       const updatedUser = { ...user, name: newName, avatarUrl: avatarUrl };
       await userService.updateUser(user.id, updatedUser);
-      login(updatedUser, isOfflineMode);
+      login(updatedUser, useAuthStore.getState().token || undefined, isOfflineMode);
       toast.success('Identity synchronized across network');
     } catch (err) {
       toast.error('Network synchronization failure');
@@ -107,11 +130,21 @@ export default function Settings() {
 
     setPasswordLoading(true);
     try {
-      await userService.changePassword(currentPassword, newPassword);
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          currentPassword,
+          newPassword,
+        }),
+      });
 
-      const updatedUser = { ...user, mustChangePassword: false };
-      await userService.updateUser(user.id, { password: newPassword, mustChangePassword: false } as any);
-      login(updatedUser, isOfflineMode);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || 'Current password is incorrect');
+        return;
+      }
 
       toast.success('Security password updated successfully');
       setCurrentPassword('');
@@ -133,20 +166,25 @@ export default function Settings() {
   useEffect(() => {
     if (activeTab === 'dropdowns') {
       loadOptions();
+    } else if (activeTab === 'formbuilder') {
+      loadFormFields();
+    } else if (activeTab === 'workflow') {
+      loadWorkflow();
     }
   }, [activeTab]);
 
   const loadOptions = async () => {
     setLoading(true);
     try {
-      // In a real scenario, we'd fetch all or by specific type
-      // For simplicity, let's fetch a sample or implement getAll if needed
-      // Actually settingsService has getOptionsByType
-      const types: any[] = ['Area', 'Source', 'Product', 'Campaign', 'Profession', 'FollowUpStatus'];
+      const types = await metadataService.getTypes();
+      setMetadataTypes(types);
+      if (types.length > 0 && !types.some(t => t.key === editingOption.type)) {
+        setEditingOption(prev => ({ ...prev, type: types[0].key }));
+      }
       const all: DropdownOption[] = [];
-      for (const type of types) {
-        const res = await settingsService.getOptionsByType(type);
-        all.push(...res.map(val => ({ type, value: val, status: 'Active' } as DropdownOption)));
+      for (const t of types) {
+        const res = await metadataService.getAllValues(t.key, true);
+        all.push(...res);
       }
       setOptions(all);
     } finally {
@@ -154,12 +192,222 @@ export default function Settings() {
     }
   };
 
-  const setLeads = (data: any) => {}; // Oops, typo in thought process, ignored
+  const handleAddType = async () => {
+    if (!newTypeForm.label.trim()) {
+      toast.error('Please enter a name for the new metadata type');
+      return;
+    }
+    try {
+      await metadataService.createType(
+        newTypeForm.label.trim().replace(/\s+/g, ''),
+        newTypeForm.label.trim(),
+        newTypeForm.description.trim()
+      );
+      toast.success(`New metadata type "${newTypeForm.label}" created`);
+      setNewTypeForm({ label: '', description: '' });
+      setIsAddingType(false);
+      loadOptions();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create metadata type');
+    }
+  };
+
+  const handleDeleteType = async (type: MetadataType) => {
+    if (type.isSystem) {
+      toast.error('System metadata types cannot be deleted.');
+      return;
+    }
+    if (!confirm(`Delete the "${type.label}" metadata type and all of its values? This cannot be undone.`)) return;
+    try {
+      await metadataService.deleteType(type.key);
+      toast.success(`"${type.label}" removed`);
+      loadOptions();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete metadata type');
+    }
+  };
+
+  const handleToggleActive = async (option: DropdownOption) => {
+    try {
+      await metadataService.toggleActive(option);
+      loadOptions();
+    } catch {
+      toast.error('Failed to update status');
+    }
+  };
+
+  const handleMove = async (type: string, index: number, direction: -1 | 1) => {
+    const forType = options.filter(o => o.type === type).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= forType.length) return;
+    const reordered = [...forType];
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+    try {
+      await metadataService.reorder(type, reordered.map(o => o.id!).filter(Boolean));
+      loadOptions();
+    } catch {
+      toast.error('Failed to reorder');
+    }
+  };
+
+  const handleSetStatusColor = async (option: DropdownOption, color: string) => {
+    try {
+      await metadataService.updateValue({ ...option, meta: { ...(option.meta || {}), color } });
+      loadOptions();
+    } catch {
+      toast.error('Failed to update color');
+    }
+  };
+
+  const loadFormFields = async () => {
+    setLoading(true);
+    try {
+      // Metadata types are needed for the "Values From" selector when
+      // creating a new dropdown field.
+      if (metadataTypes.length === 0) {
+        const types = await metadataService.getTypes();
+        setMetadataTypes(types);
+      }
+      const fields = await formBuilderService.getFields(true);
+      setFormFields(fields);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddField = async () => {
+    if (!newFieldForm.label.trim()) {
+      toast.error('Please enter a field label');
+      return;
+    }
+    if (newFieldForm.fieldType === 'dropdown' && !newFieldForm.metadataTypeKey) {
+      toast.error('Please select where this dropdown gets its values from');
+      return;
+    }
+    try {
+      const fieldKey = 'custom_' + newFieldForm.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      await formBuilderService.saveField({
+        fieldKey,
+        label: newFieldForm.label.trim(),
+        fieldType: newFieldForm.fieldType,
+        section: 'Additional',
+        isMandatory: newFieldForm.isMandatory,
+        isVisible: true,
+        metadataTypeKey: newFieldForm.fieldType === 'dropdown' ? newFieldForm.metadataTypeKey : null,
+      });
+      toast.success(`New field "${newFieldForm.label}" added to the Lead form`);
+      setNewFieldForm({ label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false });
+      setIsAddingField(false);
+      loadFormFields();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create field');
+    }
+  };
+
+  const handleDeleteField = async (field: FormField) => {
+    if (!confirm(`Remove the "${field.label}" field from the Lead form?`)) return;
+    try {
+      await formBuilderService.deleteField(field.id);
+      toast.success('Field removed');
+      loadFormFields();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete field');
+    }
+  };
+
+  const handleToggleFieldMandatory = async (field: FormField) => {
+    try {
+      await formBuilderService.saveField({ ...field, isMandatory: !field.isMandatory });
+      loadFormFields();
+    } catch {
+      toast.error('Failed to update field');
+    }
+  };
+
+  const handleToggleFieldVisible = async (field: FormField) => {
+    try {
+      await formBuilderService.saveField({ ...field, isVisible: !field.isVisible });
+      loadFormFields();
+    } catch {
+      toast.error('Failed to update field');
+    }
+  };
+
+  const handleMoveField = async (section: string, index: number, direction: -1 | 1) => {
+    const inSection = formFields.filter(f => f.section === section).sort((a, b) => a.sortOrder - b.sortOrder);
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= inSection.length) return;
+    const reordered = [...inSection];
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+    try {
+      await formBuilderService.reorder(reordered.map(f => f.id));
+      loadFormFields();
+    } catch {
+      toast.error('Failed to reorder fields');
+    }
+  };
+
+  const loadWorkflow = async () => {
+    setLoading(true);
+    try {
+      const statuses = await metadataService.getActiveValues('FollowUpStatus');
+      setAllStatuses(statuses);
+      const rules = await workflowService.getRules(true);
+      setWorkflowRules(rules);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getRuleForStatus = (status: string): WorkflowRule | undefined => workflowRules.find(r => r.status === status);
+
+  const handleToggleNextStatus = async (status: string, target: string) => {
+    const existing = getRuleForStatus(status);
+    const current = existing?.allowedNextStatuses;
+    // null/empty = currently unrestricted (all allowed). Clicking a
+    // target for the first time switches this status into "restricted"
+    // mode starting from just that one target.
+    let updated: string[];
+    if (!current || current.length === 0) {
+      updated = allStatuses.filter(s => s !== status && s !== target);
+    } else if (current.includes(target)) {
+      updated = current.filter(s => s !== target);
+    } else {
+      updated = [...current, target];
+    }
+    try {
+      await workflowService.saveRule({ ...existing, status, allowedNextStatuses: updated });
+      loadWorkflow();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update workflow rule');
+    }
+  };
+
+  const handleResetToUnrestricted = async (status: string) => {
+    const existing = getRuleForStatus(status);
+    try {
+      await workflowService.saveRule({ ...existing, status, allowedNextStatuses: null });
+      toast.success(`"${status}" can now move to any status`);
+      loadWorkflow();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update workflow rule');
+    }
+  };
+
+  const handleToggleRequirement = async (status: string, field: 'requiresLossReason' | 'requiresMeetingType' | 'requiresFollowUpType' | 'requiresNote') => {
+    const existing = getRuleForStatus(status);
+    try {
+      await workflowService.saveRule({ ...existing, status, [field]: !existing?.[field] });
+      loadWorkflow();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update workflow rule');
+    }
+  };
 
   const handleAddOption = async () => {
     if (!editingOption.value) return;
     try {
-      await settingsService.addOption(editingOption.type, editingOption.value);
+      await metadataService.addValue(editingOption.type, editingOption.value);
       toast.success('Strategy parameter added successfully');
       setEditingOption({ ...editingOption, value: '' });
       loadOptions();
@@ -171,7 +419,7 @@ export default function Settings() {
   const handleDeleteOption = async (option: DropdownOption) => {
     if (!confirm('Are you sure you want to decommission this strategic parameter?')) return;
     try {
-      await settingsService.deleteOption(option.type, option.value);
+      await metadataService.deleteValue(option.type, option.value);
       toast.success('Matrix parameter decommissioned');
       loadOptions();
     } catch (err) {
@@ -231,6 +479,28 @@ export default function Settings() {
               )}
             >
               Strategy Parameters
+            </button>
+          )}
+          {canAccess('admin_settings', 'configure_global_metadata') && (
+            <button 
+              onClick={() => setActiveTab('formbuilder')}
+              className={cn(
+                "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+                activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              Form Builder
+            </button>
+          )}
+          {canAccess('admin_settings', 'configure_global_metadata') && (
+            <button 
+              onClick={() => setActiveTab('workflow')}
+              className={cn(
+                "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+                activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              Workflow
             </button>
           )}
         </div>
@@ -747,7 +1017,7 @@ export default function Settings() {
               )}
             </div>
           </motion.div>
-        ) : (
+        ) : activeTab === 'dropdowns' ? (
           <motion.div 
             key="dropdowns"
             initial={{ opacity: 0, y: 10 }}
@@ -763,12 +1033,9 @@ export default function Settings() {
                   onChange={(e) => setEditingOption({ ...editingOption, type: e.target.value })}
                   className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
                 >
-                  <option value="Area">Area Sectors</option>
-                  <option value="Source">Intelligence Sources</option>
-                  <option value="Product">Product Portfolio</option>
-                  <option value="Campaign">Active Campaigns</option>
-                  <option value="Profession">Target Professions</option>
-                  <option value="FollowUpStatus">Lifecycle Statuses</option>
+                  {metadataTypes.map(t => (
+                    <option key={t.key} value={t.key}>{t.label}</option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-4 flex-1 max-w-md">
@@ -790,35 +1057,352 @@ export default function Settings() {
                   </button>
                 </div>
               </div>
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">&nbsp;</label>
+                <button
+                  onClick={() => setIsAddingType(v => !v)}
+                  className="border border-[#978C21]/30 text-[#978C21] px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-[#978C21]/5 transition-all flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  New Field Type
+                </button>
+              </div>
             </div>
+
+            {isAddingType && (
+              <div className="px-10 py-6 border-b border-slate-50 bg-white flex flex-col md:flex-row items-end gap-4">
+                <div className="flex-1 space-y-2 w-full">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Type Name</label>
+                  <input
+                    type="text"
+                    value={newTypeForm.label}
+                    onChange={(e) => setNewTypeForm({ ...newTypeForm, label: e.target.value })}
+                    placeholder="e.g. Industry, Referral Channel..."
+                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
+                  />
+                </div>
+                <div className="flex-1 space-y-2 w-full">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Description (optional)</label>
+                  <input
+                    type="text"
+                    value={newTypeForm.description}
+                    onChange={(e) => setNewTypeForm({ ...newTypeForm, description: e.target.value })}
+                    placeholder="What is this field for?"
+                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
+                  />
+                </div>
+                <button
+                  onClick={handleAddType}
+                  className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg whitespace-nowrap"
+                >
+                  Create Type
+                </button>
+              </div>
+            )}
 
             <div className="p-10">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {['Area', 'Source', 'Product', 'Campaign', 'Profession', 'FollowUpStatus'].map((type) => (
-                  <div key={type} className="space-y-4">
-                    <div className="flex items-center justify-between border-b-2 border-[#978C21]/20 pb-2">
-                      <h5 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] italic">{type}</h5>
-                      <span className="text-[10px] font-black text-slate-300 italic">{options.filter(o => o.type === type).length} Entries</span>
-                    </div>
-                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                      {options.filter(o => o.type === type).map((option, i) => (
-                        <div 
-                          key={i}
-                          className="flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-100 rounded-sm group hover:bg-white hover:border-[#978C21]/30 transition-all"
-                        >
-                          <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight">{option.value}</span>
-                          <button 
-                            onClick={() => handleDeleteOption(option)}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 transition-all"
+                {metadataTypes.map((t) => {
+                  const values = options
+                    .filter(o => o.type === t.key)
+                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                  return (
+                    <div key={t.key} className="space-y-4">
+                      <div className="flex items-center justify-between border-b-2 border-[#978C21]/20 pb-2">
+                        <div className="flex items-center gap-2">
+                          <h5 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] italic">{t.label}</h5>
+                          {t.isSystem && (
+                            <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">System</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black text-slate-300 italic">{values.length} Entries</span>
+                          {!t.isSystem && (
+                            <button
+                              onClick={() => handleDeleteType(t)}
+                              title="Delete this metadata type"
+                              className="text-slate-300 hover:text-red-500 transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                        {values.map((option, i) => (
+                          <div 
+                            key={option.id || i}
+                            className={cn(
+                              "flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-100 rounded-sm group hover:bg-white hover:border-[#978C21]/30 transition-all gap-2",
+                              option.status !== 'Active' && "opacity-50"
+                            )}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            <div className="flex items-center gap-2 min-w-0">
+                              {t.key === 'FollowUpStatus' && (
+                                <select
+                                  value={option.meta?.color || 'slate'}
+                                  onChange={(e) => handleSetStatusColor(option, e.target.value)}
+                                  style={{ backgroundColor: STATUS_COLOR_HEX[option.meta?.color || 'slate'] }}
+                                  className="w-5 h-5 rounded-full border-0 text-[0px] shrink-0 cursor-pointer appearance-none"
+                                  title="Status color"
+                                >
+                                  {STATUS_COLOR_CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              )}
+                              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight truncate">{option.label || option.value}</span>
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                              <button onClick={() => handleMove(t.key, i, -1)} disabled={i === 0} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => handleMove(t.key, i, 1)} disabled={i === values.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => handleToggleActive(option)} title={option.status === 'Active' ? 'Deactivate' : 'Activate'} className="p-1 text-slate-300 hover:text-[#978C21]">
+                                <Power className="w-3.5 h-3.5" />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteOption(option)}
+                                className="p-1 text-slate-300 hover:text-red-500 transition-all"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {values.length === 0 && (
+                          <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-4 text-center">No values yet</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        ) : activeTab === 'formbuilder' ? (
+          <motion.div 
+            key="formbuilder"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
+          >
+            <div className="p-10 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
+              <div>
+                <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Generate Form Fields</h5>
+                <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
+                  Control which fields appear on the Lead Generate form, whether they're required, and their order.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsAddingField(true)}
+                className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                New Field
+              </button>
+            </div>
+
+            {isAddingField && (
+              <div className="px-10 py-6 border-b border-slate-50 bg-white grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Field Label</label>
+                  <input
+                    type="text"
+                    value={newFieldForm.label}
+                    onChange={(e) => setNewFieldForm({ ...newFieldForm, label: e.target.value })}
+                    placeholder="e.g. Reference Name"
+                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Field Type</label>
+                  <select
+                    value={newFieldForm.fieldType}
+                    onChange={(e) => setNewFieldForm({ ...newFieldForm, fieldType: e.target.value as FormFieldType })}
+                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
+                  >
+                    <option value="text">Text</option>
+                    <option value="number">Number</option>
+                    <option value="dropdown">Dropdown</option>
+                    <option value="date">Date</option>
+                    <option value="textarea">Long Text</option>
+                    <option value="checkbox">Checkbox</option>
+                  </select>
+                </div>
+                {newFieldForm.fieldType === 'dropdown' && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Values From</label>
+                    <select
+                      value={newFieldForm.metadataTypeKey}
+                      onChange={(e) => setNewFieldForm({ ...newFieldForm, metadataTypeKey: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
+                    >
+                      <option value="">Select a metadata type...</option>
+                      {metadataTypes.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Mandatory?</label>
+                  <button
+                    onClick={() => setNewFieldForm({ ...newFieldForm, isMandatory: !newFieldForm.isMandatory })}
+                    className={cn(
+                      "w-full border rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest transition-all",
+                      newFieldForm.isMandatory ? "bg-[#978C21] text-white border-[#978C21]" : "bg-white text-slate-400 border-slate-200"
+                    )}
+                  >
+                    {newFieldForm.isMandatory ? 'Required' : 'Optional'}
+                  </button>
+                </div>
+                <button
+                  onClick={handleAddField}
+                  className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg"
+                >
+                  Create Field
+                </button>
+              </div>
+            )}
+
+            <div className="p-10 space-y-8">
+              {['Identity', 'Location', 'Business', 'Additional'].map(section => {
+                const fields = formFields
+                  .filter(f => f.section === section)
+                  .sort((a, b) => a.sortOrder - b.sortOrder);
+                if (fields.length === 0) return null;
+                return (
+                  <div key={section} className="space-y-3">
+                    <h6 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] border-b-2 border-[#978C21]/20 pb-2">{section}</h6>
+                    <div className="space-y-2">
+                      {fields.map((field, i) => (
+                        <div
+                          key={field.id}
+                          className={cn(
+                            "flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-100 rounded-sm group hover:bg-white hover:border-[#978C21]/30 transition-all gap-3",
+                            !field.isVisible && "opacity-50"
+                          )}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight truncate">{field.label}</span>
+                            <span className="text-[8px] font-black text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">{field.fieldType}</span>
+                            {field.isSystem && (
+                              <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">System</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <button
+                              onClick={() => handleToggleFieldMandatory(field)}
+                              className={cn(
+                                "text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-sm border",
+                                field.isMandatory ? "bg-red-50 text-red-600 border-red-100" : "bg-white text-slate-400 border-slate-200"
+                              )}
+                            >
+                              {field.isMandatory ? 'Required' : 'Optional'}
+                            </button>
+                            <button onClick={() => handleMoveField(section, i, -1)} disabled={i === 0} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleMoveField(section, i, 1)} disabled={i === fields.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleToggleFieldVisible(field)} title={field.isVisible ? 'Hide field' : 'Show field'} className="p-1 text-slate-300 hover:text-[#978C21]">
+                              <Power className="w-3.5 h-3.5" />
+                            </button>
+                            {!field.isSystem && (
+                              <button onClick={() => handleDeleteField(field)} className="p-1 text-slate-300 hover:text-red-500 transition-all">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div 
+            key="workflow"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
+          >
+            <div className="p-10 border-b border-slate-50 bg-[#FBFAF8]">
+              <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Status Pipeline & Workflow Rules</h5>
+              <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
+                For each status, control which statuses a lead can move to next, and what information is required to enter that status.
+                By default every status can move to any other status.
+              </p>
+            </div>
+
+            <div className="p-10 space-y-6">
+              {allStatuses.map(status => {
+                const rule = getRuleForStatus(status);
+                const isRestricted = !!(rule?.allowedNextStatuses && rule.allowedNextStatuses.length > 0);
+                return (
+                  <div key={status} className="border border-slate-100 rounded-sm overflow-hidden">
+                    <div className="px-6 py-4 bg-slate-50 flex items-center justify-between flex-wrap gap-3">
+                      <h6 className="text-[12px] font-black text-brand-text uppercase tracking-[0.15em]">{status}</h6>
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                          <input type="checkbox" checked={!!rule?.requiresLossReason} onChange={() => handleToggleRequirement(status, 'requiresLossReason')} />
+                          Requires Loss Reason
+                        </label>
+                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                          <input type="checkbox" checked={!!rule?.requiresMeetingType} onChange={() => handleToggleRequirement(status, 'requiresMeetingType')} />
+                          Requires Meeting Type
+                        </label>
+                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                          <input type="checkbox" checked={!!rule?.requiresFollowUpType} onChange={() => handleToggleRequirement(status, 'requiresFollowUpType')} />
+                          Requires Follow-up Type
+                        </label>
+                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                          <input type="checkbox" checked={!!rule?.requiresNote} onChange={() => handleToggleRequirement(status, 'requiresNote')} />
+                          Requires Note
+                        </label>
+                      </div>
+                    </div>
+                    <div className="p-6">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                          Can move to {isRestricted ? `(${rule!.allowedNextStatuses!.length} allowed)` : '(any status - unrestricted)'}
+                        </p>
+                        {isRestricted && (
+                          <button onClick={() => handleResetToUnrestricted(status)} className="text-[9px] font-black text-[#978C21] uppercase tracking-widest hover:underline">
+                            Reset to Unrestricted
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {allStatuses.filter(s => s !== status).map(target => {
+                          const isAllowed = !isRestricted || rule!.allowedNextStatuses!.includes(target);
+                          return (
+                            <button
+                              key={target}
+                              onClick={() => handleToggleNextStatus(status, target)}
+                              className={cn(
+                                "px-3 py-1.5 rounded-sm text-[9px] font-black uppercase tracking-widest border transition-all",
+                                isAllowed ? "bg-[#978C21]/10 text-[#978C21] border-[#978C21]/30" : "bg-slate-50 text-slate-300 border-slate-100"
+                              )}
+                            >
+                              {target}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {allStatuses.length === 0 && (
+                <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-8 text-center">
+                  No lead statuses found. Add some under Strategy Parameters first.
+                </p>
+              )}
             </div>
           </motion.div>
         )}

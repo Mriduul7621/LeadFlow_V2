@@ -482,10 +482,6 @@ export default function UserManagement() {
       toast.error('Please complete Name, Employee ID and Email address.');
       return;
     }
-    if (!editingUser && userForm.password.trim().length < 6) {
-      toast.error('Set a temporary password of at least 6 characters for a new employee.');
-      return;
-    }
 
     const cleanEmpId = userForm.employeeId.trim().toUpperCase();
 
@@ -502,7 +498,17 @@ export default function UserManagement() {
 
     try {
       const generatedUid = editingUser ? editingUser.id : `u_ops_${Date.now()}`;
-      
+      // New users without an explicit password get a random temporary
+      // password (shown once to the admin below) instead of a fixed,
+      // guessable default. They are always required to change it on
+      // first login (mustChangePassword below).
+      const generateTempPassword = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+        let out = '';
+        for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+        return out;
+      };
+
       const payload: User = {
         id: generatedUid,
         name: userForm.name.trim(),
@@ -514,7 +520,11 @@ export default function UserManagement() {
         departmentId: userForm.departmentId as any,
         status: userForm.status,
         createdDate: editingUser ? editingUser.createdDate : new Date().toISOString(),
-        password: userForm.password ? userForm.password : undefined,
+        // Save provided password; if editing and left blank, the server
+        // preserves the existing hash. For a brand-new user with no
+        // password entered, generate a random temporary one.
+        password: userForm.password ? userForm.password : (editingUser ? undefined : generateTempPassword()),
+        // Set mustChangePassword true for new users or if password is explicitly edited
         mustChangePassword: editingUser 
           ? (userForm.password ? true : (editingUser.mustChangePassword ?? false))
           : true,
@@ -527,11 +537,9 @@ export default function UserManagement() {
         toast.success(`Employee profile for ${payload.name} updated.`);
       } else {
         await userService.createUser(payload);
-        const tempPassword = userForm.password?.trim();
-        toast.success(tempPassword ? `Success: ${payload.name} registered with temporary password.` : `Success: ${payload.name} registered.`);
+        toast.success(`Success: ${payload.name} registered with Temporary Password: "${payload.password}".`);
       }
 
-      setUserForm(prev => ({ ...prev, password: '' }));
       setIsUserModalOpen(false);
       await loadAllOperationalData();
     } catch (err) {
@@ -1112,7 +1120,7 @@ export default function UserManagement() {
                               <button
                                 onClick={() => handleDeleteRole(r.roleId)}
                                 className="p-2 border border-red-150 hover:border-red-300 text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
-                                title="Remove Role"
+                                title="Delete Role"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -1385,7 +1393,7 @@ export default function UserManagement() {
                 <div className="flex flex-1 items-center gap-3 w-full max-w-lg bg-white border border-slate-200 px-3 py-2">
                   <Search className="w-4 h-4 text-slate-400" />
                   <input
-                    type="password"
+                    type="text"
                     value={userQuery}
                     onChange={(e) => setUserQuery(e.target.value)}
                     placeholder="Search by Employee ID, Name, Job title..."
@@ -1528,7 +1536,7 @@ export default function UserManagement() {
                                     <button
                                       onClick={() => handleDeleteUser(u.id, u.name)}
                                       className="p-2 border border-slate-100 hover:bg-red-50 text-red-500 rounded-sm hover:-translate-y-0.5 transition-all cursor-pointer"
-                                      title="Remove Profile"
+                                      title="Purge Profile"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
@@ -1554,7 +1562,7 @@ export default function UserManagement() {
               {/* Left sidebar: Department select descriptor */}
               <div className="lg:col-span-4 bg-[#FBFAF8] border border-slate-200 p-6 rounded-sm space-y-6">
                 <div className="space-y-1">
-                  <h3 className="text-xs font-black uppercase tracking-widest text-[#978C21]">Reporting Structure Workspace</h3>
+                  <h3 className="text-xs font-black uppercase tracking-widest text-[#978C21]">Hierarchy Workspace</h3>
                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Select targeting corporate department to architect reporting maps.</p>
                 </div>
 
@@ -1572,7 +1580,7 @@ export default function UserManagement() {
                 </div>
 
                 <div className="bg-white border border-slate-150 p-4 space-y-3.5">
-                  <h5 className="text-[10px] uppercase tracking-widest font-black text-slate-700 leading-none">Reporting Structure Rules</h5>
+                  <h5 className="text-[10px] uppercase tracking-widest font-black text-slate-700 leading-none">Hierarchy Rules</h5>
                   <ul className="space-y-2 text-[9px] text-slate-400 tracking-wider font-bold uppercase leading-normal">
                     <li className="flex items-start gap-1.5 text-slate-550">
                       <ChevronRight className="w-3.5 h-3.5 text-[#978C21] shrink-0" />
@@ -1598,7 +1606,7 @@ export default function UserManagement() {
               <div className="lg:col-span-8 bg-[#FBFAF8] border border-slate-200 p-6 rounded-sm space-y-6">
                 <div className="flex justify-between items-center pb-4 border-b border-slate-100">
                   <div className="space-y-1">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-900 leading-none">Reporting Matrix Architect</h3>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-900 leading-none">Chains Matrix architect</h3>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Dynamic layout editor per Department</p>
                   </div>
                   <span className="px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 text-[8px] font-mono font-black uppercase tracking-widest">
@@ -1623,7 +1631,7 @@ export default function UserManagement() {
                       onClick={handleSaveDepartmentHierarchyEngine}
                       className="w-full py-4.5 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-xs uppercase tracking-widest italic transition-all shadow-xl shadow-[#978C21]/20 flex items-center justify-center gap-2 cursor-pointer mt-4"
                     >
-                      <Save className="w-4 h-4 text-white" /> Compile and Deploy Reporting Structure Chains
+                      <Save className="w-4 h-4 text-white" /> Compile and Deploy Hierarchy Chains
                     </button>
                   </div>
                 )}
@@ -1788,7 +1796,7 @@ export default function UserManagement() {
                     type="text"
                     value={userForm.password}
                     onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                    placeholder={editingUser ? "LEAVE BLANK TO RETAIN CURRENT SECURITY PASSWORD" : "SET A TEMPORARY PASSWORD"}
+                    placeholder={editingUser ? "LEAVE BLANK TO RETAIN CURRENT SECURITY PASSWORD" : "LEAVE BLANK TO AUTO-GENERATE A TEMPORARY PASSWORD"}
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 focus:border-[#978C21] outline-none text-xs rounded-none transition-all uppercase tracking-widest font-mono"
                   />
                   <p className="text-[9px] text-slate-400 leading-normal tracking-wide italic">

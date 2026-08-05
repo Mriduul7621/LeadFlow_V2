@@ -25,6 +25,19 @@ export const notificationService = {
     return localDb.getNotifications(user_Id);
   },
 
+  async getNotificationsForLead(leadId: string): Promise<SystemNotification[]> {
+    try {
+      const res = await fetch(`/api/notifications/leads/${leadId}`);
+      if (res.ok) {
+        const notifs: SystemNotification[] = await res.json();
+        return notifs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      }
+    } catch (e) {
+      console.warn('Failed to fetch notification history for lead:', e);
+    }
+    return [];
+  },
+
   async createNotification(user_Id: string, title: string, message: string, leadId: string): Promise<SystemNotification> {
     const localNotif = localDb.createNotification(user_Id, title, message, leadId);
     const id = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;

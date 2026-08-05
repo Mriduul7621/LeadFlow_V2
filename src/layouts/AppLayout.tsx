@@ -45,6 +45,7 @@ const labelToTranslationKey: Record<string, string> = {
   'Campaign Breakdown': 'navCampaignBreakdown',
   'Follow-up Strategy': 'navFollowUpStrategy',
   'Task Calendar': 'navTaskCalendar',
+  'Activities': 'navActivities',
   'Team Progress': 'navTeamProgress',
   'User Management': 'navUserManagement',
   'Settings': 'navSettings',
@@ -63,6 +64,7 @@ const menuItems = [
   { label: 'Campaign Breakdown', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
   { label: 'Follow-up Strategy', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
   { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole) },
+  { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole) },
   { label: 'Team Progress', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
   { label: 'User Management', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
   { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole) },
@@ -296,8 +298,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         useAuthStore.getState().login({
           ...user,
           mustChangePassword: false,
-          password: trimmed
-        }, useAuthStore.getState().isOfflineMode);
+          password: undefined
+        }, useAuthStore.getState().token || undefined, useAuthStore.getState().isOfflineMode);
         toast.success("Password successfully rotated! Welcome to Shanta Lead Flow Client System.");
       } catch (err: any) {
         toast.error(err.message || "Failed to update password. Try again.");

@@ -20,14 +20,16 @@ import NcpProgress from './pages/NcpProgress';
 import TrendCharts from './pages/TrendCharts';
 import CampaignBreakdown from './pages/CampaignBreakdown';
 import TaskCalendar from './pages/TaskCalendar';
+import Lead360 from './pages/Lead360';
+import Activities from './pages/Activities';
 import { useAuthStore } from './store/authStore';
 import { Toaster } from 'sonner';
+import { userService } from './services/userService';
 import { syncService } from './services/syncService';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
-import { UserRole } from './types';
 
-const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: UserRole[] | string[] }) => {
-  const { isAuthenticated, isInitialized, user } = useAuthStore();
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { isAuthenticated, isInitialized } = useAuthStore();
   
   if (!isInitialized) {
     return (
@@ -38,15 +40,6 @@ const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode;
   }
   
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-
-  if (allowedRoles && user) {
-    const normalizedUserRole = (user.role || '').toUpperCase();
-    const allowed = allowedRoles.some((role) => role.toUpperCase() === normalizedUserRole || normalizedUserRole === UserRole.ADMIN);
-    if (!allowed) {
-      return <Navigate to="/" replace />;
-    }
-  }
-
   return <AppLayout>{children}</AppLayout>;
 };
 
@@ -69,11 +62,11 @@ const router = createBrowserRouter([
   },
   {
     path: '/leads/upload',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN]}><LeadUpload /></ProtectedRoute>,
+    element: <ProtectedRoute><LeadUpload /></ProtectedRoute>,
   },
   {
     path: '/leads/all',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN]}><AllLeads /></ProtectedRoute>,
+    element: <ProtectedRoute><AllLeads /></ProtectedRoute>,
   },
   {
     path: '/follow-up',
@@ -84,28 +77,36 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><TaskCalendar /></ProtectedRoute>,
   },
   {
+    path: '/activities',
+    element: <ProtectedRoute><Activities /></ProtectedRoute>,
+  },
+  {
+    path: '/leads/:id',
+    element: <ProtectedRoute><Lead360 /></ProtectedRoute>,
+  },
+  {
     path: '/users',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN]}><UserManagement /></ProtectedRoute>,
+    element: <ProtectedRoute><UserManagement /></ProtectedRoute>,
   },
   {
     path: '/team',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD]}><TeamHierarchy /></ProtectedRoute>,
+    element: <ProtectedRoute><TeamHierarchy /></ProtectedRoute>,
   },
   {
     path: '/execution-intelligence',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN, UserRole.RO, UserRole.RM]}><ExecutionIntelligence /></ProtectedRoute>,
+    element: <ProtectedRoute><ExecutionIntelligence /></ProtectedRoute>,
   },
   {
     path: '/ncp-progress',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN, UserRole.RO, UserRole.RM]}><NcpProgress /></ProtectedRoute>,
+    element: <ProtectedRoute><NcpProgress /></ProtectedRoute>,
   },
   {
     path: '/trend-charts',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN, UserRole.RO, UserRole.RM]}><TrendCharts /></ProtectedRoute>,
+    element: <ProtectedRoute><TrendCharts /></ProtectedRoute>,
   },
   {
     path: '/campaign-breakdown',
-    element: <ProtectedRoute allowedRoles={[UserRole.ADMIN, UserRole.RO, UserRole.RM]}><CampaignBreakdown /></ProtectedRoute>,
+    element: <ProtectedRoute><CampaignBreakdown /></ProtectedRoute>,
   },
   {
     path: '/settings',
@@ -124,35 +125,15 @@ export default function App() {
   useSessionTimeout();
 
   React.useEffect(() => {
-    const restoreSession = async () => {
-      try {
-      const persisted = localStorage.getItem('leadflow-auth');
-      if (persisted) {
-        const parsed = JSON.parse(persisted);
-        const snapshot = parsed?.state || parsed;
-        if (snapshot?.user && snapshot?.isAuthenticated && snapshot?.token) {
-          const response = await fetch('/api/auth/me');
-          if (!response.ok) {
-            logout();
-          } else {
-            login(snapshot.user, false, snapshot.token);
-          }
-        }
-      }
-      } catch (error) {
-        console.warn('Could not restore persisted auth session.', error);
-        logout();
-      }
+    // 1. Trigger background data synchronization if authenticated
+    const state = useAuthStore.getState();
+    if (state.isAuthenticated && state.user) {
+      syncService.syncToDatabase();
+    }
 
-      const state = useAuthStore.getState();
-      if (state.isAuthenticated && state.user) {
-        syncService.syncToDatabase();
-      }
-
-      setInitialized(true);
-    };
-    restoreSession();
-  }, [login, logout, setInitialized]);
+    // 2. Manage authentication state changes
+    setInitialized(true);
+  }, []);
 
   return (
     <>

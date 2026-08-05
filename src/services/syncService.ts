@@ -47,15 +47,11 @@ export const syncService = {
       let finalUsersToKeep = [...localUsers];
 
       try {
-        const sanitizedLocalUsers = localUsers
-          .filter(u => !deletedUserIds.has(u.id))
-          .map(({ password, ...rest }) => rest);
-
         const userSyncRes = await fetch('/api/users/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            localUsers: sanitizedLocalUsers,
+            localUsers: localUsers.filter(u => !deletedUserIds.has(u.id)),
             deletedUserIds: Array.from(deletedUserIds)
           })
         });
@@ -84,7 +80,6 @@ export const syncService = {
                 const lTime = new Date(localUser.createdDate || 0).getTime();
                 const cTime = new Date(cu.createdDate || 0).getTime();
                 const needsLocalUpdate = cu.role !== localUser.role || 
-                                         cu.password !== localUser.password || 
                                          cu.name !== localUser.name ||
                                          cu.status !== localUser.status ||
                                          (!isNaN(cTime) && !isNaN(lTime) && cTime > lTime);

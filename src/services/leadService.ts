@@ -1,8 +1,9 @@
-import { Lead, LeadStatus, StatusHistoryEntry, User } from '../types';
+import { Lead, LeadStatus, RolePermission, StatusHistoryEntry, User } from '../types';
 import { useAuthStore } from '../store/authStore';
 import { localDb } from './localDb';
 import { userService } from './userService';
 import { notificationService } from './notificationService';
+import { filterLeadsByScope } from '../utils/dataScope';
 
 async function sendHierarchyNotifications(leadId: string, prospectName: string, assignedTo: string, updaterName: string) {
   try {
@@ -48,90 +49,50 @@ async function sendHierarchyNotifications(leadId: string, prospectName: string, 
   }
 }
 
-function getReportingEmployeeIds(managerEmployeeId: string, allUsers: any[]): string[] {
-  const result: string[] = [managerEmployeeId];
-  const queue: string[] = [managerEmployeeId];
-  const visited = new Set<string>([managerEmployeeId]);
-
-  while (queue.length > 0) {
-    const currentId = queue.shift()!;
-    const directReports = allUsers.filter(u => u.managerId === currentId);
-    for (const report of directReports) {
-      if (!visited.has(report.employeeId)) {
-        visited.add(report.employeeId);
-        result.push(report.employeeId);
-        queue.push(report.employeeId);
-      }
-    }
+function loadRolePermissions(): RolePermission[] {
+  try {
+    const raw = localStorage.getItem('lf_local_roles_permissions');
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error('Failed to parse role permissions for data-visibility scoping:', e);
+    return [];
   }
-
-  return result;
 }
 
 function applyDataVisibilityFilters(leads: Lead[], filters: { role?: string, employeeId?: string }, allUsers: User[]): Lead[] {
   if (!filters?.employeeId) return leads;
-  
-  const roleName = filters.role || '';
-  const roleNormalized = roleName.toUpperCase();
-  
-  if (roleNormalized === 'ADMIN') return leads; // Admin has view-all
-  
-  let dataVisibility = 'Own'; // default
-  try {
-    const rawRoles = localStorage.getItem('lf_local_roles_permissions');
-    if (rawRoles) {
-      const parsedRoles = JSON.parse(rawRoles);
-      const matched = parsedRoles.find((r: any) => r.roleId === roleName || r.roleId === roleNormalized);
-      if (matched && matched.dataVisibility) {
-        dataVisibility = matched.dataVisibility;
-      } else {
-        // Fallback standard roles configuration
-        if (['BUSINESS_HEAD', 'BH'].includes(roleNormalized)) dataVisibility = 'Organization';
-        else if (['BUSINESS_EXECUTIVE', 'BE', 'BDM', 'ASM'].includes(roleNormalized)) dataVisibility = 'Department';
-        else if (['RM'].includes(roleNormalized)) dataVisibility = 'Team';
-        else dataVisibility = 'Own';
-      }
-    }
-  } catch (e) {
-    console.error(e);
-  }
 
-  const currentUser = allUsers.find(u => u.employeeId === filters.employeeId);
-  
-  if (dataVisibility === 'Own') {
-    return leads.filter(l => l.assignedTo === filters.employeeId || l.assignedBy === filters.employeeId);
-  }
-  
-  if (dataVisibility === 'Team') {
-    if (currentUser?.teamId) {
-      const teamId = currentUser.teamId;
-      const teamMemberIds = allUsers.filter(u => u.teamId === teamId).map(u => u.employeeId);
-      return leads.filter(l => teamMemberIds.includes(l.assignedTo || ''));
-    }
-    const teamIds = getReportingEmployeeIds(filters.employeeId, allUsers);
-    return leads.filter(l => teamIds.includes(l.assignedTo || ''));
-  }
-  
-  if (dataVisibility === 'Department') {
-    const teamIds = getReportingEmployeeIds(filters.employeeId, allUsers);
-    return leads.filter(l => teamIds.includes(l.assignedTo || ''));
-  }
-  
-  if (dataVisibility === 'Organization') {
-    return leads;
-  }
+  const currentUser = allUsers.find(u => u.employeeId === filters.employeeId) || {
+    employeeId: filters.employeeId,
+    role: filters.role,
+  };
 
-  return leads;
+  const roles = loadRolePermissions();
+  // NOTE: uses the canonical Own/DownTeam/FullTeam/Organization scope
+  // resolver so a role configured with any of those 4 values is always
+  // recognized (previously, DownTeam/FullTeam fell through every branch
+  // and silently returned ALL leads - a serious data-leak bug).
+  return filterLeadsByScope(leads, currentUser as any, allUsers, roles);
 }
 
 export const leadService = {
   async createLead(leadData: Omit<Lead, 'id'>) {
     const id = `lead_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    const payload = {
+    const payload: Lead = {
       ...leadData,
       id,
       timestamp: new Date().toISOString()
-    };
+    } as Lead;
+
+    if (payload.assignedTo) {
+      payload.assignmentHistory = [{
+        id: `assign_${Date.now()}`,
+        toEmployeeId: payload.assignedTo,
+        changedBy: payload.assignedBy || 'System',
+        date: new Date().toISOString(),
+        note: 'Initial assignment at lead creation',
+      }];
+    }
     
     // Always write to localDb first for immediate local consistency
     localDb.createLead(payload);
@@ -306,7 +267,9 @@ export const leadService = {
     meetingDate?: string,
     sumAssured?: number,
     productName?: string,
-    projectedNCP?: number
+    projectedNCP?: number,
+    lossReason?: string,
+    meetingType?: string
   ) {
     // Always write to local storage first for immediate consistency
     localDb.updateLeadStatus(
@@ -320,7 +283,9 @@ export const leadService = {
       meetingDate,
       sumAssured,
       productName,
-      projectedNCP
+      projectedNCP,
+      lossReason,
+      meetingType
     );
 
     try {
@@ -338,6 +303,40 @@ export const leadService = {
     }
   },
 
+  async getLead(leadId: string): Promise<Lead | null> {
+    // Local cache first for instant render, then refresh from cloud in
+    // the background so the timeline stays current across devices.
+    const local = localDb.getLead(leadId);
+    try {
+      const res = await fetch('/api/leads');
+      if (res.ok) {
+        const cloudLeads: Lead[] = await res.json();
+        const match = cloudLeads.find(l => l.id === leadId);
+        if (match) {
+          localDb.updateLead(leadId, match);
+          return match;
+        }
+      }
+    } catch (error) {
+      console.warn('Cloud fetch for single lead failed, using local cache:', error);
+    }
+    return local;
+  },
+
+  async addDocument(leadId: string, name: string, note: string | undefined, uploadedBy: string) {
+    const existing = localDb.getLead(leadId);
+    if (!existing) return;
+    const doc = {
+      id: `doc_${Date.now()}`,
+      name,
+      note,
+      uploadedBy,
+      date: new Date().toISOString(),
+    };
+    await this.updateLead(leadId, { documents: [...(existing.documents || []), doc] }, uploadedBy);
+    return doc;
+  },
+
   async updateLead(leadId: string, updatedFields: Partial<Lead>, updaterName?: string) {
     const updater = updaterName || 'Admin';
 
@@ -347,6 +346,14 @@ export const leadService = {
     if (updatedFields.assignedTo !== undefined && existing.assignedTo !== updatedFields.assignedTo) {
       updatedFields.assignedBy = updater;
       updatedFields.assignedDate = new Date().toISOString();
+      const assignmentEntry = {
+        id: `assign_${Date.now()}`,
+        fromEmployeeId: existing.assignedTo || undefined,
+        toEmployeeId: updatedFields.assignedTo,
+        changedBy: updater,
+        date: new Date().toISOString(),
+      };
+      updatedFields.assignmentHistory = [...(existing.assignmentHistory || []), assignmentEntry];
       if (updatedFields.assignedTo) {
         await sendHierarchyNotifications(leadId, existing.prospectName, updatedFields.assignedTo, updater);
       }

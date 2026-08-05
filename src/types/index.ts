@@ -8,18 +8,27 @@ export enum UserRole {
   ADMIN = 'ADMIN',
 }
 
-export type LeadStatus = 
-  | 'Untouched'
-  | 'Contacted'
-  | 'No Response'
-  | 'Busy'
-  | 'Interested'
-  | 'Follow-up Set'
-  | 'Meeting Fixed'
-  | 'Meeting Completed'
-  | 'Pipeline Locked'
-  | 'Converted'
-  | 'Not Interested';
+// LeadStatus used to be a hardcoded fixed union - it is now admin
+// configurable via the Metadata Engine (type key: 'lead_status'), so the
+// type is loosened to `string`. DEFAULT_LEAD_STATUSES below is only the
+// seed list used the very first time a database is initialized (see
+// server/db.ts) - the actual source of truth at runtime is the
+// `options` table (type='lead_status'), fetched through metadataService.
+export type LeadStatus = string;
+
+export const DEFAULT_LEAD_STATUSES = [
+  'Untouched',
+  'Contacted',
+  'No Response',
+  'Busy',
+  'Interested',
+  'Follow-up Set',
+  'Meeting Fixed',
+  'Meeting Completed',
+  'Pipeline Locked',
+  'Converted',
+  'Not Interested',
+] as const;
 
 export interface User {
   // Identity
@@ -64,6 +73,36 @@ export interface User {
   updatedAt?: string;
 }
 
+/**
+ * RolePermission - defines the full access-control profile attached to a role
+ * (e.g. ADMIN, BH, BDM, RO...). This drives both menu visibility and the
+ * data-visibility scope ("Own" | "DownTeam" | "FullTeam" | "Organization")
+ * used to restrict which employees'/leads' data a user can see.
+ */
+export type DataVisibilityScope = 'Own' | 'DownTeam' | 'FullTeam' | 'Organization';
+
+export interface RolePermission {
+  roleId: string;
+  roleName: string;
+  isCustom?: boolean;
+  // Route -> allowed
+  menuAccess?: Record<string, boolean>;
+  // Coarse-grained scope of data (leads/users/reports) this role may see
+  dataVisibility?: DataVisibilityScope;
+  // Coarse-grained CRUD actions allowed globally
+  actions?: {
+    view?: boolean;
+    create?: boolean;
+    edit?: boolean;
+    delete?: boolean;
+    approve?: boolean;
+    upload?: boolean;
+  };
+  // Fine-grained per-feature permission matrix, e.g.
+  // { dashboard: { view: true, ... }, user_management: { user_create: true, ... } }
+  featurePermissions?: Record<string, Record<string, boolean>>;
+}
+
 export interface Permissions {
   id: string; // coincided with roleId
   roleId: string;
@@ -75,16 +114,6 @@ export interface Permissions {
     delete: boolean;
     upload: boolean;
   }>;
-}
-
-export interface RolePermission {
-  roleId: string;
-  roleName: string;
-  isCustom?: boolean;
-  menuAccess?: Record<string, boolean>;
-  dataVisibility?: string;
-  actions?: Record<string, boolean>;
-  featurePermissions?: Record<string, Record<string, boolean>>;
 }
 
 export interface Team {
@@ -105,6 +134,25 @@ export interface StatusHistoryEntry {
   sumAssured?: number;
   productName?: string;
   updatedBy?: string;
+  lossReason?: string;
+  meetingType?: string;
+}
+
+export interface AssignmentHistoryEntry {
+  id: string;
+  fromEmployeeId?: string;
+  toEmployeeId: string;
+  changedBy?: string;
+  date: string;
+  note?: string;
+}
+
+export interface LeadDocument {
+  id: string;
+  name: string;
+  note?: string;
+  uploadedBy?: string;
+  date: string;
 }
 
 export interface Lead {
@@ -142,6 +190,20 @@ export interface Lead {
   sumAssured?: number;
   timestamp: string;
   statusHistory?: StatusHistoryEntry[];
+  // New Metadata Engine fields (Phase 1) - all admin-configurable via
+  // the Settings > Metadata Manager screen (type keys: Occupation,
+  // Priority, MeetingType, LossReason, FollowUpType).
+  occupation?: string;
+  priority?: string;
+  meetingType?: string;
+  lossReason?: string;
+  followUpType?: string;
+  // Values for any admin-added custom field (Dynamic Form Builder - Phase 2),
+  // keyed by the field's fieldKey.
+  customFields?: Record<string, string>;
+  // Lead Timeline (Phase 4)
+  assignmentHistory?: AssignmentHistoryEntry[];
+  documents?: LeadDocument[];
 }
 
 export interface FollowUp {
@@ -166,9 +228,51 @@ export interface Campaign {
 }
 
 export interface DropdownOption {
-  type: 'Area' | 'Source' | 'Product' | 'Campaign' | 'Profession' | 'MaritalStatus' | 'FollowUpStatus';
+  id?: string;
+  type: string;
   value: string;
+  label?: string;
   status: 'Active' | 'Inactive';
+  sortOrder?: number;
+  meta?: Record<string, any>;
+  createdDate?: string;
+}
+
+export interface MetadataType {
+  key: string;
+  label: string;
+  description?: string;
+  isSystem: boolean;
+  sortOrder: number;
+}
+
+export type FormFieldType = 'text' | 'number' | 'dropdown' | 'date' | 'textarea' | 'checkbox';
+
+export interface FormField {
+  id: string;
+  fieldKey: string;
+  label: string;
+  fieldType: FormFieldType;
+  section: string;
+  isMandatory: boolean;
+  isVisible: boolean;
+  sortOrder: number;
+  metadataTypeKey?: string | null;
+  placeholder?: string;
+  isSystem: boolean;
+  createdDate?: string;
+}
+
+export interface WorkflowRule {
+  id: string;
+  status: string;
+  allowedNextStatuses: string[] | null; // null = any status allowed (unrestricted)
+  requiresLossReason: boolean;
+  requiresMeetingType: boolean;
+  requiresFollowUpType: boolean;
+  requiresNote: boolean;
+  isSystem: boolean;
+  createdDate?: string;
 }
 
 export interface SystemNotification {
