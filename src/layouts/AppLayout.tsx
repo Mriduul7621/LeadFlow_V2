@@ -1,0 +1,712 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  UserPlus, 
+  Upload, 
+  ClipboardList, 
+  Users, 
+  History, 
+  Settings, 
+  ChevronRight,
+  LogOut,
+  RefreshCw,
+  Calendar,
+  Clock,
+  Menu,
+  X,
+  Bell,
+  Database,
+  TrendingUp,
+  PieChart as PieIcon,
+  Target,
+  Lock
+} from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuthStore } from '../modules/auth/store/authStore';
+import { UserRole, SystemNotification, RolePermission } from '../modules/shared/types';
+import { cn } from '../lib/utils';
+import { motion, AnimatePresence } from 'framer-motion';
+import { notificationService } from '../modules/notifications/services/notificationService';
+import { syncService } from '../services/syncService';
+import { adminService } from '../modules/admin/services/adminService';
+import { userService } from '../modules/users/services/userService';
+import { toast } from 'sonner';
+import { useTranslation } from '../modules/shared/utils/translations';
+
+const labelToTranslationKey: Record<string, string> = {
+  'Dashboard': 'navDashboard',
+  'Lead Generate': 'navLeadGenerate',
+  'Lead Upload': 'navLeadUpload',
+  'All Leads': 'navAllLeads',
+  'Lead Tracking': 'navLeadTracking',
+  'Execution Intell.': 'navExecutionIntell',
+  'NCP Progress': 'navNcpProgress',
+  'Trend Charts': 'navTrendCharts',
+  'Campaign Breakdown': 'navCampaignBreakdown',
+  'Follow-up Strategy': 'navFollowUpStrategy',
+  'Task Calendar': 'navTaskCalendar',
+  'Activities': 'navActivities',
+  'Team Progress': 'navTeamProgress',
+  'User Management': 'navUserManagement',
+  'Settings': 'navSettings',
+};
+
+
+const menuItems = [
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: Object.values(UserRole) },
+  { label: 'Lead Generate', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole) },
+  { label: 'Lead Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
+  { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
+  { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: Object.values(UserRole) },
+  { label: 'Execution Intell.', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Trend Charts', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Campaign Breakdown', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Follow-up Strategy', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
+  { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole) },
+  { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole) },
+  { label: 'Team Progress', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
+  { label: 'User Management', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
+  { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole) },
+];
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  const { t, language, setLanguage } = useTranslation();
+  const { user, logout } = useAuthStore();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
+  const [notifications, setNotifications] = useState<SystemNotification[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [rolesPermissions, setRolesPermissions] = useState<RolePermission[]>([]);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwResetLoading, setPwResetLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchPerms = async () => {
+      try {
+        const rp = await adminService.getRoles();
+        setRolesPermissions(rp);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchPerms();
+    // Re-check periodically
+    const rTimer = setInterval(fetchPerms, 6000);
+    return () => clearInterval(rTimer);
+  }, [user]);
+
+  // 30-Minute Inactivity Session Timeout with Multi-Tab Synchronization
+  useEffect(() => {
+    if (!user) return;
+
+    // Ensure initial timestamp is established
+    if (!localStorage.getItem('leadflow_last_activity')) {
+      localStorage.setItem('leadflow_last_activity', Date.now().toString());
+    }
+
+    // Set up a periodic background check (every 2 seconds)
+    const checkTimeoutInterval = setInterval(() => {
+      const lastActivityStr = localStorage.getItem('leadflow_last_activity');
+      if (!lastActivityStr) return;
+      
+      const lastActivity = parseInt(lastActivityStr, 10);
+      const now = Date.now();
+      
+      if (now - lastActivity > 1800000) { // 30 minutes = 1,800,000ms
+        clearInterval(checkTimeoutInterval);
+        toast.error("Session expired due to 30 minutes of inactivity.", {
+          duration: 7000,
+          id: "session-timeout-toast"
+        });
+        logout();
+        navigate('/login');
+      }
+    }, 2000);
+
+    // Track user active gestures in this tab with a 1-second write throttle
+    let lastWriteTime = 0;
+    const handleGesture = () => {
+      const now = Date.now();
+      if (now - lastWriteTime > 1000) {
+        localStorage.setItem('leadflow_last_activity', now.toString());
+        lastWriteTime = now;
+      }
+    };
+
+    const activityEvents = [
+      'mousedown',
+      'mousemove',
+      'keydown',
+      'scroll',
+      'touchstart',
+      'click'
+    ];
+
+    activityEvents.forEach((ev) => {
+      window.addEventListener(ev, handleGesture, { passive: true });
+    });
+
+    return () => {
+      clearInterval(checkTimeoutInterval);
+      activityEvents.forEach((ev) => {
+        window.removeEventListener(ev, handleGesture);
+      });
+    };
+  }, [user, logout, navigate]);
+
+  useEffect(() => {
+    if (!user) return;
+    const fetchNotifs = async () => {
+      try {
+        const list = await notificationService.getNotifications(user.employeeId);
+        setNotifications(list);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchNotifs();
+    const timer = setInterval(fetchNotifs, 8000);
+    return () => clearInterval(timer);
+  }, [user]);
+
+  const handleMarkAsRead = async (id: string) => {
+    await notificationService.markNotificationAsRead(id);
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
+  const handleMarkAllRead = async () => {
+    if (!user) return;
+    try {
+      await notificationService.markAllNotificationsAsRead(user.employeeId);
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      toast.success("All notifications marked as read");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark notifications as read");
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!user) return;
+    try {
+      await notificationService.deleteAllNotifications(user.employeeId);
+      setNotifications([]);
+      toast.success("All notifications deleted successfully");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete notifications");
+    }
+  };
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const [dhakaTime, setDhakaTime] = useState<{ dateStr: string; dayStr: string; timeStr: string }>({
+    dateStr: '',
+    dayStr: '',
+    timeStr: ''
+  });
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      try {
+        const dateStr = now.toLocaleDateString('en-US', {
+          timeZone: 'Asia/Dhaka',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+
+        const dayStr = now.toLocaleDateString('en-US', {
+          timeZone: 'Asia/Dhaka',
+          weekday: 'long'
+        });
+
+        const timeStr = now.toLocaleTimeString('en-US', {
+          timeZone: 'Asia/Dhaka',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        });
+
+        setDhakaTime({ dateStr, dayStr, timeStr });
+      } catch (e) {
+        // Fallback if timezone not supported (though universally is)
+        setDhakaTime({
+          dateStr: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+          dayStr: now.toLocaleDateString('en-US', { weekday: 'long' }),
+          timeStr: now.toLocaleTimeString('en-US')
+        });
+      }
+    };
+
+    updateTime();
+    const intervalId = setInterval(updateTime, 1000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    toast.loading("Initiating Cloud Uplink Sync...", { id: "sync-toast" });
+    try {
+      const result = await syncService.syncToDatabase();
+      if (result && result.success) {
+        const { usersSynced, leadsSynced, optionsSynced, departmentsSynced, rolesSynced, teamsSynced, hierarchiesSynced } = result;
+        const total = (usersSynced || 0) + (leadsSynced || 0) + (optionsSynced || 0) + (departmentsSynced || 0) + (rolesSynced || 0) + (teamsSynced || 0) + (hierarchiesSynced || 0);
+        if (total > 0) {
+          toast.success(`Uplink Synchronized! Synced ${usersSynced || 0} users, ${leadsSynced || 0} leads, ${departmentsSynced || 0} depts, ${rolesSynced || 0} roles, ${teamsSynced || 0} teams, ${optionsSynced || 0} configs.`, { id: "sync-toast" });
+        } else {
+          toast.success("Uplink Synchronized! Cloud databases are fully up to date.", { id: "sync-toast" });
+        }
+      } else {
+        toast.error("Cloud Uplink Sync failed. Registered offline.", { id: "sync-toast" });
+      }
+    } catch (err) {
+      toast.error("Offline or network issue during sync.", { id: "sync-toast" });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  if (!user) return <>{children}</>;
+
+  if (user && user.mustChangePassword) {
+    const handleForcedPasswordReset = async (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = newPassword.trim();
+      if (trimmed.length < 6) {
+        toast.error("Security policy requires password to be at least 6 characters.");
+        return;
+      }
+      if (trimmed !== confirmPassword.trim()) {
+        toast.error("Confirm password does not match new password.");
+        return;
+      }
+      setPwResetLoading(true);
+      try {
+        await userService.updateUser(user.id, {
+          password: trimmed,
+          mustChangePassword: false
+        });
+        useAuthStore.getState().login({
+          ...user,
+          mustChangePassword: false,
+          password: undefined
+        }, useAuthStore.getState().token || undefined, useAuthStore.getState().isOfflineMode);
+        toast.success("Password successfully rotated! Welcome to Shanta Lead Flow Client System.");
+      } catch (err: any) {
+        toast.error(err.message || "Failed to update password. Try again.");
+      } finally {
+        setPwResetLoading(false);
+      }
+    };
+
+    return (
+      <div id="forced_reset_container" className="fixed inset-0 bg-[#F9F9F4] z-50 flex items-center justify-center p-6">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="max-w-md w-full bg-white border border-slate-200 p-8 rounded-sm shadow-2xl space-y-6"
+        >
+          <div className="space-y-2 text-center">
+            <div className="mx-auto w-12 h-12 bg-[#978C21]/10 rounded-full flex items-center justify-center text-[#978C21] mb-2">
+              <Lock className="w-6 h-6 animate-pulse" />
+            </div>
+            <h2 className="text-sm font-black uppercase tracking-[0.2em] text-[#978C21] italic">Rotate Password</h2>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
+              For security compliance, you must rotate your temporary password upon onboarding.
+            </p>
+          </div>
+
+          <form onSubmit={handleForcedPasswordReset} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic font-bold">New Password</label>
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="MINIMUM 6 CHARACTERS"
+                className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-200 focus:border-[#978C21] outline-none text-xs rounded-none transition-all uppercase tracking-widest font-mono"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic font-bold">Confirm Password</label>
+              <input
+                type="password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="RE-ENTER NEW PASSWORD"
+                className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-200 focus:border-[#978C21] outline-none text-xs rounded-none transition-all uppercase tracking-widest font-mono"
+              />
+            </div>
+
+            <button
+              id="submit_forced_reset"
+              type="submit"
+              disabled={pwResetLoading}
+              className="w-full py-4 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-xs uppercase tracking-widest italic transition-colors shadow-lg shadow-[#978C21]/20 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {pwResetLoading ? 'Rotating credentials...' : 'Rotate and Log In'}
+            </button>
+          </form>
+        </motion.div>
+      </div>
+    );
+  }
+
+  const userRoleName = user.role || '';
+  const userRoleNormalized = userRoleName.toUpperCase();
+  const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
+
+  const filteredMenu = menuItems.filter(item => {
+    // If Admin, they always have access to everything
+    if (userRoleNormalized === 'ADMIN') return true;
+    
+    // Check if custom / role permission overrides menu access
+    if (matchedPermission && matchedPermission.menuAccess !== undefined) {
+      if (matchedPermission.menuAccess[item.path] !== undefined) {
+        return matchedPermission.menuAccess[item.path];
+      }
+    }
+    
+    // Otherwise fallback to static roles check
+    return item.roles.includes(userRoleNormalized as any) || item.roles.includes(userRoleName as any);
+  });
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  return (
+    <div className="min-h-screen bg-white flex text-slate-900 font-sans">
+      {/* Sidebar - Desktop */}
+      <motion.aside 
+        initial={false}
+        animate={{ width: isSidebarOpen ? 280 : 80 }}
+        className="hidden lg:flex flex-col bg-[#F9F9F4] border-r border-slate-100 sticky top-0 h-screen z-40 transition-all duration-300 shadow-sm"
+      >
+        <div className={cn("p-8 mb-4", !isSidebarOpen && "flex justify-center")}>
+          {isSidebarOpen ? (
+            <div className="flex items-center">
+               <img 
+                 src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
+                 alt="Shanta Life Logo"
+                 className="h-12 w-auto object-contain"
+                 referrerPolicy="no-referrer"
+               />
+            </div>
+          ) : (
+             <div className="flex items-center justify-center">
+                <img 
+                  src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
+                  alt="Shanta Life Logo"
+                  className="h-7 w-auto object-contain animate-pulse-slow"
+                  referrerPolicy="no-referrer"
+                />
+             </div>
+          )}
+        </div>
+
+        <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto">
+          {filteredMenu.map((item) => {
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={cn(
+                  "flex items-center gap-3 px-4 py-3 rounded-sm transition-all duration-200 group relative text-[10px] uppercase font-black tracking-widest italic",
+                  isActive 
+                    ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
+                    : "text-slate-400 hover:text-brand-text hover:bg-white"
+                )}
+              >
+                <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "group-hover:text-[#978C21]")} />
+                {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="p-4 border-t border-slate-100">
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="w-full h-8 flex items-center justify-center rounded-sm hover:bg-slate-100 text-slate-400 transition-colors"
+          >
+            <ChevronRight className={cn("w-4 h-4 transition-transform duration-300", isSidebarOpen && "rotate-180")} />
+          </button>
+        </div>
+      </motion.aside>
+
+      {/* Mobile Menu */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="fixed inset-0 bg-slate-900/40 z-50 lg:hidden backdrop-blur-sm"
+            />
+            <motion.aside
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              className="fixed left-0 top-0 bottom-0 w-72 bg-white z-50 lg:hidden h-full"
+            >
+              <div className="p-6 flex items-center justify-between border-b border-slate-100">
+                <div className="flex items-center">
+                   <img 
+                     src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
+                     alt="Shanta Life Logo"
+                     className="h-10 w-auto object-contain"
+                     referrerPolicy="no-referrer"
+                   />
+                </div>
+                <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-slate-50 rounded-full">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+              <nav className="p-4 space-y-1">
+                {filteredMenu.map((item) => {
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <Link
+                      key={item.path}
+                      to={item.path}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className={cn(
+                        "flex items-center gap-3 px-4 py-3 rounded text-[10px] uppercase font-black tracking-widest italic transition-colors",
+                        isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
+                      )}
+                    >
+                      <item.icon className="w-4 h-4" />
+                      <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
+                    </Link>
+                  );
+                })}
+              </nav>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
+        {/* Top Header */}
+        <header className="h-20 bg-white border-b border-slate-100 px-8 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
+          <div className="flex items-center gap-4 lg:hidden">
+             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2">
+                <Menu className="w-6 h-6 text-slate-400" />
+             </button>
+          </div>
+
+          <div className="hidden lg:flex items-center select-none">
+             <img 
+               src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
+               alt="Shanta Life Logo"
+               className="h-12 w-auto object-contain"
+               referrerPolicy="no-referrer"
+             />
+          </div>
+
+          <div className="flex items-center gap-6">
+             <div className="hidden md:flex items-center">
+                <span className="text-[11px] font-black text-[#978C21] capitalize tracking-wider italic mr-6">Dhaka Standard Time</span>
+                <div className="flex items-center border border-slate-100 rounded-sm divide-x divide-slate-50 px-2 py-1 shadow-sm bg-[#FBFAF8]">
+                   <div className="px-4 py-1.5 flex items-center gap-3">
+                      <Calendar className="w-3.5 h-3.5 text-[#978C21]" />
+                      <span className="text-[10px] font-black text-slate-600 italic tracking-wider leading-none">
+                        {dhakaTime.dayStr ? `${dhakaTime.dayStr.substring(0, 3)}, ${dhakaTime.dateStr}` : 'Loading Date...'}
+                      </span>
+                   </div>
+                   <div className="px-4 py-1.5 flex items-center gap-3 bg-white shadow-inner rounded-sm">
+                      <Clock className="w-3.5 h-3.5 text-[#978C21]" />
+                      <span className="text-[10px] font-mono font-black text-slate-800 tracking-widest leading-none">
+                        {dhakaTime.timeStr || '--:--:-- --'}
+                      </span>
+                   </div>
+                </div>
+             </div>
+             
+             <div className="h-6 w-px bg-slate-100 mx-2" />
+
+             {/* Premium Language Switcher inside App Layout Header */}
+             <div className="flex items-center gap-1 bg-slate-100 border border-slate-200/50 p-1 rounded-full shadow-inner" id="layout-language-switcher">
+               <button
+                 type="button"
+                 onClick={() => setLanguage('en')}
+                 className={cn(
+                   "px-2.5 py-1 text-[8px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer",
+                   language === 'en'
+                     ? "bg-[#978C21] text-white shadow-sm"
+                     : "text-slate-400 hover:text-slate-600"
+                 )}
+               >
+                 EN
+               </button>
+               <button
+                 type="button"
+                 onClick={() => setLanguage('bn')}
+                 className={cn(
+                   "px-2.5 py-1 text-[8px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer",
+                   language === 'bn'
+                     ? "bg-[#978C21] text-white shadow-sm"
+                     : "text-slate-400 hover:text-slate-600"
+                 )}
+               >
+                 BN
+               </button>
+             </div>
+
+             <div className="h-6 w-px bg-slate-100 mx-2" />
+
+             <div className="flex items-center gap-4">
+                <button 
+                  onClick={handleSync}
+                  disabled={isSyncing}
+                  title={isSyncing ? "Syncing data to Supabase..." : "Click to Sync Data with secure cloud network"}
+                  className={cn(
+                    "p-2.5 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm flex items-center justify-center gap-2",
+                    isSyncing ? "text-slate-400 bg-slate-50 border-slate-200 cursor-not-allowed" : "text-[#978C21]"
+                  )}
+                >
+                   <RefreshCw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
+                   <span className="hidden md:inline text-[9px] font-black tracking-widest uppercase italic text-[#978C21]/90">
+                     {isSyncing ? "Syncing..." : "Sync Now"}
+                   </span>
+                </button>
+
+                {/* Real-time Notification Bell container */}
+                <div className="relative">
+                   <button 
+                     onClick={() => setIsNotifOpen(!isNotifOpen)}
+                     className="relative p-2.5 border border-slate-100 rounded-sm text-slate-400 hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm"
+                   >
+                     <Bell className="w-4 h-4" />
+                     {unreadCount > 0 && (
+                       <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-bold h-4 w-4 rounded-full flex items-center justify-center animate-pulse">
+                         {unreadCount}
+                       </span>
+                     )}
+                   </button>
+
+                   {isNotifOpen && (
+                     <>
+                       <div 
+                         className="fixed inset-0 z-40" 
+                         onClick={() => setIsNotifOpen(false)}
+                       />
+                       <div className="absolute right-0 mt-2 w-[330px] bg-white border border-slate-100 rounded-sm shadow-2xl py-3 z-50 text-left max-h-96 overflow-y-auto">
+                         <div className="px-4 py-2 border-b border-slate-50 flex justify-between items-center">
+                           <span className="text-[10px] font-black uppercase tracking-wider text-slate-950 italic">🔔 Notifications ({unreadCount} new)</span>
+                          </div>
+                          {notifications.length > 0 && (
+                            <div className="px-4 py-1.5 border-b border-slate-50 flex items-center justify-between bg-[#FDFDFB]">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMarkAllRead();
+                                }}
+                                className="text-[9px] font-semibold text-[#978C21] hover:underline uppercase tracking-wide cursor-pointer"
+                              >
+                                Mark All Read
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteAll();
+                                }}
+                                className="text-[9px] font-semibold text-red-500 hover:underline uppercase tracking-wide cursor-pointer"
+                              >
+                                Delete All
+                              </button>
+                            </div>
+                          )}
+
+                         <div className="divide-y divide-slate-50">
+                           {notifications.length === 0 ? (
+                             <div className="px-4 py-8 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest italic">
+                               No notifications received
+                             </div>
+                           ) : (
+                             notifications.map((notif) => (
+                               <div 
+                                 key={notif.id} 
+                                 onClick={() => {
+                                   handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`);
+                                   setIsNotifOpen(false);
+                                 }}
+                                 className={cn(
+                                   "p-4 hover:bg-slate-50 transition-colors cursor-pointer text-left",
+                                   !notif.read ? "bg-[#978C21]/5 border-l-2 border-[#978C21]" : ""
+                                 )}
+                               >
+                                 <div className="flex justify-between items-start gap-2">
+                                    <h5 className="text-[10px] uppercase font-black tracking-wider text-slate-800">{notif.title}</h5>
+                                    {!notif.read && <span className="bg-[#978C21] h-1.5 w-1.5 rounded-full" />}
+                                 </div>
+                                 <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{notif.message}</p>
+                                 <span className="text-[8px] font-bold text-slate-300 uppercase tracking-widest leading-none italic mt-2 block">
+                                   {new Date(notif.date).toLocaleTimeString()}
+                                 </span>
+                               </div>
+                             ))
+                           )}
+                         </div>
+                       </div>
+                     </>
+                   )}
+                </div>
+                
+                <div className="relative group cursor-pointer">
+                  <div className="flex items-center gap-3 pl-2">
+                    <div className="w-10 h-10 rounded-sm bg-slate-900 flex items-center justify-center border border-slate-800 shadow-lg overflow-hidden">
+                      {user.avatarUrl ? (
+                        <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="text-white font-black text-sm italic">
+                          {user.name.charAt(0)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {/* Profile Popup */}
+                  <div className="absolute right-0 top-[120%] w-64 bg-white rounded-sm shadow-2xl border border-slate-100 py-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 transform origin-top-right scale-95 group-hover:scale-100 z-50">
+                    <div className="px-6 py-4 border-b border-slate-50 mb-2">
+                      <p className="text-[9px] font-black text-slate-300 uppercase tracking-[0.2em] mb-2 italic">Active Identity</p>
+                      <p className="text-[14px] text-brand-text font-black truncate uppercase italic tracking-tight">{user.name}</p>
+                      <p className="text-[10px] text-slate-400 font-bold mt-1">{user.email}</p>
+                    </div>
+                    <button 
+                      onClick={handleLogout}
+                      className="w-full px-6 py-4 flex items-center gap-4 text-red-500 hover:bg-red-50 text-[10px] font-black uppercase tracking-[0.2em] transition-colors italic"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  </div>
+                </div>
+             </div>
+          </div>
+        </header>
+
+        {/* Main Content Area */}
+        <main className="flex-1 p-10 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

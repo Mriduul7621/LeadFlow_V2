@@ -1,0 +1,118 @@
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400;1,500;1,600;1,700;1,800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Open Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-primary: #978C21;
+  --color-brand-blue: #0359B3;
+  --color-brand-accent: #026A8B;
+  --color-surface: #F9F9F4;
+  --color-card: #FFFFFF;
+  --color-border: #D1D5DB;
+  --color-brand-text: #3C3C3C;
+  --color-brand-dark: #1F2937;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-brand-text antialiased scroll-smooth;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer components {
+  .card-premium {
+    @apply bg-white border border-border rounded-lg p-6 shadow-sm hover:shadow-md transition-all duration-300;
+  }
+
+  .btn-primary {
+    @apply px-5 py-2.5 bg-primary text-white rounded-md font-bold uppercase tracking-widest text-xs hover:opacity-90 active:scale-95 transition-all duration-200 shadow-sm disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-outline {
+    @apply px-5 py-2.5 bg-white border border-border text-brand-text rounded-md font-bold uppercase tracking-widest text-xs hover:bg-slate-50 active:scale-95 transition-all duration-200;
+  }
+
+  .input-standard {
+    @apply w-full px-4 py-2.5 bg-slate-50 border border-border rounded-lg text-sm font-medium focus:ring-2 focus:ring-primary/10 focus:border-primary focus:bg-white outline-none transition-all;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full hover:bg-slate-300;
+  }
+}
+
+/* Beautiful Org Chart Tree Connectors */
+.org-tree {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+}
+.org-tree ul {
+  padding-top: 24px;
+  position: relative;
+  transition: all 0.3s;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+.org-tree li {
+  text-align: center;
+  list-style-type: none;
+  position: relative;
+  padding: 24px 8px 0 8px;
+  transition: all 0.3s;
+}
+/* Connector lines */
+.org-tree li::before, .org-tree li::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 50%;
+  border-top: 2px solid #94a3b8; /* slate-400 */
+  width: 50%;
+  height: 24px;
+}
+.org-tree li::after {
+  right: auto;
+  left: 50%;
+  border-left: 2px solid #94a3b8;
+}
+/* Disconnect first and last elements */
+.org-tree li:only-child::after, .org-tree li:only-child::before {
+  display: none;
+}
+.org-tree li:only-child {
+  padding-top: 0;
+}
+.org-tree li:first-child::before, .org-tree li:last-child::after {
+  border: 0 none;
+}
+.org-tree li:last-child::before {
+  border-right: 2px solid #94a3b8;
+  border-radius: 0 6px 0 0;
+}
+.org-tree li:first-child::after {
+  border-radius: 6px 0 0 0;
+}
+/* Vertical down lines from parents */
+.org-tree ul ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  border-left: 2px solid #94a3b8;
+  width: 0;
+  height: 24px;
+  transform: translateX(-50%);
+}
+

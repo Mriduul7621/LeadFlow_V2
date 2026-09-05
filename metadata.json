@@ -1,0 +1,8 @@
+{
+  "name": "LeadFlow",
+  "description": "Smart Lead Execution Intelligence Platform for Shanta Life Insurance sales operations. Built with React, Google Sheets, and Google Apps Script.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
