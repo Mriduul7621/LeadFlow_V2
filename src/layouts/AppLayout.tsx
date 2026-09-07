@@ -35,38 +35,38 @@ import { useTranslation } from '../modules/shared/utils/translations';
 
 const labelToTranslationKey: Record<string, string> = {
   'Dashboard': 'navDashboard',
-  'Lead Generate': 'navLeadGenerate',
-  'Lead Upload': 'navLeadUpload',
+  'Add New Lead': 'navLeadGenerate',
+  'Bulk Upload': 'navLeadUpload',
   'All Leads': 'navAllLeads',
   'Lead Tracking': 'navLeadTracking',
-  'Execution Intell.': 'navExecutionIntell',
+  'Performance': 'navExecutionIntell',
   'NCP Progress': 'navNcpProgress',
-  'Trend Charts': 'navTrendCharts',
-  'Campaign Breakdown': 'navCampaignBreakdown',
-  'Follow-up Strategy': 'navFollowUpStrategy',
+  'Trends': 'navTrendCharts',
+  'Campaigns': 'navCampaignBreakdown',
+  'Follow-ups': 'navFollowUpStrategy',
   'Task Calendar': 'navTaskCalendar',
   'Activities': 'navActivities',
-  'Team Progress': 'navTeamProgress',
-  'User Management': 'navUserManagement',
+  'Team': 'navTeamProgress',
+  'Users': 'navUserManagement',
   'Settings': 'navSettings',
 };
 
 
 const menuItems = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: Object.values(UserRole) },
-  { label: 'Lead Generate', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole) },
-  { label: 'Lead Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
+  { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole) },
+  { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
   { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
   { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: Object.values(UserRole) },
-  { label: 'Execution Intell.', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
   { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Trend Charts', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Campaign Breakdown', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Follow-up Strategy', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
+  { label: 'Trends', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
+  { label: 'Follow-ups', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
   { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole) },
   { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole) },
-  { label: 'Team Progress', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
-  { label: 'User Management', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
+  { label: 'Team', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
+  { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
   { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole) },
 ];
 
@@ -254,19 +254,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const handleSync = async () => {
     setIsSyncing(true);
-    toast.loading("Initiating Cloud Uplink Sync...", { id: "sync-toast" });
+    toast.loading("Syncing data...", { id: "sync-toast" });
     try {
       const result = await syncService.syncToDatabase();
       if (result && result.success) {
         const { usersSynced, leadsSynced, optionsSynced, departmentsSynced, rolesSynced, teamsSynced, hierarchiesSynced } = result;
         const total = (usersSynced || 0) + (leadsSynced || 0) + (optionsSynced || 0) + (departmentsSynced || 0) + (rolesSynced || 0) + (teamsSynced || 0) + (hierarchiesSynced || 0);
         if (total > 0) {
-          toast.success(`Uplink Synchronized! Synced ${usersSynced || 0} users, ${leadsSynced || 0} leads, ${departmentsSynced || 0} depts, ${rolesSynced || 0} roles, ${teamsSynced || 0} teams, ${optionsSynced || 0} configs.`, { id: "sync-toast" });
+          toast.success(`Synced successfully! ${usersSynced || 0} users, ${leadsSynced || 0} leads, ${departmentsSynced || 0} departments updated.`, { id: "sync-toast" });
         } else {
-          toast.success("Uplink Synchronized! Cloud databases are fully up to date.", { id: "sync-toast" });
+          toast.success("All data is up to date.", { id: "sync-toast" });
         }
       } else {
-        toast.error("Cloud Uplink Sync failed. Registered offline.", { id: "sync-toast" });
+        toast.error("Sync failed. Working in offline mode.", { id: "sync-toast" });
       }
     } catch (err) {
       toast.error("Offline or network issue during sync.", { id: "sync-toast" });
@@ -327,7 +327,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           <form onSubmit={handleForcedPasswordReset} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic font-bold">New Password</label>
+              <label className="text-sm font-medium text-slate-600">New Password</label>
               <input
                 type="password"
                 required
@@ -339,7 +339,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic font-bold">Confirm Password</label>
+              <label className="text-sm font-medium text-slate-600">Confirm Password</label>
               <input
                 type="password"
                 required
@@ -426,7 +426,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 key={item.path}
                 to={item.path}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 rounded-sm transition-all duration-200 group relative text-[10px] uppercase font-black tracking-widest italic",
+                  "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group relative text-sm font-medium",
                   isActive 
                     ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
                     : "text-slate-400 hover:text-brand-text hover:bg-white"
@@ -488,7 +488,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       to={item.path}
                       onClick={() => setIsMobileMenuOpen(false)}
                       className={cn(
-                        "flex items-center gap-3 px-4 py-3 rounded text-[10px] uppercase font-black tracking-widest italic transition-colors",
+                        "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
                         isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
                       )}
                     >
@@ -576,15 +576,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <button 
                   onClick={handleSync}
                   disabled={isSyncing}
-                  title={isSyncing ? "Syncing data to Supabase..." : "Click to Sync Data with secure cloud network"}
+                  title={isSyncing ? "Syncing..." : "Sync data with cloud"}
                   className={cn(
                     "p-2.5 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm flex items-center justify-center gap-2",
                     isSyncing ? "text-slate-400 bg-slate-50 border-slate-200 cursor-not-allowed" : "text-[#978C21]"
                   )}
                 >
                    <RefreshCw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
-                   <span className="hidden md:inline text-[9px] font-black tracking-widest uppercase italic text-[#978C21]/90">
-                     {isSyncing ? "Syncing..." : "Sync Now"}
+                   <span className="hidden md:inline text-sm font-medium text-[#978C21]">
+                     {isSyncing ? "Syncing..." : "Sync"}
                    </span>
                 </button>
 
@@ -610,7 +610,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                        />
                        <div className="absolute right-0 mt-2 w-[330px] bg-white border border-slate-100 rounded-sm shadow-2xl py-3 z-50 text-left max-h-96 overflow-y-auto">
                          <div className="px-4 py-2 border-b border-slate-50 flex justify-between items-center">
-                           <span className="text-[10px] font-black uppercase tracking-wider text-slate-950 italic">🔔 Notifications ({unreadCount} new)</span>
+                           <span className="text-sm font-semibold text-slate-800">🔔 Notifications ({unreadCount} new)</span>
                           </div>
                           {notifications.length > 0 && (
                             <div className="px-4 py-1.5 border-b border-slate-50 flex items-center justify-between bg-[#FDFDFB]">
@@ -619,7 +619,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                   e.stopPropagation();
                                   handleMarkAllRead();
                                 }}
-                                className="text-[9px] font-semibold text-[#978C21] hover:underline uppercase tracking-wide cursor-pointer"
+                                className="text-xs font-medium text-[#978C21] hover:underline cursor-pointer"
                               >
                                 Mark All Read
                               </button>
@@ -628,7 +628,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                   e.stopPropagation();
                                   handleDeleteAll();
                                 }}
-                                className="text-[9px] font-semibold text-red-500 hover:underline uppercase tracking-wide cursor-pointer"
+                                className="text-xs font-medium text-red-500 hover:underline cursor-pointer"
                               >
                                 Delete All
                               </button>
@@ -637,8 +637,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
                          <div className="divide-y divide-slate-50">
                            {notifications.length === 0 ? (
-                             <div className="px-4 py-8 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest italic">
-                               No notifications received
+                             <div className="px-4 py-8 text-center text-sm text-slate-400">
+                               No notifications yet
                              </div>
                            ) : (
                              notifications.map((notif) => (
@@ -654,11 +654,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                  )}
                                >
                                  <div className="flex justify-between items-start gap-2">
-                                    <h5 className="text-[10px] uppercase font-black tracking-wider text-slate-800">{notif.title}</h5>
+                                    <h5 className="text-sm font-medium text-slate-800">{notif.title}</h5>
                                     {!notif.read && <span className="bg-[#978C21] h-1.5 w-1.5 rounded-full" />}
                                  </div>
-                                 <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{notif.message}</p>
-                                 <span className="text-[8px] font-bold text-slate-300 uppercase tracking-widest leading-none italic mt-2 block">
+                                 <p className="text-sm text-slate-500 mt-1 leading-relaxed">{notif.message}</p>
+                                 <span className="text-xs text-slate-400 mt-2 block">
                                    {new Date(notif.date).toLocaleTimeString()}
                                  </span>
                                </div>
@@ -672,12 +672,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 
                 <div className="relative group cursor-pointer">
                   <div className="flex items-center gap-3 pl-2">
-                    <div className="w-10 h-10 rounded-sm bg-slate-900 flex items-center justify-center border border-slate-800 shadow-lg overflow-hidden">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center border-2 border-slate-200 shadow-sm overflow-hidden">
                       {user.avatarUrl ? (
                         <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       ) : (
-                        <span className="text-white font-black text-sm italic">
-                          {user.name.charAt(0)}
+                        <span className="text-white font-semibold text-base">
+                          {user.name.charAt(0).toUpperCase()}
                         </span>
                       )}
                     </div>
@@ -685,13 +685,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   {/* Profile Popup */}
                   <div className="absolute right-0 top-[120%] w-64 bg-white rounded-sm shadow-2xl border border-slate-100 py-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 transform origin-top-right scale-95 group-hover:scale-100 z-50">
                     <div className="px-6 py-4 border-b border-slate-50 mb-2">
-                      <p className="text-[9px] font-black text-slate-300 uppercase tracking-[0.2em] mb-2 italic">Active Identity</p>
-                      <p className="text-[14px] text-brand-text font-black truncate uppercase italic tracking-tight">{user.name}</p>
-                      <p className="text-[10px] text-slate-400 font-bold mt-1">{user.email}</p>
+                      <p className="text-xs text-slate-400 mb-2">Logged in as</p>
+                      <p className="text-base text-slate-800 font-semibold truncate">{user.name}</p>
+                      <p className="text-sm text-slate-400 mt-1">{user.email}</p>
                     </div>
                     <button 
                       onClick={handleLogout}
-                      className="w-full px-6 py-4 flex items-center gap-4 text-red-500 hover:bg-red-50 text-[10px] font-black uppercase tracking-[0.2em] transition-colors italic"
+                      className="w-full px-6 py-4 flex items-center gap-4 text-red-500 hover:bg-red-50 text-sm font-medium transition-colors"
                     >
                       <LogOut className="w-4 h-4" />
                       Logout

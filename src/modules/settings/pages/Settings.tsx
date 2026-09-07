@@ -455,8 +455,8 @@ export default function Settings() {
             <SettingsIcon className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-black tracking-tight italic uppercase serif">System Command Console</h1>
-            <p className="text-slate-400 text-[10px] uppercase font-black tracking-widest mt-1">Operational Governance / Configuration Matrix</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800">Settings</h1>
+            <p className="text-sm text-slate-500 mt-1">Manage your profile, data and system preferences</p>
           </div>
         </div>
 
@@ -464,7 +464,7 @@ export default function Settings() {
           <button 
             onClick={() => setActiveTab('overview')}
             className={cn(
-              "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+              "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
               activeTab === 'overview' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
             )}
           >
@@ -474,7 +474,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('dropdowns')}
               className={cn(
-                "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
                 activeTab === 'dropdowns' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -485,7 +485,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('formbuilder')}
               className={cn(
-                "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
                 activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -496,7 +496,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('workflow')}
               className={cn(
-                "px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all",
+                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
                 activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -524,13 +524,13 @@ export default function Settings() {
                     user?.name.charAt(0)
                   )}
                 </div>
-                <h3 className="font-black text-xl text-slate-800 uppercase tracking-tight">{user?.name}</h3>
-                <p className="text-[10px] font-black text-[#978C21] uppercase tracking-[0.2em] mt-2">{user?.role}</p>
+                <h3 className="font-bold text-xl text-slate-800">{user?.name}</h3>
+                <p className="text-sm font-medium text-[#978C21] mt-2">{user?.role}</p>
                 
                 <div className="mt-8 pt-8 border-t border-slate-50 space-y-4">
                   <div className="flex items-center justify-center gap-3">
-                    <div className="px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-sm text-[9px] font-black uppercase tracking-widest border border-emerald-100">Live Agent</div>
-                    <span className="text-[10px] font-black text-slate-300 italic">ID: {user?.employeeId}</span>
+                    <div className="px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-sm text-xs font-medium border border-emerald-200 rounded-full">Active</div>
+                    <span className="text-sm text-slate-500">ID: {user?.employeeId}</span>
                   </div>
                   
                   <button 
@@ -545,7 +545,7 @@ export default function Settings() {
               <div className="bg-[#3C3C3C] p-8 rounded-sm shadow-xl italic">
                 <div className="flex items-center gap-3 mb-4">
                   <ShieldCheck className="w-5 h-5 text-[#978C21]" />
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">System Compliance</h4>
+                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">System Info</h4>
                 </div>
                 <p className="text-[11px] font-bold leading-relaxed text-slate-400 uppercase tracking-tight">Terminal verified as Shanta Lead Console v2.0 compliant. Secure authentication active.</p>
               </div>
@@ -565,7 +565,7 @@ export default function Settings() {
                           <section.icon className="w-5 h-5 text-slate-400 group-hover:text-[#978C21]" />
                         </div>
                         <div>
-                          <h4 className="font-black text-[13px] text-slate-800 uppercase tracking-widest">{section.label}</h4>
+                          <h4 className="font-semibold text-slate-800">{section.label}</h4>
                           <p className="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-tight">{section.desc}</p>
                         </div>
                       </div>
@@ -581,11 +581,11 @@ export default function Settings() {
                               <Database className="w-5 h-5" />
                            </div>
                            <div>
-                              <h4 className="font-black text-red-600 uppercase tracking-widest text-[13px]">Backend Ops Intelligence</h4>
-                              <p className="text-[10px] text-red-400 font-bold uppercase mt-1 tracking-tight italic">Low-level protocol access for system architects.</p>
+                              <h4 className="font-semibold text-red-600">System Tools</h4>
+                              <p className="text-[10px] text-red-400 font-bold uppercase mt-1 tracking-tight italic">Advanced system operations for administrators.</p>
                            </div>
                         </div>
-                        <button className="text-[10px] font-black text-red-600 hover:underline tracking-widest" onClick={handleClearData}>PURGE DATABASE</button>
+                        <button className="text-sm font-medium text-red-600 hover:underline" onClick={handleClearData}>Clear All Data</button>
                       </div>
                     </div>
                   )}
@@ -601,13 +601,13 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Identity Protocol Update</h3>
+                      <h3 className="font-bold text-xl text-slate-800">Update Profile</h3>
                     </div>
                   </div>
 
                   <div className="space-y-8">
                     <div className="space-y-3">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">Matrix Display Name</label>
+                      <label className="text-sm font-medium text-slate-600">Display Name</label>
                       <input 
                         type="text"
                         value={newName}
@@ -617,7 +617,7 @@ export default function Settings() {
                     </div>
 
                     <div className="space-y-3">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">Identity Avatar Profile</label>
+                      <label className="text-sm font-medium text-slate-600">Identity Avatar Profile</label>
                       
                       <div className="flex flex-col sm:flex-row items-center gap-8 p-6 bg-[#FBFAF8] rounded-sm border border-slate-100">
                         {/* Avatar Preview */}
@@ -677,7 +677,7 @@ export default function Settings() {
                           </div>
 
                           <div className="space-y-2 pt-3 border-t border-slate-100">
-                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Quick Identity Presets</p>
+                            <p className="text-xs font-medium text-slate-500">Quick Presets</p>
                             <div className="flex flex-wrap gap-2.5">
                               {[
                                 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
@@ -730,7 +730,7 @@ export default function Settings() {
                       }} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Security & Access Protocol</h3>
+                      <h3 className="font-bold text-xl text-slate-800">Security & Access Protocol</h3>
                     </div>
                   </div>
 
@@ -788,7 +788,7 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Network Integration & Sync</h3>
+                      <h3 className="font-bold text-xl text-slate-800">Network Integration & Sync</h3>
                     </div>
                   </div>
 
@@ -932,7 +932,7 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Push Intelligence & Alerts</h3>
+                      <h3 className="font-bold text-xl text-slate-800">Push Intelligence & Alerts</h3>
                     </div>
                   </div>
 
@@ -970,7 +970,7 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">System Configuration</h3>
+                      <h3 className="font-bold text-xl text-slate-800">System Configuration</h3>
                     </div>
                   </div>
 
@@ -1116,7 +1116,7 @@ export default function Settings() {
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black text-slate-300 italic">{values.length} Entries</span>
+                          <span className="text-sm text-slate-500">{values.length} Entries</span>
                           {!t.isSystem && (
                             <button
                               onClick={() => handleDeleteType(t)}

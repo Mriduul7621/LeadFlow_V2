@@ -440,7 +440,7 @@ export default function LeadList() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <RefreshCw className="w-8 h-8 text-primary animate-spin" />
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Syncing Intelligence Matrix...</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading leads...</p>
         </div>
       </div>
     );
@@ -450,8 +450,8 @@ export default function LeadList() {
     <div className="space-y-6 pb-20 bg-white min-h-screen">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-1">
         <div>
-          <h1 className="text-3xl font-black tracking-tighter text-brand-text italic uppercase serif">Lead Intelligence Hub</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-1 italic">Operational Matrix / Pipeline Flow Control</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Tracking</h1>
+          <p className="text-sm text-slate-500 mt-1">View and manage your leads pipeline</p>
         </div>
         <div className="flex items-center gap-2">
           <button 
@@ -498,7 +498,7 @@ export default function LeadList() {
           </div>
           <div className="flex items-center gap-4">
              <div className="h-10 w-px bg-slate-200 hidden md:block" />
-            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sort Logic</label>
+            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sort by</label>
             <select 
               value={sortLogic}
               onChange={(e) => setSortLogic(e.target.value as any)}
@@ -515,10 +515,10 @@ export default function LeadList() {
           <table className="w-full text-left">
             <thead>
               <tr className="bg-[#3C3C3C] text-white italic">
-                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect Intelligence</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Economic Profile</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Institutional Stats</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Operational Status</th>
+                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Financial</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Details</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Status</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Remarks</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
               </tr>
@@ -707,7 +707,7 @@ export default function LeadList() {
                     <p className="text-[10px] text-slate-400 font-bold uppercase">{selectedLead.area || 'N/A'}</p>
                   </div>
                   <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Operational Status</p>
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Status</p>
                     <div className="flex">
                       <span className={cn(
                         "px-4 py-1.5 rounded-sm text-[10px] font-black uppercase tracking-widest border",

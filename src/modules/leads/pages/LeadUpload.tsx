@@ -59,8 +59,8 @@ export default function LeadUpload() {
           <AlertCircle className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Clearance Protocol Warning</span>
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">Access Denied</h2>
+          <span className="text-sm font-medium text-[#978C21]">Access Restricted</span>
+          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
           <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
             Your current clearance level <span className="text-red-550 font-black">"{userRole || 'RESTRICTED'}"</span> does not possess active credentials to upload raw lead sheets or configure campaign lists.
           </p>
@@ -175,7 +175,7 @@ export default function LeadUpload() {
           const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
           setFullData(rows);
           setPreviewData(data.slice(0, 7)); // Preview header + 6 rows
-          toast.success("Intelligence data parsed successfully");
+          toast.success("Data imported successfully");
         } catch (err) {
           toast.error("Failed to parse file. Check integrity.");
         } finally {
@@ -310,8 +310,8 @@ export default function LeadUpload() {
             <Database className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-4xl font-black tracking-tighter text-brand-text italic uppercase serif leading-none">Bulk Data Injection</h1>
-            <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Autonomous Lead Acquisition Protocol</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Bulk Lead Upload</h1>
+            <p className="text-sm text-slate-500 mt-2">Upload leads from Excel files</p>
           </div>
         </div>
         <button 
@@ -353,7 +353,7 @@ export default function LeadUpload() {
                         animate={{ opacity: 1, scale: 1 }}
                         className="space-y-4"
                      >
-                        <p className="text-2xl font-black text-brand-text italic tracking-tight uppercase">{file.name}</p>
+                        <p className="text-xl font-bold text-slate-800">{file.name}</p>
                         <div className="flex items-center justify-center gap-4">
                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{(file.size / 1024).toFixed(2)} KB</span>
                            <div className="w-1 h-1 rounded-full bg-slate-300" />

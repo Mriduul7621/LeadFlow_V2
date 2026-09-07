@@ -229,7 +229,7 @@ export default function Login() {
         <button
           type="button"
           onClick={() => setLanguage('en')}
-          className={`px-3.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer ${
+          className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
             language === 'en'
               ? 'bg-[#978C21] text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200'
@@ -240,7 +240,7 @@ export default function Login() {
         <button
           type="button"
           onClick={() => setLanguage('bn')}
-          className={`px-3.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer ${
+          className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
             language === 'bn'
               ? 'bg-[#978C21] text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200'
@@ -252,10 +252,10 @@ export default function Login() {
 
       {/* Decorative Bottom Bar Indicator */}
       <div className="absolute bottom-6 left-8 z-20 hidden md:flex flex-col items-start gap-1" id="system-ready-indicator">
-        <span className="text-[10px] text-slate-500 font-bold tracking-[0.25em] uppercase opacity-60">{t('systemReady')}</span>
+        <span className="text-sm text-slate-400 opacity-70">{t('systemReady')}</span>
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-ping" />
-          <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest opacity-85">
+          <span className="text-sm text-slate-400 opacity-80">
             {isFirstTimeSetup ? t('setupRequired') : t('secureNodeOnline')}
           </span>
         </div>
@@ -289,7 +289,7 @@ export default function Login() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
-          className="inline-flex items-center gap-2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-[10px] uppercase tracking-[0.25em] text-slate-200 font-black mb-8 select-none"
+          className="inline-flex items-center gap-2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-sm text-slate-300 mb-8 select-none tracking-wide"
           id="institutional-pill-badge"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-pulse"></span>
@@ -319,7 +319,7 @@ export default function Login() {
               </div>
 
               {/* Subheading */}
-              <h2 className="text-xs sm:text-sm font-black text-white tracking-[0.2em] uppercase select-none">
+              <h2 className="text-base sm:text-lg font-semibold text-white tracking-wide select-none">
                 {t('loginSubheading')}
               </h2>
 
@@ -334,7 +334,7 @@ export default function Login() {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => setShowForm(true)}
-                  className="px-8 py-3.5 bg-[#978C21] hover:bg-[#a59924] text-white rounded-lg font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-[#978C21]/20 group cursor-pointer"
+                  className="px-8 py-3.5 bg-[#978C21] hover:bg-[#a59924] text-white rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-[#978C21]/20 group cursor-pointer"
                   id="login-now-btn"
                 >
                   {isFirstTimeSetup ? t('initializeConsoleBtn') : t('loginButton')} 
@@ -358,14 +358,14 @@ export default function Login() {
               {isFirstTimeSetup ? (
                 <>
                   <div className="text-center mb-6" id="setup-header">
-                    <h2 className="text-xl font-black text-white uppercase tracking-tight">{t('setupTitle')}</h2>
-                    <p className="text-[#978C21] text-[10px] font-black uppercase tracking-widest mt-1">{t('setupSub')}</p>
+                    <h2 className="text-2xl font-bold text-white tracking-tight">{t('setupTitle')}</h2>
+                    <p className="text-[#978C21] text-sm text-[#978C21] mt-1">{t('setupSub')}</p>
                   </div>
 
                   <form onSubmit={handleSetupSubmit(onSetupSubmit)} className="space-y-4" id="setup-credentials-form">
                     {/* Full Name input */}
                     <div className="space-y-1" id="setup-name-group">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block animate-pulse">{t('fullNameLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('fullNameLabel')}</label>
                       <div className="relative group">
                         <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -381,7 +381,7 @@ export default function Login() {
 
                     {/* Employee ID input */}
                     <div className="space-y-1" id="setup-empid-group">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('employeeIdLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('employeeIdLabel')}</label>
                       <div className="relative group">
                         <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -397,7 +397,7 @@ export default function Login() {
 
                     {/* Email input */}
                     <div className="space-y-1" id="setup-email-group">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('emailLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('emailLabel')}</label>
                       <div className="relative group">
                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -413,7 +413,7 @@ export default function Login() {
 
                     {/* Password input */}
                     <div className="space-y-1" id="setup-password-group">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('passwordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('passwordLabel')}</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -428,7 +428,7 @@ export default function Login() {
 
                     {/* Confirm Password input */}
                     <div className="space-y-1" id="setup-confirmpassword-group">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('confirmPasswordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('confirmPasswordLabel')}</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -445,7 +445,7 @@ export default function Login() {
                     <button 
                       type="submit" 
                       disabled={isSetupSubmitting}
-                      className="w-full py-3 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
+                      className="w-full py-3 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
                       id="setup-submit-btn"
                     >
                       {isSetupSubmitting ? (
@@ -470,7 +470,7 @@ export default function Login() {
                     
                     {/* Employee ID input */}
                     <div className="space-y-2" id="username-field-group">
-                      <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest block">{t('loginEmpIdLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('loginEmpIdLabel')}</label>
                       <div className="relative group">
                         <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -486,7 +486,7 @@ export default function Login() {
 
                     {/* Password input */}
                     <div className="space-y-2" id="password-field-group">
-                      <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest block">{t('loginPasswordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">{t('loginPasswordLabel')}</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
@@ -503,7 +503,7 @@ export default function Login() {
                     <button 
                       type="submit" 
                       disabled={isSubmitting}
-                      className="w-full py-4 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
+                      className="w-full py-4 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
                       id="form-submit-btn"
                     >
                       {isSubmitting ? (
@@ -524,7 +524,7 @@ export default function Login() {
                 <button 
                   type="button"
                   onClick={() => setShowForm(false)}
-                  className="text-xs text-slate-400 hover:text-[#978C21] transition-colors font-bold uppercase tracking-widest flex items-center gap-2 cursor-pointer"
+                  className="text-sm text-slate-400 hover:text-[#978C21] transition-colors font-medium flex items-center gap-2 cursor-pointer"
                   id="back-trigger"
                 >
                   <ArrowLeft className="w-3 h-3" /> {t('backToMainBtn')}
@@ -539,7 +539,7 @@ export default function Login() {
 
       {/* Footer Copy */}
       <div className="relative z-10 w-full text-center pb-2 select-none" id="login-footer">
-        <p className="text-[9px] sm:text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-60">
+        <p className="text-sm text-slate-500 opacity-70">
           © 2024 Shanta Life Insurance. All Rights Reserved.
         </p>
       </div>

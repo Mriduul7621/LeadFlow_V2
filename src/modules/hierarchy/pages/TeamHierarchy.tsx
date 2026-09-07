@@ -191,7 +191,7 @@ export default function TeamHierarchy() {
 
     } catch (err) {
       console.error("Error computing team progress stats:", err);
-      toast.error("তথ্য লোড করার সময় ত্রুটি ঘটেছে।");
+      toast.error("Error loading data.");
     } finally {
       setLoading(false);
     }
@@ -219,7 +219,7 @@ export default function TeamHierarchy() {
 
   const handleAddNodeClick = (parent: OrgNode) => {
     if (!isAdmin) {
-      toast.error('শুধুমাত্র অ্যাডমিন নোড যোগ বা সম্পাদনা করতে পারবেন।');
+      toast.error('Only admin nodes can be added or edited.');
       return;
     }
     setActiveAddParentNode(parent);
@@ -240,7 +240,7 @@ export default function TeamHierarchy() {
     );
 
     if (isDuplicate) {
-      toast.error('এই বিভাগটি ইতিমধ্যেই এখানে যুক্ত করা হয়েছে।');
+      toast.error('This department is already added.');
       return;
     }
 
@@ -255,7 +255,7 @@ export default function TeamHierarchy() {
 
     setNodes(prev => [...prev, newNode]);
     setActiveAddParentNode(null);
-    toast.success('বিভাগ সফলভাবে রেখাচিত্রে যোগ করা হয়েছে!');
+    toast.success('Department added to chart!');
   };
 
   const handleAddEmployeeNode = () => {
@@ -274,16 +274,16 @@ export default function TeamHierarchy() {
 
     setNodes(prev => [...prev, newNode]);
     setActiveAddParentNode(null);
-    toast.success('কর্মচারী সফলভাবে রেখাচিত্রে যোগ করা হয়েছে!');
+    toast.success('Employee added to chart!');
   };
 
   const handleDeleteNode = (nodeId: string) => {
     if (!isAdmin) {
-      toast.error('শুধুমাত্র অ্যাডমিন নোড মুছতে পারবেন।');
+      toast.error('Only admin nodes can be deleted.');
       return;
     }
     if (nodeId === 'root') {
-      toast.error('প্রধান রুট নোড মুছে ফেলা সম্ভব নয়!');
+      toast.error('Root node cannot be deleted!');
       return;
     }
 
@@ -291,8 +291,8 @@ export default function TeamHierarchy() {
     if (!node) return;
 
     const confirmMsg = node.type === 'department' 
-      ? `আপনি কি নিশ্চিতভাবে "${node.name}" বিভাগ এবং এর অধীনস্থ সকল কর্মকর্তা/কর্মচারী মুছে ফেলতে চান?`
-      : `আপনি কি নিশ্চিতভাবে "${node.name}" নোড এবং এর অধীনস্থ সকল সদস্যকে মুছে ফেলতে চান?`;
+      ? `Are you sure you want to delete "${node.name}" department and all its members?`
+      : `Are you sure you want to delete "${node.name}" node and all its members?`;
 
     if (confirm(confirmMsg)) {
       const getDescendantIds = (id: string): string[] => {
@@ -304,7 +304,7 @@ export default function TeamHierarchy() {
 
       const toDelete = [nodeId, ...getDescendantIds(nodeId)];
       setNodes(prev => prev.filter(n => !toDelete.includes(n.id)));
-      toast.success('নোড সফলভাবে মুছে ফেলা হয়েছে।');
+      toast.success('Node deleted successfully.');
     }
   };
 
@@ -347,7 +347,7 @@ export default function TeamHierarchy() {
         return subs;
       };
 
-      toast.info('রিপোর্টিং চেইন এবং সাব-অর্ডিনেট ডেটা আপডেট করা হচ্ছে...');
+      toast.info('Updating reporting chains and subordinate data...');
 
       // Update users roster links dynamically
       for (const emp of users) {
@@ -377,11 +377,11 @@ export default function TeamHierarchy() {
         }
       }
 
-      toast.success('দলগত সাংগঠনিক চেইন সফলভাবে ডেটাবেজে সংরক্ষিত ও প্রচার করা হয়েছে!');
+      toast.success('Organizational chains saved successfully!');
       await loadAllData();
     } catch (err) {
       console.error(err);
-      toast.error('রেখাচিত্র সংরক্ষণ করতে সমস্যা হয়েছে।');
+      toast.error('Could not save chart.');
     } finally {
       setSaving(false);
     }
@@ -395,7 +395,7 @@ export default function TeamHierarchy() {
     
     const emp = users.find(u => u.employeeId === node.employeeId);
     if (!emp) {
-      toast.error('কর্মচারীর বিবরণ পাওয়া যায়নি।');
+      toast.error('Employee details not found.');
       return;
     }
 
@@ -494,7 +494,7 @@ export default function TeamHierarchy() {
                     handleAddNodeClick(node);
                   }}
                   className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-sm"
-                  title={node.type === 'root' ? 'বিভাগ যোগ করুন (Add Dept)' : 'কর্মচারী যোগ করুন (Add Employee)'}
+                  title={node.type === 'root' ? t('addDept') : t('addEmployeeNode')}
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>
@@ -506,7 +506,7 @@ export default function TeamHierarchy() {
                       handleDeleteNode(node.id);
                     }}
                     className="p-1 text-red-500 hover:bg-red-50 rounded-sm"
-                    title="মুছে ফেলুন (Delete Node)"
+                    title={t('deleteNode')}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -554,8 +554,8 @@ export default function TeamHierarchy() {
       {/* 1. Header Section */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-slate-900 uppercase italic">
-            দলগত চেইন রেখাচিত্র (Organizational Hierarchy)
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">
+            {t('teamHierarchyTitle')}
           </h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5 italic">
             Establish dynamic department levels, designations, and employee routing maps
@@ -576,7 +576,7 @@ export default function TeamHierarchy() {
               )}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
-              সাংগঠনিক চার্ট (Org Chart)
+              {t('orgChart')}
             </button>
             <button
               onClick={() => setActiveTab('list')}
@@ -588,7 +588,7 @@ export default function TeamHierarchy() {
               )}
             >
               <Users className="w-3.5 h-3.5" />
-              তালিকা ভিউ (Subordinates)
+              {t('listView')}
             </button>
           </div>
 
@@ -598,7 +598,7 @@ export default function TeamHierarchy() {
               <Search className="w-3.5 h-3.5 text-slate-400" />
               <input 
                 type="text" 
-                placeholder="খুঁজুন (Search name/ID)..." 
+                placeholder={t("searchPlaceholder")} 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="bg-transparent border-none text-[11px] font-bold uppercase text-slate-700 placeholder-slate-400 outline-none w-full"
@@ -620,7 +620,7 @@ export default function TeamHierarchy() {
               className="flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#857b1c] text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
-              {saving ? 'সংরক্ষণ করা হচ্ছে...' : 'সংরক্ষণ করুন (Save Tree)'}
+              {saving ? t('savingTree') : t('saveTree')}
             </button>
           )}
         </div>
@@ -645,7 +645,7 @@ export default function TeamHierarchy() {
               <div className="flex items-center justify-between bg-slate-50 border border-slate-200 px-4 py-3 rounded-xl">
                 <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2">
                   <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
-                  ← নোড দেখতে ডানে/বামে স্ক্রোল করুন (Drag or scroll horizontally to explore chart) →
+                  ← Scroll horizontally to explore chart →
                 </span>
                 
                 {/* Zoom Controls */}
@@ -700,7 +700,7 @@ export default function TeamHierarchy() {
             >
               {teamMembers.length === 0 ? (
                 <div className="text-center py-24 border border-dashed border-slate-200 rounded-2xl bg-[#F9F9F4] text-slate-400 font-bold uppercase tracking-widest text-[11px] italic">
-                  আপনার রিপোর্টিং লাইনে কোনো সরাসরি কর্মী নিযুক্ত নেই।
+                  No direct reports in your reporting line.
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -772,7 +772,7 @@ export default function TeamHierarchy() {
                       </div>
 
                       <div className="flex items-center justify-end text-right text-[9px] font-bold text-[#978C21] uppercase tracking-widest italic mt-4 gap-1 group-hover:translate-x-1 transition-transform">
-                        <span>Details Progress Matrix</span>
+                        <span>Performance Details</span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </div>
                     </motion.div>
@@ -801,8 +801,8 @@ export default function TeamHierarchy() {
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">
                     {activeAddParentNode.type === 'root' 
-                      ? 'নতুন বিভাগ যুক্ত করুন (Add Department)' 
-                      : 'নতুন কর্মকর্তা/কর্মচারী যোগ করুন (Add Employee)'}
+                      ? t('addDept') 
+                      : 'Add New Employee'}
                   </h3>
                   <p className="text-[10px] text-slate-400 mt-0.5 font-bold uppercase tracking-widest">
                     Parent Node: {activeAddParentNode.name}
@@ -823,20 +823,20 @@ export default function TeamHierarchy() {
                   // DEPARTMENT SELECTION DROPDOWN
                   <div className="space-y-2">
                     <label className="text-[11px] font-bold text-slate-600 uppercase block">
-                      বিভাগ নির্বাচন করুন (Select Department):
+                      {t('selectDept')}:
                     </label>
                     <select
                       value={selectedDeptId}
                       onChange={(e) => setSelectedDeptId(e.target.value)}
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#978C21] rounded-lg text-sm outline-none font-medium text-slate-700"
                     >
-                      <option value="">-- বিভাগ বেছে নিন --</option>
+                      <option value="">-- {t('selectDept')} --</option>
                       {departments.map(d => (
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
                     </select>
                     <p className="text-[10px] text-slate-400 italic">
-                      * এই বিভাগটি রুট অ্যাডমিন (Admin) এর নিচে সরাসরি প্রথম স্তর হিসেবে যুক্ত হবে।
+                      * This department will be added as the first level under the root admin.
                     </p>
                   </div>
                 ) : (
@@ -861,12 +861,12 @@ export default function TeamHierarchy() {
                     </div>
 
                     <label className="text-[11px] font-bold text-slate-600 uppercase block mt-3">
-                      কর্মচারী নির্বাচন করুন (Select Employee):
+                      {t('selectEmp')}:
                     </label>
                     
                     {availableEmployees.length === 0 ? (
                       <div className="p-4 bg-amber-50 text-amber-800 text-xs font-semibold rounded-lg border border-amber-200">
-                        ⚠️ এই বিভাগের কোনো কর্মচারী খালি নেই (সবাই ইতিমধ্যে যুক্ত হয়েছেন অথবা কোনো কর্মচারী রেজিস্টার্ড নেই)। অনুগ্রহ করে প্রথমে ইউজার ম্যানেজমেন্টে নতুন কর্মচারী যোগ করুন।
+                        ⚠️ No available employees in this department. Please add employees in User Management first.
                       </div>
                     ) : (
                       <select
@@ -874,7 +874,7 @@ export default function TeamHierarchy() {
                         onChange={(e) => setSelectedEmpId(e.target.value)}
                         className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#978C21] rounded-lg text-sm outline-none font-medium text-slate-700 uppercase"
                       >
-                        <option value="">-- কর্মচারী বেছে নিন --</option>
+                        <option value="">-- {t('selectEmp')} --</option>
                         {availableEmployees.map(u => (
                           <option key={u.id} value={u.employeeId}>
                             {u.name} ({u.employeeId}) - {u.designation || 'Officer'}
@@ -893,7 +893,7 @@ export default function TeamHierarchy() {
                   onClick={() => setActiveAddParentNode(null)}
                   className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-bold uppercase tracking-wider rounded-lg transition-colors"
                 >
-                  বাতিল (Cancel)
+                  {t('cancel')}
                 </button>
                 <button
                   type="button"
@@ -901,7 +901,7 @@ export default function TeamHierarchy() {
                   onClick={activeAddParentNode.type === 'root' ? handleAddDepartmentNode : handleAddEmployeeNode}
                   className="px-5 py-2 bg-[#978C21] hover:bg-[#857b1c] disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-colors shadow-xs"
                 >
-                  নিশ্চিত করুন (Confirm)
+                  {t('confirm')}
                 </button>
               </div>
             </motion.div>
@@ -977,7 +977,7 @@ export default function TeamHierarchy() {
 
                     {/* Member Profile Details card */}
                     <div className="p-5 border border-slate-200/60 rounded-xl bg-slate-50/50 space-y-3.5 mb-6 text-xs text-slate-600">
-                      <h4 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">কর্মকর্তা পরিচিতি (Profile Summary)</h4>
+                      <h4 className="text-sm font-semibold text-slate-700">{t('profileSummary')}</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="flex items-center gap-2">
                           <Users className="w-4 h-4 text-slate-400" />
@@ -1000,8 +1000,8 @@ export default function TeamHierarchy() {
 
                     {/* Lead table */}
                     <div>
-                      <h4 className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-3">
-                        সাম্প্রতিক লিড বিবরণী (Latest Lead Registry)
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3">
+                        {t('latestLeads')}
                       </h4>
                       
                       <div className="border border-slate-200/80 rounded-xl overflow-hidden shadow-xs bg-white">
@@ -1054,7 +1054,7 @@ export default function TeamHierarchy() {
                   }}
                   className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase tracking-widest text-[10px] rounded-lg shadow-md transition-colors"
                 >
-                  বিবরণী বন্ধ করুন (Close Details)
+                  {t('closeDetails')}
                 </button>
               </div>
             </motion.div>

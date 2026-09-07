@@ -144,14 +144,14 @@ export default function Lead360() {
     return (
       <div className="p-10 text-center space-y-4">
         <p className="text-[11px] text-slate-400 uppercase tracking-widest italic">Lead not found, or you don't have access to it.</p>
-        <button onClick={() => navigate(-1)} className="text-[11px] font-black text-[#978C21] uppercase tracking-widest hover:underline">Go Back</button>
+        <button onClick={() => navigate(-1)} className="text-sm font-medium text-[#978C21] hover:underline">Go Back</button>
       </div>
     );
   }
 
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
-      <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-[#978C21] transition-all">
+      <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-[#978C21] transition-colors">
         <ArrowLeft className="w-3.5 h-3.5" /> Back
       </button>
 
@@ -159,7 +159,7 @@ export default function Lead360() {
       <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-8">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-[20px] font-black text-brand-text uppercase tracking-wide italic">{lead.prospectName}</h1>
+            <h1 className="text-xl font-bold text-slate-800">{lead.prospectName}</h1>
             <div className="flex items-center gap-4 mt-2 flex-wrap text-[11px] text-slate-500 font-bold">
               <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" /> {lead.mobile}</span>
               {lead.email && <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {lead.email}</span>}
@@ -175,19 +175,19 @@ export default function Lead360() {
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-50">
           <div>
-            <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Assigned To</p>
+            <p className="text-xs font-medium text-slate-500">Assigned To</p>
             <p className="text-[12px] font-black text-brand-text flex items-center gap-1 mt-1"><UserIcon className="w-3.5 h-3.5" /> {lead.assignedTo || '-'}</p>
           </div>
           <div>
-            <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Product</p>
+            <p className="text-xs font-medium text-slate-500">Product</p>
             <p className="text-[12px] font-black text-brand-text mt-1">{lead.productName || '-'}</p>
           </div>
           <div>
-            <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Source</p>
+            <p className="text-xs font-medium text-slate-500">Source</p>
             <p className="text-[12px] font-black text-brand-text mt-1">{lead.source || '-'}</p>
           </div>
           <div>
-            <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Created</p>
+            <p className="text-xs font-medium text-slate-500">Created</p>
             <p className="text-[12px] font-black text-brand-text mt-1">{lead.creationDate ? new Date(lead.creationDate).toLocaleDateString() : '-'}</p>
           </div>
         </div>
