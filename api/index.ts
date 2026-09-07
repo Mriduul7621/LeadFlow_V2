@@ -1,6 +1,4 @@
 import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -57,6 +55,7 @@ async function loadRoutes() {
   const { default: productionRoutes } = await import('../server/routes/production.routes.js');
   app.use('/api', productionRoutes);
 }
+
 app.use('/api', async (req, res, next) => {
   try {
     await loadRoutes();
@@ -65,14 +64,6 @@ app.use('/api', async (req, res, next) => {
     console.error('Route load error:', error?.message || error);
     next(error);
   }
-});
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distPath = path.resolve(__dirname, '../dist');
-app.use(express.static(distPath));
-
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 export default app;
