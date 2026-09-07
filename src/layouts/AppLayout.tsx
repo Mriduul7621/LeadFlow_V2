@@ -35,19 +35,19 @@ import { useTranslation } from '../modules/shared/utils/translations';
 
 const labelToTranslationKey: Record<string, string> = {
   'Dashboard': 'navDashboard',
-  'Lead Generate': 'navLeadGenerate',
-  'Lead Upload': 'navLeadUpload',
+  'Add New Lead': 'navLeadGenerate',
+  'Bulk Upload': 'navLeadUpload',
   'All Leads': 'navAllLeads',
   'Lead Tracking': 'navLeadTracking',
-  'Execution Intell.': 'navExecutionIntell',
+  'Performance': 'navExecutionIntell',
   'NCP Progress': 'navNcpProgress',
-  'Trend Charts': 'navTrendCharts',
-  'Campaign Breakdown': 'navCampaignBreakdown',
-  'Follow-up Strategy': 'navFollowUpStrategy',
+  'Trends': 'navTrendCharts',
+  'Campaigns': 'navCampaignBreakdown',
+  'Follow-ups': 'navFollowUpStrategy',
   'Task Calendar': 'navTaskCalendar',
   'Activities': 'navActivities',
-  'Team Progress': 'navTeamProgress',
-  'User Management': 'navUserManagement',
+  'Team': 'navTeamProgress',
+  'Users': 'navUserManagement',
   'Settings': 'navSettings',
 };
 
