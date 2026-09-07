@@ -218,7 +218,7 @@ export default function ExecutionIntelligence() {
     <div className="space-y-8 pb-24 bg-white font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-4xl font-black tracking-tighter text-brand-text italic uppercase leading-none">Execution Intelligence</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Execution Intelligence</h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Live Status ledger and Hierarchical Output Audit</p>
         </div>
         <div className="flex items-center gap-3">
@@ -238,7 +238,7 @@ export default function ExecutionIntelligence() {
               <LayoutDashboard className="w-4 h-4 text-[#978C21]" />
            </div>
            <div>
-              <h4 className="text-white text-[12px] font-black uppercase tracking-[0.2em] italic">Daily Status Audit</h4>
+              <h4 className="text-white text-sm font-semibold">Daily Status Audit</h4>
               <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Execution intelligence scope</p>
            </div>
         </div>
@@ -248,7 +248,7 @@ export default function ExecutionIntelligence() {
                key={p}
                onClick={() => setPeriod(p)}
                className={cn(
-                 "px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-sm transition-all",
+                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
                  period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                )}
              >
@@ -258,7 +258,7 @@ export default function ExecutionIntelligence() {
            <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
            <div className="flex items-center gap-2 px-2">
               <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-[9px] font-black text-slate-400 uppercase">{formattedDateRange()}</span>
+              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
            </div>
         </div>
       </div>
@@ -266,7 +266,7 @@ export default function ExecutionIntelligence() {
       {period === 'CUSTOM' && (
         <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4 animate-fade-in">
            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Start Date:</span>
+              <span className="text-xs font-medium text-slate-500">Start:</span>
               <input 
                 type="date" 
                 value={customDates.start}
@@ -275,7 +275,7 @@ export default function ExecutionIntelligence() {
               />
            </div>
            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">End Date:</span>
+              <span className="text-xs font-medium text-slate-500">End Date:</span>
               <input 
                 type="date" 
                 value={customDates.end}
@@ -312,7 +312,7 @@ export default function ExecutionIntelligence() {
                 >
                    <div className="flex items-center gap-2 mb-4">
                       <stat.icon className={cn("w-4 h-4", stat.color)} />
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{stat.label}</p>
+                      <p className="text-xs font-medium text-slate-500">{stat.label}</p>
                    </div>
                    <h5 className={cn("text-3xl font-black text-brand-text tracking-tighter italic", stat.isGreen && "text-[#10B981]")}>{stat.value}</h5>
                 </button>

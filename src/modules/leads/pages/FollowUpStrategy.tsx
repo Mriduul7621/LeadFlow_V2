@@ -122,13 +122,13 @@ export default function FollowUpStrategy() {
             <History className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-4xl font-black tracking-tighter text-brand-text italic uppercase serif leading-none">Follow-up Intelligence</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Follow-up Strategy</h1>
             <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Strategic Multi-Touch Engagement Analytics</p>
           </div>
         </div>
         <div className="flex items-center gap-6 bg-white p-6 rounded-sm border border-slate-100 shadow-sm px-8">
            <div className="flex flex-col text-right">
-              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic animate-pulse-slow">Conversion Velocity</span>
+              <span className="text-xs font-medium text-slate-400">Avg. Follow-up Days</span>
               <span className="text-xl font-black text-brand-text italic tracking-tighter">{velocityDays}</span>
            </div>
            <div className="w-px h-10 bg-slate-100" />

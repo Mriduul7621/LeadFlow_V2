@@ -554,7 +554,7 @@ export default function TeamHierarchy() {
       {/* 1. Header Section */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-slate-900 uppercase italic">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">
             দলগত চেইন রেখাচিত্র (Organizational Hierarchy)
           </h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5 italic">
@@ -772,7 +772,7 @@ export default function TeamHierarchy() {
                       </div>
 
                       <div className="flex items-center justify-end text-right text-[9px] font-bold text-[#978C21] uppercase tracking-widest italic mt-4 gap-1 group-hover:translate-x-1 transition-transform">
-                        <span>Details Progress Matrix</span>
+                        <span>Performance Details</span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </div>
                     </motion.div>
@@ -977,7 +977,7 @@ export default function TeamHierarchy() {
 
                     {/* Member Profile Details card */}
                     <div className="p-5 border border-slate-200/60 rounded-xl bg-slate-50/50 space-y-3.5 mb-6 text-xs text-slate-600">
-                      <h4 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">কর্মকর্তা পরিচিতি (Profile Summary)</h4>
+                      <h4 className="text-sm font-semibold text-slate-700">কর্মকর্তা পরিচিতি (Profile Summary)</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="flex items-center gap-2">
                           <Users className="w-4 h-4 text-slate-400" />
@@ -1000,7 +1000,7 @@ export default function TeamHierarchy() {
 
                     {/* Lead table */}
                     <div>
-                      <h4 className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-3">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-3">
                         সাম্প্রতিক লিড বিবরণী (Latest Lead Registry)
                       </h4>
                       

@@ -744,8 +744,8 @@ export default function Dashboard() {
       {/* Dynamic Date Selection Controls */}
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-[#F9F9F4] p-6 rounded-sm border border-slate-100 shadow-sm mx-1">
          <div>
-            <h1 className="text-3xl font-black italic uppercase text-brand-text tracking-tighter serif leading-none">Dashboard Summary</h1>
-            <p className="text-[10px] uppercase tracking-[0.22em] font-black text-slate-400 mt-2 italic">Corporate Performance Ledger Control</p>
+            <h1 className="text-2xl font-bold text-slate-800 tracking-tight leading-none">Dashboard Summary</h1>
+            <p className="text-sm text-slate-500 mt-2">Corporate Performance Ledger Control</p>
          </div>
 
          <div className="flex flex-wrap items-center gap-3">
@@ -756,7 +756,7 @@ export default function Dashboard() {
                   type="button"
                   onClick={() => setPeriod(p)}
                   className={cn(
-                    "px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-sm transition-all",
+                    "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
                     period === p ? "bg-[#978C21] text-white shadow-sm" : "text-slate-500 hover:text-slate-800"
                   )}
                  >
@@ -767,12 +767,12 @@ export default function Dashboard() {
 
             {period === 'TODAY' && (
               <div className="flex items-center gap-2 bg-white p-1 rounded-sm border border-slate-200 shadow-sm">
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1.5">Date:</span>
+                <span className="text-xs font-medium text-slate-500 pl-1.5">Date:</span>
                 <input 
                   type="date" 
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="bg-white border-0 text-slate-700 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:ring-0 cursor-pointer"
+                  className="bg-white border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[#978C21]/20 cursor-pointer"
                 />
               </div>
             )}
@@ -780,21 +780,21 @@ export default function Dashboard() {
             {period === 'CUSTOM' && (
               <div className="flex items-center gap-3 bg-white p-1 rounded-sm border border-slate-200 shadow-sm">
                 <div className="flex items-center gap-1.5">
-                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1.5">Start:</span>
+                   <span className="text-xs font-medium text-slate-500 pl-1.5">Start:</span>
                    <input 
                      type="date" 
                      value={customDates.start}
                      onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                     className="bg-white border-0 text-slate-700 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:ring-0 cursor-pointer"
+                     className="bg-white border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[#978C21]/20 cursor-pointer"
                    />
                 </div>
                 <div className="flex items-center gap-1.5 border-l border-slate-100 pl-3">
-                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">End:</span>
+                   <span className="text-xs font-medium text-slate-500">End:</span>
                    <input 
                      type="date" 
                      value={customDates.end}
                      onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                     className="bg-white border-0 text-slate-700 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:ring-0 cursor-pointer"
+                     className="bg-white border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[#978C21]/20 cursor-pointer"
                    />
                 </div>
               </div>
@@ -802,14 +802,14 @@ export default function Dashboard() {
 
             <div className="flex items-center gap-2 px-3 py-1.5 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm">
                <CalendarIcon className="w-3.5 h-3.5 text-[#978C21]" />
-               <span className="text-[10px] font-black text-[#978C21] uppercase tracking-widest italic">{formattedDateRange()}</span>
+               <span className="text-sm font-medium text-[#978C21]">{formattedDateRange()}</span>
             </div>
          </div>
       </div>
 
       {/* Snapshot Header */}
       <div className="flex items-center gap-2 px-1">
-         <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-300 italic">Today's Snapshot / {new Date(selectedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+         <p className="text-xs font-medium text-slate-400">Today's Snapshot / {new Date(selectedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
       </div>
 
       {/* Snapshot Grid */}
@@ -836,7 +836,7 @@ export default function Dashboard() {
             )}
           >
             <div className="w-full">
-               <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-4">{stat.label}</p>
+               <p className="text-xs font-medium text-slate-500 leading-none mb-4">{stat.label}</p>
                <h3 className={cn("text-4xl font-black text-brand-text tracking-tighter italic", stat.isCritical && "text-red-500")}>{stat.value}</h3>
             </div>
             {stat.sub && (
@@ -848,7 +848,7 @@ export default function Dashboard() {
 
       {/* Quick Action Alerts block */}
       <div className="bg-[#FBFAF8] p-6 rounded-sm border border-slate-100 mx-1">
-         <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic mb-3">Quick Actions & Alerts</p>
+         <p className="text-xs font-medium text-slate-500 mb-3">Quick Actions & Alerts</p>
          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             
             {/* Action 1: Daily Call Alerts */}
@@ -864,8 +864,8 @@ export default function Dashboard() {
                   <Phone className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Daily Call Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Daily Call Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => l.currentStatus === 'No Response' && l.nextCallDate && l.nextCallDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Calls Scheduled Today
                   </p>
                </div>
@@ -884,8 +884,8 @@ export default function Dashboard() {
                   <Phone className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Tomorrow Call Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Call Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => l.currentStatus === 'No Response' && l.nextCallDate && l.nextCallDate.substring(0, 10) === getTomorrowString()).length} Calls Tomorrow
                   </p>
                </div>
@@ -904,8 +904,8 @@ export default function Dashboard() {
                   <CalendarIcon className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Daily Meeting Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Daily Meeting Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => l.meetingDate && l.meetingDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Meetings Today
                   </p>
                </div>
@@ -924,8 +924,8 @@ export default function Dashboard() {
                   <CalendarIcon className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Tomorrow Meeting Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Meeting Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => l.meetingDate && l.meetingDate.substring(0, 10) === getTomorrowString()).length} Meetings Tomorrow
                   </p>
                </div>
@@ -944,8 +944,8 @@ export default function Dashboard() {
                   <RefreshCw className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Daily Follow-up Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Daily Follow-up Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => ['Follow-up Set', 'Interested', 'Pipeline Locked'].includes(l.currentStatus) && l.nextFollowUpDate && l.nextFollowUpDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Follow-ups Today
                   </p>
                </div>
@@ -964,8 +964,8 @@ export default function Dashboard() {
                   <RefreshCw className="w-5 h-5" />
                </div>
                <div>
-                  <h4 className="text-[12px] font-black uppercase text-slate-800 tracking-wider">Tomorrow Follow-up Alerts</h4>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Follow-up Alerts</h4>
+                  <p className="text-xs text-slate-400 mt-1">
                      {getDateFilteredLeads().filter(l => ['Follow-up Set', 'Interested', 'Pipeline Locked'].includes(l.currentStatus) && l.nextFollowUpDate && l.nextFollowUpDate.substring(0, 10) === getTomorrowString()).length} Follow-ups Tomorrow
                   </p>
                </div>
@@ -1023,7 +1023,7 @@ export default function Dashboard() {
                         </div>
                      ) : (
                         <div className="flex items-center gap-2">
-                           <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic bg-slate-200/50 px-2.5 py-1 rounded-sm">
+                           <span className="text-xs font-medium text-slate-500 italic bg-slate-200/50 px-2.5 py-1 rounded-sm">
                               {period === 'CUSTOM' ? `Custom Period: ${customDates.start} ~ ${customDates.end}` : `Period: ${period}`}
                            </span>
                         </div>
@@ -1234,7 +1234,7 @@ export default function Dashboard() {
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                            <div className="space-y-1">
-                              <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Status <span className="text-red-500">*</span></p>
+                              <p className="text-xs font-medium text-slate-500 italic">Target Status <span className="text-red-500">*</span></p>
                               <select 
                                  value={formStatus}
                                  onChange={(e) => {
@@ -1259,7 +1259,7 @@ export default function Dashboard() {
                            {/* Workflow Engine: Loss Reason (admin-configurable requirement) */}
                            {workflowRules.find((r: any) => r.status === formStatus)?.requiresLossReason && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Loss Reason <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Loss Reason <span className="text-red-500">*</span></p>
                                  <select 
                                     value={formLossReason}
                                     onChange={(e) => setFormLossReason(e.target.value)}
@@ -1274,7 +1274,7 @@ export default function Dashboard() {
                            {/* Workflow Engine: Meeting Type (admin-configurable requirement) */}
                            {workflowRules.find((r: any) => r.status === formStatus)?.requiresMeetingType && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Type <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Meeting Type <span className="text-red-500">*</span></p>
                                  <select 
                                     value={formMeetingType}
                                     onChange={(e) => setFormMeetingType(e.target.value)}
@@ -1289,7 +1289,7 @@ export default function Dashboard() {
                            {/* Conditional Field: No Response -> Next Call Date */}
                            {formStatus === 'No Response' && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Next Call Date <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Next Call Date <span className="text-red-500">*</span></p>
                                  <input 
                                     type="date"
                                     value={formNextCallDate ? formNextCallDate.substring(0, 10) : ''}
@@ -1302,7 +1302,7 @@ export default function Dashboard() {
                            {/* Conditional Field: Meeting Fixed -> Meeting Date */}
                            {formStatus === 'Meeting Fixed' && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Date <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Meeting Date <span className="text-red-500">*</span></p>
                                  <input 
                                     type="date"
                                     value={formMeetingDate ? formMeetingDate.substring(0, 10) : ''}
@@ -1315,7 +1315,7 @@ export default function Dashboard() {
                            {/* Conditional Field: Follow-up Set, Interested or Busy -> Next Follow-up Date */}
                            {(formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Follow-Up Date <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Target Follow-Up Date <span className="text-red-500">*</span></p>
                                  <input 
                                     type="date"
                                     value={formNextFollowUpDate ? formNextFollowUpDate.substring(0, 10) : ''}
@@ -1328,7 +1328,7 @@ export default function Dashboard() {
                            {/* Conditional Field: Meeting Completed -> sub-status dropdown */}
                            {formStatus === 'Meeting Completed' && (
                               <div className="space-y-1">
-                                 <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Result (Sub-Status) <span className="text-red-500">*</span></p>
+                                 <p className="text-xs font-medium text-slate-500 italic">Meeting Result (Sub-Status) <span className="text-red-500">*</span></p>
                                  <select 
                                     value={formSubStatus}
                                     onChange={(e) => setFormSubStatus(e.target.value)}
@@ -1345,7 +1345,7 @@ export default function Dashboard() {
                            {(formStatus === 'Pipeline Locked' || (formStatus === 'Meeting Completed' && formSubStatus === 'Pipeline Locked')) && (
                               <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-[#978C21] pl-3 py-1 bg-slate-50/50 rounded-r-md">
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Product Name <span className="text-red-500">*</span></p>
                                     <select 
                                        value={formProductName}
                                        onChange={(e) => setFormProductName(e.target.value)}
@@ -1358,7 +1358,7 @@ export default function Dashboard() {
                                     </select>
                                  </div>
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
                                     <input 
                                        type="number"
                                        placeholder="Sum Assured..."
@@ -1368,7 +1368,7 @@ export default function Dashboard() {
                                     />
                                  </div>
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
                                     <input 
                                        type="number"
                                        placeholder="Projected NCP..."
@@ -1384,7 +1384,7 @@ export default function Dashboard() {
                            {formStatus === 'Converted' && (
                               <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-emerald-500 pl-3 py-1 bg-slate-50/50 rounded-r-md">
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Product Name <span className="text-red-500">*</span></p>
                                     <select 
                                        value={formProductName}
                                        onChange={(e) => setFormProductName(e.target.value)}
@@ -1397,7 +1397,7 @@ export default function Dashboard() {
                                     </select>
                                  </div>
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
                                     <input 
                                        type="number"
                                        placeholder="Sum Assured..."
@@ -1407,7 +1407,7 @@ export default function Dashboard() {
                                     />
                                  </div>
                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-black text-slate-400 uppercase italic">Collected NCP (৳) <span className="text-red-500">*</span></p>
+                                    <p className="text-xs font-medium text-slate-500 italic">Collected NCP (৳) <span className="text-red-500">*</span></p>
                                     <input 
                                        type="number"
                                        placeholder="Collected NCP..."
@@ -1422,7 +1422,7 @@ export default function Dashboard() {
 
                         {/* Operational Remarks */}
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Operational Remarks <span className="text-red-500">*</span></p>
+                           <p className="text-xs font-medium text-slate-500 italic">Operational Remarks <span className="text-red-500">*</span></p>
                            <textarea
                               placeholder="Describe client response, expectations, or next steps in detail (Mandatory)..."
                               value={formRemarks}
@@ -1524,7 +1524,7 @@ export default function Dashboard() {
                   key={p}
                   onClick={() => setPeriod(p)}
                   className={cn(
-                    "px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-sm transition-all",
+                    "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
                     period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                   )}
                  >
@@ -1534,7 +1534,7 @@ export default function Dashboard() {
                <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
                <div className="flex items-center gap-2 px-2">
                   <CalendarIcon className="w-3 h-3 text-slate-400" />
-                  <span className="text-[9px] font-black text-slate-400 uppercase">{formattedDateRange()}</span>
+                  <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
                </div>
             </div>
          </div>
@@ -1542,7 +1542,7 @@ export default function Dashboard() {
          {period === 'CUSTOM' && (
            <div className="bg-slate-50 px-6 py-3 border-b border-slate-100 flex items-center gap-4">
               <div className="flex items-center gap-2">
-                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Start:</span>
+                 <span className="text-xs font-medium text-slate-500">Start:</span>
                  <input 
                    type="date" 
                    value={customDates.start}
@@ -1551,7 +1551,7 @@ export default function Dashboard() {
                  />
               </div>
               <div className="flex items-center gap-2">
-                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">End:</span>
+                 <span className="text-xs font-medium text-slate-500">End:</span>
                  <input 
                    type="date" 
                    value={customDates.end}
@@ -1586,7 +1586,7 @@ export default function Dashboard() {
                      {i === 3 && <Target className="w-3.5 h-3.5 text-slate-900" />}
                      {i === 4 && <div className="w-3.5 h-3.5 rounded-full border-2 border-brand-blue" />}
                      {i === 5 && <CheckCircle className="w-3.5 h-3.5 text-[#10B981]" />}
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{stat.label}</p>
+                     <p className="text-xs font-medium text-slate-500">{stat.label}</p>
                   </div>
                   <div className="flex items-baseline gap-1">
                     {stat.prefix && <span className="text-xl font-black text-brand-text leading-none italic">{stat.prefix}</span>}
@@ -1662,11 +1662,11 @@ export default function Dashboard() {
                   className="text-right border-l-0 md:border-l md:pl-6 border-slate-100 flex flex-row md:flex-col gap-4 md:gap-2 justify-between items-end cursor-pointer hover:bg-slate-50 p-2 rounded transition-all select-none"
                >
                   <div>
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Collected NCP</p>
+                     <p className="text-xs font-medium text-slate-500 mb-1 italic">Collected NCP</p>
                      <h3 className="text-2xl md:text-3xl font-black text-[#978C21] italic tracking-tighter leading-none">৳{stats.collected.toLocaleString()}</h3>
                   </div>
                   <div>
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Projected NCP</p>
+                     <p className="text-xs font-medium text-slate-500 mb-1 italic">Projected NCP</p>
                      <h4 className="text-lg md:text-xl font-black text-slate-500 italic tracking-tighter leading-none">৳{stats.projected.toLocaleString()}</h4>
                   </div>
                   <p className="text-[11px] font-black text-[#978C21] mt-1 italic flex items-center gap-1">

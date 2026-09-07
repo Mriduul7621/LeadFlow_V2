@@ -51,7 +51,7 @@ export default function Activities() {
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
       <div>
-        <h1 className="text-[20px] font-black text-brand-text uppercase tracking-wide italic">Activities</h1>
+        <h1 className="text-xl font-bold text-slate-800">Activities</h1>
         <p className="text-[11px] text-slate-400 uppercase tracking-widest mt-1">
           Every pending follow-up, call, and meeting across your visible leads, organized by urgency.
         </p>
@@ -74,7 +74,7 @@ export default function Activities() {
               <div className={cn("w-8 h-8 rounded-sm flex items-center justify-center mb-3", config.color)}>
                 <Icon className="w-4 h-4" />
               </div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{config.label}</p>
+              <p className="text-xs font-medium text-slate-500">{config.label}</p>
               <p className="text-[22px] font-black text-brand-text">{count}</p>
             </button>
           );
@@ -83,7 +83,7 @@ export default function Activities() {
 
       <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-50 bg-[#FBFAF8]">
-          <h3 className="text-[12px] font-black text-brand-text uppercase tracking-[0.15em]">{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
+          <h3 className="text-sm font-semibold text-slate-700">{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
         </div>
         <div className="divide-y divide-slate-50">
           {loading ? (
@@ -106,7 +106,7 @@ export default function Activities() {
                       <TypeIcon className="w-4 h-4 text-slate-400" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-[12px] font-black text-brand-text uppercase tracking-tight truncate">{activity.prospectName}</p>
+                      <p className="text-sm font-semibold text-slate-800 truncate">{activity.prospectName}</p>
                       <p className="text-[10px] text-slate-400 uppercase tracking-widest">{activity.type} &middot; {new Date(activity.dueDate).toLocaleDateString()}</p>
                     </div>
                   </div>

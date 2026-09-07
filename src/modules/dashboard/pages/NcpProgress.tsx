@@ -167,7 +167,7 @@ export default function NcpProgress() {
     <div className="space-y-8 pb-24 bg-white font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-4xl font-black tracking-tighter text-brand-text italic uppercase leading-none">NCP Progress Matrix</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">NCP Progress</h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Volume Velocity, collected BDT metrics and conversions</p>
         </div>
         <div className="flex items-center gap-3 animate-fade-in">
@@ -187,7 +187,7 @@ export default function NcpProgress() {
               <TrendingUp className="w-4 h-4 text-[#10B981]" />
            </div>
            <div>
-              <h4 className="text-white text-[12px] font-black uppercase tracking-[0.2em] italic">Progression Velocity</h4>
+              <h4 className="text-white text-sm font-semibold">Performance</h4>
               <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">NCP tracking status range</p>
            </div>
         </div>
@@ -197,7 +197,7 @@ export default function NcpProgress() {
                key={p}
                onClick={() => setPeriod(p)}
                className={cn(
-                 "px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-sm transition-all",
+                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
                  period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                )}
              >
@@ -207,7 +207,7 @@ export default function NcpProgress() {
            <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
            <div className="flex items-center gap-2 px-2">
               <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-[9px] font-black text-slate-400 uppercase">{formattedDateRange()}</span>
+              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
            </div>
         </div>
       </div>
@@ -215,7 +215,7 @@ export default function NcpProgress() {
       {period === 'CUSTOM' && (
         <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4 animate-fade-in">
            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Start Date:</span>
+              <span className="text-xs font-medium text-slate-500">Start:</span>
               <input 
                 type="date" 
                 value={customDates.start}
@@ -224,7 +224,7 @@ export default function NcpProgress() {
               />
            </div>
            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">End Date:</span>
+              <span className="text-xs font-medium text-slate-500">End Date:</span>
               <input 
                 type="date" 
                 value={customDates.end}
@@ -250,11 +250,11 @@ export default function NcpProgress() {
                 </div>
                 <div className="text-right border-l-0 md:border-l md:pl-6 border-slate-100 flex flex-row md:flex-col gap-4 md:gap-2 justify-between items-end">
                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Collected NCP</p>
+                      <p className="text-xs font-medium text-slate-500 mb-1 italic">Collected NCP</p>
                       <h3 className="text-2xl md:text-3xl font-black text-[#978C21] italic tracking-tighter leading-none">৳{stats.collected.toLocaleString()}</h3>
                    </div>
                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">Projected NCP</p>
+                      <p className="text-xs font-medium text-slate-500 mb-1 italic">Projected NCP</p>
                       <h4 className="text-lg md:text-xl font-black text-slate-500 italic tracking-tighter leading-none">৳{stats.projected.toLocaleString()}</h4>
                    </div>
                    <p className="text-[11px] font-black text-[#978C21] mt-1 italic flex items-center gap-1">
@@ -303,15 +303,15 @@ export default function NcpProgress() {
 
              <div className="grid grid-cols-3 gap-2 mt-6 border-t border-slate-50 pt-6">
                 <div>
-                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 italic">Conversion</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Conversion</p>
                    <h4 className="text-xl md:text-2xl font-black text-brand-blue italic leading-none">{stats.conversionRate}</h4>
                 </div>
                 <div>
-                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 italic">Response TAT</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Response TAT</p>
                    <h4 className="text-xl md:text-2xl font-black text-slate-800 italic leading-none">{stats.avgResponseTAT}</h4>
                 </div>
                 <div>
-                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 italic">Active Leads</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Active Leads</p>
                    <h4 className="text-xl md:text-2xl font-black text-slate-800 italic leading-none">{stats.activeLeads}</h4>
                 </div>
              </div>
