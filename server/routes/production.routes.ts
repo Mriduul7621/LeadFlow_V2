@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getPool, isDatabaseConfigured } from '../database/connection';
 import { fallbackStore, createId } from '../fallbackStore';
