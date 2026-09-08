@@ -21,12 +21,16 @@ export function getPool(): Pool {
         throw new Error("DATABASE_URL environment variable is missing.");
     }
 
+    // Allow local/dev databases without SSL via ?sslmode=disable or PGSSL=disable;
+    // hosted providers (Neon/Supabase/Render) keep the default relaxed SSL.
+    const sslDisabled =
+        /[?&]sslmode=disable\b/i.test(connectionString) ||
+        String(process.env.PGSSL || "").toLowerCase() === "disable";
+
     pool = new Pool({
         connectionString,
 
-        ssl: {
-            rejectUnauthorized: false,
-        },
+        ssl: sslDisabled ? false : { rejectUnauthorized: false },
 
         max: 20,
         idleTimeoutMillis: 30000,

@@ -1,3 +1,4 @@
+import { seedRoles } from "./seeds/roles.seed";
 import { seedMetadata } from "./seeds/metadata.seed";
 import { seedWorkflow } from "./seeds/workflow.seed";
 import { seedLeadStatus } from "./seeds/status.seed";
@@ -8,6 +9,8 @@ export async function runSeeds(): Promise<void> {
     console.log("========================================");
     console.log("🌱 Running Database Seeds");
     console.log("========================================");
+
+    await seedRoles();
 
     await seedMetadata();
 
