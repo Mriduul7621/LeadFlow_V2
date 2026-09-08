@@ -17,23 +17,22 @@ async function ensureDb() {
     const { initializeDatabase } = await import('../server/database/initialize.js');
     await initializeDatabase();
     dbInitialized = true;
-    console.log('Database initialized on Vercel');
+    console.log('Database initialized');
   } catch (error: any) {
-    console.error('Database initialization failed:', error?.message || error);
+    console.error('DB init failed:', error?.message || error);
   }
 }
 
 app.get('/api/db-status', async (_req, res) => {
   if (!process.env.DATABASE_URL) {
-    return res.json({ connected: false, message: 'DATABASE_URL is not set. Using local fallback mode.' });
+    return res.json({ connected: false, message: 'DATABASE_URL is not set.' });
   }
-
   try {
     const { checkDatabaseHealth } = await import('../server/database/connection.js');
     const connected = await checkDatabaseHealth();
-    return res.json({ connected, message: connected ? 'Database connected.' : 'Database host is unreachable.' });
+    return res.json({ connected, message: connected ? 'Database connected.' : 'Unreachable.' });
   } catch (error: any) {
-    return res.json({ connected: false, message: error?.message || 'Database error' });
+    return res.json({ connected: false, message: error?.message });
   }
 });
 
@@ -47,6 +46,7 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// All API routes - load after DB init
 let routesLoaded = false;
 async function loadRoutes() {
   if (routesLoaded) return;
@@ -61,7 +61,7 @@ app.use('/api', async (req, res, next) => {
     await loadRoutes();
     next();
   } catch (error: any) {
-    console.error('Route load error:', error?.message || error);
+    console.error('Route error:', error?.message);
     next(error);
   }
 });
