@@ -23,6 +23,8 @@ export interface FallbackUser {
   updatedAt?: string;
   password?: string;
   mustChangePassword?: boolean;
+  reportingChain?: string[];
+  subordinates?: string[];
 }
 
 export interface FallbackLead {

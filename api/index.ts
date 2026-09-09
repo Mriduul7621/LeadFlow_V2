@@ -27,26 +27,44 @@ async function ensureDb() {
   }
 }
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+
 app.get('/api/db-status', async (_req, res) => {
   if (!process.env.DATABASE_URL) {
-    return res.json({ connected: false, message: 'DATABASE_URL is not set.' });
+    const demoMode = !IS_PRODUCTION;
+    return res.status(demoMode ? 200 : 503).json({
+      connected: false,
+      message: demoMode
+        ? 'DATABASE_URL is not set. Running in development demo mode (in-memory, not persistent).'
+        : 'DATABASE_URL is not configured. The application cannot persist data in production.',
+      mode: demoMode ? 'dev-demo' : 'db-unconfigured',
+    });
   }
   try {
     const { checkDatabaseHealth } = await import('../server/database/connection.js');
     const connected = await checkDatabaseHealth();
-    return res.json({ connected, message: connected ? 'Database connected.' : 'Unreachable.' });
+    if (!connected) {
+      return res.status(503).json({ connected: false, message: 'Database host is unreachable.', mode: 'database-unreachable' });
+    }
+    return res.json({ connected, message: 'Database connected.', mode: 'database' });
   } catch (error: any) {
-    return res.json({ connected: false, message: error?.message });
+    return res.status(503).json({ connected: false, message: error?.message || 'Database is unavailable.', mode: 'database-unreachable' });
   }
 });
 
 app.get('/health', async (_req, res) => {
   try {
     const { isDatabaseConfigured, checkDatabaseHealth } = await import('../server/database/connection.js');
-    const connected = isDatabaseConfigured() ? await checkDatabaseHealth().catch(() => false) : false;
-    return res.json({ ok: true, database: connected, mode: isDatabaseConfigured() ? 'database' : 'fallback' });
+    const configured = isDatabaseConfigured();
+    const database = configured ? await checkDatabaseHealth().catch(() => false) : false;
+    return res.json({
+      ok: true,
+      database,
+      mode: configured ? 'database' : (IS_PRODUCTION ? 'unconfigured' : 'dev-demo'),
+      status: configured ? (database ? 'ok' : 'degraded') : (IS_PRODUCTION ? 'misconfigured' : 'demo'),
+    });
   } catch {
-    return res.json({ ok: true, database: false, mode: 'fallback' });
+    return res.json({ ok: true, database: false, mode: 'unconfigured', status: IS_PRODUCTION ? 'misconfigured' : 'demo' });
   }
 });
 

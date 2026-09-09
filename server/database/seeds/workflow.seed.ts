@@ -1,5 +1,37 @@
+import { query } from "../connection";
+
+/**
+ * Seeds default workflow rules (only when the table is empty).
+ * Defaults are deliberately permissive: only the two requirement rules
+ * that encode long-standing informal business rules (Loss Reason when a
+ * lead is lost, Meeting Type when a meeting is fixed).
+ */
+const DEFAULT_RULES: Array<{
+  status: string;
+  requiresLossReason?: boolean;
+  requiresMeetingType?: boolean;
+}> = [
+  { status: "Not Interested", requiresLossReason: true },
+  { status: "Meeting Fixed", requiresMeetingType: true },
+];
+
 export async function seedWorkflow(): Promise<void> {
+  const result = await query<{ count: number }>("SELECT COUNT(*)::int AS count FROM workflow_rules");
+  const count = result.rows[0]?.count ?? 0;
+  if (count > 0) {
+    console.log(`ℹ️ Workflow rules already present (${count}). Skipping seed.`);
+    return;
+  }
 
-    console.log("✅ Workflow seed completed.");
-
+  for (const rule of DEFAULT_RULES) {
+    await query(
+      `INSERT INTO workflow_rules
+         (status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
+          requires_followup_type, requires_note, is_system, created_at, updated_at)
+       VALUES ($1, NULL, $2, $3, FALSE, FALSE, TRUE, NOW(), NOW())
+       ON CONFLICT (status) DO NOTHING`,
+      [rule.status, !!rule.requiresLossReason, !!rule.requiresMeetingType]
+    );
+  }
+  console.log(`✅ Workflow seed completed (${DEFAULT_RULES.length} default rules).`);
 }
