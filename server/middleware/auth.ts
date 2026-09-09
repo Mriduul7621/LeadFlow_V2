@@ -7,7 +7,7 @@ import {
 import {
     verifyToken,
     JwtPayload
-} from "../utils/jwt";
+} from "../utils/jwt.js";
 
 export interface AuthRequest
     extends Request {

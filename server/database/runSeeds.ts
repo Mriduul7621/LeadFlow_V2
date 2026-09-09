@@ -1,8 +1,8 @@
-import { seedRoles } from "./seeds/roles.seed";
-import { seedMetadata } from "./seeds/metadata.seed";
-import { seedWorkflow } from "./seeds/workflow.seed";
-import { seedLeadStatus } from "./seeds/status.seed";
-import { seedFormBuilder } from "./seeds/form.seed";
+import { seedRoles } from "./seeds/roles.seed.js";
+import { seedMetadata } from "./seeds/metadata.seed.js";
+import { seedWorkflow } from "./seeds/workflow.seed.js";
+import { seedLeadStatus } from "./seeds/status.seed.js";
+import { seedFormBuilder } from "./seeds/form.seed.js";
 
 export async function runSeeds(): Promise<void> {
 

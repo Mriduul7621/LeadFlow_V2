@@ -1,8 +1,8 @@
 import bcrypt from "bcryptjs";
 
-import UserRepository from "../database/repository/UserRepository";
+import UserRepository from "../database/repository/UserRepository.js";
 
-import { signToken } from "../utils/jwt";
+import { signToken } from "../utils/jwt.js";
 
 export interface LoginPayload {
 

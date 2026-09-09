@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import UserRepository, {
     UserRecord,
     UserWithRole
-} from "../database/repository/UserRepository";
+} from "../database/repository/UserRepository.js";
 
 class UserService {
 

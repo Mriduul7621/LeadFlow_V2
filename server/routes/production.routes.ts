@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { getPool } from '../database/connection';
-import { fallbackStore, createId } from '../fallbackStore';
+import { getPool } from '../database/connection.js';
+import { fallbackStore, createId } from '../fallbackStore.js';
 
 const router = Router();
 
@@ -46,6 +46,45 @@ function sendJson(res: any, status: number, payload: any) {
 }
 
 const useDb = () => !!process.env.DATABASE_URL;
+
+async function hasAdminUser(): Promise<boolean> {
+  if (!useDb()) {
+    return fallbackStore.users.some(user => normalizeRole(user.role) === 'ADMIN');
+  }
+  const pool = getPool();
+  const result = await pool.query(
+    `SELECT 1 FROM users u JOIN roles r ON r.id = u.role_id WHERE UPPER(r.role_code) = 'ADMIN' LIMIT 1`
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Allows unauthenticated access only while bootstrapping the first ADMIN.
+ * If a valid token is present, behave like requireAuth.
+ * If no token is present and no ADMIN exists, allow the request.
+ * Otherwise require authentication.
+ */
+async function requireAuthOrBootstrap(req: any, res: any, next: any) {
+  const user = getAuthUser(req);
+  if (user) {
+    req.currentUser = user;
+    next();
+    return;
+  }
+
+  try {
+    const adminExists = await hasAdminUser();
+    if (!adminExists) {
+      next();
+      return;
+    }
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Auth check failed' });
+    return;
+  }
+
+  res.status(401).json({ success: false, message: 'Unauthorized' });
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const asUuid = (value: any): string | null => (value && UUID_RE.test(String(value)) ? String(value) : null);
@@ -208,7 +247,7 @@ router.get('/db-status', async (_req, res) => {
    USERS
 ========================================================= */
 
-router.get('/users/check-admin', requireAuth, async (_req, res) => {
+router.get('/users/check-admin', async (_req, res) => {
   if (!useDb()) {
     const exists = fallbackStore.users.some(user => normalizeRole(user.role) === 'ADMIN');
     return res.status(200).json({ exists });
@@ -242,7 +281,7 @@ router.get('/users', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/users', requireAuth, async (req, res) => {
+router.post('/users', requireAuthOrBootstrap, async (req, res) => {
   const payload = req.body || {};
   const user = {
     id: payload.id || createId('user'),

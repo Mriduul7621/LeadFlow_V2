@@ -1,7 +1,7 @@
 import { Response, NextFunction } from "express";
 
-import { AuthRequest } from "./auth";
-import { query } from "../database/connection";
+import { AuthRequest } from "./auth.js";
+import { query } from "../database/connection.js";
 
 export function requireRole(...allowedRoles: string[]) {
 
