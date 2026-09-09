@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 /**
  * Seeds the metadata engine defaults (era-B `metadata_types` + `options`

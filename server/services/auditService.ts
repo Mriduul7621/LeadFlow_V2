@@ -1,4 +1,4 @@
-import { query } from "../database/connection";
+import { query } from "../database/connection.js";
 
 export interface AuditEvent {
     actorUserId?: string | null;

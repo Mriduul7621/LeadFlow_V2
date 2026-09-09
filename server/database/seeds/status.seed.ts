@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 /**
  * Lead-status seed is handled by metadata.seed.ts (options of type

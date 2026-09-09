@@ -1,4 +1,4 @@
-import { getPool } from './database/connection';
+import { getPool } from './database/connection.js';
 
 export async function getScopedEmployeeIds(employeeId: string, role: string): Promise<Set<string> | null> {
   if (role === 'ADMIN') return null;

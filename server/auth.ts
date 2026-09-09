@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
-import { hashPassword, isBcryptHash, verifyPassword } from './utils/password';
-import { signToken as createToken, verifyToken as decodeToken, JwtPayload } from './utils/jwt';
+import { hashPassword, isBcryptHash, verifyPassword } from './utils/password.js';
+import { signToken as createToken, verifyToken as decodeToken, JwtPayload } from './utils/jwt.js';
 
 export { hashPassword, isBcryptHash, verifyPassword };
 

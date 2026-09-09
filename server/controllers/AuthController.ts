@@ -1,8 +1,8 @@
 import { Request, Response } from "express";
 
-import AuthService from "../services/AuthService";
+import AuthService from "../services/AuthService.js";
 
-import { AuthRequest } from "../middleware/auth";
+import { AuthRequest } from "../middleware/auth.js";
 
 class AuthController {
 

@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 /**
  * Seeds default workflow rules (only when the table is empty).

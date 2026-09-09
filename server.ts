@@ -3,9 +3,9 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 
-import { initializeDatabase } from './server/database/initialize';
-import { checkDatabaseHealth, isDatabaseConfigured, getPool } from './server/database/connection';
-import productionRoutes from './server/routes/production.routes';
+import { initializeDatabase } from './server/database/initialize.js';
+import { checkDatabaseHealth, isDatabaseConfigured, getPool } from './server/database/connection.js';
+import productionRoutes from './server/routes/production.routes.js';
 
 dotenv.config();
 

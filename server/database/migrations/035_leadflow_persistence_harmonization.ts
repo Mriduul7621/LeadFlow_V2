@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 /**
  * 035 - LeadFlow persistence harmonization

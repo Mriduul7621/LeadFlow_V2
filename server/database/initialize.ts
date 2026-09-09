@@ -1,6 +1,6 @@
-import { checkDatabaseHealth } from "./connection";
-import { runMigrations } from "./runMigrations";
-import { runSeeds } from "./runSeeds";
+import { checkDatabaseHealth } from "./connection.js";
+import { runMigrations } from "./runMigrations.js";
+import { runSeeds } from "./runSeeds.js";
 
 export async function initializeDatabase(): Promise<void> {
 

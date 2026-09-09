@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 /**
  * 036 - Fine-grained module permissions
