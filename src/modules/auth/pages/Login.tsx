@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
-import { syncService } from '../../../services/syncService';
+import { ApiError } from '../../shared/api/http';
 import { User, UserRole } from '../../shared/types';
 import { useTranslation } from '../../shared/utils/translations';
 import { preloadLeadStatuses, invalidateLeadStatusCache } from '../../workflow/utils/leadStatusMeta';
@@ -89,10 +89,15 @@ export default function Login() {
       const adminExists = await userService.checkAdminExists();
       setIsFirstTimeSetup(!adminExists);
     } catch (err) {
+      // Never decide first-run state from browser cache - ask the server
+      // again later; default to the login form with a clear error.
       console.error("Error checking admin existence:", err);
-      const localUsers = localDb.getUsers();
-      const hasLocalAdmin = localUsers.some(u => u.role === 'ADMIN');
-      setIsFirstTimeSetup(!hasLocalAdmin);
+      setIsFirstTimeSetup(false);
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not verify the database. Please check the server configuration and try again.'
+      );
     } finally {
       setCheckingSetup(false);
     }
@@ -105,53 +110,32 @@ export default function Login() {
   const onSetupSubmit = async (data: any) => {
     try {
       const empId = data.employeeId.toUpperCase().trim();
-      const newUser: User = {
-        id: `u_admin_${Date.now()}`,
-        name: data.fullName,
+
+      // Create the first ADMIN account through the dedicated, guarded
+      // bootstrap endpoint. The server refuses this call (409) as soon
+      // as any ADMIN exists, validates the input, hashes the password
+      // with bcrypt and creates the user inside a database transaction.
+      const { token, user: serverUser } = await userService.bootstrapAdmin({
+        fullName: data.fullName,
         employeeId: empId,
         email: data.email.toLowerCase().trim(),
-        role: UserRole.ADMIN,
-        designation: 'Administrator',
-        status: 'Active',
-        createdDate: new Date().toISOString(),
-        password: data.password
-      };
-
-      // Create the first ADMIN account. The server only allows this
-      // specific call (role=ADMIN, no auth header) when no admin exists
-      // yet - see POST /api/users bootstrap check on the server.
-      const created = await userService.createUser(newUser);
-
-      // Immediately authenticate through the real login endpoint so we
-      // get back a valid session token (rather than trusting the client).
-      const loginRes = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: empId, password: data.password }),
+        password: data.password,
       });
 
-      if (!loginRes.ok) {
-        localDb.createUser({ ...newUser, password: data.password });
-        invalidateLeadStatusCache();
-        preloadLeadStatuses();
-        login(newUser, undefined, true);
-        toast.success('Offline console initialized. Connect a database to enable cloud sync.');
-        setIsFirstTimeSetup(false);
-        navigate('/');
-        return;
-      }
-
-      const { token, user: serverUser } = await loginRes.json();
-      localDb.createUser({ ...serverUser, password: undefined });
+      // Keep the read cache in sync (password never cached).
+      localDb.createUser({ ...serverUser, password: undefined } as any);
       invalidateLeadStatusCache();
       preloadLeadStatuses();
       login(serverUser, token, false);
       toast.success("Super Admin console initialized successfully!");
-      syncService.syncToDatabase();
       navigate('/');
     } catch (err) {
       console.error("Super Admin setup failed:", err);
-      toast.error("Failed to setup Super Admin account.");
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : "Failed to setup Super Admin account. Please try again.";
+      toast.error(message);
     }
   };
 
@@ -171,36 +155,21 @@ export default function Login() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        const localUser = await userService.getUserByEmail(empId);
-        const localMatch = localDb.getUsers().find(user =>
-          (user.employeeId || '').toUpperCase() === empId && user.password === enteredPassword
-        ) || localUser;
-        if (res.status === 503 && localMatch) {
-          login({ ...localMatch, password: undefined }, undefined, true);
-          toast.success(t('welcomeMessage', { name: localMatch.name }));
-          navigate('/');
-          return;
-        }
-        toast.error(body.error || 'Authentication failed: Invalid credentials.');
+        const message =
+          body?.message || body?.error || 'Authentication failed: Invalid credentials.';
+        toast.error(message);
         return;
       }
 
       const { token, user: matchedUser } = await res.json();
 
-      // Keep the offline cache in sync for offline-mode support.
-      const localUsers = localDb.getUsers();
-      const existsLocally = localUsers.some(u => u.id === matchedUser.id);
-      if (!existsLocally) {
-        localDb.createUser(matchedUser);
-      } else {
-        localDb.updateUser(matchedUser.id, matchedUser);
-      }
-
+      // Cache is only ever written AFTER the server validated the
+      // credentials against PostgreSQL; it is never authoritative.
+      localDb.createUser({ ...matchedUser, password: undefined } as any);
       invalidateLeadStatusCache();
       preloadLeadStatuses();
       login(matchedUser, token, false);
       toast.success(t('welcomeMessage', { name: matchedUser.name }));
-      syncService.syncToDatabase();
       navigate('/');
     } catch (err: any) {
       console.error('Authentication process failed:', err);

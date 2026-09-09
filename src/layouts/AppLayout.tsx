@@ -27,7 +27,7 @@ import { UserRole, SystemNotification, RolePermission } from '../modules/shared/
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notificationService } from '../modules/notifications/services/notificationService';
-import { syncService } from '../services/syncService';
+import { databaseStatusService } from '../services/syncService';
 import { adminService } from '../modules/admin/services/adminService';
 import { userService } from '../modules/users/services/userService';
 import { toast } from 'sonner';
@@ -254,22 +254,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const handleSync = async () => {
     setIsSyncing(true);
-    toast.loading("Syncing data...", { id: "sync-toast" });
+    toast.loading("Checking database connection...", { id: "sync-toast" });
     try {
-      const result = await syncService.syncToDatabase();
-      if (result && result.success) {
-        const { usersSynced, leadsSynced, optionsSynced, departmentsSynced, rolesSynced, teamsSynced, hierarchiesSynced } = result;
-        const total = (usersSynced || 0) + (leadsSynced || 0) + (optionsSynced || 0) + (departmentsSynced || 0) + (rolesSynced || 0) + (teamsSynced || 0) + (hierarchiesSynced || 0);
-        if (total > 0) {
-          toast.success(`Synced successfully! ${usersSynced || 0} users, ${leadsSynced || 0} leads, ${departmentsSynced || 0} departments updated.`, { id: "sync-toast" });
-        } else {
-          toast.success("All data is up to date.", { id: "sync-toast" });
-        }
+      const result = await databaseStatusService.checkDatabaseStatus();
+      if (result && result.connected) {
+        toast.success("Connected to the cloud database. All data is stored in PostgreSQL.", { id: "sync-toast" });
       } else {
-        toast.error("Sync failed. Working in offline mode.", { id: "sync-toast" });
+        toast.error(result?.message || "Database connection failed. Changes cannot be persisted right now.", { id: "sync-toast" });
       }
     } catch (err) {
-      toast.error("Offline or network issue during sync.", { id: "sync-toast" });
+      toast.error("Could not verify the database connection.", { id: "sync-toast" });
     } finally {
       setIsSyncing(false);
     }

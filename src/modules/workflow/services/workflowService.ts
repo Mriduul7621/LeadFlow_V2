@@ -1,4 +1,5 @@
 import { WorkflowRule } from '../../shared/types';
+import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
 
 /**
  * workflowService.ts
@@ -9,42 +10,40 @@ import { WorkflowRule } from '../../shared/types';
  * unless the admin explicitly restricts a status's next steps through
  * Settings > Workflow. The two requirement flags (Loss Reason, Meeting
  * Type) add genuinely new, previously-unenforced business rules.
+ *
+ * Writes are DB-first: saveRule/deleteRule only report success after the
+ * API (and therefore PostgreSQL) commits. Reads default to "no
+ * restrictions" only when the server is unreachable/failing - 4xx
+ * responses (e.g. expired session) surface as errors instead.
  */
 
 let cache: WorkflowRule[] | null = null;
+
+function isOfflineError(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 0 || err.status >= 500;
+  return true;
+}
 
 export const workflowService = {
   async getRules(forceRefresh = false): Promise<WorkflowRule[]> {
     if (cache && !forceRefresh) return cache;
     try {
-      const res = await fetch('/api/workflow-rules');
-      if (res.ok) {
-        cache = await res.json();
-        return cache!;
-      }
+      cache = await apiRequest<WorkflowRule[]>('/api/workflow-rules');
+      return cache;
     } catch (err) {
-      console.warn('Failed to fetch workflow rules, defaulting to unrestricted:', err);
+      if (!isOfflineError(err)) throw err;
+      return cache || [];
     }
-    return cache || [];
   },
 
   async saveRule(rule: Partial<WorkflowRule>): Promise<WorkflowRule> {
-    const res = await fetch('/api/workflow-rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(rule),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to save workflow rule');
-    }
+    const saved = await apiRequest<WorkflowRule>('/api/workflow-rules', jsonBody(rule));
     cache = null;
-    return res.json();
+    return saved;
   },
 
   async deleteRule(id: string): Promise<void> {
-    const res = await fetch(`/api/workflow-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete workflow rule');
+    await apiRequest(`/api/workflow-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
     cache = null;
   },
 

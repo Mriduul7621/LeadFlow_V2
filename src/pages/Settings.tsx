@@ -31,7 +31,7 @@ import { formBuilderService } from '../services/formBuilderService';
 import { workflowService } from '../services/workflowService';
 import { userService } from '../services/userService';
 import { leadService } from '../services/leadService';
-import { syncService } from '../services/syncService';
+import { databaseStatusService } from '../services/syncService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../types';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
@@ -900,11 +900,11 @@ export default function Settings() {
                         onClick={async () => {
                           setLoading(true);
                           try {
-                            const result = await syncService.syncToDatabase();
-                            if (result) {
-                              toast.success("Synchronized local modifications to live database successfully!");
+                            const result = await databaseStatusService.checkDatabaseStatus();
+                            if (result && result.connected) {
+                              toast.success("Connected to the cloud database. All data is persisted directly to PostgreSQL.");
                             } else {
-                              toast.warning("Sync returned warnings or cloud service is occupied.");
+                              toast.error(result?.message || "Database connection failed. Changes cannot be persisted right now.");
                             }
                           } catch (err) {
                             toast.error("Failed to run sync. Check your cloud connection.");
