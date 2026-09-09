@@ -23,6 +23,11 @@ import { fallbackStore, createId } from '../fallbackStore';
  *   4. Every mutation returns the persisted record and a meaningful
  *      error/status on failure; nothing is reported as success unless the
  *      database committed it.
+ *   5. Authorization is enforced here, never trusted from the UI: admin
+ *      mutations require the ADMIN role, user-scoped routes require the
+ *      caller to be the subject or an admin, lead deletion requires
+ *      admin/grant/ownership, and admins cannot strand the org without
+ *      an administrator or lock out their own account.
  * ------------------------------------------------------------------
  */
 
@@ -117,6 +122,49 @@ function requireAdmin(req: any, res: any, next: any): void {
     return;
   }
   next();
+}
+
+function callerIsAdmin(req: any): boolean {
+  const role = normalizeRole(req.currentUser?.role || req.currentUser?.roleCode);
+  return role === 'ADMIN' || role === 'SUPERADMIN';
+}
+
+/** True when `ref` identifies the authenticated caller (uuid, employee id or email). */
+function isSelfRef(req: any, ref: any): boolean {
+  if (!req.currentUser || ref == null) return false;
+  const value = String(ref).trim();
+  if (!value) return false;
+  const candidates = [req.currentUser.id, req.currentUser.employeeId, req.currentUser.email]
+    .filter(Boolean)
+    .map((entry: any) => String(entry).trim());
+  return candidates.some(entry =>
+    entry === value || entry.toUpperCase() === value.toUpperCase()
+  );
+}
+
+/**
+ * Allows the request when the route param identifies the caller
+ * themselves, or when the caller is an administrator. Used for
+ * user-scoped reads/writes (own notifications, own permission sheet,
+ * own password change) so one authenticated user cannot mutate
+ * another user's data.
+ */
+function requireSelfOrAdmin(paramName: string) {
+  return (req: any, res: any, next: any): void => {
+    if (!req.currentUser) {
+      res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
+      return;
+    }
+    if (callerIsAdmin(req)) {
+      next();
+      return;
+    }
+    if (isSelfRef(req, req.params?.[paramName])) {
+      next();
+      return;
+    }
+    res.status(403).json({ success: false, message: 'You can only access your own records.' });
+  };
 }
 
 
@@ -511,6 +559,10 @@ async function adminExistsInDb(): Promise<boolean> {
 }
 
 router.get('/auth/bootstrap-status', async (_req, res) => {
+  // In production without a database this must report 503 (honest
+  // "unavailable") instead of consulting the empty in-memory store and
+  // misleading the login screen into first-run setup.
+  if (sendDbUnavailable(res)) return;
   try {
     const required = !(await adminExistsInDb());
     return sendJson(res, 200, { required, exists: !required });
@@ -705,6 +757,11 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
   if (String(newPassword).length < 5) {
     return sendJson(res, 400, { success: false, message: 'New password must be at least 5 characters' });
   }
+  // Self-service only: one authenticated user must not rotate another
+  // user's password. Admins use POST /users/:id/reset-password.
+  if (!callerIsAdmin(req) && !isSelfRef(req, userId)) {
+    return sendJson(res, 403, { success: false, message: 'You can only change your own password.' });
+  }
 
   if (!useDb()) {
     if (!demoModeAllowed()) {
@@ -752,6 +809,7 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
 ==================================================================== */
 
 router.get('/users/check-admin', requireAuth, async (_req, res) => {
+  if (sendDbUnavailable(res)) return;
   try {
     const exists = await adminExistsInDb();
     return sendJson(res, 200, { exists });
@@ -779,7 +837,8 @@ router.get('/users/:id', requireAuth, async (req, res) => {
   if (!useDb()) {
     const user = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
     if (!user) return sendJson(res, 404, { success: false, message: 'User not found' });
-    return sendJson(res, 200, user);
+    const { password: _pw, ...safeUser } = user;
+    return sendJson(res, 200, safeUser);
   }
   try {
     const uuid = asUuid(req.params.id);
@@ -874,7 +933,14 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
     if (!roleId) return sendJson(res, 400, { success: false, message: 'Unknown role code.' });
     const hash = payload.password ? await bcrypt.hash(String(payload.password), 10) : null;
     const departmentId = await resolveDepartmentId(payload.departmentId);
-    const teamId = await resolveTeamId(payload.teamId);
+    // Unknown team references must fail loudly instead of being silently
+    // dropped to NULL (the UI would otherwise show a team that the
+    // database does not have).
+    const teamRef = clean(payload.teamId);
+    const teamId = teamRef ? await resolveTeamId(teamRef) : null;
+    if (teamRef && !teamId) {
+      return sendJson(res, 400, { success: false, message: `Unknown team "${teamRef}". Please select a valid team.` });
+    }
     const managerId = await resolveUserId(payload.managerId || payload.reportingManagerId);
 
     const result = await getPool().query(
@@ -922,6 +988,19 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const existing = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
     if (!existing) return sendJson(res, 404, { success: false, message: 'User not found' });
+    // Demo-mode parity for the autonomy guards below: an admin must not
+    // lock themselves out, even locally.
+    const demoTargetIsSelf = isSelfRef(req, existing.id) || isSelfRef(req, existing.employeeId);
+    if (demoTargetIsSelf) {
+      const demoExistingRole = normalizeRole(existing.roleCode || existing.role);
+      const demoNextRole = payload.role ? normalizeRole(payload.role) : demoExistingRole;
+      const demoNextActive = payload.status !== undefined ? payload.status !== 'Inactive' : existing.status !== 'Inactive';
+      const demoLosesAdmin = (demoExistingRole === 'ADMIN' || demoExistingRole === 'SUPERADMIN') &&
+        (demoNextRole !== 'ADMIN' && demoNextRole !== 'SUPERADMIN');
+      if (demoLosesAdmin || !demoNextActive) {
+        return sendJson(res, 403, { success: false, message: 'You cannot remove your own administrator access or deactivate your own account.' });
+      }
+    }
     const role = payload.role ? normalizeRole(payload.role) : normalizeRole(existing.role);
     if (payload.password) existing.password = await bcrypt.hash(String(payload.password), 10);
     existing.employeeId = clean(payload.employeeId).toUpperCase() || existing.employeeId;
@@ -965,15 +1044,55 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
       return sendJson(res, 409, { success: false, message: duplicateError });
     }
 
+    // --- Admin autonomy guards -------------------------------------------
+    // 1. The last active administrator can neither be demoted nor
+    //    deactivated (otherwise the org strands itself with no admin and
+    //    the first-admin bootstrap becomes claimable again).
+    // 2. An administrator cannot demote or deactivate their own account
+    //    (self lock-out prevention).
+    const targetIsSelf = isSelfRef(req, existing.id) || isSelfRef(req, existing.employee_id);
+    const targetRoleCode = await roleCodeOf(existing.role_id);
+    const targetIsAdmin = targetRoleCode === 'ADMIN' || targetRoleCode === 'SUPERADMIN';
+    const incomingRole = payload.role !== undefined && payload.role !== null && payload.role !== ''
+      ? normalizeRole(payload.role)
+      : null;
+    const staysAdmin = incomingRole
+      ? (incomingRole === 'ADMIN' || incomingRole === 'SUPERADMIN')
+      : targetIsAdmin;
+    const staysActive = payload.status !== undefined ? payload.status !== 'Inactive' : existing.is_active !== false;
+    if (targetIsAdmin && (!staysAdmin || !staysActive)) {
+      const admins = await client.query(
+        `SELECT COUNT(*)::int AS count FROM users u
+         JOIN roles r ON r.id = u.role_id
+         WHERE UPPER(r.role_code) IN ('ADMIN','SUPERADMIN') AND u.is_active = TRUE`
+      );
+      if ((admins.rows[0]?.count ?? 0) <= 1) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 409, { success: false, message: 'You cannot demote or deactivate the last active administrator account.' });
+      }
+      if (targetIsSelf) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 403, { success: false, message: 'You cannot remove your own administrator access or deactivate your own account.' });
+      }
+    }
+
     const employeeId = clean(payload.employeeId || payload.employee_id).toUpperCase() || existing.employee_id;
     const fullName = clean(payload.fullName || payload.name) || existing.full_name;
     const email = clean(payload.email).toLowerCase() || existing.email;
     const status = payload.status !== undefined ? (payload.status === 'Inactive' ? false : true) : existing.is_active !== false;
-    const roleId = payload.role !== undefined && payload.role !== null && payload.role !== ''
-      ? await resolveRoleId(normalizeRole(payload.role))
+    const roleId = incomingRole
+      ? await resolveRoleId(incomingRole)
       : existing.role_id;
     const departmentId = payload.departmentId !== undefined ? await resolveDepartmentId(payload.departmentId) : existing.department_id;
-    const teamId = payload.teamId !== undefined ? await resolveTeamId(payload.teamId) : existing.team_id;
+    let teamId = existing.team_id;
+    if (payload.teamId !== undefined) {
+      const updateTeamRef = clean(payload.teamId);
+      teamId = updateTeamRef ? await resolveTeamId(updateTeamRef) : null;
+      if (updateTeamRef && !teamId) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: `Unknown team "${updateTeamRef}". Please select a valid team.` });
+      }
+    }
     const managerRef = payload.managerId !== undefined ? payload.managerId : payload.reportingManagerId;
     let managerId = existing.manager_id;
     if (managerRef !== undefined) {
@@ -1056,6 +1175,9 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
 router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    if (isSelfRef(req, req.params.id)) {
+      return sendJson(res, 400, { success: false, message: 'You cannot delete your own account. Ask another administrator.' });
+    }
     fallbackStore.users = fallbackStore.users.filter(u => u.id !== req.params.id && u.employeeId !== req.params.id);
     return sendJson(res, 200, { success: true, message: 'User deleted' });
   }
@@ -1069,6 +1191,10 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     if (!existing) {
       await client.query('ROLLBACK');
       return sendJson(res, 404, { success: false, message: 'User not found' });
+    }
+    if (isSelfRef(req, existing.id) || isSelfRef(req, existing.employee_id)) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: 'You cannot delete your own account. Ask another administrator.' });
     }
     const admins = await client.query(
       `SELECT COUNT(*)::int AS count FROM users u
@@ -1129,7 +1255,7 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
 
 /* ---------- user permission overrides + audit ---------- */
 
-router.get('/users/:id/permissions', requireAuth, async (req, res) => {
+router.get('/users/:id/permissions', requireAuth, requireSelfOrAdmin('id'), async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) return sendJson(res, 200, { success: true, data: [] });
   try {
@@ -1420,6 +1546,168 @@ router.delete('/roles/:roleId', requireAuth, requireAdmin, async (req, res) => {
       return sendJson(res, 409, { success: false, message: 'Role is assigned to existing users and cannot be deleted.' });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Role delete failed' });
+  }
+});
+
+/* ====================================================================
+   FINE PERMISSIONS (per-role module/action matrix)
+==================================================================== */
+
+const FINE_PERMISSION_FLAGS = ['view', 'create', 'edit', 'delete', 'upload'] as const;
+
+/** Demo-mode scratch copy (development only, never used in production). */
+const fallbackFinePermissions: Array<{
+  id: string;
+  roleId: string;
+  roleName: string;
+  modules: Record<string, Record<string, boolean>>;
+  updatedAt: string;
+}> = [];
+
+/**
+ * Validates + normalizes the modules matrix to the Permissions contract:
+ * { <module>: { view, create, edit, delete, upload } } with booleans.
+ * Unknown modules are kept (forward compatible) but their flags are
+ * coerced to exactly the five known keys; anything else is a 400.
+ */
+function sanitizeFinePermissionModules(input: any): Record<string, Record<string, boolean>> | { error: string } {
+  if (input == null || typeof input !== 'object' || Array.isArray(input)) {
+    return { error: 'modules must be an object keyed by module name.' };
+  }
+  const entries = Object.entries(input);
+  if (entries.length > 100) {
+    return { error: 'Too many modules supplied (max 100).' };
+  }
+  const sanitized: Record<string, Record<string, boolean>> = {};
+  for (const [moduleKey, flags] of entries) {
+    const name = String(moduleKey).trim().slice(0, 60);
+    if (!name || flags == null || typeof flags !== 'object' || Array.isArray(flags)) {
+      return { error: `Module "${moduleKey}" must map to an object of boolean flags.` };
+    }
+    const row: Record<string, boolean> = {};
+    for (const flag of FINE_PERMISSION_FLAGS) {
+      row[flag] = (flags as Record<string, unknown>)[flag] === true;
+    }
+    sanitized[name] = row;
+  }
+  return sanitized;
+}
+
+function mapFinePermissionRow(row: any) {
+  return {
+    id: row.id,
+    roleId: String(row.role_code || '').toLowerCase(),
+    roleName: row.role_name || '',
+    modules: jsonbOr(row.modules, {}),
+  };
+}
+
+router.get('/permissions', requireAuth, async (_req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) return sendJson(res, 200, fallbackFinePermissions);
+  try {
+    const result = await getPool().query('SELECT * FROM fine_permissions ORDER BY role_code ASC');
+    return sendJson(res, 200, result.rows.map(mapFinePermissionRow));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission fetch failed' });
+  }
+});
+
+router.get('/permissions/:roleId', requireAuth, async (req, res) => {
+  const roleCode = clean(req.params.roleId).toUpperCase().slice(0, 30);
+  if (!roleCode) return sendJson(res, 400, { success: false, message: 'Role ID is required' });
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    const found = fallbackFinePermissions.find(p => p.roleId.toUpperCase() === roleCode);
+    if (!found) return sendJson(res, 404, { success: false, message: 'Permissions not found for this role' });
+    return sendJson(res, 200, found);
+  }
+  try {
+    const result = await getPool().query(
+      'SELECT * FROM fine_permissions WHERE UPPER(role_code) = $1 LIMIT 1',
+      [roleCode]
+    );
+    if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Permissions not found for this role' });
+    return sendJson(res, 200, mapFinePermissionRow(result.rows[0]));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission fetch failed' });
+  }
+});
+
+router.post('/permissions', requireAuth, requireAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const roleCode = clean(payload.roleId || payload.role_code || payload.roleCode)
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, '')
+    .slice(0, 30);
+  if (!roleCode) {
+    return sendJson(res, 400, { success: false, message: 'roleId is required' });
+  }
+  const modules = sanitizeFinePermissionModules(payload.modules);
+  if ('error' in modules) {
+    return sendJson(res, 400, { success: false, message: modules.error });
+  }
+  const roleName = clean(payload.roleName || payload.role_name) || roleCode;
+
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    const item = {
+      id: roleCode.toLowerCase(),
+      roleId: roleCode.toLowerCase(),
+      roleName,
+      modules,
+      updatedAt: new Date().toISOString(),
+    };
+    const idx = fallbackFinePermissions.findIndex(p => p.roleId.toUpperCase() === roleCode);
+    if (idx >= 0) fallbackFinePermissions[idx] = item;
+    else fallbackFinePermissions.push(item);
+    return sendJson(res, 200, item);
+  }
+
+  try {
+    // The FK references roles(role_code): provision the parent row first
+    // so saving permissions for a brand-new role code just works.
+    await resolveRoleId(roleCode);
+    const result = await getPool().query(
+      `INSERT INTO fine_permissions (role_code, role_name, modules, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       ON CONFLICT (role_code) DO UPDATE SET
+         role_name = EXCLUDED.role_name,
+         modules = EXCLUDED.modules,
+         updated_at = NOW()
+       RETURNING *`,
+      [roleCode, roleName, JSON.stringify(modules)]
+    );
+    return sendJson(res, 200, mapFinePermissionRow(result.rows[0]));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission save failed' });
+  }
+});
+
+router.delete('/permissions/:roleId', requireAuth, requireAdmin, async (req, res) => {
+  const roleCode = clean(req.params.roleId).toUpperCase().slice(0, 30);
+  if (!roleCode) return sendJson(res, 400, { success: false, message: 'Role ID is required' });
+  // The ADMIN matrix is load-bearing for the whole authorization model;
+  // it can be edited but never deleted outright.
+  if (roleCode === 'ADMIN' || roleCode === 'SUPERADMIN') {
+    return sendJson(res, 400, { success: false, message: 'The Super Admin permission matrix cannot be deleted.' });
+  }
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    const idx = fallbackFinePermissions.findIndex(p => p.roleId.toUpperCase() === roleCode);
+    if (idx < 0) return sendJson(res, 404, { success: false, message: 'Permissions not found for this role' });
+    fallbackFinePermissions.splice(idx, 1);
+    return sendJson(res, 200, { success: true, message: 'Permissions deleted' });
+  }
+  try {
+    const result = await getPool().query(
+      'DELETE FROM fine_permissions WHERE UPPER(role_code) = $1 RETURNING id',
+      [roleCode]
+    );
+    if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Permissions not found for this role' });
+    return sendJson(res, 200, { success: true, message: 'Permissions deleted' });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission delete failed' });
   }
 });
 
@@ -1954,7 +2242,7 @@ router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) 
    NOTIFICATIONS
 ==================================================================== */
 
-router.get('/notifications/users/:userId', requireAuth, async (req, res) => {
+router.get('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
     const list = fallbackStore.notifications
@@ -2052,19 +2340,36 @@ router.post('/notifications/:id/read', requireAuth, async (req, res) => {
     return sendJson(res, 200, { success: true, data: item });
   }
   try {
-    const result = await getPool().query(
-      `UPDATE notifications SET is_read = TRUE, read_at = NOW(), updated_at = NOW()
-       WHERE id::text = $1 RETURNING *`,
+    const found = await getPool().query(
+      `SELECT n.*, u.employee_id AS user_employee_id, u.email AS user_email
+       FROM notifications n
+       LEFT JOIN users u ON u.id = n.user_id
+       WHERE n.id::text = $1 LIMIT 1`,
       [req.params.id]
     );
-    if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Notification not found' });
+    if (!found.rows[0]) return sendJson(res, 404, { success: false, message: 'Notification not found' });
+    if (!callerIsAdmin(req)) {
+      const row = found.rows[0];
+      const owned = isSelfRef(req, row.recipient_key) ||
+        isSelfRef(req, row.user_id) ||
+        isSelfRef(req, row.user_employee_id) ||
+        isSelfRef(req, row.user_email);
+      if (!owned) {
+        return sendJson(res, 403, { success: false, message: 'You can only access your own notifications.' });
+      }
+    }
+    const result = await getPool().query(
+      `UPDATE notifications SET is_read = TRUE, read_at = NOW(), updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [found.rows[0].id]
+    );
     return sendJson(res, 200, { success: true, data: mapNotificationRow(result.rows[0]) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification update failed' });
   }
 });
 
-router.post('/notifications/users/:userId/read-all', requireAuth, async (req, res) => {
+router.post('/notifications/users/:userId/read-all', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.notifications.filter(n => n.userId === req.params.userId).forEach(n => { n.read = true; });
@@ -2084,7 +2389,7 @@ router.post('/notifications/users/:userId/read-all', requireAuth, async (req, re
   }
 });
 
-router.delete('/notifications/users/:userId', requireAuth, async (req, res) => {
+router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.notifications = fallbackStore.notifications.filter(n => n.userId !== req.params.userId);
@@ -2527,12 +2832,84 @@ function leadParams(record: LeadRecord, leadCode: string): any[] {
   ];
 }
 
+/**
+ * Server-side guard for single-lead deletion. The UI gates its delete
+ * buttons behind `canAccess('all_leads', 'delete_destroy_leads')`, but
+ * that check alone is not authorization. Deletion is allowed when the
+ * caller is an administrator, holds an explicit `leads.delete` grant
+ * (user override, else role grant), or owns the lead (it is assigned
+ * to them). Anything else is a 403. Returns true when the handler may
+ * proceed; otherwise the error response has already been sent.
+ */
+async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
+  if (callerIsAdmin(req)) return true;
+  try {
+    const pool = getPool();
+    const callerResult = await pool.query(
+      `SELECT id, employee_id, role_id FROM users
+       WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($3)
+       LIMIT 1`,
+      [String(req.currentUser?.id || ''), String(req.currentUser?.employeeId || ''), String(req.currentUser?.email || '')]
+    );
+    const caller = callerResult.rows[0];
+    if (!caller) {
+      sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+      return false;
+    }
+    const leadResult = await pool.query(
+      `SELECT id, assigned_to, custom_fields FROM leads
+       WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
+       LIMIT 1`,
+      [req.params.id]
+    );
+    // Missing leads fall through so the handler returns its 404.
+    if (!leadResult.rows[0]) return true;
+    const lead = leadResult.rows[0];
+    const assignedEmp = lead.custom_fields && typeof lead.custom_fields === 'object'
+      ? (lead.custom_fields as Record<string, any>).assignedTo
+      : null;
+    const isOwner = String(lead.assigned_to || '') === String(caller.id) ||
+      (!!assignedEmp && !!caller.employee_id &&
+        String(assignedEmp).toUpperCase() === String(caller.employee_id).toUpperCase());
+    if (isOwner) return true;
+
+    const permResult = await pool.query(
+      `SELECT id FROM permissions WHERE permission_code = 'leads.delete' LIMIT 1`
+    );
+    if (permResult.rows[0]) {
+      const permissionId = permResult.rows[0].id;
+      const override = await pool.query(
+        `SELECT is_allowed FROM user_permissions WHERE user_id = $1 AND permission_id = $2 LIMIT 1`,
+        [caller.id, permissionId]
+      );
+      if (override.rows[0]) {
+        if (override.rows[0].is_allowed === true) return true;
+      } else if (caller.role_id) {
+        const roleGrant = await pool.query(
+          `SELECT is_allowed FROM role_permissions WHERE role_id = $1 AND permission_id = $2 LIMIT 1`,
+          [caller.role_id, permissionId]
+        );
+        if (roleGrant.rows[0]?.is_allowed === true) return true;
+      }
+    }
+    sendJson(res, 403, {
+      success: false,
+      message: 'You do not have permission to delete this lead. Only administrators, users with lead-delete permission, or the assigned owner may delete it.',
+    });
+    return false;
+  } catch (error: any) {
+    sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead delete check failed' });
+    return false;
+  }
+}
+
 router.delete('/leads/:id', requireAuth, async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.leads = fallbackStore.leads.filter(lead => lead.id !== req.params.id);
     return sendJson(res, 200, { success: true, message: 'Lead deleted' });
   }
+  if (!(await checkLeadDeletePermission(req, res))) return;
   try {
     const result = await getPool().query(
       `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
@@ -2547,7 +2924,7 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
   }
 });
 
-router.delete('/leads/campaign/:campaign', requireAuth, async (req, res) => {
+router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req, res) => {
   const campaign = req.params.campaign;
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });

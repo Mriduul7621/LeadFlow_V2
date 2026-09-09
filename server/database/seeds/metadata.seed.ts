@@ -130,7 +130,11 @@ export async function seedMetadata(): Promise<void> {
       const option = DEFAULT_OPTIONS[i];
       await query(
         `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
-         VALUES ($1, $2, COALESCE($3, $2), $4, FALSE, TRUE, COALESCE($5::jsonb, '{}'::jsonb), NOW(), NOW())
+         -- NOTE: $3 is cast explicitly. COALESCE($3, $2) with two inferred
+         -- params makes PostgreSQL resolve the shared $2 inconsistently
+         -- (42P08 "text versus character varying") under the extended
+         -- query protocol used by node-postgres.
+         VALUES ($1, $2, COALESCE($3::VARCHAR, $2), $4, FALSE, TRUE, COALESCE($5::jsonb, '{}'::jsonb), NOW(), NOW())
          ON CONFLICT (field_key, option_value) DO NOTHING`,
         [option.type, option.value, option.label || null, i + 1, JSON.stringify(option.meta || {})]
       );
