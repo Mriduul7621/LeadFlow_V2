@@ -1,9 +1,9 @@
 import { Request, Response, Router } from "express";
-import { getPool } from "../database/connection";
-import { requireAuth, signToken } from "../auth";
-import { requirePermission } from "../middleware/permission";
-import { hashPassword, isBcryptHash, verifyPassword } from "../utils/password";
-import AuditService from "../services/auditService";
+import { getPool } from "../database/connection.js";
+import { requireAuth, signToken } from "../auth.js";
+import { requirePermission } from "../middleware/permission.js";
+import { hashPassword, isBcryptHash, verifyPassword } from "../utils/password.js";
+import AuditService from "../services/auditService.js";
 
 const router = Router();
 

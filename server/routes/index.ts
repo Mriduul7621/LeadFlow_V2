@@ -1,12 +1,12 @@
 import { Router } from 'express';
 
-import authRoutes from './auth.routes';
-import userRoutes from './user.routes';
-import leadRoutes from './lead.routes';
-import metadataRoutes from './metadata.routes';
-import workflowRoutes from './workflow.routes';
-import notificationRoutes from './notification.routes';
-import dashboardRoutes from './dashboard.routes';
+import authRoutes from './auth.routes.js';
+import userRoutes from './user.routes.js';
+import leadRoutes from './lead.routes.js';
+import metadataRoutes from './metadata.routes.js';
+import workflowRoutes from './workflow.routes.js';
+import notificationRoutes from './notification.routes.js';
+import dashboardRoutes from './dashboard.routes.js';
 
 const router = Router();
 

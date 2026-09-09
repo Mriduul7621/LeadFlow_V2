@@ -1,5 +1,5 @@
-import BaseRepository from "./BaseRepository";
-import { query } from "../connection";
+import BaseRepository from "./BaseRepository.js";
+import { query } from "../connection.js";
 
 export interface TeamRecord {
 

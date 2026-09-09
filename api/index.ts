@@ -52,7 +52,12 @@ app.get('/api/db-status', async (_req, res) => {
   }
 });
 
-app.get('/health', async (_req, res) => {
+// Health endpoint. Registered on both '/health' and '/api/health': on Vercel,
+// /api/* requests are routed to this function with the full original path
+// (e.g. '/api/health'), while '/health' only matches when the app is served
+// standalone (npm start / local dev). Without the '/api/health' alias the
+// health check would fall through to the API 404 handler in production.
+const healthHandler = async (_req, res) => {
   try {
     const { isDatabaseConfigured, checkDatabaseHealth } = await import('../server/database/connection.js');
     const configured = isDatabaseConfigured();
@@ -66,7 +71,10 @@ app.get('/health', async (_req, res) => {
   } catch {
     return res.json({ ok: true, database: false, mode: 'unconfigured', status: IS_PRODUCTION ? 'misconfigured' : 'demo' });
   }
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 // All API routes - load after DB init
 let productionRouter: express.Router | null = null;

@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 export const DEFAULT_ROLES: Array<{ code: string; name: string; level: number; description: string }> = [
     { code: "ADMIN", name: "Administrator", level: 1, description: "Full system access" },

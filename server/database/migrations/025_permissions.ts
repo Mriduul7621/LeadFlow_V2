@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 
 const permissions = [
     ["dashboard.view", "Dashboard", "VIEW"],

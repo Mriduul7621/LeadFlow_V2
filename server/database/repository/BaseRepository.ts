@@ -1,4 +1,4 @@
-import { query } from "../connection";
+import { query } from "../connection.js";
 import { QueryResultRow } from "pg";
 
 export default abstract class BaseRepository<T extends QueryResultRow> {

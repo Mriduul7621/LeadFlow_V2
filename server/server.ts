@@ -3,8 +3,8 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 
-import routes from './routes';
-import { initializeDatabase } from './database/initialize';
+import routes from './routes/index.js';
+import { initializeDatabase } from './database/initialize.js';
 
 dotenv.config();
 
