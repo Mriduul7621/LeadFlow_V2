@@ -2,6 +2,17 @@ import { query } from "../connection";
 
 export async function up(): Promise<void> {
 
+    // gen_random_uuid() (used as the PK default by nearly every table)
+    // lives in pgcrypto. Managed providers pre-enable it, so this is a
+    // no-op there; it only matters for fresh self-hosted databases.
+    // Best-effort: without it the CREATE TABLE below fails loudly, as
+    // before.
+    try {
+        await query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+    } catch (error: any) {
+        console.warn("⚠️ 001: could not ensure pgcrypto extension:", error?.message || error);
+    }
+
     await query(`
         CREATE TABLE IF NOT EXISTS departments (
 

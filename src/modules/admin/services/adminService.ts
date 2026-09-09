@@ -6,7 +6,50 @@ import { apiRequest, ApiError } from '../../shared/api/http';
 const KEYS = {
   ROLES: 'lf_local_roles_permissions',
   TEAMS: 'lf_local_teams',
+  PERMS: 'lf_local_fine_permissions',
 };
+
+const FINE_PERMISSION_MODULES = [
+  'dashboard',
+  'lead_generate',
+  'lead_upload',
+  'lead_tracking',
+  'execution_intelligence',
+  'ncp_progress',
+  'trend_charts',
+  'campaign_breakdown',
+  'follow_up_strategy',
+  'team_progress',
+  'user_management'
+];
+
+/** Default module/action matrix for a role with no saved row yet. */
+function defaultPermissionsFor(roleId: string, roleName?: string): Permissions {
+  const roleIdClean = roleId.toLowerCase();
+  const isAdminRole = roleIdClean === 'admin' || roleIdClean === 'superadmin';
+  const modules: Permissions['modules'] = {};
+  FINE_PERMISSION_MODULES.forEach(m => {
+    modules[m] = {
+      view: isAdminRole,
+      create: isAdminRole,
+      edit: isAdminRole,
+      delete: isAdminRole,
+      upload: isAdminRole
+    };
+  });
+  return {
+    id: roleIdClean,
+    roleId: roleIdClean,
+    roleName: roleName || roleId.toUpperCase(),
+    modules
+  };
+}
+
+/** Normalizes an API row to the Permissions contract (roleId lowercase). */
+function normalizePermissions(row: Permissions): Permissions {
+  const roleId = String(row.roleId || '').toLowerCase();
+  return { ...row, id: row.id || roleId, roleId, modules: row.modules || {} };
+}
 
 function readCache<T>(key: string, fallback: T): T {
   try {
@@ -280,67 +323,75 @@ export const adminService = {
     return true;
   },
 
-  // --- MODULE ACTIONS AND PERMISSIONS (client-side config only) ---
+  // --- FINE-GRAINED MODULE PERMISSIONS (PostgreSQL-authoritative) ---
+  // Reads go to GET /api/permissions first with the localStorage copy as
+  // a read-only cache; writes MUST commit through the API before the
+  // cache is touched, and 4xx failures are never swallowed.
   async getPermissionsList(): Promise<Permissions[]> {
-    return readCache<Permissions[]>('lf_local_fine_permissions', []);
+    try {
+      const cloud = await apiRequest<Permissions[]>('/api/permissions');
+      const normalized = cloud.map(normalizePermissions);
+      writeCache(KEYS.PERMS, normalized);
+      return normalized;
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      return readCache<Permissions[]>(KEYS.PERMS, []).map(normalizePermissions);
+    }
   },
 
   async getPermissionsByRoleId(roleId: string, roleName?: string): Promise<Permissions> {
     const roleIdClean = roleId.toLowerCase();
-    const list = readCache<Permissions[]>('lf_local_fine_permissions', []);
-    const found = list.find(p => p.roleId === roleIdClean);
-    if (found) return found;
-
-    // Default configuration if missing
-    const defaultModules: Record<string, { view: boolean; create: boolean; edit: boolean; delete: boolean; upload: boolean }> = {};
-    const moduleKeys = [
-      'dashboard',
-      'lead_generate',
-      'lead_upload',
-      'lead_tracking',
-      'execution_intelligence',
-      'ncp_progress',
-      'trend_charts',
-      'campaign_breakdown',
-      'follow_up_strategy',
-      'team_progress',
-      'user_management'
-    ];
-
-    const isAdminRole = roleIdClean === 'admin' || roleIdClean === 'superadmin';
-
-    moduleKeys.forEach(m => {
-      defaultModules[m] = {
-        view: isAdminRole,
-        create: isAdminRole,
-        edit: isAdminRole,
-        delete: isAdminRole,
-        upload: isAdminRole
-      };
-    });
-
-    const newPerm: Permissions = {
-      id: roleIdClean,
-      roleId: roleIdClean,
-      roleName: roleName || roleId.toUpperCase(),
-      modules: defaultModules
-    };
-
-    await this.savePermissions(newPerm);
-    return newPerm;
+    try {
+      const row = await apiRequest<Permissions>(`/api/permissions/${encodeURIComponent(roleIdClean)}`);
+      const normalized = normalizePermissions(row);
+      const list = readCache<Permissions[]>(KEYS.PERMS, []).map(normalizePermissions);
+      const idx = list.findIndex(p => p.roleId === roleIdClean);
+      if (idx > -1) list[idx] = normalized;
+      else list.push(normalized);
+      writeCache(KEYS.PERMS, list);
+      return normalized;
+    } catch (err) {
+      // No saved row for this role: return the default matrix WITHOUT
+      // persisting it. Reads must never manufacture database writes;
+      // the caller saves explicitly when the user edits permissions.
+      if (err instanceof ApiError && err.status === 404) {
+        return defaultPermissionsFor(roleIdClean, roleName);
+      }
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      const cached = readCache<Permissions[]>(KEYS.PERMS, [])
+        .map(normalizePermissions)
+        .find(p => p.roleId === roleIdClean);
+      return cached || defaultPermissionsFor(roleIdClean, roleName);
+    }
   },
 
   async savePermissions(perms: Permissions): Promise<Permissions> {
-    const list = readCache<Permissions[]>('lf_local_fine_permissions', []);
-    const idx = list.findIndex(p => p.roleId === perms.roleId);
-    if (idx > -1) list[idx] = perms;
-    else list.push(perms);
-    writeCache('lf_local_fine_permissions', list);
-    return perms;
+    const saved = await apiRequest<Permissions>('/api/permissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(perms),
+    });
+    const normalized = normalizePermissions({ ...perms, ...saved });
+    const list = readCache<Permissions[]>(KEYS.PERMS, []).map(normalizePermissions);
+    const idx = list.findIndex(p => p.roleId === normalized.roleId);
+    if (idx > -1) list[idx] = normalized;
+    else list.push(normalized);
+    writeCache(KEYS.PERMS, list);
+    return normalized;
   },
 
   async deletePermissions(roleId: string): Promise<boolean> {
-    writeCache('lf_local_fine_permissions', readCache<Permissions[]>('lf_local_fine_permissions', []).filter(p => p.roleId !== roleId));
+    if (['ADMIN', 'SUPERADMIN'].includes(String(roleId).toUpperCase())) {
+      toast.error('The Super Admin permission matrix cannot be deleted.');
+      return false;
+    }
+    await apiRequest(`/api/permissions/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
+    writeCache(
+      KEYS.PERMS,
+      readCache<Permissions[]>(KEYS.PERMS, [])
+        .map(normalizePermissions)
+        .filter(p => p.roleId !== String(roleId).toLowerCase())
+    );
     return true;
   }
 };

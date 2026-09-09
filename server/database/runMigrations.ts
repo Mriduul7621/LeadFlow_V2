@@ -26,6 +26,7 @@ import { up as auditLogs } from "./migrations/032_audit_logs";
 import { up as territories } from "./migrations/033_territories";
 import { up as userTerritories } from "./migrations/034_user_territories";
 import { up as persistenceHarmonization } from "./migrations/035_leadflow_persistence_harmonization";
+import { up as finePermissions } from "./migrations/036_fine_permissions";
 
 interface Migration {
 
@@ -175,6 +176,11 @@ const migrations: Migration[] = [
     {
         name: "LeadFlow Persistence Harmonization",
         run: persistenceHarmonization,
+    },
+
+    {
+        name: "Fine Permissions",
+        run: finePermissions,
     },
 
 ];
