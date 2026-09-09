@@ -1,11 +1,29 @@
 import { RolePermission, Team, User, Permissions } from '../../shared/types';
 import { toast } from 'sonner';
 import { userService } from '../../users/services/userService';
+import { apiRequest, ApiError } from '../../shared/api/http';
 
 const KEYS = {
   ROLES: 'lf_local_roles_permissions',
   TEAMS: 'lf_local_teams',
 };
+
+function readCache<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCache<T>(key: string, value: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error(`Failed to write local cache ${key}:`, e);
+  }
+}
 
 // Seed initial default permissions for built-in clearance levels
 export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
@@ -36,15 +54,15 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
 
 export function ensureFeaturePermissions(role: RolePermission): RolePermission {
   const defaults: Record<string, Record<string, boolean>> = {
-    dashboard: { 
-      view: true, 
-      view_calls_stats: true, 
-      view_pipeline_ncp: true, 
-      view_division_table: true, 
-      view_ncp_chart: true, 
-      view_trend_chart: true, 
-      view_campaign_pie: true, 
-      view_critical_alerts: true, 
+    dashboard: {
+      view: true,
+      view_calls_stats: true,
+      view_pipeline_ncp: true,
+      view_division_table: true,
+      view_ncp_chart: true,
+      view_trend_chart: true,
+      view_campaign_pie: true,
+      view_critical_alerts: true,
       view_agent_table: true,
       view_task_calendar: true
     },
@@ -80,7 +98,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
 
   if (!role.featurePermissions) {
     const f: Record<string, Record<string, boolean>> = JSON.parse(JSON.stringify(defaults));
-    
+
     if (roleIdUpper === 'ADMIN' || roleIdUpper === 'SUPERADMIN' || roleIdUpper === 'ADMINISTRATOR') {
       Object.keys(f).forEach(feat => {
         Object.keys(f[feat]).forEach(subK => {
@@ -96,7 +114,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
         else if (feat === 'lead_upload') route = '/leads/upload';
         else if (feat === 'lead_tracking') route = '/leads';
         else if (feat === 'execution_intelligence') route = '/execution-intelligence';
-        else if (feat === 'ncp-progress') route = '/ncp-progress';
+        else if (feat === 'ncp_progress') route = '/ncp-progress';
         else if (feat === 'trend_charts') route = '/trend-charts';
         else if (feat === 'campaign_breakdown') route = '/campaign-breakdown';
         else if (feat === 'follow_up_strategy') route = '/follow-up';
@@ -148,237 +166,128 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
   return role;
 }
 
+function finalizeRole(role: RolePermission): RolePermission {
+  const isAdm = String(role.roleId || '').toUpperCase() === 'ADMIN';
+  return {
+    ...ensureFeaturePermissions(role),
+    isCustom: !isAdm && role.isCustom !== false,
+    dataVisibility: role.dataVisibility || 'Own',
+  };
+}
+
+/** Loads a fresh copy of the local role cache (client-side copy only). */
+function cachedRoles(): RolePermission[] {
+  return readCache<RolePermission[]>(KEYS.ROLES, []).map(r => finalizeRole(r));
+}
+
 export const adminService = {
   // --- ROLES & PERMISSIONS WORKSPACE ---
   async getRoles(): Promise<RolePermission[]> {
     try {
-      const data = localStorage.getItem(KEYS.ROLES);
-      let localRoles: RolePermission[] = data ? JSON.parse(data) : [];
-      let changed = false;
-
-      // Seed ADMIN built-in default if not present
-      if (!localRoles.some(r => r.roleId.toUpperCase() === 'ADMIN')) {
-        localRoles.push(DEFAULT_ROLE_PERMISSIONS[0]);
-        changed = true;
-      }
-      
-      localRoles = localRoles.map(r => {
-        const isAdm = r.roleId.toUpperCase() === 'ADMIN';
-        return {
-          ...ensureFeaturePermissions(r),
-          isCustom: !isAdm
-        };
+      const cloudRoles = await apiRequest<RolePermission[]>('/api/roles');
+      const sorted = [...cloudRoles].sort((a, b) => {
+        if (String(a.roleId).toUpperCase() === 'ADMIN') return -1;
+        if (String(b.roleId).toUpperCase() === 'ADMIN') return 1;
+        return String(a.roleName || a.roleId).localeCompare(String(b.roleName || b.roleId));
       });
-
-      const res = await fetch('/api/roles');
-      if (res.ok) {
-        const cloudRoles = await res.json();
-        let mergedChanged = false;
-
-        for (const cr of cloudRoles) {
-          const isAdm = cr.roleId.toUpperCase() === 'ADMIN';
-          const finalizedCr = {
-            ...ensureFeaturePermissions(cr),
-            isCustom: !isAdm
-          };
-
-          const idx = localRoles.findIndex(lr => lr.roleId.toUpperCase() === finalizedCr.roleId.toUpperCase());
-          if (idx === -1) {
-            localRoles.push(finalizedCr);
-            mergedChanged = true;
-          } else {
-            localRoles[idx] = finalizedCr;
-            mergedChanged = true;
-          }
-        }
-
-        // Clean localRoles again based on filtered cloud ids
-        const activeIds = new Set(cloudRoles.map((cr: any) => cr.roleId.toUpperCase()));
-        const originalLocalLen = localRoles.length;
-        localRoles = localRoles.filter(r => {
-          const rIdUpper = r.roleId.toUpperCase();
-          if (rIdUpper === 'ADMIN') return true;
-          return activeIds.has(rIdUpper);
-        });
-        if (localRoles.length !== originalLocalLen) {
-          mergedChanged = true;
-        }
-
-        if (mergedChanged || changed) {
-          localStorage.setItem(KEYS.ROLES, JSON.stringify(localRoles));
-        }
-      } else {
-        if (changed) {
-          localStorage.setItem(KEYS.ROLES, JSON.stringify(localRoles));
-        }
-      }
-      return localRoles;
-    } catch (error) {
-      console.warn('PostgreSQL fetch roles fallback to local cache:', error);
-      const data = localStorage.getItem(KEYS.ROLES);
-      const outputRoles = data ? JSON.parse(data) : DEFAULT_ROLE_PERMISSIONS;
-      return outputRoles.map((r: RolePermission) => {
-        const isAdm = r.roleId.toUpperCase() === 'ADMIN';
-        return {
-          ...ensureFeaturePermissions(r),
-          isCustom: !isAdm
-        };
-      });
+      const finalized = sorted.map(finalizeRole);
+      writeCache(KEYS.ROLES, finalized);
+      return finalized;
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      const cached = cachedRoles();
+      if (cached.length > 0) return cached;
+      return DEFAULT_ROLE_PERMISSIONS.map(finalizeRole);
     }
   },
 
   async saveRole(role: RolePermission): Promise<RolePermission> {
-    try {
-      const res = await fetch('/api/roles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(role)
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        const roles = await this.getRoles();
-        const normalized = saved?.data ?? saved;
-        const idx = roles.findIndex(r => r.roleId === role.roleId);
-        if (idx > -1) roles[idx] = { ...roles[idx], ...normalized, ...role };
-        else roles.push({ ...role, ...normalized });
-        localStorage.setItem(KEYS.ROLES, JSON.stringify(roles));
-        return role;
-      }
-    } catch (error) {
-      console.warn('PostgreSQL save role fallback:', error);
-    }
-
-    const roles = await this.getRoles();
-    const idx = roles.findIndex(r => r.roleId === role.roleId);
-    if (idx > -1) roles[idx] = role;
-    else roles.push(role);
-    localStorage.setItem(KEYS.ROLES, JSON.stringify(roles));
-    return role;
+    const saved = await apiRequest<RolePermission>('/api/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(role),
+    });
+    const finalized = finalizeRole({ ...role, ...saved, roleId: saved.roleId || role.roleId });
+    const roles = cachedRoles();
+    const idx = roles.findIndex(r => String(r.roleId).toUpperCase() === String(finalized.roleId).toUpperCase());
+    if (idx > -1) roles[idx] = finalized;
+    else roles.push(finalized);
+    writeCache(KEYS.ROLES, roles);
+    return finalized;
   },
 
   async deleteRole(roleId: string): Promise<boolean> {
-    if (['ADMIN'].includes(roleId)) {
+    if (['ADMIN'].includes(String(roleId).toUpperCase())) {
       toast.error('The Super Admin system role cannot be deleted.');
       return false;
     }
-
-    const roles = await this.getRoles();
-    const filtered = roles.filter(r => r.roleId !== roleId);
-    localStorage.setItem(KEYS.ROLES, JSON.stringify(filtered));
-
-    await this.deletePermissions(roleId);
-
-    try {
-      await fetch(`/api/roles/${roleId}`, {
-        method: 'DELETE'
-      });
-      return true;
-    } catch (error) {
-      console.warn('PostgreSQL delete role fallback:', error);
-      return true;
-    }
+    await apiRequest(`/api/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
+    writeCache(KEYS.ROLES, cachedRoles().filter(r => String(r.roleId).toUpperCase() !== String(roleId).toUpperCase()));
+    return true;
   },
 
   // --- TEAMS WORKSPACE ---
   async getTeams(): Promise<Team[]> {
     try {
-      const data = localStorage.getItem(KEYS.TEAMS);
-      let localTeams: Team[] = data ? JSON.parse(data) : [];
-
-      const res = await fetch('/api/teams');
-      if (res.ok) {
-        const cloudTeams: Team[] = await res.json();
-        let mergedChanged = false;
-        
-        cloudTeams.forEach(ct => {
-          const idx = localTeams.findIndex(lt => lt.id === ct.id);
-          if (idx === -1) {
-            localTeams.push(ct);
-            mergedChanged = true;
-          } else {
-            localTeams[idx] = ct;
-            mergedChanged = true;
-          }
-        });
-
-        if (mergedChanged) {
-          localStorage.setItem(KEYS.TEAMS, JSON.stringify(localTeams));
-        }
-      }
-      return localTeams;
-    } catch (error) {
-      console.warn('PostgreSQL fetch teams fallback to local cache:', error);
-      const data = localStorage.getItem(KEYS.TEAMS);
-      return data ? JSON.parse(data) : [];
+      const cloudTeams = await apiRequest<Team[]>('/api/teams');
+      writeCache(KEYS.TEAMS, cloudTeams);
+      return cloudTeams;
+    } catch (err) {
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      return readCache<Team[]>(KEYS.TEAMS, []);
     }
   },
 
+  /**
+   * Saves the team through the API first, then reconciles each member's
+   * teamId through updateUser - every one of those calls is a confirmed
+   * database write, and any failure aborts with an error.
+   */
   async saveTeam(team: Team): Promise<Team> {
-    const teams = await this.getTeams();
-    const idx = teams.findIndex(t => t.id === team.id);
-    if (idx > -1) {
-      teams[idx] = team;
-    } else {
-      teams.push(team);
-    }
-    localStorage.setItem(KEYS.TEAMS, JSON.stringify(teams));
-
+    const saved = await apiRequest<Team>('/api/teams', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(team),
+    });
     const allUsers = await userService.getAllUsers();
     for (const u of allUsers) {
-      if (team.memberIds.includes(u.employeeId) || u.employeeId === team.leaderId) {
-        if (u.teamId !== team.id) {
-          await userService.updateUser(u.id, { teamId: team.id });
+      const isMember = saved.memberIds.includes(u.employeeId) || u.employeeId === saved.leaderId;
+      if (isMember) {
+        if (u.teamId !== saved.id) {
+          await userService.updateUser(u.id, { teamId: saved.id });
         }
-      } else if (u.teamId === team.id) {
+      } else if (u.teamId === saved.id || u.teamId === team.id) {
         await userService.updateUser(u.id, { teamId: '' });
       }
     }
-
-    try {
-      await fetch('/api/teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(team)
-      });
-    } catch (error) {
-      console.warn('PostgreSQL save team fallback:', error);
-    }
-    return team;
+    const teams = await this.getTeams().catch(() => readCache<Team[]>(KEYS.TEAMS, []));
+    const idx = teams.findIndex(t => t.id === saved.id);
+    if (idx > -1) teams[idx] = saved;
+    else teams.push(saved);
+    writeCache(KEYS.TEAMS, teams);
+    return saved;
   },
 
   async deleteTeam(teamId: string): Promise<boolean> {
-    const teams = await this.getTeams();
-    const filtered = teams.filter(t => t.id !== teamId);
-    localStorage.setItem(KEYS.TEAMS, JSON.stringify(filtered));
-
+    await apiRequest(`/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' });
     const allUsers = await userService.getAllUsers();
     for (const u of allUsers) {
       if (u.teamId === teamId) {
         await userService.updateUser(u.id, { teamId: '' });
       }
     }
-
-    try {
-      await fetch(`/api/teams/${teamId}`, {
-        method: 'DELETE'
-      });
-      return true;
-    } catch (error) {
-      console.warn('PostgreSQL delete team fallback:', error);
-      return true;
-    }
+    writeCache(KEYS.TEAMS, readCache<Team[]>(KEYS.TEAMS, []).filter(t => t.id !== teamId));
+    return true;
   },
 
-  // --- MODULE ACTIONS AND PERMISSIONS ---
+  // --- MODULE ACTIONS AND PERMISSIONS (client-side config only) ---
   async getPermissionsList(): Promise<Permissions[]> {
-    const localPerms = localStorage.getItem('lf_local_fine_permissions');
-    return localPerms ? JSON.parse(localPerms) : [];
+    return readCache<Permissions[]>('lf_local_fine_permissions', []);
   },
 
   async getPermissionsByRoleId(roleId: string, roleName?: string): Promise<Permissions> {
     const roleIdClean = roleId.toLowerCase();
-    const localPerms = localStorage.getItem('lf_local_fine_permissions');
-    const list: Permissions[] = localPerms ? JSON.parse(localPerms) : [];
+    const list = readCache<Permissions[]>('lf_local_fine_permissions', []);
     const found = list.find(p => p.roleId === roleIdClean);
     if (found) return found;
 
@@ -422,25 +331,16 @@ export const adminService = {
   },
 
   async savePermissions(perms: Permissions): Promise<Permissions> {
-    const localPerms = localStorage.getItem('lf_local_fine_permissions');
-    let list: Permissions[] = localPerms ? JSON.parse(localPerms) : [];
+    const list = readCache<Permissions[]>('lf_local_fine_permissions', []);
     const idx = list.findIndex(p => p.roleId === perms.roleId);
-    if (idx > -1) {
-      list[idx] = perms;
-    } else {
-      list.push(perms);
-    }
-    localStorage.setItem('lf_local_fine_permissions', JSON.stringify(list));
+    if (idx > -1) list[idx] = perms;
+    else list.push(perms);
+    writeCache('lf_local_fine_permissions', list);
     return perms;
   },
 
   async deletePermissions(roleId: string): Promise<boolean> {
-    const localPerms = localStorage.getItem('lf_local_fine_permissions');
-    if (localPerms) {
-      let list: Permissions[] = JSON.parse(localPerms);
-      list = list.filter(p => p.roleId !== roleId);
-      localStorage.setItem('lf_local_fine_permissions', JSON.stringify(list));
-    }
+    writeCache('lf_local_fine_permissions', readCache<Permissions[]>('lf_local_fine_permissions', []).filter(p => p.roleId !== roleId));
     return true;
   }
 };

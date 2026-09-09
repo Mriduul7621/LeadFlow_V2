@@ -40,23 +40,40 @@ app.use(async (req, res, next) => {
 
 app.use('/api', productionRoutes);
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+
 app.get('/api/db-status', async (_req, res) => {
   if (!isDatabaseConfigured()) {
-    return res.json({ connected: false, message: 'DATABASE_URL is not set. Using local fallback mode.' });
+    const demoMode = !IS_PRODUCTION;
+    return res.status(demoMode ? 200 : 503).json({
+      connected: false,
+      message: demoMode
+        ? 'DATABASE_URL is not set. Running in development demo mode (in-memory, not persistent).'
+        : 'DATABASE_URL is not configured. The application cannot persist data in production.',
+      mode: demoMode ? 'dev-demo' : 'db-unconfigured',
+    });
   }
 
   try {
     const connected = await checkDatabaseHealth();
-    return res.json({ connected, message: connected ? 'Connected to PostgreSQL database.' : 'Database host is unreachable.' });
+    if (!connected) {
+      return res.status(503).json({ connected: false, message: 'Database host is unreachable.', mode: 'database-unreachable' });
+    }
+    return res.json({ connected, message: 'Connected to PostgreSQL database.', mode: 'database' });
   } catch (error: any) {
-    return res.status(503).json({ connected: false, message: error.message || 'Database is unavailable.' });
+    return res.status(503).json({ connected: false, message: error.message || 'Database is unavailable.', mode: 'database-unreachable' });
   }
 });
 
 app.get('/health', async (_req, res) => {
   const pool = isDatabaseConfigured() ? getPool() : null;
-  const health = pool ? await checkDatabaseHealth().catch(() => false) : false;
-  return res.json({ ok: true, database: health, mode: isDatabaseConfigured() ? 'database' : 'fallback' });
+  const database = pool ? await checkDatabaseHealth().catch(() => false) : false;
+  return res.json({
+    ok: true,
+    database,
+    mode: pool ? 'database' : (IS_PRODUCTION ? 'unconfigured' : 'dev-demo'),
+    status: pool ? (database ? 'ok' : 'degraded') : (IS_PRODUCTION ? 'misconfigured' : 'demo'),
+  });
 });
 
 async function startDevelopmentServer() {

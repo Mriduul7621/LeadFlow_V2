@@ -25,6 +25,7 @@ import { up as sessions } from "./migrations/031_sessions";
 import { up as auditLogs } from "./migrations/032_audit_logs";
 import { up as territories } from "./migrations/033_territories";
 import { up as userTerritories } from "./migrations/034_user_territories";
+import { up as persistenceHarmonization } from "./migrations/035_leadflow_persistence_harmonization";
 
 interface Migration {
 
@@ -169,6 +170,11 @@ const migrations: Migration[] = [
     {
         name: "User Territories",
         run: userTerritories,
+    },
+
+    {
+        name: "LeadFlow Persistence Harmonization",
+        run: persistenceHarmonization,
     },
 
 ];

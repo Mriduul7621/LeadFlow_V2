@@ -1,4 +1,5 @@
 import { FormField } from '../../shared/types';
+import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
 
 /**
  * formBuilderService.ts
@@ -17,55 +18,45 @@ import { FormField } from '../../shared/types';
  * respect isVisible/isMandatory from this config. Any NEW field an
  * admin adds through the Form Builder is rendered generically in an
  * "Additional Information" section and stored in Lead.customFields.
+ *
+ * Writes are DB-first - saveField/deleteField/reorder throw unless the
+ * API (and therefore PostgreSQL) confirmed the change. Reads default
+ * to "all fields visible" only when the server is unreachable/failing;
+ * 4xx responses surface as errors.
  */
 
 let cache: FormField[] | null = null;
+
+function isOfflineError(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status === 0 || err.status >= 500;
+  return true;
+}
 
 export const formBuilderService = {
   async getFields(forceRefresh = false): Promise<FormField[]> {
     if (cache && !forceRefresh) return cache;
     try {
-      const res = await fetch('/api/form-fields');
-      if (res.ok) {
-        cache = await res.json();
-        return cache!;
-      }
+      cache = await apiRequest<FormField[]>('/api/form-fields');
+      return cache;
     } catch (err) {
-      console.warn('Failed to fetch form field config, using defaults (all visible):', err);
+      if (!isOfflineError(err)) throw err;
+      return cache || [];
     }
-    return cache || [];
   },
 
   async saveField(field: Partial<FormField>): Promise<FormField> {
-    const res = await fetch('/api/form-fields', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(field),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to save field');
-    }
+    const saved = await apiRequest<FormField>('/api/form-fields', jsonBody(field));
     cache = null;
-    return res.json();
+    return saved;
   },
 
   async deleteField(id: string): Promise<void> {
-    const res = await fetch(`/api/form-fields/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to delete field');
-    }
+    await apiRequest(`/api/form-fields/${encodeURIComponent(id)}`, { method: 'DELETE' });
     cache = null;
   },
 
   async reorder(orderedIds: string[]): Promise<void> {
-    const res = await fetch('/api/form-fields/reorder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderedIds }),
-    });
-    if (!res.ok) throw new Error('Failed to reorder fields');
+    await apiRequest('/api/form-fields/reorder', jsonBody({ orderedIds }));
     cache = null;
   },
 

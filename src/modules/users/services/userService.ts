@@ -1,159 +1,154 @@
 import { User } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
-import { useAuthStore } from '../../auth/store/authStore';
+import { apiRequest, ApiError } from '../../shared/api/http';
 
-function authHeaders(): HeadersInit {
-  const token = useAuthStore.getState().token;
-  return token
-    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
-    : { 'Content-Type': 'application/json' };
+/**
+ * userService.ts
+ * ------------------------------------------------------------------
+ * Persistence policy (matches the rest of the app):
+ *   CREATE/UPDATE/DELETE -> API first -> only after the server confirms
+ *   the PostgreSQL commit is the local cache touched.
+ *   READS -> API first; localDb is a pure cache fallback for offline
+ *   viewing, never an authoritative store.
+ * A failed database write THROWS - the UI must never show a success
+ * toast when the database did not persist the change.
+ */
+
+function cacheUser(user: User): void {
+  const safe = { ...user, password: undefined };
+  const existing = localDb.getUser(user.id);
+  if (existing) {
+    localDb.updateUser(user.id, safe);
+  } else {
+    localDb.createUser(safe as User);
+  }
 }
 
-async function readResponse<T>(response: Response): Promise<T> {
-  const body = await response.json();
-  return (body?.data ?? body) as T;
+function cacheUsers(users: User[]): void {
+  localDb.saveUsers(users.map(u => ({ ...u, password: undefined })));
+}
+
+async function extractErrorMessage(err: unknown, fallback: string): Promise<string> {
+  if (err instanceof ApiError) return err.message;
+  return err instanceof Error ? err.message : fallback;
 }
 
 export const userService = {
-  async createUser(user: User) {
-    try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify(user)
-      });
-      if (res.ok) {
-        const saved = await readResponse<User>(res);
-        localDb.createUser({ ...saved, password: undefined });
-        return saved as User;
-      }
-    } catch (error) {
-      console.warn('PostgreSQL write fallback to local db:', error);
-    }
-    localDb.createUser(user);
-    return user;
+  /** POST /api/auth/bootstrap-admin - secure first-admin creation (server guards it). */
+  async bootstrapAdmin(payload: {
+    fullName: string;
+    employeeId: string;
+    email: string;
+    password: string;
+  }): Promise<{ token: string; user: User }> {
+    const body = await apiRequest<{ token: string; user: User }>('/api/auth/bootstrap-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    cacheUser(body.user);
+    return body;
   },
 
-  async updateUser(userId: string, data: Partial<User>) {
-    try {
-      const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
-        method: 'PUT',
-        headers: authHeaders(),
-        body: JSON.stringify(data)
-      });
-      if (res.ok) {
-        const saved = await readResponse<User>(res);
-        localDb.updateUser(userId, { ...saved, password: undefined });
-        return saved;
-      }
-    } catch (error) {
-      console.warn('PostgreSQL write fallback to local db:', error);
+  async createUser(user: User): Promise<User> {
+    const saved = await apiRequest<User>('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+    cacheUser(saved);
+    return saved;
+  },
+
+  async updateUser(userId: string, data: Partial<User>): Promise<User | null> {
+    const saved = await apiRequest<User>(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (saved) {
+      localDb.updateUser(userId, { ...saved, password: undefined });
+      return saved;
     }
-    localDb.updateUser(userId, data);
-    return localDb.getUser(userId);
+    return null;
   },
 
   async getUser(userId: string): Promise<User | null> {
     try {
-      const res = await fetch('/api/users', { headers: authHeaders() });
-      if (res.ok) {
-        const cloudUsers = await readResponse<User[]>(res);
-        const found = cloudUsers.find(u => u.id === userId || u.employeeId === userId);
-        if (found) {
-          localDb.updateUser(found.id, found);
-          return found;
-        }
+      const cloudUsers = await this.getAllUsers();
+      const found = cloudUsers.find(u => u.id === userId || u.employeeId === userId);
+      if (found) {
+        localDb.updateUser(found.id, { ...found, password: undefined });
+        return found;
       }
-    } catch (error) {
-      console.warn('PostgreSQL get fallback to local db:', error);
+      // Cloud is authoritative: if the user is not there anymore, drop the
+      // stale cache entry and report null (do not resurrect deleted users).
+      const cached = localDb.getUser(userId);
+      if (cached && String(cached.status).toLowerCase() === 'inactive') {
+        localDb.deleteUser(userId);
+      }
+      return null;
+    } catch (err) {
+      // Network/server unavailable: return the cache (read-only fallback).
+      const cached = localDb.getUser(userId);
+      if (cached) return cached;
+      throw err;
     }
-    return localDb.getUser(userId);
   },
 
   async getAllUsers(): Promise<User[]> {
     try {
-      const res = await fetch('/api/users', { headers: authHeaders() });
-      if (res.ok) {
-        const cloudUsers: User[] = await res.json();
-        const localUsers = localDb.getUsers();
-        let changed = false;
-        const mergedUsers = [...localUsers];
-
-        for (const cu of cloudUsers) {
-          const idx = mergedUsers.findIndex(u => u.id === cu.id);
-          if (idx === -1) {
-            mergedUsers.push(cu);
-            changed = true;
-          } else {
-            const localUser = mergedUsers[idx];
-            const lTime = new Date(localUser.createdDate || 0).getTime();
-            const cTime = new Date(cu.createdDate || 0).getTime();
-            const needsUpdate = cu.role !== localUser.role || 
-                                cu.name !== localUser.name ||
-                                cu.status !== localUser.status ||
-                                (!isNaN(cTime) && !isNaN(lTime) && cTime > lTime);
-            if (needsUpdate) {
-              mergedUsers[idx] = cu;
-              changed = true;
-            }
-          }
-        }
-
-        if (changed) {
-          localDb.saveUsers(mergedUsers);
-        }
-        return mergedUsers;
-      }
-    } catch (error) {
-      console.warn('PostgreSQL list users fallback to local db:', error);
+      const cloudUsers = await apiRequest<User[]>('/api/users');
+      cacheUsers(cloudUsers);
+      return cloudUsers;
+    } catch (err) {
+      // Offline / server-down fallback: return the read-only cache. Auth
+      // failures (401/403) are never swallowed here.
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      const cached = localDb.getUsers();
+      return cached;
     }
-    return localDb.getUsers();
   },
 
   async getUserByEmail(email: string): Promise<User | null> {
-    try {
-      const users = await this.getAllUsers();
-      return users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
-    } catch (error) {
-      console.warn('PostgreSQL getUserByEmail fallback to local db:', error);
-    }
-    return localDb.getUserByEmail(email);
+    const users = await this.getAllUsers();
+    return users.find(u => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
   },
 
-  async deleteUser(userId: string) {
-    try {
-      await fetch(`/api/users/${userId}`, {
-        method: 'DELETE',
-        headers: authHeaders()
-      });
-    } catch (error) {
-      console.warn('PostgreSQL delete user fallback to local db:', error);
-    }
+  async deleteUser(userId: string): Promise<void> {
+    await apiRequest(`/api/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
     localDb.deleteUser(userId);
   },
 
-  async resetPassword(userId: string, password: string) {
-    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/reset-password`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ password })
-    });
-    if (!res.ok) throw new Error('Password reset failed.');
-    return readResponse<{ success: boolean }>(res);
+  async resetPassword(userId: string, password: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(
+      `/api/users/${encodeURIComponent(userId)}/reset-password`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      }
+    );
   },
 
+  /**
+   * Whether the app still needs its first ADMIN created. Uses the public
+   * bootstrap-status endpoint - no local fallback, because deciding this
+   * from the browser's cache could mislead the user about the real
+   * database state.
+   */
   async checkAdminExists(): Promise<boolean> {
-    try {
-      const res = await fetch('/api/users/check-admin', { headers: authHeaders() });
-      if (res.ok) {
-        const body = await res.json();
-        return !!body.exists;
-      }
-    } catch (error) {
-      console.warn('PostgreSQL checkAdminExists failed:', error);
-    }
-    // Only fallback if there was an actual connection issue
-    const localUsers = localDb.getUsers();
-    return localUsers.some(u => u.role === 'ADMIN');
-  }
+    const body = await apiRequest<{ required: boolean; exists?: boolean }>('/api/auth/bootstrap-status');
+    return body.exists === true || body.required === false;
+  },
+
+  async checkBootstrapRequired(): Promise<boolean> {
+    const body = await apiRequest<{ required: boolean; exists?: boolean }>('/api/auth/bootstrap-status');
+    return body.required !== false;
+  },
+
+  /** Shared by UI catch blocks - keeps messages consistent. */
+  async errorMessage(err: unknown, fallback: string): Promise<string> {
+    return extractErrorMessage(err, fallback);
+  },
 };

@@ -1,5 +1,6 @@
 import { DropdownOption, MetadataType } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
+import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
 
 /**
  * metadataService.ts
@@ -15,49 +16,44 @@ import { localDb } from '../../../services/localDb';
  *                              blob for per-type extras, e.g. a lead
  *                              status's color / isWon / isLost flags)
  *
- * settingsService.ts (legacy) is kept for backward compatibility but
- * now delegates to this service under the hood.
+ * Writes are DB-first: every add/update/delete/reorder is a confirmed
+ * API (PostgreSQL) commit; failures throw and never update local state.
+ * Reads use an in-memory cache, with a localStorage read-cache only
+ * when the server is unreachable or failing (never on 4xx errors).
  */
 
 let typesCache: MetadataType[] | null = null;
 let valuesCache: Record<string, DropdownOption[]> = {};
+
+function isOfflineError(err: unknown): boolean {
+  // status 0 = network failure; >=500 = server/database unavailable.
+  if (err instanceof ApiError) {
+    return err.status === 0 || err.status >= 500;
+  }
+  return true;
+}
 
 export const metadataService = {
   /** Full registry of metadata types (for the admin "Metadata Manager" screen). */
   async getTypes(forceRefresh = false): Promise<MetadataType[]> {
     if (typesCache && !forceRefresh) return typesCache;
     try {
-      const res = await fetch('/api/metadata-types');
-      if (res.ok) {
-        typesCache = await res.json();
-        return typesCache!;
-      }
+      typesCache = await apiRequest<MetadataType[]>('/api/metadata-types');
+      return typesCache;
     } catch (err) {
-      console.warn('Failed to fetch metadata types, using empty registry:', err);
+      if (!isOfflineError(err)) throw err;
+      return typesCache || [];
     }
-    return typesCache || [];
   },
 
   async createType(key: string, label: string, description?: string): Promise<MetadataType> {
-    const res = await fetch('/api/metadata-types', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, label, description }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to create metadata type');
-    }
+    const saved = await apiRequest<MetadataType>('/api/metadata-types', jsonBody({ key, label, description }));
     typesCache = null;
-    return res.json();
+    return saved;
   },
 
   async deleteType(key: string): Promise<void> {
-    const res = await fetch(`/api/metadata-types/${encodeURIComponent(key)}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to delete metadata type');
-    }
+    await apiRequest(`/api/metadata-types/${encodeURIComponent(key)}`, { method: 'DELETE' });
     typesCache = null;
     delete valuesCache[key];
   },
@@ -67,19 +63,16 @@ export const metadataService = {
     const cacheKey = `__all__${type}`;
     if (valuesCache[cacheKey] && !forceRefresh) return valuesCache[cacheKey];
     try {
-      const res = await fetch('/api/options');
-      if (res.ok) {
-        const all: DropdownOption[] = await res.json();
-        const forType = all
-          .filter(o => o.type === type)
-          .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        valuesCache[cacheKey] = forType;
-        return forType;
-      }
+      const all = await apiRequest<DropdownOption[]>('/api/options');
+      const forType = all
+        .filter(o => o.type === type)
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+      valuesCache[cacheKey] = forType;
+      return forType;
     } catch (err) {
-      console.warn(`Failed to fetch metadata values for "${type}", falling back to local cache:`, err);
+      if (!isOfflineError(err)) throw err;
+      return localDb.getOptionsByType(type).map(v => ({ type, value: v, label: v, status: 'Active' as const }));
     }
-    return localDb.getOptionsByType(type).map(v => ({ type, value: v, label: v, status: 'Active' as const }));
   },
 
   /** Active values only, as plain strings - drop-in for the old settingsService.getOptionsByType(). */
@@ -89,25 +82,16 @@ export const metadataService = {
   },
 
   async addValue(type: string, value: string, meta?: Record<string, any>, label?: string): Promise<DropdownOption> {
-    const res = await fetch('/api/options', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, value, label: label || value, status: 'Active', meta }),
-    });
-    if (!res.ok) throw new Error('Failed to add metadata value');
-    const saved = await res.json();
+    const saved = await apiRequest<DropdownOption>(
+      '/api/options',
+      jsonBody({ type, value, label: label || value, status: 'Active', meta })
+    );
     delete valuesCache[`__all__${type}`];
     return saved;
   },
 
   async updateValue(option: DropdownOption): Promise<DropdownOption> {
-    const res = await fetch('/api/options', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(option),
-    });
-    if (!res.ok) throw new Error('Failed to update metadata value');
-    const saved = await res.json();
+    const saved = await apiRequest<DropdownOption>('/api/options', jsonBody(option));
     delete valuesCache[`__all__${option.type}`];
     return saved;
   },
@@ -117,17 +101,12 @@ export const metadataService = {
   },
 
   async deleteValue(type: string, value: string): Promise<void> {
-    await fetch(`/api/options/${encodeURIComponent(type)}/${encodeURIComponent(value)}`, { method: 'DELETE' });
+    await apiRequest(`/api/options/${encodeURIComponent(type)}/${encodeURIComponent(value)}`, { method: 'DELETE' });
     delete valuesCache[`__all__${type}`];
   },
 
   async reorder(type: string, orderedIds: string[]): Promise<void> {
-    const res = await fetch('/api/options/reorder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderedIds }),
-    });
-    if (!res.ok) throw new Error('Failed to reorder metadata values');
+    await apiRequest('/api/options/reorder', jsonBody({ orderedIds }));
     delete valuesCache[`__all__${type}`];
   },
 

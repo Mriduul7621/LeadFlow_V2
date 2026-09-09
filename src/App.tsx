@@ -25,7 +25,7 @@ import Activities from './modules/leads/pages/Activities';
 import { useAuthStore } from './modules/auth/store/authStore';
 import { Toaster } from 'sonner';
 import { userService } from './modules/users/services/userService';
-import { syncService } from './services/syncService';
+import { databaseStatusService } from './services/syncService';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -128,7 +128,7 @@ export default function App() {
     // 1. Trigger background data synchronization if authenticated
     const state = useAuthStore.getState();
     if (state.isAuthenticated && state.user) {
-      syncService.syncToDatabase();
+      databaseStatusService.checkDatabaseStatus().catch(() => undefined);
     }
 
     // 2. Manage authentication state changes
