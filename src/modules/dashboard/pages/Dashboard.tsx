@@ -11,6 +11,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { UserRole, LeadStatus } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
+import { dashboardService } from '../services/dashboardService';
 import { userService } from '../../users/services/userService';
 import { settingsService } from '../../../services/settingsService';
 import { metadataService } from '../../metadata/services/metadataService';
@@ -18,16 +19,6 @@ import { workflowService } from '../../workflow/services/workflowService';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
-
-const CAMPAIGN_TREND_DATA = [
-  { date: '01 May', value: 40 },
-  { date: '05 May', value: 65 },
-  { date: '10 May', value: 45 },
-  { date: '15 May', value: 90 },
-  { date: '20 May', value: 70 },
-  { date: '25 May', value: 85 },
-  { date: '31 May', value: 110 },
-];
 
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 
@@ -60,7 +51,7 @@ export default function Dashboard() {
     collected: 0,
     activeLeads: 0,
     conversionRate: '0.0%',
-    avgResponseTAT: '24.0h'
+    avgResponseTAT: null as string | null,
   });
   const [agentStats, setAgentStats] = useState<any[]>([]);
   const [teamStats, setTeamStats] = useState<any[]>([]);
@@ -69,7 +60,8 @@ export default function Dashboard() {
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [alertDate, setAlertDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [popupSearch, setPopupSearch] = useState<string>('');
-  const [trendData, setTrendData] = useState<{ date: string; value: number }[]>(CAMPAIGN_TREND_DATA);
+  // Empty until the server provides real time-series points — never fabricate a single-point "trend".
+  const [trendData, setTrendData] = useState<{ date: string; value: number }[]>([]);
 
   // Status updating state fields
   const [selectedLead, setSelectedLead] = useState<any | null>(null);
@@ -516,207 +508,83 @@ export default function Dashboard() {
     if (!user) return;
     setLoading(true);
     try {
-      const allLeads = await leadService.getLeads({ 
-        employeeId: user.employeeId, 
-        role: user.role,
-        startDate: period === 'CUSTOM' ? customDates.start : (period === 'TODAY' ? selectedDate + 'T00:00:00' : undefined),
-        endDate: period === 'CUSTOM' ? customDates.end : (period === 'TODAY' ? selectedDate + 'T23:59:59.999' : undefined)
+      // Authoritative metrics from GET /api/dashboard (server-side visibility + Asia/Dhaka).
+      // KPI cards and tables bind only to this response.
+      const periodKey =
+        period === 'THIS MONTH' ? 'THIS_MONTH' :
+        period === 'LAST MONTH' ? 'LAST_MONTH' :
+        period === 'CUSTOM' ? 'CUSTOM' :
+        period === 'TODAY' ? 'TODAY' : 'ALL';
+
+      const metrics = await dashboardService.getDashboard({
+        period: periodKey,
+        selectedDate: period === 'TODAY' ? selectedDate : undefined,
+        startDate: period === 'CUSTOM' ? customDates.start : undefined,
+        endDate: period === 'CUSTOM' ? customDates.end : undefined,
       });
-      setLeads(allLeads);
-      
-      let allUsers: any[] = [];
+
+      setStats({
+        newLeads: metrics.newLeads || 0,
+        responses: metrics.responses || 0,
+        pipeline: metrics.pipeline || 0,
+        alerts: metrics.alerts || 0,
+        contacted: metrics.contacted || 0,
+        meetings: metrics.meetings || 0,
+        followUps: metrics.followUps || 0,
+        projected: metrics.projected || 0,
+        collected: metrics.collected || 0,
+        activeLeads: metrics.activeLeads || 0,
+        conversionRate: metrics.conversionRate || '0.0%',
+        avgResponseTAT: metrics.avgResponseTAT == null || metrics.avgResponseTAT === '' ? null : metrics.avgResponseTAT,
+      });
+
+      setAgentStats((metrics.agentStats || []).map((row: any) => ({
+        ...row,
+        collected: typeof row.collected === 'number' ? `৳ ${row.collected.toLocaleString()}` : row.collected,
+        projected: typeof row.projected === 'number' ? `৳ ${row.projected.toLocaleString()}` : row.projected,
+      })));
+      setTeamStats((metrics.teamStats || []).map((row: any) => ({
+        ...row,
+        collected: typeof row.collected === 'number' ? `৳ ${Number(row.collected).toLocaleString()}` : row.collected,
+        projected: typeof row.projected === 'number' ? `৳ ${Number(row.projected).toLocaleString()}` : row.projected,
+      })));
+      setCampaignStats(metrics.campaignStats || []);
+
+      // Detail rows for optional popup drill-downs are not used for KPI math.
+      setLeads([]);
+
       if (user.role !== UserRole.RO) {
         try {
-          allUsers = await userService.getAllUsers();
-          setAllUsers(allUsers);
+          const usersList = await userService.getAllUsers();
+          setAllUsers(usersList);
         } catch (e) {
           console.warn("Could not fetch user list - restricted access");
         }
       }
-      
-      // Determine date range
-      let startDate = new Date(0);
-      let endDate = new Date();
-      const now = new Date();
 
-      if (period === 'TODAY') {
-        startDate = new Date(selectedDate + 'T00:00:00');
-        endDate = new Date(selectedDate + 'T23:59:59.999');
-      } else if (period === 'THIS MONTH') {
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-      } else if (period === 'LAST MONTH') {
-        startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      } else if (period === 'CUSTOM') {
-        startDate = new Date(customDates.start);
-        endDate = new Date(customDates.end);
-        endDate.setHours(23, 59, 59, 999);
-      }
-
-      // Filter leads based on role AND time
-      let filteredLeads = allLeads.filter(l => {
-        const leadDate = new Date(l.timestamp);
-        return leadDate >= startDate && leadDate <= endDate;
-      });
-
-      if (user.role === UserRole.RO) {
-        filteredLeads = filteredLeads.filter(l => l.assignedTo === user.employeeId);
-      }
-
-      // Calculate Snapshots
-      const newLeadsCount = filteredLeads.filter(l => l.currentStatus === 'Untouched').length;
-      const responsesCount = filteredLeads.filter(l => l.currentStatus !== 'Untouched').length;
-      const pipelineCount = filteredLeads.filter(l => l.collectedNCP > 0 || l.projectedNCP > 0).length;
-      const alertsCount = filteredLeads.filter(l => l.currentStatus === 'Untouched').length;
-
-      const collectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
-      const projectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0);
-
-      // Calculate Turnaround Time (TAT)
-      let totalTatMs = 0;
-      let targetTatLeads = 0;
-      filteredLeads.forEach(l => {
-        if (l.currentStatus !== 'Untouched') {
-          const birthTime = new Date(l.timestamp || l.creationDate).getTime();
-          let reactionTime = 0;
-          if (l.statusHistory && l.statusHistory.length > 0) {
-            const validTimes = l.statusHistory
-              .map(h => new Date(h.date).getTime())
-              .filter(t => !isNaN(t));
-            if (validTimes.length > 0) {
-              reactionTime = Math.min(...validTimes);
-            }
-          }
-          if (reactionTime > birthTime) {
-            totalTatMs += (reactionTime - birthTime);
-            targetTatLeads++;
-          }
-        }
-      });
-      const tatVal = targetTatLeads > 0 
-        ? (totalTatMs / (1000 * 60 * 60 * targetTatLeads)).toFixed(1) + 'h' 
-        : '24.0h';
-
-      const activeLeadsCount = filteredLeads.filter(l => l.currentStatus !== 'Converted' && l.currentStatus !== 'Not Interested').length;
-      const convertedCount = filteredLeads.filter(l => l.currentStatus === 'Converted').length;
-      const conversionRateVal = filteredLeads.length > 0
-        ? ((convertedCount / filteredLeads.length) * 100).toFixed(1) + '%'
-        : '0.0%';
-
-      setStats({
-        newLeads: newLeadsCount,
-        responses: responsesCount,
-        pipeline: pipelineCount,
-        alerts: alertsCount,
-        contacted: filteredLeads.filter(l => ['Contacted', 'Interested', 'Follow-up Set'].includes(l.currentStatus)).length,
-        meetings: filteredLeads.filter(l => l.currentStatus === 'Meeting Fixed').length,
-        followUps: filteredLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
-        projected: projectedTotal,
-        collected: collectedTotal,
-        activeLeads: activeLeadsCount,
-        conversionRate: conversionRateVal,
-        avgResponseTAT: tatVal
-      });
-
-      // Calculate Agent Stats
-      const agents = allUsers.filter(u => u.role === UserRole.RO);
-      const calculatedAgentStats = agents.map(agent => {
-        const agentLeads = filteredLeads.filter(l => l.assignedTo === agent.employeeId);
-        const agentCollected = agentLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
-        const agentProjected = agentLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0);
-        
-        return {
-          name: agent.name,
-          assigned: agentLeads.length,
-          total: agentLeads.length,
-          noCall: agentLeads.filter(l => l.currentStatus === 'Untouched').length,
-          nextCall: agentLeads.filter(l => l.currentStatus === 'Untouched').length,
-          followUp: agentLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
-          followUpAlert: agentLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
-          converted: agentLeads.filter(l => l.currentStatus === 'Converted').length,
-          collected: `৳ ${agentCollected.toLocaleString()}`,
-          projected: `৳ ${agentProjected.toLocaleString()}`,
-          conversion: agentLeads.length > 0 ? `${((agentLeads.filter(l => l.currentStatus === 'Converted').length / agentLeads.length) * 100).toFixed(1)}%` : '0.0%'
-        };
-      });
-      setAgentStats(calculatedAgentStats);
-
-      // Campaign stats breakdown
-      const statuses = [
-        'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested', 
-        'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked'
-      ];
-      const colors = ['#e2e8f0', '#0F172A', '#334155', '#64748B', '#94A3B8', '#1E293B', '#CBD5E1', '#978C21', '#475569'];
-      
-      const breakdown = statuses.map((status, i) => ({
-        name: status,
-        value: filteredLeads.filter(l => l.currentStatus === status).length,
-        color: colors[i]
-      }));
-      setCampaignStats(breakdown);
-
-      // Team stats
-      const teams = ['Gulshan', 'Banani', 'Dhanmondi', 'Uttara', 'Mirpur'];
-      const teamBreakdown = teams.map(team => {
-        const teamLeads = filteredLeads.filter(l => (l.area || '').includes(team));
-        return {
-          team,
-          assigned: teamLeads.length,
-          noCall: teamLeads.filter(l => l.currentStatus === 'Untouched').length,
-          contacted: teamLeads.filter(l => l.currentStatus === 'Contacted').length,
-          meetings: teamLeads.filter(l => l.currentStatus === 'Meeting Fixed').length,
-          followUps: teamLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
-          pipeline: teamLeads.filter(l => l.projectedNCP > 0).length,
-          collected: `৳ ${teamLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0).toLocaleString()}`,
-          projected: `৳ ${teamLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0).toLocaleString()}`
-        };
-      });
-      setTeamStats(teamBreakdown.filter(t => t.assigned > 0));
-
-      // Calculate dynamic Campaign Performance Trend (Daily Lead Generation Volume)
-      let calculatedTrend: { date: string; value: number }[] = [];
-      const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      if (period === 'TODAY' || diffDays <= 1) {
-        // Hourly breakdown for 1 day
-        const hours = [
-          { label: '09:00', start: 0, end: 9 },
-          { label: '12:00', start: 9, end: 12 },
-          { label: '15:00', start: 12, end: 15 },
-          { label: '18:00', start: 15, end: 18 },
-          { label: '21:00', start: 18, end: 21 },
-          { label: '24:00', start: 21, end: 24 }
-        ];
-        calculatedTrend = hours.map(h => {
-          const count = filteredLeads.filter(l => {
-            const hr = new Date(l.timestamp).getHours();
-            return hr >= h.start && hr < h.end;
-          }).length;
-          return { date: h.label, value: count };
-        });
-      } else {
-        // Multi-day breakdown (max 7-8 intervals to look beautiful)
-        const pointCount = Math.min(diffDays, 7);
-        const intervalMs = diffTime / pointCount;
-
-        for (let i = 0; i < pointCount; i++) {
-          const pointStart = new Date(startDate.getTime() + i * intervalMs);
-          const pointEnd = new Date(startDate.getTime() + (i + 1) * intervalMs);
-          
-          const label = pointEnd.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-          const count = filteredLeads.filter(l => {
-            const leadDate = new Date(l.timestamp);
-            return leadDate >= pointStart && leadDate <= pointEnd;
-          }).length;
-
-          calculatedTrend.push({ date: label, value: count });
-        }
-      }
-      setTrendData(calculatedTrend);
+      // No fabricated single-point trend from current totals.
+      setTrendData(Array.isArray(metrics.trendData) ? metrics.trendData : []);
 
     } catch (err) {
+      // Prefer explicit error over silently presenting stale totals as current.
+      setStats({
+        newLeads: 0,
+        responses: 0,
+        pipeline: 0,
+        alerts: 0,
+        contacted: 0,
+        meetings: 0,
+        followUps: 0,
+        projected: 0,
+        collected: 0,
+        activeLeads: 0,
+        conversionRate: '0.0%',
+        avgResponseTAT: null,
+      });
+      setAgentStats([]);
+      setTeamStats([]);
+      setCampaignStats([]);
+      setTrendData([]);
       toast.error('Dashboard synchronization failure');
     } finally {
       setLoading(false);
@@ -1631,6 +1499,12 @@ export default function Dashboard() {
                            </div>
                         </td>
                      </tr>
+                  ) : teamStats.length === 0 ? (
+                     <tr>
+                        <td colSpan={10} className="px-8 py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[10px]">
+                           Team performance unavailable — canonical team metrics are not published yet
+                        </td>
+                     </tr>
                   ) : teamStats.map((row, i) => (
                      <tr key={i} className="hover:bg-slate-50 transition-colors group">
                         <td className="px-8 py-5 text-[12px] font-black uppercase text-slate-600">{row.team}</td>
@@ -1746,7 +1620,7 @@ export default function Dashboard() {
                   className="text-left cursor-pointer hover:bg-slate-50 p-2 rounded transition-all select-none border-0 outline-none w-full"
                >
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic leading-none mb-3">Avg Response TAT</p>
-                  <h4 className="text-2xl md:text-3xl font-black text-brand-text italic tracking-tighter leading-none">{stats.avgResponseTAT}</h4>
+                  <h4 className="text-2xl md:text-3xl font-black text-brand-text italic tracking-tighter leading-none">{stats.avgResponseTAT ?? 'N/A'}</h4>
                </button>
                <button 
                   onClick={() => {
@@ -1799,6 +1673,11 @@ export default function Dashboard() {
                   <AlertTriangle className="w-5 h-5 text-[#978C21] mb-1 animate-pulse" />
                   <p className="text-[10px] font-black text-slate-900 uppercase">Clearance Unauthorized</p>
                   <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Role credentials lack permissions to view visual analytical indexes.</p>
+               </div>
+            ) : trendData.length === 0 ? (
+               <div className="h-full w-full flex flex-col items-center justify-center bg-[#FBFAF8] border border-dashed border-slate-100 rounded-sm p-4 text-center">
+                  <p className="text-[10px] font-black text-slate-900 uppercase">No trend data available</p>
+                  <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Historical time-series is not published by the server yet.</p>
                </div>
             ) : (
                <ResponsiveContainer width="100%" height="100%">
