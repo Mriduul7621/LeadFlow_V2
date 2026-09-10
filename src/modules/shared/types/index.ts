@@ -85,6 +85,8 @@ export interface RolePermission {
   roleId: string;
   roleName: string;
   isCustom?: boolean;
+  /** Position in the company-wide reporting ladder (1 = CEO). 0/undefined = not placed. */
+  hierarchyLevel?: number;
   // Route -> allowed
   menuAccess?: Record<string, boolean>;
   // Coarse-grained scope of data (leads/users/reports) this role may see

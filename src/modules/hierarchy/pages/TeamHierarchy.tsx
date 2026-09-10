@@ -33,19 +33,23 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { useTranslation } from '../../shared/utils/translations';
 import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
-import { orgService, Department, Hierarchy } from '../services/orgService';
+import { orgService } from '../services/orgService';
 import { UserRole, User, Lead } from '../../shared/types';
 import { toast } from 'sonner';
 
-// Custom Node structure for Unified Org Tree
+// Auto-generated organogram node (server derives the tree from users.manager_id)
 interface OrgNode {
-  id: string;
-  parentId: string | null;
-  type: 'root' | 'department' | 'employee';
-  departmentId?: string; // used when type === 'department'
-  employeeId?: string;   // used when type === 'employee'
-  name: string;          // e.g. "Finance" or Employee Name
-  designation?: string;  // e.g. "MANAGER", "CEO"
+  employeeId: string;
+  name: string;
+  designation: string;
+  roleId: string;
+  roleName: string;
+  level: number;              // company ladder level (1 = CEO)
+  departmentId: string;
+  departmentName: string;
+  managerEmployeeId: string | null;
+  isActive: boolean;
+  directReports: number;
 }
 
 interface MemberStats {
@@ -65,16 +69,15 @@ export default function TeamHierarchy() {
   const isAdmin = currentUser?.role === UserRole.ADMIN;
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'chart' | 'list'>('chart');
   
   // Master lists
   const [users, setUsers] = useState<User[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
   const [teamMembers, setTeamMembers] = useState<MemberStats[]>([]);
   
-  // Org Tree state
+  // Org Tree state (auto-generated from reporting links)
   const [nodes, setNodes] = useState<OrgNode[]>([]);
+  const [rootEmployeeIds, setRootEmployeeIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -84,10 +87,6 @@ export default function TeamHierarchy() {
   const [selectedMemberLeads, setSelectedMemberLeads] = useState<Lead[]>([]);
   const [loadingStats, setLoadingStats] = useState(false);
 
-  // Modals / Dropdowns state
-  const [activeAddParentNode, setActiveAddParentNode] = useState<OrgNode | null>(null);
-  const [selectedDeptId, setSelectedDeptId] = useState<string>('');
-  const [selectedEmpId, setSelectedEmpId] = useState<string>('');
 
   // ----------------------------------------------------
   // DATA LOADING & STATISTICS CALCULATION
@@ -96,66 +95,43 @@ export default function TeamHierarchy() {
     if (!currentUser) return;
     setLoading(true);
     try {
-      // 1. Fetch Users Roster
+      // 1. Users roster (member details + stats lookups)
       const roster = await userService.getAllUsers();
       setUsers(roster);
 
-      // 2. Fetch Departments List
-      const depts = await orgService.getDepartments();
-      setDepartments(depts);
+      // 2. Auto-generated organogram — the server derives the tree from
+      //    users.manager_id (single source of truth; no manual drawing).
+      const organogram = await orgService.getOrganogram();
+      setNodes(organogram.nodes.map(n => ({
+        employeeId: n.employeeId,
+        name: n.fullName || n.name,
+        designation: n.designation || n.roleName || 'Employee',
+        roleId: n.roleId,
+        roleName: n.roleName,
+        level: n.level,
+        departmentId: n.departmentId,
+        departmentName: n.departmentName,
+        managerEmployeeId: n.managerEmployeeId,
+        isActive: n.isActive,
+        directReports: n.directReports,
+      })));
+      setRootEmployeeIds(organogram.roots);
 
-      // 3. Fetch Hierarchies and load the Unified Org Chart
-      const hiers = await orgService.getHierarchies();
-      const unifiedHier = hiers.find(h => h.departmentId === 'unified_org');
-      
-      if (unifiedHier && unifiedHier.layers && unifiedHier.layers.length > 0) {
-        setNodes(unifiedHier.layers as unknown as OrgNode[]);
-      } else {
-        // Default initial chart layout: Admin is the Root
-        setNodes([
-          {
-            id: 'root',
-            parentId: null,
-            type: 'root',
-            name: 'System Administrator',
-            designation: 'CEO / ADMIN'
-          }
-        ]);
-      }
-
-      // 4. Calculate individual/direct-reports statistics (preserving original page feature)
+      // 3. Direct-report statistics from the real reporting tree. Lead data
+      //    comes from the (server-scoped) leads API, so members outside the
+      //    caller's visibility can never leak numbers here.
       const allLeads = await leadService.getLeads({ 
         employeeId: currentUser.employeeId, 
         role: currentUser.role 
       });
 
-      let filteredUsers = roster.filter(u => u.employeeId !== currentUser.employeeId);
+      const managerOf = (u: User) => u.managerId || (u as any).reportingManagerId || '';
+      const directReports = roster.filter(u => managerOf(u) === currentUser.employeeId);
 
-      if (currentUser.role !== UserRole.ADMIN) {
-        const directReports = roster.filter(u => u.managerId === currentUser.employeeId);
-        if (directReports.length > 0) {
-          filteredUsers = directReports;
-        } else {
-          // Cascade fallback role hierarchy
-          let targetSubRole: UserRole | null = null;
-          if (currentUser.role === UserRole.BUSINESS_HEAD) targetSubRole = UserRole.BUSINESS_EXECUTIVE;
-          else if (currentUser.role === UserRole.BUSINESS_EXECUTIVE) targetSubRole = UserRole.BDM;
-          else if (currentUser.role === UserRole.BDM) targetSubRole = UserRole.ASM;
-          else if (currentUser.role === UserRole.ASM) targetSubRole = UserRole.RM;
-          else if (currentUser.role === UserRole.RM) targetSubRole = UserRole.RO;
-
-          if (targetSubRole) {
-            filteredUsers = roster.filter(u => u.role === targetSubRole);
-          } else {
-            filteredUsers = [];
-          }
-        }
-      }
-
-      const computedMembers: MemberStats[] = filteredUsers.map(u => {
+      const computedMembers: MemberStats[] = directReports.map(u => {
         const getReportingEmployeeIds = (mgrId: string): string[] => {
           const ids = [mgrId];
-          const subordinates = roster.filter(x => x.managerId === mgrId);
+          const subordinates = roster.filter(x => managerOf(x) === mgrId);
           subordinates.forEach(s => {
             ids.push(...getReportingEmployeeIds(s.employeeId));
           });
@@ -204,194 +180,15 @@ export default function TeamHierarchy() {
   // ----------------------------------------------------
   // HIERARCHY TREE LOGIC
   // ----------------------------------------------------
-  const getBranchDepartmentId = (node: OrgNode): string | undefined => {
-    let current: OrgNode | undefined = node;
-    while (current) {
-      if (current.type === 'department') return current.departmentId;
-      current = nodes.find(n => n.id === current?.parentId);
-    }
-    return undefined;
-  };
-
   const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.1, 1.4));
   const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.1, 0.6));
   const handleZoomReset = () => setZoom(1);
-
-  const handleAddNodeClick = (parent: OrgNode) => {
-    if (!isAdmin) {
-      toast.error('Only admin nodes can be added or edited.');
-      return;
-    }
-    setActiveAddParentNode(parent);
-    setSelectedDeptId('');
-    setSelectedEmpId('');
-  };
-
-  const handleAddDepartmentNode = () => {
-    if (!activeAddParentNode || !selectedDeptId) return;
-    const dept = departments.find(d => d.id === selectedDeptId);
-    if (!dept) return;
-
-    // Avoid duplicate departments under the same direct level
-    const isDuplicate = nodes.some(
-      n => n.parentId === activeAddParentNode.id && 
-           n.type === 'department' && 
-           n.departmentId === selectedDeptId
-    );
-
-    if (isDuplicate) {
-      toast.error('This department is already added.');
-      return;
-    }
-
-    const newNode: OrgNode = {
-      id: `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      parentId: activeAddParentNode.id,
-      type: 'department',
-      departmentId: dept.id,
-      name: dept.name,
-      designation: 'DEPARTMENT'
-    };
-
-    setNodes(prev => [...prev, newNode]);
-    setActiveAddParentNode(null);
-    toast.success('Department added to chart!');
-  };
-
-  const handleAddEmployeeNode = () => {
-    if (!activeAddParentNode || !selectedEmpId) return;
-    const emp = users.find(u => u.employeeId === selectedEmpId);
-    if (!emp) return;
-
-    const newNode: OrgNode = {
-      id: `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      parentId: activeAddParentNode.id,
-      type: 'employee',
-      employeeId: emp.employeeId,
-      name: emp.name,
-      designation: emp.designation || 'Officer'
-    };
-
-    setNodes(prev => [...prev, newNode]);
-    setActiveAddParentNode(null);
-    toast.success('Employee added to chart!');
-  };
-
-  const handleDeleteNode = (nodeId: string) => {
-    if (!isAdmin) {
-      toast.error('Only admin nodes can be deleted.');
-      return;
-    }
-    if (nodeId === 'root') {
-      toast.error('Root node cannot be deleted!');
-      return;
-    }
-
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
-
-    const confirmMsg = node.type === 'department' 
-      ? `Are you sure you want to delete "${node.name}" department and all its members?`
-      : `Are you sure you want to delete "${node.name}" node and all its members?`;
-
-    if (confirm(confirmMsg)) {
-      const getDescendantIds = (id: string): string[] => {
-        const children = nodes.filter(n => n.parentId === id);
-        const childIds = children.map(c => c.id);
-        const grandChildIds = childIds.flatMap(cid => getDescendantIds(cid));
-        return [...childIds, ...grandChildIds];
-      };
-
-      const toDelete = [nodeId, ...getDescendantIds(nodeId)];
-      setNodes(prev => prev.filter(n => !toDelete.includes(n.id)));
-      toast.success('Node deleted successfully.');
-    }
-  };
-
-  const handleSaveHierarchyTree = async () => {
-    setSaving(true);
-    try {
-      const payload: Hierarchy = {
-        id: 'unified_org_hierarchy',
-        departmentId: 'unified_org',
-        layers: nodes as any, // Saved safely inside the general layers wrapper
-        updatedAt: new Date().toISOString()
-      };
-
-      // 1. Save Tree Hierarchy document to database/localStorage
-      await orgService.saveHierarchy(payload);
-
-      // 2. Transitive Reporting Chain Propagation
-      const getEmployeeReportingChain = (nodeId: string): string[] => {
-        const chain: string[] = [];
-        let current = nodes.find(n => n.id === nodeId);
-        while (current && current.parentId) {
-          const parent = nodes.find(n => n.id === current.parentId);
-          if (parent && parent.type === 'employee' && parent.employeeId) {
-            chain.push(parent.employeeId);
-          }
-          current = parent;
-        }
-        return chain;
-      };
-
-      const getEmployeeSubordinates = (nodeId: string): string[] => {
-        const subs: string[] = [];
-        const children = nodes.filter(n => n.parentId === nodeId);
-        for (const child of children) {
-          if (child.type === 'employee' && child.employeeId) {
-            subs.push(child.employeeId);
-          }
-          subs.push(...getEmployeeSubordinates(child.id));
-        }
-        return subs;
-      };
-
-      toast.info('Updating reporting chains and subordinate data...');
-
-      // Update users roster links dynamically
-      for (const emp of users) {
-        const empNode = nodes.find(n => n.type === 'employee' && n.employeeId === emp.employeeId);
-        
-        if (empNode) {
-          // Direct supervisor/manager (closest employee node up the chain)
-          let managerId = '';
-          let currParentId = empNode.parentId;
-          while (currParentId) {
-            const pNode = nodes.find(n => n.id === currParentId);
-            if (pNode && pNode.type === 'employee' && pNode.employeeId) {
-              managerId = pNode.employeeId;
-              break;
-            }
-            currParentId = pNode ? pNode.parentId : null;
-          }
-
-          const reportingChain = getEmployeeReportingChain(empNode.id);
-          const subordinates = getEmployeeSubordinates(empNode.id);
-
-          await userService.updateUser(emp.id, {
-            managerId,
-            reportingChain,
-            subordinates
-          });
-        }
-      }
-
-      toast.success('Organizational chains saved successfully!');
-      await loadAllData();
-    } catch (err) {
-      console.error(err);
-      toast.error('Could not save chart.');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   // ----------------------------------------------------
   // INTERACTIVE STATS DRAWER (DETAILS SIDEBAR)
   // ----------------------------------------------------
   const handleNodeClick = async (node: OrgNode) => {
-    if (node.type !== 'employee' || !node.employeeId) return;
+    if (!node.employeeId) return;
     
     const emp = users.find(u => u.employeeId === node.employeeId);
     if (!emp) {
@@ -444,11 +241,11 @@ export default function TeamHierarchy() {
   // RECURSIVE TREE RENDERING COMPONENT
   // ----------------------------------------------------
   const renderTreeNode = (node: OrgNode) => {
-    const children = nodes.filter(n => n.parentId === node.id);
+    const children = nodes.filter(n => n.managerEmployeeId === node.employeeId);
     const matches = isNodeMatchingQuery(node);
 
     return (
-      <li key={node.id}>
+      <li key={node.employeeId}>
         <div className="inline-block relative">
           <div 
             onClick={() => handleNodeClick(node)}
@@ -457,19 +254,17 @@ export default function TeamHierarchy() {
               matches 
                 ? "border-amber-400 ring-4 ring-amber-400/30 scale-[1.05] shadow-lg" 
                 : "border-slate-200 hover:border-[#978C21] hover:shadow-md hover:scale-[1.02]",
-              node.type === 'root' && "border-[#0359B3]/40 bg-gradient-to-b from-blue-50/20 to-white",
-              node.type === 'department' && "border-slate-300 bg-gradient-to-b from-slate-50/20 to-white",
-              node.type === 'employee' && "border-slate-200"
+              node.level === 1 && "border-[#0359B3]/40 bg-gradient-to-b from-blue-50/20 to-white"
             )}
           >
             {/* Header / Top label */}
             <div className={cn(
               "text-[10px] font-black uppercase tracking-widest py-1.5 px-3 border-b text-center font-sans",
-              node.type === 'root' && "bg-blue-100/80 border-blue-200 text-[#0359B3]",
-              node.type === 'department' && "bg-slate-100/90 border-slate-200 text-slate-700",
-              node.type === 'employee' && "bg-[#978C21]/10 border-amber-200/50 text-[#978C21]"
+              node.level === 1
+                ? "bg-blue-100/80 border-blue-200 text-[#0359B3]"
+                : "bg-[#978C21]/10 border-amber-200/50 text-[#978C21]"
             )}>
-              {node.designation || (node.type === 'department' ? 'DEPARTMENT' : 'MEMBER')}
+              {node.roleName || node.designation || 'EMPLOYEE'}
             </div>
 
             {/* Core / Bottom label */}
@@ -477,42 +272,15 @@ export default function TeamHierarchy() {
               <p className="text-sm font-extrabold text-slate-800 tracking-tight block">
                 {node.name}
               </p>
-              {node.employeeId && (
-                <span className="text-[9px] font-bold text-slate-400 mt-1 font-mono block">
-                  ID: {node.employeeId}
+              <span className="text-[9px] font-bold text-slate-400 mt-1 font-mono block">
+                ID: {node.employeeId}
+              </span>
+              {!node.isActive && (
+                <span className="text-[9px] font-bold text-red-500 mt-1 block uppercase tracking-widest">
+                  Inactive
                 </span>
               )}
             </div>
-
-            {/* Quick Action Overlay (Visible only to Admin for editing) */}
-            {isAdmin && (
-              <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-white/90 backdrop-blur-xs p-1 rounded-md shadow-xs border border-slate-100">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleAddNodeClick(node);
-                  }}
-                  className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-sm"
-                  title={node.type === 'root' ? t('addDept') : t('addEmployeeNode')}
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-                {node.id !== 'root' && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteNode(node.id);
-                    }}
-                    className="p-1 text-red-500 hover:bg-red-50 rounded-sm"
-                    title={t('deleteNode')}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
@@ -525,29 +293,6 @@ export default function TeamHierarchy() {
       </li>
     );
   };
-
-  // Filter lists inside Modals
-  const activeDeptBranchId = activeAddParentNode ? getBranchDepartmentId(activeAddParentNode) : undefined;
-  
-  const alreadyAssignedEmployeeIds = nodes
-    .filter(n => n.type === 'employee')
-    .map(n => n.employeeId);
-
-  const unassignedEmployees = users.filter(
-    u => !alreadyAssignedEmployeeIds.includes(u.employeeId)
-  );
-
-  // Check if we have unassigned employees matching this department ID
-  const hasEmployeesInDept = activeDeptBranchId 
-    ? unassignedEmployees.some(u => u.departmentId === activeDeptBranchId)
-    : false;
-
-  // Filter available employees: strictly filter if matching employees exist, otherwise show all unassigned employees as fallback
-  const availableEmployees = hasEmployeesInDept
-    ? unassignedEmployees.filter(u => u.departmentId === activeDeptBranchId)
-    : unassignedEmployees;
-
-  const isFilteredByDept = hasEmployeesInDept;
 
   return (
     <div className="space-y-6 pb-24 bg-white font-sans min-h-screen">
@@ -611,16 +356,16 @@ export default function TeamHierarchy() {
             </div>
           )}
 
-          {/* Save Button for Admin only */}
-          {activeTab === 'chart' && isAdmin && (
+          {/* Refresh organogram */}
+          {activeTab === 'chart' && (
             <button
               type="button"
-              disabled={saving}
-              onClick={handleSaveHierarchyTree}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#857b1c] text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all disabled:opacity-50"
+              onClick={() => loadAllData()}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#857b1c] text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all"
+              title="The chart is generated automatically from reporting links"
             >
-              <Save className="w-4 h-4" />
-              {saving ? t('savingTree') : t('saveTree')}
+              <RotateCcw className="w-4 h-4" />
+              Refresh
             </button>
           )}
         </div>
@@ -684,7 +429,15 @@ export default function TeamHierarchy() {
                   style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
                 >
                   <ul>
-                    {nodes.filter(n => n.parentId === null).map(rootNode => renderTreeNode(rootNode))}
+                    {nodes.length === 0 && (
+                      <li className="text-center text-slate-400 font-bold uppercase tracking-widest text-[11px] italic py-16">
+                        No organogram yet — assign reporting managers to employees in User Management.
+                      </li>
+                    )}
+                    {rootEmployeeIds
+                      .map(id => nodes.find(n => n.employeeId === id))
+                      .filter((n): n is OrgNode => Boolean(n))
+                      .map(rootNode => renderTreeNode(rootNode))}
                   </ul>
                 </div>
               </div>
@@ -783,131 +536,6 @@ export default function TeamHierarchy() {
           )}
         </AnimatePresence>
       )}
-
-      {/* ----------------------------------------------------
-          MODAL: ADD NODE DIALOG (DEPT OR EMPLOYEE)
-         ---------------------------------------------------- */}
-      <AnimatePresence>
-        {activeAddParentNode && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden border border-slate-100"
-            >
-              {/* Modal Header */}
-              <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900">
-                    {activeAddParentNode.type === 'root' 
-                      ? t('addDept') 
-                      : 'Add New Employee'}
-                  </h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-bold uppercase tracking-widest">
-                    Parent Node: {activeAddParentNode.name}
-                  </p>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => setActiveAddParentNode(null)}
-                  className="p-1 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Modal Body */}
-              <div className="p-6 space-y-4">
-                {activeAddParentNode.type === 'root' ? (
-                  // DEPARTMENT SELECTION DROPDOWN
-                  <div className="space-y-2">
-                    <label className="text-[11px] font-bold text-slate-600 uppercase block">
-                      {t('selectDept')}:
-                    </label>
-                    <select
-                      value={selectedDeptId}
-                      onChange={(e) => setSelectedDeptId(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#978C21] rounded-lg text-sm outline-none font-medium text-slate-700"
-                    >
-                      <option value="">-- {t('selectDept')} --</option>
-                      {departments.map(d => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-[10px] text-slate-400 italic">
-                      * This department will be added as the first level under the root admin.
-                    </p>
-                  </div>
-                ) : (
-                  // EMPLOYEE SELECTION DROPDOWN (Strictly filtered by branch's department!)
-                  <div className="space-y-2">
-                    <div className={cn(
-                      "p-3 rounded-lg text-xs border",
-                      isFilteredByDept 
-                        ? "bg-[#978C21]/5 border-[#978C21]/30 text-slate-700" 
-                        : "bg-amber-50 border-amber-200/60 text-slate-700"
-                    )}>
-                      <span className={cn("font-bold block", isFilteredByDept ? "text-[#978C21]" : "text-amber-700")}>
-                        {isFilteredByDept ? t('deptFilterActive') : t('deptFilterRelaxed')}
-                      </span>
-                      <p className="font-medium mt-0.5">
-                        {isFilteredByDept ? (
-                          t('deptFilterActiveDesc', { deptName: departments.find(d => d.id === activeDeptBranchId)?.name || activeDeptBranchId })
-                        ) : (
-                          t('deptFilterRelaxedDesc', { deptName: departments.find(d => d.id === activeDeptBranchId)?.name || 'N/A' })
-                        )}
-                      </p>
-                    </div>
-
-                    <label className="text-[11px] font-bold text-slate-600 uppercase block mt-3">
-                      {t('selectEmp')}:
-                    </label>
-                    
-                    {availableEmployees.length === 0 ? (
-                      <div className="p-4 bg-amber-50 text-amber-800 text-xs font-semibold rounded-lg border border-amber-200">
-                        ⚠️ No available employees in this department. Please add employees in User Management first.
-                      </div>
-                    ) : (
-                      <select
-                        value={selectedEmpId}
-                        onChange={(e) => setSelectedEmpId(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#978C21] rounded-lg text-sm outline-none font-medium text-slate-700 uppercase"
-                      >
-                        <option value="">-- {t('selectEmp')} --</option>
-                        {availableEmployees.map(u => (
-                          <option key={u.id} value={u.employeeId}>
-                            {u.name} ({u.employeeId}) - {u.designation || 'Officer'}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Modal Footer */}
-              <div className="bg-slate-50 border-t border-slate-100 px-6 py-4 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setActiveAddParentNode(null)}
-                  className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-bold uppercase tracking-wider rounded-lg transition-colors"
-                >
-                  {t('cancel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={activeAddParentNode.type === 'root' ? !selectedDeptId : !selectedEmpId}
-                  onClick={activeAddParentNode.type === 'root' ? handleAddDepartmentNode : handleAddEmployeeNode}
-                  className="px-5 py-2 bg-[#978C21] hover:bg-[#857b1c] disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-colors shadow-xs"
-                >
-                  {t('confirm')}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* ----------------------------------------------------
           SIDEBAR SLIDE-OVER: DETAILED INTEL MATRIX

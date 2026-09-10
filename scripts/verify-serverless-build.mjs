@@ -183,6 +183,11 @@ const stopHarness = (h) => h.child.kill('SIGTERM');
 /* ------------------------------------------------------------------ */
 /* 4. Smoke tests                                                      */
 /* ------------------------------------------------------------------ */
+function createUserSafe(r) {
+  const d = r.json?.data;
+  return d ? { employeeId: d.employeeId, managerId: d.managerId } : r.json;
+}
+
 async function req(method, p, { body, token } = {}) {
   const res = await fetch(BASE + p, {
     method,
@@ -258,7 +263,8 @@ async function main() {
       const stamp = Date.now().toString(36);
       const adminId = `ADM${stamp}`;
       const adminEmail = `admin-${stamp}@leadflow.test`;
-      const userId = `BDM${stamp}`;
+      const ceoId = `CEO${stamp}`;
+      const userId = `MGR${stamp}`;
 
       const bootstrapStatus = await req('GET', '/api/auth/bootstrap-status');
       check('GET /api/auth/bootstrap-status -> 200', bootstrapStatus.status === 200, JSON.stringify(bootstrapStatus.json));
@@ -281,11 +287,19 @@ async function main() {
       const checkAdmin = await req('GET', '/api/users/check-admin', { token: login.json?.token });
       check('GET /api/users/check-admin (authenticated) -> {exists:true}', checkAdmin.status === 200 && checkAdmin.json?.exists === true, JSON.stringify(checkAdmin.json));
 
+      // Ladder-aware creation: a Level-1 CEO (no manager), then a Level-2
+      // Manager reporting to the CEO — proving the reporting-link flow.
+      const createCeo = await req('POST', '/api/users', {
+        token: login.json?.token,
+        body: { fullName: 'Verify CEO', employeeId: ceoId, email: `ceo-${stamp}@leadflow.test`, role: 'CEO', password: 'ceo-pass-123' },
+      });
+      check('POST /api/users (Level-1 CEO, no manager) -> 201', createCeo.status === 201, `status=${createCeo.status} body=${JSON.stringify(createUserSafe(createCeo))}`);
+
       const createUser = await req('POST', '/api/users', {
         token: login.json?.token,
-        body: { fullName: 'Verify BDM', employeeId: userId, email: `bdm-${stamp}@leadflow.test`, role: 'BDM', password: 'bdm-pass-123' },
+        body: { fullName: 'Verify Manager', employeeId: userId, email: `mgr-${stamp}@leadflow.test`, role: 'MANAGER', managerId: ceoId, password: 'mgr-pass-123' },
       });
-      check('POST /api/users (admin creates user) -> 201 persisted', createUser.status === 201, `status=${createUser.status} body=${JSON.stringify(createUser.json)}`);
+      check('POST /api/users (admin creates user with reporting manager) -> 201 persisted', createUser.status === 201, `status=${createUser.status} body=${JSON.stringify(createUserSafe(createUser))}`);
 
       // Direct SQL verification that rows were persisted through DATABASE_URL.
       const { default: pg } = await import('pg');
@@ -293,14 +307,14 @@ async function main() {
       await client.connect();
       const { rows } = await client.query(
         `SELECT u.employee_id, r.role_code FROM users u JOIN roles r ON r.id = u.role_id
-         WHERE UPPER(u.employee_id) IN (UPPER($1), UPPER($2))`,
-        [adminId, userId]
+         WHERE UPPER(u.employee_id) IN (UPPER($1), UPPER($2), UPPER($3))`,
+        [adminId, ceoId, userId]
       );
       await client.end();
       const byId = Object.fromEntries(rows.map((r) => [String(r.employee_id).toUpperCase(), r.role_code]));
       check(
-        'DATABASE_URL persistence verified (admin + user rows in PostgreSQL)',
-        byId[adminId.toUpperCase()] === 'ADMIN' && byId[userId.toUpperCase()] === 'BDM',
+        'DATABASE_URL persistence verified (admin + CEO + manager rows in PostgreSQL)',
+        byId[adminId.toUpperCase()] === 'ADMIN' && byId[ceoId.toUpperCase()] === 'CEO' && byId[userId.toUpperCase()] === 'MANAGER',
         JSON.stringify(byId)
       );
     } else {
