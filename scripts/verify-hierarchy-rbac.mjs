@@ -250,6 +250,33 @@ async function main() {
     });
     check(`PUT /api/users cycle (Manager A -> Executive X) -> 400`, cycle.status === 400, `status=${cycle.status} body=${JSON.stringify(cycle.json)}`);
 
+    // ---- PUT /users/:id enforces the SAME ladder rules as POST ----
+    // A Level 2+ update without a manager must be rejected (mandatory
+    // reporting); every other link rule applies on update as well.
+    const putExpect = async (employeeId, body, expectStatus, label) => {
+      const r = await req('PUT', `/api/users/${employeeId}`, { token: admin, body });
+      check(`PUT /api/users ${label} -> ${expectStatus}`, r.status === expectStatus,
+        `status=${r.status}${r.status !== expectStatus ? ` body=${JSON.stringify(r.json)}` : ''}`);
+      return r;
+    };
+    const clearExec = await putExpect(EXEC_X, { managerId: '' }, 400, 'L4 Executive without manager (rejected)');
+    check('Rejection message names the missing reporting manager', /reporting manager/i.test(clearExec.json?.message || ''),
+      JSON.stringify(clearExec.json));
+    const execAfterReject = await req('GET', `/api/users/${EXEC_X}`, { token: admin });
+    check('Rejected update preserves the stored manager (no silent removal)',
+      (execAfterReject.json?.managerId || execAfterReject.json?.reportingManagerId) === MGR_A,
+      `managerId=${execAfterReject.json?.managerId}`);
+    await putExpect(EXEC_X, { managerId: MGR_A, designation: 'Executive (verified)' }, 200, 'L4 Executive with valid manager (accepted)');
+    await putExpect(EXEC_X, { designation: 'Executive (verified again)' }, 200, 'L4 field-only update keeps existing manager (accepted)');
+    await putExpect(CEO, { managerId: RETAIL_HEAD }, 400, 'CEO with a manager (rejected)');
+    await putExpect(MGR_A, { managerId: MGR_A }, 400, 'self-manager (rejected)');
+    await putExpect(EXEC_X, { managerId: RETAIL_HEAD }, 400, 'wrong-level manager L4 -> L2 (rejected)');
+    await putExpect(EXEC_X, { managerId: CORP_MGR }, 400, 'cross-department manager (rejected)');
+    // Inactive managers are not valid link targets.
+    await putExpect(MGR_B, { status: 'Inactive' }, 200, 'deactivate Manager B (setup)');
+    await putExpect(EXEC_X, { managerId: MGR_B }, 400, 'inactive manager (rejected)');
+    await putExpect(MGR_B, { status: 'Active' }, 200, 'reactivate Manager B (restore)');
+
     /* ---------------- 3. Reporting-options endpoint ---------------- */
     log('\nD. Reporting-options dropdown source:');
     const optsMgr = await req('GET', `/api/users/reporting-options?role=MANAGER&departmentId=${retailDept}`, { token: admin });
@@ -335,17 +362,51 @@ async function main() {
     check('Setup: CEO (Level 1) NOT counted as missing a manager', setup.usersWithoutManager === 0, `withoutManager=${setup.usersWithoutManager} (must be 0 — CEO excluded)`);
     check('Setup: no false invalid links in a valid org', setup.invalidLinks?.length === 0, `invalidLinks=${JSON.stringify(setup.invalidLinks)}`);
 
-    // (a) Missing-manager calculation for Level 2+. An admin may clear an
-    // existing employee's manager (PUT allows a null manager); a Level 2+
-    // employee left without a manager MUST be counted as missing.
+    // (a) Mandatory reporting on update + missing-manager health coverage.
+    // PUT must REJECT clearing a Level 2+ manager (the stored manager_id
+    // is preserved by the rollback — never silently removed).
     const clearMgr = await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: '' } });
-    check('PUT clears Retail Head manager (allowed by PUT)', clearMgr.status === 200, `status=${clearMgr.status}`);
+    check('PUT rejects clearing a Level-2 manager (mandatory reporting)',
+      clearMgr.status === 400 && /reporting manager/i.test(clearMgr.json?.message || ''),
+      `status=${clearMgr.status} body=${JSON.stringify(clearMgr.json)}`);
+    const headAfterReject = await req('GET', `/api/users/${RETAIL_HEAD}`, { token: admin });
+    check('Rejected clear preserves the Retail Head manager (still the CEO)',
+      (headAfterReject.json?.managerId || headAfterReject.json?.reportingManagerId) === CEO,
+      `managerId=${headAfterReject.json?.managerId}`);
+    const restoreMgr = await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: CEO } });
+    check('PUT with a valid Level-2 manager is accepted', restoreMgr.status === 200, `status=${restoreMgr.status}`);
+
+    // Missing-manager health coverage WITHOUT violating PUT rules: create
+    // an employee on an unassigned (non-ladder) role — the manager is
+    // optional there — then place that role at Level 2. The employee is
+    // now a Level 2+ employee without a manager, which the health stats
+    // must flag (and which is fixed the supported way: PUT a valid
+    // manager, which the mandatory-reporting rule accepts).
+    const FLOATER_ROLE = `FLT${stamp}`;
+    const FLOATER = `FLT1${stamp}`;
+    await req('POST', '/api/roles', { token: admin, body: { roleId: FLOATER_ROLE, roleName: 'Floater (verify)' } });
+    const mkFloater = await req('POST', '/api/users', {
+      token: admin,
+      body: {
+        fullName: 'Floater One', employeeId: FLOATER, email: `${FLOATER.toLowerCase()}@leadflow.test`,
+        role: FLOATER_ROLE, departmentId: retailDept, managerId: '', password: 'verify-pass-123',
+      },
+    });
+    check('POST unassigned-role employee without manager -> 201', mkFloater.status === 201, `status=${mkFloater.status} body=${JSON.stringify(mkFloater.json)}`);
+    await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: [{ roleId: FLOATER_ROLE, level: 2 }] } });
     const setupOrphan = (await req('GET', '/api/hierarchy-config', { token: admin })).json?.setup || {};
     check('Setup: a Level 2 employee with no manager IS counted as missing', setupOrphan.usersWithoutManager === 1, `withoutManager=${setupOrphan.usersWithoutManager}`);
     check('Setup: orphan reported in invalidLinks ("no reporting manager")',
-      setupOrphan.invalidLinks?.some(l => l.employeeId === RETAIL_HEAD && /no reporting manager/i.test(l.reason)),
+      setupOrphan.invalidLinks?.some(l => l.employeeId === FLOATER && /no reporting manager/i.test(l.reason)),
       JSON.stringify(setupOrphan.invalidLinks));
-    await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: CEO } }); // restore
+    const fixFloater = await req('PUT', `/api/users/${FLOATER}`, { token: admin, body: { managerId: CEO } });
+    check('PUT assigns the missing Level-2 manager (accepted)', fixFloater.status === 200, `status=${fixFloater.status}`);
+    const setupFixed = (await req('GET', '/api/hierarchy-config', { token: admin })).json?.setup || {};
+    check('Setup: missing count back to 0 after the fix',
+      setupFixed.usersWithoutManager === 0 && !(setupFixed.invalidLinks || []).some(l => l.employeeId === FLOATER),
+      `withoutManager=${setupFixed.usersWithoutManager} invalidLinks=${JSON.stringify(setupFixed.invalidLinks)}`);
+    // Restore the role to unassigned so later sections see the original ladder.
+    await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: [{ roleId: FLOATER_ROLE, level: 0 }] } });
 
     // (b) Invalid reporting relationships detected AFTER a role-level change.
     // Move MANAGER from Level 3 -> Level 4 so the existing MANAGER employees
@@ -365,6 +426,69 @@ async function main() {
     await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: ladderBody } });
     const restored = (await req('GET', '/api/hierarchy-config', { token: admin })).json?.setup || {};
     check('Ladder restored: invalidLinks back to 0', restored.invalidLinks?.length === 0, `invalidLinks=${JSON.stringify(restored.invalidLinks)}`);
+
+    /* ---------------- 9. POST /users atomicity ---------------- */
+    // User creation and reporting-chain recomputation share ONE database
+    // transaction: when the recompute cannot persist, the whole create
+    // must fail (error response, no swallowed error) and NO
+    // partially-created user may remain. The failure is simulated by
+    // temporarily renaming the `hierarchies` table (scratch test database
+    // only — always renamed back in the finally block).
+    log('\nI. User creation rolls back when the recompute fails:');
+    let pgClient = null;
+    let hierarchiesRenamed = false;
+    try {
+      const pg = await import('pg');
+      const Client = pg.Client ?? pg.default?.Client;
+      if (!Client) throw new Error('pg Client unavailable');
+      pgClient = new Client({ connectionString: process.env.DATABASE_URL });
+      await pgClient.connect();
+      await pgClient.query('ALTER TABLE hierarchies RENAME TO hierarchies_verify_bak');
+      hierarchiesRenamed = true;
+
+      const mkBody = (employeeId, fullName, role, managerId) => ({
+        fullName, employeeId, email: `${employeeId.toLowerCase()}@leadflow.test`,
+        role, departmentId: retailDept, managerId, password: 'verify-pass-123',
+      });
+      const doomedCEO = `DC${stamp}`;
+      const failCEO = await req('POST', '/api/users', { token: admin, body: mkBody(doomedCEO, 'Doomed CEO', 'CEO', '') });
+      check('POST /api/users fails (5xx, no false success) when the recompute cannot persist',
+        failCEO.status >= 500 && failCEO.json?.success === false,
+        `status=${failCEO.status} body=${JSON.stringify(failCEO.json)}`);
+      const ghostCEO = await pgClient.query('SELECT id FROM users WHERE employee_id = $1', [doomedCEO]);
+      check('Failed create left NO partially-created user row (manager-less path)', ghostCEO.rows.length === 0, `rows=${ghostCEO.rows.length}`);
+
+      const doomedExec = `DE${stamp}`;
+      const failExec = await req('POST', '/api/users', { token: admin, body: mkBody(doomedExec, 'Doomed Exec', 'EXECUTIVE', MGR_A) });
+      check('POST /api/users fails (5xx) for a manager-linked user too',
+        failExec.status >= 500 && failExec.json?.success === false,
+        `status=${failExec.status} body=${JSON.stringify(failExec.json)}`);
+      const ghostExec = await pgClient.query('SELECT id FROM users WHERE employee_id = $1', [doomedExec]);
+      check('Failed create left NO partially-created user row (linked path)', ghostExec.rows.length === 0, `rows=${ghostExec.rows.length}`);
+    } finally {
+      if (pgClient) {
+        if (hierarchiesRenamed) {
+          try {
+            await pgClient.query('ALTER TABLE hierarchies_verify_bak RENAME TO hierarchies');
+            hierarchiesRenamed = false;
+          } catch (err) {
+            log(`  WARNING: could not restore the hierarchies table: ${err?.message || err}`);
+          }
+        }
+        await pgClient.end().catch(() => {});
+      }
+    }
+    check('hierarchies table restored after the failure simulation', hierarchiesRenamed === false);
+    // Recovery proof: the rolled-back employee ID is free again, so the
+    // same create now succeeds (a leftover row would 409 here).
+    const retryExec = await req('POST', '/api/users', {
+      token: admin,
+      body: {
+        fullName: 'Doomed Exec', employeeId: `DE${stamp}`, email: `de${stamp.toLowerCase()}@leadflow.test`,
+        role: 'EXECUTIVE', departmentId: retailDept, managerId: MGR_A, password: 'verify-pass-123',
+      },
+    });
+    check('POST /api/users succeeds again after restore (rollback freed the ID)', retryExec.status === 201, `status=${retryExec.status} body=${JSON.stringify(retryExec.json)}`);
 
     log('');
     if (failures) { log(`✗ ${failures} check(s) FAILED`); process.exitCode = 1; }
