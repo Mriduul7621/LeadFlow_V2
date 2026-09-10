@@ -14,6 +14,7 @@ import {
   Save,
   Check,
   ArrowLeft,
+  AlertTriangle,
   Layers,
   Mail,
   UserCheck,
@@ -1060,34 +1061,67 @@ export default function UserManagement() {
           </div>
 
           {/* Reporting setup progress */}
-          {hierConfig && (
-            <div className="bg-white border border-slate-200 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-slate-700">Reporting setup</span>
-                <span className="text-sm text-slate-500">
-                  {hierConfig.setup.usersWithManager} / {hierConfig.setup.totalUsers} employees have a reporting manager
-                </span>
-              </div>
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-[#978C21] transition-all"
-                  style={{ width: `${hierConfig.setup.totalUsers > 0 ? Math.round((hierConfig.setup.usersWithManager / hierConfig.setup.totalUsers) * 100) : 0}%` }}
-                />
-              </div>
-              {hierConfig.setup.invalidLinks.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  {hierConfig.setup.invalidLinks.slice(0, 8).map(link => (
-                    <div key={link.employeeId} className="text-xs text-red-600">
-                      ⚠ {link.employeeName} ({link.employeeId}): {link.reason}
+          {hierConfig && (() => {
+            // "Missing reporting manager" only counts Level 2+ employees.
+            // The Level-1 (CEO) org root is excluded from the denominator.
+            const managerBase =
+              hierConfig.setup.usersWithManager + hierConfig.setup.usersWithoutManager;
+            const pct = managerBase > 0 ? Math.round((hierConfig.setup.usersWithManager / managerBase) * 100) : 0;
+            const invalid = hierConfig.setup.invalidLinks;
+            return (
+            <div className="space-y-3">
+              {/* Admin warning: a hierarchy / role-level change can invalidate
+                  existing reporting relationships. We surface them but never
+                  auto-edit stored manager_id values. */}
+              {invalid.length > 0 && (
+                <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-amber-800">
+                        Hierarchy changed. Some existing reporting relationships are no longer valid and require correction.
+                      </p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        {invalid.length} reporting relationship{invalid.length === 1 ? '' : 's'} need correction. Your existing
+                        manager assignments were <span className="font-semibold">not changed automatically</span> — open each
+                        employee in the <span className="font-semibold">Employees</span> tab and set a valid reporting manager
+                        (one level up, same department).
+                      </p>
+                      <ul className="mt-2 space-y-1 max-h-48 overflow-auto pr-1">
+                        {invalid.map(link => (
+                          <li key={link.employeeId} className="text-xs text-amber-800">
+                            <span className="font-medium">{link.employeeName}</span> ({link.employeeId}): {link.reason}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                  ))}
-                  {hierConfig.setup.invalidLinks.length > 8 && (
-                    <div className="text-xs text-slate-400">…and {hierConfig.setup.invalidLinks.length - 8} more</div>
-                  )}
+                  </div>
                 </div>
               )}
+
+              <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-slate-700">Reporting setup</span>
+                  <span className="text-sm text-slate-500">
+                    {hierConfig.setup.usersWithManager} / {managerBase} employees have a reporting manager
+                    <span className="text-slate-400">  ·  Level 1 / CEO excluded (no manager required)</span>
+                  </span>
+                </div>
+                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-[#978C21] transition-all" style={{ width: `${pct}%` }} />
+                </div>
+                {hierConfig.setup.usersWithoutManager > 0 ? (
+                  <p className="mt-2 text-xs text-red-600">
+                    {hierConfig.setup.usersWithoutManager} employee{hierConfig.setup.usersWithoutManager === 1 ? '' : 's'} on Level 2 or below
+                    have no reporting manager.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-emerald-600">All employees that require a manager have one.</p>
+                )}
+              </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Ladder levels */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">

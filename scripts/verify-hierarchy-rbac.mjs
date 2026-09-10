@@ -327,9 +327,44 @@ async function main() {
       JSON.stringify(allUsers.find(u => u.employeeId === RETAIL_HEAD)?.subordinates));
     check('Users response exposes hierarchyLevel', typeof execXUser?.hierarchyLevel === 'number' && execXUser?.hierarchyLevel === 4, `level=${execXUser?.hierarchyLevel}`);
 
-    /* ---------------- 8. Setup stats ---------------- */
+    /* ---------------- 8. Setup stats & post-change detection ---------------- */
     const cfg2 = await req('GET', '/api/hierarchy-config', { token: admin });
-    check('Hierarchy config setup stats: all employees have managers', cfg2.json?.setup?.usersWithoutManager === 1, `withoutManager=${cfg2.json?.setup?.usersWithoutManager} (1 = the CEO)`);
+    const setup = cfg2.json?.setup || {};
+    // In a fully-valid org the CEO (Level 1) MUST NOT be counted as "missing a
+    // reporting manager"; only Level 2+ employees with no manager are counted.
+    check('Setup: CEO (Level 1) NOT counted as missing a manager', setup.usersWithoutManager === 0, `withoutManager=${setup.usersWithoutManager} (must be 0 — CEO excluded)`);
+    check('Setup: no false invalid links in a valid org', setup.invalidLinks?.length === 0, `invalidLinks=${JSON.stringify(setup.invalidLinks)}`);
+
+    // (a) Missing-manager calculation for Level 2+. An admin may clear an
+    // existing employee's manager (PUT allows a null manager); a Level 2+
+    // employee left without a manager MUST be counted as missing.
+    const clearMgr = await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: '' } });
+    check('PUT clears Retail Head manager (allowed by PUT)', clearMgr.status === 200, `status=${clearMgr.status}`);
+    const setupOrphan = (await req('GET', '/api/hierarchy-config', { token: admin })).json?.setup || {};
+    check('Setup: a Level 2 employee with no manager IS counted as missing', setupOrphan.usersWithoutManager === 1, `withoutManager=${setupOrphan.usersWithoutManager}`);
+    check('Setup: orphan reported in invalidLinks ("no reporting manager")',
+      setupOrphan.invalidLinks?.some(l => l.employeeId === RETAIL_HEAD && /no reporting manager/i.test(l.reason)),
+      JSON.stringify(setupOrphan.invalidLinks));
+    await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: CEO } }); // restore
+
+    // (b) Invalid reporting relationships detected AFTER a role-level change.
+    // Move MANAGER from Level 3 -> Level 4 so the existing MANAGER employees
+    // now report to a Level-2 head (must be Level 3) => links become invalid.
+    // Existing manager_id values are NOT auto-edited — they are surfaced.
+    const levelChange = allRoleIds.map(id => ({
+      roleId: id,
+      level: assignmentMap.get(id) != null ? (id === 'MANAGER' ? 4 : assignmentMap.get(id)) : 0,
+    }));
+    const lcRes = await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: levelChange } });
+    check('PUT hierarchy-config level change -> 200', lcRes.status === 200 && lcRes.json?.success === true, `status=${lcRes.status}`);
+    const setupChanged = lcRes.json?.data?.setup || {};
+    const badManagerLinks = (setupChanged.invalidLinks || []).filter(l => /Manager must be Level/i.test(l.reason));
+    check('Post level-change: MANAGER employees flagged as invalid (manager no longer one level up)',
+      badManagerLinks.length >= 3, `invalidLinks=${JSON.stringify(setupChanged.invalidLinks)}`);
+    // restore the correct ladder
+    await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: ladderBody } });
+    const restored = (await req('GET', '/api/hierarchy-config', { token: admin })).json?.setup || {};
+    check('Ladder restored: invalidLinks back to 0', restored.invalidLinks?.length === 0, `invalidLinks=${JSON.stringify(restored.invalidLinks)}`);
 
     log('');
     if (failures) { log(`✗ ${failures} check(s) FAILED`); process.exitCode = 1; }

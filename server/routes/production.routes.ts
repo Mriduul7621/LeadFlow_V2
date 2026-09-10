@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
+import { computeHierarchyHealth } from '../utils/hierarchyHealth.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -504,51 +505,22 @@ async function buildHierarchyConfig() {
     .filter(r => !(Number(r.hierarchy_level) > 0 && Number(r.hierarchy_level) < UNASSIGNED_LEVEL))
     .map(r => ({ roleId: String(r.role_code), roleName: r.role_name, employeeCount: usersResult.rows.filter((u: any) => String(u.role_code || '').toUpperCase() === String(r.role_code).toUpperCase() && u.is_active !== false).length }));
 
-  let usersWithManager = 0;
-  let ladderUsers = 0;
-  const invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }> = [];
-  const userById = new Map<string, any>(usersResult.rows.map((u: any) => [u.id, u]));
-  const levelOfUser = (u: any): number => {
-    const code = String(u.role_code || '').toUpperCase();
-    return levelMap.has(code) ? levelMap.get(code)! : UNASSIGNED_LEVEL;
-  };
-  for (const u of usersResult.rows) {
-    if (u.is_active === false) continue;
-    const level = levelOfUser(u);
-    if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
-    ladderUsers++;
-    if (u.manager_id) usersWithManager++;
-    if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
-
-    if (level === 1) {
-      if (u.manager_id) invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'A Level-1 (CEO) employee must not have a reporting manager.' });
-      continue;
-    }
-    if (!u.manager_id) {
-      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: `Level ${level} employee has no reporting manager.` });
-      continue;
-    }
-    const manager = userById.get(u.manager_id);
-    if (!manager) {
-      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'Reporting manager not found.' });
-      continue;
-    }
-    const managerLevel = levelOfUser(manager);
-    if (managerLevel !== level - 1) {
-      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: `Manager must be Level ${level - 1} (currently Level ${managerLevel === UNASSIGNED_LEVEL ? 'unassigned' : managerLevel}).` });
-    } else if (managerLevel !== 1 && String(manager.department_id || '') !== String(u.department_id || '')) {
-      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'Manager belongs to a different department.' });
-    }
-  }
+  // Server-authoritative ladder health. The "missing reporting manager"
+  // count uses the hierarchy level/business rule: only Level 2+ employees
+  // are counted, so the Level-1 (CEO) org root is never reported as missing
+  // a manager. Invalid links are recomputed from the CURRENT role levels, so
+  // a hierarchy/role-level change is reflected here without mutating any
+  // stored manager_id values.
+  const health = computeHierarchyHealth(usersResult.rows as any, levelMap);
 
   return {
     levels,
     unassignedRoles,
     setup: {
-      totalUsers: ladderUsers,
-      usersWithManager,
-      usersWithoutManager: Math.max(0, ladderUsers - usersWithManager),
-      invalidLinks,
+      totalUsers: health.totalUsers,
+      usersWithManager: health.usersWithManager,
+      usersWithoutManager: health.usersWithoutManager,
+      invalidLinks: health.invalidLinks,
     },
     rules: {
       levelGap: 1,
