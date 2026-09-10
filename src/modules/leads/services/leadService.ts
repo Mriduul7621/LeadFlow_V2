@@ -236,6 +236,13 @@ export const leadService = {
     localDb.clearAllLeads();
   },
 
+  /**
+   * Server-authoritative follow-up/status update.
+   * Sends ONLY the business fields to POST /api/leads/:id/follow-up.
+   * The server derives actor/timestamp, validates status, appends history
+   * atomically, and updates the lead's current state in one transaction.
+   * No history arrays or spoofable actor fields are ever sent.
+   */
   async updateLeadStatus(
     leadId: string,
     status: LeadStatus,
@@ -251,54 +258,71 @@ export const leadService = {
     lossReason?: string,
     meetingType?: string,
   ): Promise<Lead | null> {
-    const existing = await this.getLead(leadId);
-    if (!existing) throw new ApiError(404, 'Lead not found. It may have been deleted.');
-    const history: StatusHistoryEntry = {
+    // updatedBy is intentionally ignored: server derives actor from auth
+    void updatedBy;
+    const payload: Record<string, any> = {
       status,
-      date: new Date().toISOString(),
-      remarks: remarks || '',
+      remarks,
       nextFollowUpDate,
       nextCallDate,
       meetingDate,
+      meetingType,
+      collectedNCP: ncp,
+      projectedNCP,
       sumAssured,
       productName,
-      updatedBy,
       lossReason,
-      meetingType,
     };
-    return this.updateLead(
-      leadId,
-      {
-        currentStatus: status,
-        collectedNCP: ncp ?? existing.collectedNCP,
-        nextFollowUpDate: nextFollowUpDate ?? existing.nextFollowUpDate,
-        nextCallDate: nextCallDate ?? existing.nextCallDate,
-        meetingDate: meetingDate ?? existing.meetingDate,
-        sumAssured: sumAssured ?? existing.sumAssured,
-        productName: productName ?? existing.productName,
-        projectedNCP: projectedNCP ?? existing.projectedNCP,
-        lossReason: lossReason ?? existing.lossReason,
-        meetingType: meetingType ?? existing.meetingType,
-        statusHistory: [...(existing.statusHistory || []), history],
-      },
-      updatedBy
-    );
+    // Remove undefined values — preserves partial-update semantics
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+    const result = await apiRequest<any>(`/api/leads/${encodeURIComponent(leadId)}/follow-up`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    // Server returns { lead, activity } (unwrapped from { success, data })
+    // For backward compat, also handle bare Lead response
+    const lead: Lead | null = result && typeof result === 'object' && 'lead' in result ? (result.lead as Lead) : (result as Lead);
+    if (lead) {
+      cacheLead(lead);
+      return lead;
+    }
+    return null;
   },
 
   async getLead(leadId: string): Promise<Lead | null> {
     const cached = localDb.getLead(leadId);
     try {
-      const cloudLeads = await apiRequest<Lead[]>('/api/leads');
-      localDb.saveLeads(cloudLeads);
-      const match = cloudLeads.find(l => l.id === leadId);
-      if (match) {
-        localDb.updateLead(leadId, match);
-        return match;
+      const lead = await apiRequest<Lead>(`/api/leads/${encodeURIComponent(leadId)}`);
+      if (lead) {
+        cacheLead(lead);
+        return lead;
       }
-      return null; // cloud says it is gone - do not resurrect from cache
+      return null;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError) {
+        if (err.status === 404) return null;
+        if (err.status !== 0 && err.status < 500) throw err;
+      }
+      // Network / 5xx: return cached for offline read, but never report write success elsewhere
       return cached;
+    }
+  },
+
+  /**
+   * Fetch authoritative activity history for a lead.
+   * Uses GET /api/leads/:id/activities (reverse chronological).
+   */
+  async getLeadActivities(leadId: string): Promise<Array<Record<string, any>>> {
+    try {
+      const activities = await apiRequest<Array<Record<string, any>>>(`/api/leads/${encodeURIComponent(leadId)}/activities`);
+      return Array.isArray(activities) ? activities : [];
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return [];
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      return [];
     }
   },
 

@@ -42,16 +42,20 @@ export default function Lead360() {
   const [docNote, setDocNote] = useState('');
   const [addingDoc, setAddingDoc] = useState(false);
 
+  const [activities, setActivities] = useState<any[]>([]);
+
   const load = async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const [l, n] = await Promise.all([
+      const [l, n, a] = await Promise.all([
         leadService.getLead(id),
         notificationService.getNotificationsForLead(id),
+        (leadService as any).getLeadActivities ? (leadService as any).getLeadActivities(id) : Promise.resolve([]),
       ]);
       setLead(l);
       setNotifications(n);
+      setActivities(Array.isArray(a) ? a : []);
     } finally {
       setLoading(false);
     }
@@ -63,25 +67,93 @@ export default function Lead360() {
     if (!lead) return [];
     const events: TimelineEvent[] = [];
 
-    (lead.statusHistory || []).forEach((h, i) => {
-      const parts: string[] = [];
-      if (h.remarks) parts.push(h.remarks);
-      if (h.lossReason) parts.push(`Loss Reason: ${h.lossReason}`);
-      if (h.meetingType) parts.push(`Meeting Type: ${h.meetingType}`);
-      if (h.nextFollowUpDate) parts.push(`Next follow-up: ${new Date(h.nextFollowUpDate).toLocaleDateString()}`);
-      if (h.nextCallDate) parts.push(`Next call: ${new Date(h.nextCallDate).toLocaleDateString()}`);
-      if (h.meetingDate) parts.push(`Meeting: ${new Date(h.meetingDate).toLocaleDateString()}`);
-      if (h.productName) parts.push(`Product: ${h.productName}`);
-      if (h.sumAssured) parts.push(`Sum Assured: ${h.sumAssured}`);
-      events.push({
-        id: `status_${i}_${h.date}`,
-        type: 'status',
-        date: h.date,
-        title: `Status changed to "${h.status}"`,
-        detail: parts.join(' · '),
-        by: h.updatedBy,
+    // Prefer server-authoritative lead_activities when available (NEW LeadFlow events);
+    // otherwise fall back to embedded statusHistory for backward compat / legacy leads.
+    const authoritativeActivities = activities && activities.length > 0 ? activities : null;
+    if (authoritativeActivities) {
+      authoritativeActivities.forEach((act: any, i: number) => {
+        const status = act.status || act.currentStatus || 'Unknown';
+        const date = act.createdAt || act.created_at || act.date || new Date().toISOString();
+        const parts: string[] = [];
+        const remarks = act.remarks || '';
+        if (remarks) parts.push(remarks);
+        if (act.lossReason || act.loss_reason) parts.push(`Loss Reason: ${act.lossReason || act.loss_reason}`);
+        if (act.meetingType || act.meeting_type) parts.push(`Meeting Type: ${act.meetingType || act.meeting_type}`);
+        const nfd = act.nextFollowUpAt || act.next_follow_up_at || act.nextFollowUpDate;
+        if (nfd) {
+          try { parts.push(`Next follow-up: ${new Date(nfd).toLocaleDateString()}`); } catch {}
+        }
+        const ncd = act.nextCallAt || act.next_call_at || act.nextCallDate;
+        if (ncd) {
+          try { parts.push(`Next call: ${new Date(ncd).toLocaleDateString()}`); } catch {}
+        }
+        const md = act.meetingAt || act.meeting_at || act.meetingDate;
+        if (md) {
+          try { parts.push(`Meeting: ${new Date(md).toLocaleDateString()}`); } catch {}
+        }
+        const pn = act.productName || act.product_name;
+        if (pn) parts.push(`Product: ${pn}`);
+        const sa = act.sumAssured ?? act.sum_assured;
+        if (sa) parts.push(`Sum Assured: ${sa}`);
+        const pncp = act.projectedNcp ?? act.projected_ncp ?? act.projectedNCP;
+        if (pncp) parts.push(`Projected NCP: ${pncp}`);
+        const cncp = act.collectedNcp ?? act.collected_ncp ?? act.collectedNCP;
+        if (cncp) parts.push(`Collected NCP: ${cncp}`);
+        const by = act.actorEmployeeId || act.actor_employee_id || act.actor || act.updatedBy || act.createdBy || act.created_by || act.created_by_employee;
+        events.push({
+          id: `activity_${act.id || i}_${date}`,
+          type: 'status',
+          date,
+          title: `Status changed to "${status}"`,
+          detail: parts.join(' · '),
+          by,
+        });
       });
-    });
+      // Also include any legacy statusHistory entries that pre-date the activities table
+      // (imported snapshot) so history is not lost — dedupe by date+status when overlapping.
+      const seen = new Set(events.map(e => `${e.title}|${e.date}`));
+      (lead.statusHistory || []).forEach((h, i) => {
+        const key = `Status changed to "${h.status}"|${h.date}`;
+        if (seen.has(key)) return;
+        const parts: string[] = [];
+        if (h.remarks) parts.push(h.remarks);
+        if (h.lossReason) parts.push(`Loss Reason: ${h.lossReason}`);
+        if (h.meetingType) parts.push(`Meeting Type: ${h.meetingType}`);
+        if (h.nextFollowUpDate) parts.push(`Next follow-up: ${new Date(h.nextFollowUpDate).toLocaleDateString()}`);
+        if (h.nextCallDate) parts.push(`Next call: ${new Date(h.nextCallDate).toLocaleDateString()}`);
+        if (h.meetingDate) parts.push(`Meeting: ${new Date(h.meetingDate).toLocaleDateString()}`);
+        if (h.productName) parts.push(`Product: ${h.productName}`);
+        if (h.sumAssured) parts.push(`Sum Assured: ${h.sumAssured}`);
+        events.push({
+          id: `status_${i}_${h.date}`,
+          type: 'status',
+          date: h.date,
+          title: `Status changed to "${h.status}"`,
+          detail: parts.join(' · '),
+          by: h.updatedBy,
+        });
+      });
+    } else {
+      (lead.statusHistory || []).forEach((h, i) => {
+        const parts: string[] = [];
+        if (h.remarks) parts.push(h.remarks);
+        if (h.lossReason) parts.push(`Loss Reason: ${h.lossReason}`);
+        if (h.meetingType) parts.push(`Meeting Type: ${h.meetingType}`);
+        if (h.nextFollowUpDate) parts.push(`Next follow-up: ${new Date(h.nextFollowUpDate).toLocaleDateString()}`);
+        if (h.nextCallDate) parts.push(`Next call: ${new Date(h.nextCallDate).toLocaleDateString()}`);
+        if (h.meetingDate) parts.push(`Meeting: ${new Date(h.meetingDate).toLocaleDateString()}`);
+        if (h.productName) parts.push(`Product: ${h.productName}`);
+        if (h.sumAssured) parts.push(`Sum Assured: ${h.sumAssured}`);
+        events.push({
+          id: `status_${i}_${h.date}`,
+          type: 'status',
+          date: h.date,
+          title: `Status changed to "${h.status}"`,
+          detail: parts.join(' · '),
+          by: h.updatedBy,
+        });
+      });
+    }
 
     (lead.assignmentHistory || []).forEach((a, i) => {
       events.push({
@@ -118,7 +190,7 @@ export default function Lead360() {
     });
 
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [lead, notifications]);
+  }, [lead, notifications, activities]);
 
   const filteredTimeline = filter === 'all' ? timeline : timeline.filter(e => e.type === filter);
 
