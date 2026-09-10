@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Calendar, Clock, History, Phone, User, AlertTriangle, ChevronRight, RefreshCw } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../../../lib/utils';
 import { leadService, type FollowUpQueueItem, type FollowUpQueueResult } from '../services/leadService';
 import { toast } from 'sonner';
 
 type Bucket = 'overdue' | 'today' | 'upcoming';
+
+const isValidBucket = (value: string | null): value is Bucket =>
+  value === 'overdue' || value === 'today' || value === 'upcoming';
 
 function formatDue(iso: string) {
   try {
@@ -68,9 +71,25 @@ function QueueRow({ item }: { item: FollowUpQueueItem }) {
 }
 
 export default function FollowUpStrategy() {
-  const [active, setActive] = useState<Bucket>('overdue');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const bucketFromUrl = searchParams.get('bucket');
+  const [active, setActive] = useState<Bucket>(isValidBucket(bucketFromUrl) ? bucketFromUrl : 'overdue');
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<FollowUpQueueResult | null>(null);
+
+  // Keep the selected bucket in the URL so dashboard deep links
+  // (/follow-up?bucket=overdue|today|upcoming) open the right tab, and the
+  // browser back/forward buttons still work.
+  const selectBucket = (bucket: Bucket) => {
+    setActive(bucket);
+    setSearchParams({ bucket }, { replace: true });
+  };
+
+  useEffect(() => {
+    const next = searchParams.get('bucket');
+    if (isValidBucket(next) && next !== active) setActive(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const load = useCallback(async (bucket: Bucket) => {
     setLoading(true);
@@ -123,7 +142,7 @@ export default function FollowUpStrategy() {
           <button
             key={tab.id}
             type="button"
-            onClick={() => setActive(tab.id)}
+            onClick={() => selectBucket(tab.id)}
             className={cn(
               'p-5 border text-left transition-all',
               active === tab.id ? 'border-[#978C21] bg-[#978C21]/5' : 'border-slate-100 hover:border-slate-200'

@@ -43,7 +43,7 @@ const labelToTranslationKey: Record<string, string> = {
   'NCP Progress': 'navNcpProgress',
   'Trends': 'navTrendCharts',
   'Campaigns': 'navCampaignBreakdown',
-  'Follow-ups': 'navFollowUpStrategy',
+  'Follow-up Queue': 'navFollowUpQueue',
   'Task Calendar': 'navTaskCalendar',
   'Activities': 'navActivities',
   'Team': 'navTeamProgress',
@@ -51,23 +51,91 @@ const labelToTranslationKey: Record<string, string> = {
   'Settings': 'navSettings',
 };
 
+interface MenuItem {
+  label: string;
+  icon: any;
+  path: string;
+  roles: UserRole[];
+}
 
-const menuItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: Object.values(UserRole) },
-  { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole) },
-  { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
-  { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
-  { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: Object.values(UserRole) },
-  { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Trends', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Follow-ups', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
-  { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole) },
-  { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole) },
-  { label: 'Team', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
-  { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
-  { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole) },
+interface MenuSection {
+  key: string;
+  labelKey: string;
+  items: MenuItem[];
+}
+
+const ALL_ROLES = Object.values(UserRole);
+const INSIGHT_ROLES = [UserRole.ADMIN, UserRole.RO, UserRole.RM];
+const TEAM_ROLES = [
+  UserRole.ADMIN,
+  UserRole.RM,
+  UserRole.ASM,
+  UserRole.BDM,
+  UserRole.BUSINESS_EXECUTIVE,
+  UserRole.BUSINESS_HEAD,
+];
+
+/**
+ * Grouped sidebar navigation (Step 5B). Each item keeps the SAME path and
+ * role/`menuAccess` semantics as the previous flat menu — grouping is purely
+ * visual and never changes what a role is allowed to see.
+ *
+ * Every path below maps to a real, existing route registered in App.tsx.
+ * No dead links and no invented routes (e.g. there is deliberately no
+ * dedicated "Pipeline" route yet).
+ */
+const menuSections: MenuSection[] = [
+  {
+    key: 'overview',
+    labelKey: 'navSectionOverview',
+    items: [
+      { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ALL_ROLES },
+    ],
+  },
+  {
+    key: 'mywork',
+    labelKey: 'navSectionMyWork',
+    items: [
+      { label: 'Activities', icon: Clock, path: '/activities', roles: ALL_ROLES },
+      { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: ALL_ROLES },
+      { label: 'Follow-up Queue', icon: History, path: '/follow-up', roles: ALL_ROLES },
+    ],
+  },
+  {
+    key: 'leads',
+    labelKey: 'navSectionLeads',
+    items: [
+      { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
+      { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: ALL_ROLES },
+      { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
+      { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
+    ],
+  },
+  {
+    key: 'insights',
+    labelKey: 'navSectionInsights',
+    items: [
+      { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: INSIGHT_ROLES },
+      { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: INSIGHT_ROLES },
+      { label: 'Trends', icon: Target, path: '/trend-charts', roles: INSIGHT_ROLES },
+      { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: INSIGHT_ROLES },
+    ],
+  },
+  {
+    key: 'management',
+    labelKey: 'navSectionManagement',
+    items: [
+      { label: 'Team', icon: Users, path: '/team', roles: TEAM_ROLES },
+      { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
+    ],
+  },
+  {
+    key: 'system',
+    labelKey: 'navSectionSystem',
+    items: [
+      { label: 'Settings', icon: Settings, path: '/settings', roles: ALL_ROLES },
+    ],
+  },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -362,20 +430,32 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const userRoleNormalized = userRoleName.toUpperCase();
   const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
 
-  const filteredMenu = menuItems.filter(item => {
+  /**
+   * Single, authoritative visibility check used by BOTH the grouped sidebar
+   * and the mobile drawer. Semantics are unchanged from the previous flat
+   * menu: ADMIN always sees everything, then the dynamic role `menuAccess`
+   * override wins when configured, otherwise the static role fallback applies.
+   */
+  const isItemVisible = (item: MenuItem): boolean => {
     // If Admin, they always have access to everything
     if (userRoleNormalized === 'ADMIN') return true;
-    
+
     // Check if custom / role permission overrides menu access
     if (matchedPermission && matchedPermission.menuAccess !== undefined) {
       if (matchedPermission.menuAccess[item.path] !== undefined) {
         return matchedPermission.menuAccess[item.path];
       }
     }
-    
+
     // Otherwise fallback to static roles check
     return item.roles.includes(userRoleNormalized as any) || item.roles.includes(userRoleName as any);
-  });
+  };
+
+  // Sections are only rendered when at least one of their items is visible,
+  // so grouping can never surface a route that the permission model hides.
+  const visibleSections = menuSections
+    .map(section => ({ ...section, items: section.items.filter(isItemVisible) }))
+    .filter(section => section.items.length > 0);
 
   const handleLogout = () => {
     logout();
@@ -413,24 +493,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto">
-          {filteredMenu.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group relative text-sm font-medium",
-                  isActive 
-                    ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
-                    : "text-slate-400 hover:text-brand-text hover:bg-white"
-                )}
-              >
-                <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "group-hover:text-[#978C21]")} />
-                {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
-              </Link>
-            );
-          })}
+          {visibleSections.map((section, sectionIndex) => (
+            <React.Fragment key={section.key}>
+              {isSidebarOpen ? (
+                <div className={cn("pt-3 pb-1 px-4 first:pt-0", sectionIndex > 0 && "mt-2")}>
+                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-slate-300 select-none">
+                    {t(section.labelKey as any)}
+                  </p>
+                </div>
+              ) : (
+                sectionIndex > 0 && <div className="my-2 border-t border-slate-100" aria-hidden="true" />
+              )}
+              {section.items.map((item) => {
+                const isActive = location.pathname === item.path;
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    title={item.label}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group relative text-sm font-medium",
+                      isActive 
+                        ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
+                        : "text-slate-400 hover:text-brand-text hover:bg-white"
+                    )}
+                  >
+                    <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "group-hover:text-[#978C21]")} />
+                    {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
+                  </Link>
+                );
+              })}
+            </React.Fragment>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -473,24 +567,33 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   <X className="w-5 h-5 text-slate-400" />
                 </button>
               </div>
-              <nav className="p-4 space-y-1">
-                {filteredMenu.map((item) => {
-                  const isActive = location.pathname === item.path;
-                  return (
-                    <Link
-                      key={item.path}
-                      to={item.path}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                        isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
-                      )}
-                    >
-                      <item.icon className="w-4 h-4" />
-                      <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
-                    </Link>
-                  );
-                })}
+              <nav className="p-4 space-y-1 overflow-y-auto h-[calc(100%-5rem)]">
+                {visibleSections.map((section, sectionIndex) => (
+                  <React.Fragment key={section.key}>
+                    <div className={cn("pt-3 pb-1 px-3 first:pt-0", sectionIndex > 0 && "mt-1")}>
+                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-slate-300 select-none">
+                        {t(section.labelKey as any)}
+                      </p>
+                    </div>
+                    {section.items.map((item) => {
+                      const isActive = location.pathname === item.path;
+                      return (
+                        <Link
+                          key={item.path}
+                          to={item.path}
+                          onClick={() => setIsMobileMenuOpen(false)}
+                          className={cn(
+                            "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                            isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
+                          )}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
               </nav>
             </motion.aside>
           </>
