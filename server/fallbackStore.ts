@@ -101,6 +101,39 @@ export interface FallbackWorkflowRule {
   createdDate?: string;
 }
 
+
+export interface FallbackLeadActivity {
+  id: string;
+  leadId: string;
+  lead_id?: string;
+  activityType: string;
+  activity_type?: string;
+  status?: string;
+  remarks?: string;
+  nextFollowUpAt?: string | null;
+  next_follow_up_at?: string | null;
+  nextCallAt?: string | null;
+  next_call_at?: string | null;
+  meetingAt?: string | null;
+  meeting_at?: string | null;
+  meetingType?: string | null;
+  meeting_type?: string | null;
+  collectedNcp?: number | null;
+  collected_ncp?: number | null;
+  projectedNcp?: number | null;
+  projected_ncp?: number | null;
+  sumAssured?: number | null;
+  sum_assured?: number | null;
+  productName?: string | null;
+  product_name?: string | null;
+  lossReason?: string | null;
+  loss_reason?: string | null;
+  createdBy?: string | null;
+  created_by?: string | null;
+  createdAt: string;
+  created_at?: string;
+}
+
 export const fallbackStore = {
   users: [] as FallbackUser[],
   leads: [] as FallbackLead[],
@@ -129,6 +162,7 @@ export const fallbackStore = {
     { id: 'status_not_interested', type: 'lead_status', value: 'Not Interested', label: 'Not Interested', status: 'Active', sortOrder: 11 },
   ] as FallbackOption[],
   workflowRules: [] as FallbackWorkflowRule[],
+  leadActivities: [] as FallbackLeadActivity[],
 };
 
 export function createId(prefix: string): string {

@@ -4770,6 +4770,563 @@ async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
   }
 }
 
+
+/* ====================================================================
+   LEADS — SERVER-AUTHORITATIVE FOLLOW-UP / ACTIVITY HISTORY
+   - Appendix for PR 4A: dedicated append-only activity path
+   - New table lead_activities is authoritative for NEW follow-up events
+   - leads.status_history JSONB remains for backward compat (server appends)
+   - Status validation reuses canonical FollowUpStatus dictionary (bulk import)
+==================================================================== */
+
+/**
+ * Fetch canonical FollowUpStatus values (active options). Falls back to
+ * DEFAULT_STATUS_DICTIONARY when the options table has no rows (same
+ * policy as bulk import, so validation never depends on seed ordering).
+ */
+async function getFollowUpStatusValues(): Promise<string[]> {
+  if (!useDb()) {
+    const opts = fallbackStore.options.filter((o: any) => o.type === 'FollowUpStatus' && o.status !== 'Inactive');
+    if (opts.length > 0) return opts.map(o => String(o.value));
+    const legacy = fallbackStore.options.filter((o: any) => o.type === 'lead_status' && o.status !== 'Inactive').map(o => String(o.value));
+    if (legacy.length > 0) return legacy;
+    return DEFAULT_STATUS_DICTIONARY as unknown as string[];
+  }
+  try {
+    let res = await getPool().query(`SELECT option_value FROM options WHERE field_key = 'FollowUpStatus' AND COALESCE(is_active, TRUE) = TRUE`);
+    if (res.rows.length > 0) return res.rows.map((r: any) => String(r.option_value));
+    // Fallback to legacy key used by some deployments
+    res = await getPool().query(`SELECT option_value FROM options WHERE field_key = 'lead_status' AND COALESCE(is_active, TRUE) = TRUE`);
+    if (res.rows.length > 0) return res.rows.map((r: any) => String(r.option_value));
+  } catch {}
+  return DEFAULT_STATUS_DICTIONARY as unknown as string[];
+}
+
+function parseNumeric(value: any): number | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const n = Number(String(value).replace(/[,\\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function mapActivityRow(row: any) {
+  return {
+    id: row.id,
+    leadId: row.lead_id || row.leadId,
+    activityType: row.activity_type || row.activityType || 'follow_up',
+    status: row.status || '',
+    remarks: row.remarks || '',
+    nextFollowUpAt: row.next_follow_up_at || row.nextFollowUpAt || null,
+    nextFollowUpDate: row.next_follow_up_at || row.nextFollowUpAt || null,
+    nextCallAt: row.next_call_at || row.nextCallAt || null,
+    nextCallDate: row.next_call_at || row.nextCallAt || null,
+    meetingAt: row.meeting_at || row.meetingAt || null,
+    meetingDate: row.meeting_at || row.meetingAt || null,
+    meetingType: row.meeting_type || row.meetingType || null,
+    collectedNcp: row.collected_ncp != null ? Number(row.collected_ncp) : (row.collectedNcp ?? null),
+    collectedNCP: row.collected_ncp != null ? Number(row.collected_ncp) : (row.collectedNcp ?? null),
+    projectedNcp: row.projected_ncp != null ? Number(row.projected_ncp) : (row.projectedNcp ?? null),
+    projectedNCP: row.projected_ncp != null ? Number(row.projected_ncp) : (row.projectedNcp ?? null),
+    sumAssured: row.sum_assured != null ? Number(row.sum_assured) : (row.sumAssured ?? null),
+    sum_assured: row.sum_assured != null ? Number(row.sum_assured) : (row.sumAssured ?? null),
+    productName: row.product_name || row.productName || null,
+    product_name: row.product_name || row.productName || null,
+    lossReason: row.loss_reason || row.lossReason || null,
+    loss_reason: row.loss_reason || row.lossReason || null,
+    createdBy: row.created_by || row.createdBy || null,
+    created_by: row.created_by || row.createdBy || null,
+    createdAt: row.created_at || row.createdAt,
+    created_at: row.created_at || row.createdAt,
+    // Actor employeeId for UI convenience (joined when possible)
+    actorEmployeeId: row.actor_employee_id || row.created_by_employee || null,
+  };
+}
+
+/**
+ * Resolve a lead by UUID or lead_code (including fallbackStore) with
+ * soft-delete filtering. Returns the raw DB row (with joined employee
+ * columns when available) or fallback lead object.
+ */
+async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): Promise<any | null> {
+  const raw = String(leadIdParam || '').trim();
+  if (!raw) return null;
+  if (!useDb()) {
+    const lead = fallbackStore.leads.find((l: any) => String(l.id) === raw || String((l as any).leadCode) === raw);
+    return lead || null;
+  }
+  const pool = getPool();
+  // Note: FOR UPDATE is only valid inside a transaction (client.query). Caller must handle when useDb() but not in tx.
+  // This helper is used both inside and outside tx; when forUpdate=true we use SELECT ... FOR UPDATE (caller must be inside tx via client).
+  // However to keep helper simple, we just do normal select; the transactional callers will do their own SELECT FOR UPDATE.
+  const result = await pool.query(
+    `${LEAD_SELECT} WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1`,
+    [raw]
+  );
+  return result.rows[0] || null;
+}
+
+/* ------------------------------------------------------------------
+   GET /leads/:id — direct single-lead retrieval (visibility enforced)
+------------------------------------------------------------------- */
+router.get('/leads/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
+      if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      const visibility = await resolveCallerVisibility(caller);
+      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      return sendJson(res, 200, lead);
+    }
+
+    const row = await findLeadByIdRaw(param, false);
+    if (!row) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    const visibility = await resolveCallerVisibility(caller);
+    if (!isLeadAccessible(row, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    return sendJson(res, 200, mapLeadRow(row));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   GET /leads/:id/activities — chronological activity history
+------------------------------------------------------------------- */
+router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
+      if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      const visibility = await resolveCallerVisibility(caller);
+      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      const acts = (fallbackStore.leadActivities || []).filter((a: any) => String(a.leadId) === String(lead.id) || String(a.lead_id) === String(lead.id));
+      // Return most recent first (reverse chronological) for UI convenience
+      acts.sort((a: any, b: any) => new Date(b.createdAt || b.created_at).getTime() - new Date(a.createdAt || a.created_at).getTime());
+      return sendJson(res, 200, acts.map(mapActivityRow));
+    }
+
+    const leadRow = await findLeadByIdRaw(param, false);
+    if (!leadRow) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    const visibility = await resolveCallerVisibility(caller);
+    if (!isLeadAccessible(leadRow, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    // Fetch activities + actor employee_id for UI
+    const activities = await getPool().query(
+      `SELECT a.*, u.employee_id AS actor_employee_id
+       FROM lead_activities a
+       LEFT JOIN users u ON u.id = a.created_by
+       WHERE a.lead_id = $1
+       ORDER BY a.created_at DESC`,
+      [leadRow.id]
+    );
+    return sendJson(res, 200, activities.rows.map(mapActivityRow));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Activity fetch failed' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   POST /leads/:id/follow-up — server-authoritative follow-up
+   Body whitelist: status/currentStatus, remarks, nextFollowUpDate,
+   nextCallDate, meetingDate, meetingType, collectedNCP, projectedNCP,
+   sumAssured, productName, lossReason
+   Spoofable fields ignored: changedBy, updatedBy, createdBy, actor,
+   date, timestamp, statusHistory, assignmentHistory
+------------------------------------------------------------------- */
+router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to update leads.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+
+    // Whitelisted payload extraction (ignore everything else, including spoofable keys)
+    const body = req.body || {};
+    // Explicitly ignore spoofable keys even if client tries to send them under alias
+    const rawStatus = body.status ?? body.currentStatus ?? body.current_status;
+    const rawRemarks = body.remarks;
+    const rawNextFollowUpDate = body.nextFollowUpDate ?? body.next_follow_up_at ?? body.nextFollowUpAt;
+    const rawNextCallDate = body.nextCallDate ?? body.next_call_at ?? body.nextCallAt;
+    const rawMeetingDate = body.meetingDate ?? body.meeting_at ?? body.meetingAt;
+    const rawMeetingType = body.meetingType ?? body.meeting_type;
+    const rawCollectedNCP = body.collectedNCP ?? body.collected_ncp ?? body.collectedNcp;
+    const rawProjectedNCP = body.projectedNCP ?? body.projected_ncp ?? body.projectedNcp;
+    const rawSumAssured = body.sumAssured ?? body.sum_assured ?? body.sumAssured;
+    const rawProductName = body.productName ?? body.product_name ?? body.product;
+    const rawLossReason = body.lossReason ?? body.loss_reason ?? body.lossReason;
+
+    // Normalize
+    const statusInput = rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '' ? String(rawStatus).trim() : undefined;
+    const remarksInput = rawRemarks !== undefined && rawRemarks !== null ? String(rawRemarks).trim() : undefined;
+    const nextFollowUpDateInput = rawNextFollowUpDate !== undefined && rawNextFollowUpDate !== null && String(rawNextFollowUpDate).trim() !== '' ? dateOrNull(rawNextFollowUpDate) : undefined;
+    const nextCallDateInput = rawNextCallDate !== undefined && rawNextCallDate !== null && String(rawNextCallDate).trim() !== '' ? dateOrNull(rawNextCallDate) : undefined;
+    const meetingDateInput = rawMeetingDate !== undefined && rawMeetingDate !== null && String(rawMeetingDate).trim() !== '' ? dateOrNull(rawMeetingDate) : undefined;
+    const meetingTypeInput = rawMeetingType !== undefined && rawMeetingType !== null && String(rawMeetingType).trim() !== '' ? String(rawMeetingType).trim().slice(0, 255) : undefined;
+    const collectedNCPInput = rawCollectedNCP !== undefined && rawCollectedNCP !== null && String(rawCollectedNCP).trim() !== '' ? parseNumeric(rawCollectedNCP) : undefined;
+    const projectedNCPInput = rawProjectedNCP !== undefined && rawProjectedNCP !== null && String(rawProjectedNCP).trim() !== '' ? parseNumeric(rawProjectedNCP) : undefined;
+    const sumAssuredInput = rawSumAssured !== undefined && rawSumAssured !== null && String(rawSumAssured).trim() !== '' ? parseNumeric(rawSumAssured) : undefined;
+    const productNameInput = rawProductName !== undefined && rawProductName !== null && String(rawProductName).trim() !== '' ? String(rawProductName).trim().slice(0, 255) : undefined;
+    const lossReasonInput = rawLossReason !== undefined && rawLossReason !== null && String(rawLossReason).trim() !== '' ? String(rawLossReason).trim() : undefined;
+
+    // Validate dates when supplied but unparseable
+    if (rawNextFollowUpDate !== undefined && rawNextFollowUpDate !== null && String(rawNextFollowUpDate).trim() !== '' && nextFollowUpDateInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid nextFollowUpDate.' });
+    }
+    if (rawNextCallDate !== undefined && rawNextCallDate !== null && String(rawNextCallDate).trim() !== '' && nextCallDateInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid nextCallDate.' });
+    }
+    if (rawMeetingDate !== undefined && rawMeetingDate !== null && String(rawMeetingDate).trim() !== '' && meetingDateInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid meetingDate.' });
+    }
+    // Validate numerics when supplied but not numeric
+    if (rawCollectedNCP !== undefined && rawCollectedNCP !== null && String(rawCollectedNCP).trim() !== '' && collectedNCPInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid collectedNCP.' });
+    }
+    if (rawProjectedNCP !== undefined && rawProjectedNCP !== null && String(rawProjectedNCP).trim() !== '' && projectedNCPInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid projectedNCP.' });
+    }
+    if (rawSumAssured !== undefined && rawSumAssured !== null && String(rawSumAssured).trim() !== '' && sumAssuredInput === null) {
+      return sendJson(res, 400, { success: false, message: 'Invalid sumAssured.' });
+    }
+
+    // Status validation against canonical dictionary (unknown => fail clearly, never silently Untouched)
+    let validatedStatus: string | undefined = undefined;
+    if (statusInput !== undefined) {
+      const dict = await getFollowUpStatusValues();
+      const resolved = resolveImportStatus(statusInput, dict);
+      if (!resolved.ok) {
+        return sendJson(res, 400, { success: false, message: `Unknown status \"${statusInput}\".` });
+      }
+      validatedStatus = resolved.status;
+      if (!validatedStatus) {
+        return sendJson(res, 400, { success: false, message: `Unknown status \"${statusInput}\".` });
+      }
+    }
+
+    // At least one business field should be present; otherwise it's a no-op
+    const hasAnyField = validatedStatus !== undefined || remarksInput !== undefined || nextFollowUpDateInput !== undefined || nextCallDateInput !== undefined || meetingDateInput !== undefined || meetingTypeInput !== undefined || collectedNCPInput !== undefined || projectedNCPInput !== undefined || sumAssuredInput !== undefined || productNameInput !== undefined || lossReasonInput !== undefined;
+    if (!hasAnyField) {
+      return sendJson(res, 400, { success: false, message: 'No valid follow-up fields supplied.' });
+    }
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
+      if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      if ((lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      const visibility = await resolveCallerVisibility(caller);
+      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      // Determine new status (preserve existing when not supplied)
+      const newStatus = validatedStatus !== undefined ? validatedStatus : (lead as any).currentStatus || 'Untouched';
+
+      // Build server-authoritative history entry
+      const historyEntry: Record<string, any> = {
+        status: newStatus,
+        date: nowIso,
+        remarks: remarksInput !== undefined ? remarksInput : '',
+        nextFollowUpDate: nextFollowUpDateInput !== undefined ? nextFollowUpDateInput! : (lead as any).nextFollowUpDate,
+        nextCallDate: nextCallDateInput !== undefined ? nextCallDateInput! : (lead as any).nextCallDate,
+        meetingDate: meetingDateInput !== undefined ? meetingDateInput! : (lead as any).meetingDate,
+        sumAssured: sumAssuredInput !== undefined ? sumAssuredInput! : (lead as any).sumAssured,
+        productName: productNameInput !== undefined ? productNameInput! : (lead as any).productName,
+        lossReason: lossReasonInput !== undefined ? lossReasonInput! : (lead as any).lossReason,
+        meetingType: meetingTypeInput !== undefined ? meetingTypeInput! : (lead as any).meetingType,
+        collectedNCP: collectedNCPInput !== undefined ? collectedNCPInput! : (lead as any).collectedNCP,
+        projectedNCP: projectedNCPInput !== undefined ? projectedNCPInput! : (lead as any).projectedNCP,
+        updatedBy: caller.employee_id,
+        changedBy: caller.employee_id,
+        actor: caller.employee_id,
+      };
+
+      // Update lead current state (partial-update semantics, preserve unrelated data)
+      if (validatedStatus !== undefined) (lead as any).currentStatus = newStatus;
+      if (remarksInput !== undefined) (lead as any).notes = remarksInput;
+      if (nextFollowUpDateInput !== undefined) (lead as any).nextFollowUpDate = nextFollowUpDateInput;
+      if (nextCallDateInput !== undefined) (lead as any).nextCallDate = nextCallDateInput;
+      if (meetingDateInput !== undefined) (lead as any).meetingDate = meetingDateInput;
+      if (meetingTypeInput !== undefined) (lead as any).meetingType = meetingTypeInput;
+      if (productNameInput !== undefined) (lead as any).productName = productNameInput;
+      if (lossReasonInput !== undefined) (lead as any).lossReason = lossReasonInput;
+      if (collectedNCPInput !== undefined) (lead as any).collectedNCP = collectedNCPInput;
+      if (projectedNCPInput !== undefined) (lead as any).projectedNCP = projectedNCPInput;
+      if (sumAssuredInput !== undefined) (lead as any).sumAssured = sumAssuredInput;
+      (lead as any).lastFollowUpDate = nowIso;
+      (lead as any).timestamp = nowIso;
+      (lead as any).updatedBy = caller.employee_id;
+      // Also keep customFields in sync for UI that reads from custom fields
+      const cf = (lead as any).customFields || {};
+      if (nextCallDateInput !== undefined) cf.nextCallDate = nextCallDateInput;
+      if (meetingDateInput !== undefined) cf.meetingDate = meetingDateInput;
+      if (meetingTypeInput !== undefined) cf.meetingType = meetingTypeInput;
+      if (productNameInput !== undefined) cf.productName = productNameInput;
+      if (lossReasonInput !== undefined) cf.lossReason = lossReasonInput;
+      if (collectedNCPInput !== undefined) cf.collectedNCP = collectedNCPInput;
+      if (projectedNCPInput !== undefined) cf.projectedNCP = projectedNCPInput;
+      if (sumAssuredInput !== undefined) cf.sumAssured = sumAssuredInput;
+      (lead as any).customFields = cf;
+
+      // Append to statusHistory (authoritative)
+      const existingHistory: any[] = Array.isArray((lead as any).statusHistory) ? (lead as any).statusHistory : [];
+      (lead as any).statusHistory = [...existingHistory, historyEntry];
+
+      // Insert append-only activity (in-memory)
+      const activity: any = {
+        id: createId('activity'),
+        leadId: (lead as any).id,
+        activityType: 'follow_up',
+        status: newStatus,
+        remarks: remarksInput,
+        nextFollowUpAt: nextFollowUpDateInput,
+        nextCallAt: nextCallDateInput,
+        meetingAt: meetingDateInput,
+        meetingType: meetingTypeInput,
+        collectedNcp: collectedNCPInput,
+        projectedNcp: projectedNCPInput,
+        sumAssured: sumAssuredInput,
+        productName: productNameInput,
+        lossReason: lossReasonInput,
+        createdBy: caller.id,
+        createdAt: nowIso,
+        // camelCase aliases for UI
+        nextFollowUpDate: nextFollowUpDateInput,
+        nextCallDate: nextCallDateInput,
+        meetingDate: meetingDateInput,
+        collectedNCP: collectedNCPInput,
+        projectedNCP: projectedNCPInput,
+        updatedBy: caller.employee_id,
+        actor: caller.employee_id,
+      };
+      if (!Array.isArray((fallbackStore as any).leadActivities)) (fallbackStore as any).leadActivities = [];
+      (fallbackStore as any).leadActivities.push(activity);
+
+      const mappedActivity = mapActivityRow(activity);
+      // Return lead (authoritative) + activity
+      return sendJson(res, 200, { success: true, data: { lead: lead, activity: mappedActivity } });
+    }
+
+    // ---------- PostgreSQL path (transactional atomic) ----------
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock the lead row to prevent lost updates / concurrent history overwrite
+      const leadRes = await client.query(
+        `SELECT l.* FROM leads l WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1 FOR UPDATE`,
+        [param]
+      );
+      const leadRow = leadRes.rows[0];
+      if (!leadRow) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      const visibility = await resolveCallerVisibility(caller);
+      if (!isLeadAccessible(leadRow, visibility, caller)) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
+      }
+
+      // Server timestamp (authoritative) — one instant for both the activity and the lead update
+      const nowIso: string = new Date().toISOString();
+      const nowForDb: string = nowIso; // for TIMESTAMP columns, PG will parse ISO
+
+      const newStatus = validatedStatus !== undefined ? validatedStatus : (leadRow.current_status || 'Untouched');
+
+      // Build history entry (server-authoritative)
+      const existingHistory: any[] = Array.isArray(leadRow.status_history) ? leadRow.status_history : (Array.isArray(leadRow.statusHistory) ? leadRow.statusHistory : []);
+      const historyEntry: Record<string, any> = {
+        status: newStatus,
+        date: nowIso,
+        remarks: remarksInput !== undefined ? remarksInput : '',
+        nextFollowUpDate: nextFollowUpDateInput !== undefined ? nextFollowUpDateInput! : (leadRow.next_follow_up_at ? new Date(leadRow.next_follow_up_at).toISOString() : undefined),
+        nextCallDate: nextCallDateInput !== undefined ? nextCallDateInput! : undefined,
+        meetingDate: meetingDateInput !== undefined ? meetingDateInput! : undefined,
+        sumAssured: sumAssuredInput !== undefined ? sumAssuredInput! : (leadRow.expected_value != null ? Number(leadRow.expected_value) : undefined),
+        productName: productNameInput !== undefined ? productNameInput! : undefined,
+        lossReason: lossReasonInput !== undefined ? lossReasonInput! : undefined,
+        meetingType: meetingTypeInput !== undefined ? meetingTypeInput! : undefined,
+        collectedNCP: collectedNCPInput !== undefined ? collectedNCPInput! : undefined,
+        projectedNCP: projectedNCPInput !== undefined ? projectedNCPInput! : undefined,
+        updatedBy: caller.employee_id,
+        changedBy: caller.employee_id,
+        // Preserve additional fields for backward compat if existing history had them
+      };
+      // Fill missing history fields from existing custom_fields when not supplied
+      const cfExisting: Record<string, any> = leadRow.custom_fields && typeof leadRow.custom_fields === 'object' ? leadRow.custom_fields : {};
+      if (historyEntry.nextCallDate === undefined && cfExisting.nextCallDate) historyEntry.nextCallDate = cfExisting.nextCallDate;
+      if (historyEntry.meetingDate === undefined && cfExisting.meetingDate) historyEntry.meetingDate = cfExisting.meetingDate;
+      if (historyEntry.productName === undefined && cfExisting.productName) historyEntry.productName = cfExisting.productName;
+      if (historyEntry.lossReason === undefined && cfExisting.lossReason) historyEntry.lossReason = cfExisting.lossReason;
+      if (historyEntry.meetingType === undefined && cfExisting.meetingType) historyEntry.meetingType = cfExisting.meetingType;
+      if (historyEntry.collectedNCP === undefined && cfExisting.collectedNCP != null) historyEntry.collectedNCP = cfExisting.collectedNCP;
+      if (historyEntry.projectedNCP === undefined && cfExisting.projectedNCP != null) historyEntry.projectedNCP = cfExisting.projectedNCP;
+      if (historyEntry.sumAssured === undefined && cfExisting.sumAssured != null) historyEntry.sumAssured = cfExisting.sumAssured;
+
+      const newHistory = [...existingHistory, historyEntry];
+
+      // Prepare lead update — partial, preserve-on-undefined
+      // Build custom_fields merge
+      const newCustomFields: Record<string, any> = { ...(cfExisting || {}) };
+      if (nextCallDateInput !== undefined) newCustomFields.nextCallDate = nextCallDateInput;
+      if (meetingDateInput !== undefined) newCustomFields.meetingDate = meetingDateInput;
+      if (meetingTypeInput !== undefined) newCustomFields.meetingType = meetingTypeInput;
+      if (productNameInput !== undefined) newCustomFields.productName = productNameInput;
+      if (lossReasonInput !== undefined) newCustomFields.lossReason = lossReasonInput;
+      if (collectedNCPInput !== undefined) newCustomFields.collectedNCP = collectedNCPInput;
+      if (projectedNCPInput !== undefined) newCustomFields.projectedNCP = projectedNCPInput;
+      if (sumAssuredInput !== undefined) newCustomFields.sumAssured = sumAssuredInput;
+
+      // Build dynamic SET for leads update. Use parameterized query to avoid undefined wipes.
+      const setClauses: string[] = [];
+      const params: any[] = [];
+      let idx = 1;
+
+      // current_status
+      if (validatedStatus !== undefined) {
+        setClauses.push(`current_status = $${idx++}`);
+        params.push(newStatus);
+      }
+      // notes / remarks
+      if (remarksInput !== undefined) {
+        setClauses.push(`notes = $${idx++}`);
+        params.push(remarksInput);
+      }
+      // next_follow_up_at
+      if (nextFollowUpDateInput !== undefined) {
+        setClauses.push(`next_follow_up_at = $${idx++}`);
+        params.push(nextFollowUpDateInput);
+      }
+      // last_contacted_at = now (semantically correct for a follow-up)
+      setClauses.push(`last_contacted_at = $${idx++}`);
+      params.push(nowForDb);
+
+      // expected_premium / expected_value
+      if (projectedNCPInput !== undefined) {
+        setClauses.push(`expected_premium = $${idx++}`);
+        params.push(projectedNCPInput);
+      }
+      if (sumAssuredInput !== undefined) {
+        setClauses.push(`expected_value = $${idx++}`);
+        params.push(sumAssuredInput);
+      }
+
+      // status_history
+      setClauses.push(`status_history = $${idx++}::jsonb`);
+      params.push(JSON.stringify(newHistory));
+
+      // custom_fields merge
+      setClauses.push(`custom_fields = $${idx++}::jsonb`);
+      params.push(JSON.stringify(newCustomFields));
+
+      // updated_by / updated_at
+      setClauses.push(`updated_by = $${idx++}`);
+      params.push(caller.id);
+      setClauses.push(`updated_at = NOW()`);
+
+      // increment follow_up_count (optional but keeps stats)
+      setClauses.push(`follow_up_count = COALESCE(follow_up_count, 0) + 1`);
+
+      const leadIdParamIdx = idx++;
+      params.push(leadRow.id);
+
+      const updateSql = `UPDATE leads SET ${setClauses.join(', ')} WHERE id = $${leadIdParamIdx} RETURNING *`;
+      const updatedLeadRes = await client.query(updateSql, params);
+      if (!updatedLeadRes.rows[0]) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 500, { success: false, message: 'Lead update failed.' });
+      }
+      const updatedRow = updatedLeadRes.rows[0];
+
+      // Insert activity row
+      const activityInsert = await client.query(
+        `INSERT INTO lead_activities
+           (lead_id, activity_type, status, remarks, next_follow_up_at, next_call_at, meeting_at, meeting_type, collected_ncp, projected_ncp, sum_assured, product_name, loss_reason, created_by, created_at)
+         VALUES
+           ($1, 'follow_up', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         RETURNING *`,
+        [
+          updatedRow.id,
+          newStatus,
+          remarksInput !== undefined ? remarksInput : null,
+          nextFollowUpDateInput !== undefined ? nextFollowUpDateInput : null,
+          nextCallDateInput !== undefined ? nextCallDateInput : null,
+          meetingDateInput !== undefined ? meetingDateInput : null,
+          meetingTypeInput !== undefined ? meetingTypeInput : null,
+          collectedNCPInput !== undefined ? collectedNCPInput : null,
+          projectedNCPInput !== undefined ? projectedNCPInput : null,
+          sumAssuredInput !== undefined ? sumAssuredInput : null,
+          productNameInput !== undefined ? productNameInput : null,
+          lossReasonInput !== undefined ? lossReasonInput : null,
+          caller.id,
+          nowForDb,
+        ]
+      );
+      if (!activityInsert.rows[0]) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' });
+      }
+
+      await client.query('COMMIT');
+
+      // Fetch mapped lead with employee joins for frontend shape
+      const freshLead = await pool.query(`${LEAD_SELECT} WHERE l.id = $1`, [updatedRow.id]);
+      const mappedLead = freshLead.rows[0] ? mapLeadRow(freshLead.rows[0]) : mapLeadRow(updatedRow);
+      const mappedActivity = mapActivityRow({ ...activityInsert.rows[0], actor_employee_id: caller.employee_id });
+
+      return sendJson(res, 200, { success: true, data: { lead: mappedLead, activity: mappedActivity } });
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up failed.' });
+    } finally {
+      try { client.release(); } catch {}
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up failed.' });
+  }
+});
+
+
 router.delete('/leads/:id', requireAuth, async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
