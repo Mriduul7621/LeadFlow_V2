@@ -57,6 +57,15 @@ export async function up(): Promise<void> {
     ON lead_activities(status);
   `);
 
+  // Production schema safety: some databases upgraded from main may lack
+  // follow_up_count if they predated 014 or were provisioned via a
+  // minimal bootstrap. The follow-up route increments this counter, so
+  // ensure it exists idempotently without requiring a separate migration.
+  await query(`
+    ALTER TABLE leads
+      ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0
+  `);
+
   console.log("✅ 037_lead_activities migrated");
 }
 

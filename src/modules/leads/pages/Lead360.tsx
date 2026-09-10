@@ -99,7 +99,7 @@ export default function Lead360() {
         if (pncp) parts.push(`Projected NCP: ${pncp}`);
         const cncp = act.collectedNcp ?? act.collected_ncp ?? act.collectedNCP;
         if (cncp) parts.push(`Collected NCP: ${cncp}`);
-        const by = act.createdBy || act.created_by || act.updatedBy || act.actorEmployeeId || act.actor;
+        const by = act.actorEmployeeId || act.actor_employee_id || act.actor || act.updatedBy || act.createdBy || act.created_by || act.created_by_employee;
         events.push({
           id: `activity_${act.id || i}_${date}`,
           type: 'status',

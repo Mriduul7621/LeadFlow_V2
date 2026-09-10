@@ -705,4 +705,122 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     const second = new Date(actsRes.body[1].createdAt || actsRes.body[1].created_at).getTime();
     assert.ok(first >= second, 'activities should be reverse chronological');
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // BLOCKER 1 REGRESSION — Lead360 actor display prefers human identifier
+  // ─────────────────────────────────────────────────────────────────
+  it('W. Actor display regression: server activity returns EMPA as actorEmployeeId and Lead360 prefers it over UUID', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009910', customerName: 'Actor Regression Prospect' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const res = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Contacted', remarks: 'actor regression' });
+    assert.equal(res.status, 200);
+    const activity = res.body.data.activity;
+    // Server-authoritative: createdBy is UUID, but human identifier is actorEmployeeId
+    assert.equal(activity.createdBy, employeeA.id, 'activity.createdBy should be the UUID (server-authoritative actor storage)');
+    assert.ok(activity.actorEmployeeId, 'activity should expose actorEmployeeId');
+    assert.equal(activity.actorEmployeeId, employeeA.employeeId, 'actorEmployeeId must be the human-readable employee identifier (EMPA), not UUID');
+    assert.notEqual(activity.actorEmployeeId, activity.createdBy, 'human identifier must differ from UUID');
+
+    // Also via chronological activities endpoint
+    const getRes = await request(app).get(`/api/leads/${lead.id}/activities`).set('Authorization', `Bearer ${token}`);
+    assert.equal(getRes.status, 200);
+    assert.equal(getRes.body.length, 1);
+    assert.equal(getRes.body[0].actorEmployeeId, employeeA.employeeId);
+    assert.equal(getRes.body[0].createdBy, employeeA.id);
+
+    // Lead360 file priority: actorEmployeeId first, then actor, then updatedBy, then UUID fallbacks
+    const filePath = path.join(process.cwd(), 'src/modules/leads/pages/Lead360.tsx');
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    const byMatch = fileContent.match(/const\s+by\s*=\s*[^;]+;/);
+    assert.ok(byMatch, 'Lead360 should contain const by = ...');
+    const byLine = byMatch[0];
+    // Must contain actorEmployeeId and prefer it
+    assert.ok(byLine.includes('actorEmployeeId'), 'Lead360 timeline must reference actorEmployeeId');
+    const idxActorEmployeeId = byLine.indexOf('actorEmployeeId');
+    const idxActor = byLine.indexOf('|| act.actor');
+    const idxUpdatedBy = byLine.indexOf('updatedBy');
+    const idxCreatedBy = byLine.indexOf('createdBy');
+    const idxCreatedBySnake = byLine.indexOf('created_by');
+    assert.ok(idxActorEmployeeId >= 0, 'actorEmployeeId must be present');
+    assert.ok(idxActorEmployeeId < idxUpdatedBy, 'actorEmployeeId must come before updatedBy');
+    assert.ok(idxActorEmployeeId < idxCreatedBy, 'actorEmployeeId must come before createdBy (final fallback)');
+    if (idxCreatedBySnake >= 0) assert.ok(idxActorEmployeeId < idxCreatedBySnake, 'actorEmployeeId must come before created_by fallback');
+    // Simulate Lead360 timeline mapping
+    const act = getRes.body[0];
+    const by = act.actorEmployeeId || act.actor_employee_id || act.actor || act.updatedBy || act.createdBy || act.created_by || act.created_by_employee;
+    assert.equal(by, employeeA.employeeId, 'Lead360 timeline simulation should resolve to EMPA (human id), not UUID');
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // BLOCKER 2 REGRESSION — follow_up_count production schema safety
+  // ─────────────────────────────────────────────────────────────────
+  it('X. Production schema safety: follow-up works on DB upgraded from pre-PR main schema where follow_up_count was missing (037 idempotent ALTER)', async () => {
+    // Simulate a production DB that was provisioned before 014 or via a minimal
+    // bootstrap where leads lacked follow_up_count. Drop the column if it exists.
+    try { await pool.query(`ALTER TABLE leads DROP COLUMN IF EXISTS follow_up_count`); } catch {}
+    // Verify column is gone (query should fail)
+    let missing = false;
+    try {
+      await pool.query(`SELECT follow_up_count FROM leads LIMIT 1`);
+    } catch (e: any) {
+      const msg = String((e as any)?.message || '').toLowerCase();
+      if (msg.includes('does not exist') || msg.includes('column')) missing = true;
+    }
+    assert.ok(missing, 'follow_up_count column should be missing before migration fix');
+
+    // Create a lead while column is missing — single-lead create does NOT touch follow_up_count
+    const lead = await createLeadAs(employeeA, { mobile: '01700009911', customerName: 'Schema Safety Prospect' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+
+    // Follow-up BEFORE the 037 fix should fail (column does not exist)
+    const before = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Contacted', remarks: 'before migration' });
+    assert.ok(before.status === 500 || before.status === 503, `before migration follow-up should fail with 500 due to missing column, got ${before.status} ${JSON.stringify(before.body)}`);
+
+    // Apply the idempotent fix that 037 performs (simulating upgrade)
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0`);
+    // Idempotency: second run must not fail
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0`);
+
+    // Verify column now exists
+    const afterCheck: any = await pool.query(`SELECT follow_up_count FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.ok(afterCheck.rows[0] !== undefined, 'follow_up_count column should exist after migration');
+
+    // Follow-up AFTER migration must succeed and increment counter
+    const after = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Contacted', remarks: 'after migration' });
+    assert.equal(after.status, 200, `after migration follow-up should succeed: ${JSON.stringify(after.body)}`);
+    assert.equal(after.body.data.activity.actorEmployeeId, employeeA.employeeId);
+
+    const pgLead: any = await pool.query(`SELECT follow_up_count, current_status FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.equal(pgLead.rows[0].current_status, 'Contacted');
+    assert.ok(Number(pgLead.rows[0].follow_up_count) >= 1, `follow_up_count should be >=1 after migration, got ${pgLead.rows[0].follow_up_count}`);
+
+    // Second follow-up should increment again without duplicating failure
+    const second = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Interested', remarks: 'second after migration' });
+    assert.equal(second.status, 200);
+    const pgLead2: any = await pool.query(`SELECT follow_up_count FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.ok(Number(pgLead2.rows[0].follow_up_count) >= 2, `follow_up_count should increment to >=2, got ${pgLead2.rows[0].follow_up_count}`);
+
+    // Also verify lead_activities table idempotency and bulk import still works on same schema
+    await pool.query(`CREATE TABLE IF NOT EXISTS lead_activities (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE, activity_type VARCHAR(50) NOT NULL DEFAULT 'follow_up', status VARCHAR(255), remarks TEXT, next_follow_up_at TIMESTAMP, next_call_at TIMESTAMP, meeting_at TIMESTAMP, meeting_type VARCHAR(255), collected_ncp NUMERIC(14,2), projected_ncp NUMERIC(14,2), sum_assured NUMERIC(14,2), product_name VARCHAR(255), loss_reason TEXT, created_by UUID REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMP NOT NULL DEFAULT NOW())`);
+    // Bulk import (row-level success) should still work after the schema fix
+    const bulkToken = signToken({ id: adminUser.id, employeeId: adminUser.employeeId, role: adminUser.role, email: adminUser.email });
+    const bulkRes = await request(app).post('/api/leads/bulk').set('Authorization', `Bearer ${bulkToken}`).send({ leads: [{ customerName: 'Bulk After Schema Fix', mobile: '01700009912', assignedTo: 'EMPA' }], dryRun: false });
+    // Bulk may be 200 with partial success envelope
+    assert.ok(bulkRes.status === 200, `bulk import should still work after schema fix, got ${bulkRes.status} ${JSON.stringify(bulkRes.body)}`);
+  });
+
+  it('Y. lead_activities migration idempotency: CREATE TABLE IF NOT EXISTS and ADD COLUMN IF NOT EXISTS can run twice', async () => {
+    // Simulate re-running 037
+    await pool.query(`CREATE TABLE IF NOT EXISTS lead_activities (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE, activity_type VARCHAR(50) NOT NULL DEFAULT 'follow_up', status VARCHAR(255), remarks TEXT, next_follow_up_at TIMESTAMP, next_call_at TIMESTAMP, meeting_at TIMESTAMP, meeting_type VARCHAR(255), collected_ncp NUMERIC(14,2), projected_ncp NUMERIC(14,2), sum_assured NUMERIC(14,2), product_name VARCHAR(255), loss_reason TEXT, created_by UUID REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMP NOT NULL DEFAULT NOW())`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_lead_activities_lead_id ON lead_activities(lead_id)`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0`);
+    // Second run
+    await pool.query(`CREATE TABLE IF NOT EXISTS lead_activities (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE, activity_type VARCHAR(50) NOT NULL DEFAULT 'follow_up', status VARCHAR(255), remarks TEXT, next_follow_up_at TIMESTAMP, next_call_at TIMESTAMP, meeting_at TIMESTAMP, meeting_type VARCHAR(255), collected_ncp NUMERIC(14,2), projected_ncp NUMERIC(14,2), sum_assured NUMERIC(14,2), product_name VARCHAR(255), loss_reason TEXT, created_by UUID REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMP NOT NULL DEFAULT NOW())`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0`);
+    // Verify follow-up still works
+    const lead = await createLeadAs(employeeA, { mobile: '01700009913' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const res = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Busy', remarks: 'idempotency check' });
+    assert.equal(res.status, 200);
+  });
 });
