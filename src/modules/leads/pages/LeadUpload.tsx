@@ -25,7 +25,9 @@ import { REAL_SHEET_HEADERS, mapRowForPreview, formatDateForDisplay, type Previe
 /** Display formatting for preview cells (never mutates the submitted data). */
 function displayCell(cell: any): string {
   if (cell === null || cell === undefined) return '';
-  if (cell instanceof Date) return isNaN(cell.getTime()) ? String(cell) : cell.toISOString().slice(0, 10);
+  // formatDateForDisplay handles Date instances, Excel serials and every
+  // supported date-only string WITHOUT timezone shifting (a Date or a
+  // "23-Apr-2026" cell must display the same calendar date that is stored).
   return formatDateForDisplay(cell);
 }
 

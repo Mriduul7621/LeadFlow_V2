@@ -189,7 +189,17 @@ function excelSerialToIso(serial: number): string | null {
 export function parseImportDate(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    if (Number.isNaN(value.getTime())) return null;
+    // A Date constructed at LOCAL midnight (e.g. new Date(2026, 3, 23) in
+    // UTC+6) represents a DATE-ONLY value; converting the instant via
+    // toISOString() would shift it to the previous UTC day. Rebuild it as
+    // UTC midnight of the intended calendar date instead. UTC-midnight
+    // dates (the xlsx `cellDates` shape) are unaffected in UTC+ zones and
+    // identical in UTC, so this never moves a correctly-built date.
+    if (isLocalMidnight(value)) {
+      return new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate())).toISOString();
+    }
+    return value.toISOString();
   }
   if (typeof value === 'number') return excelSerialToIso(value);
 
@@ -206,8 +216,18 @@ export function parseImportDate(value: unknown): string | null {
   const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})([T\s].*)?$/);
   if (isoMatch) {
     if (isoMatch[4]) {
-      const withTime = new Date(s);
-      if (!Number.isNaN(withTime.getTime())) return withTime.toISOString();
+      // A timezone-less midnight timestamp ("2026-04-23T00:00:00") is a
+      // date-only value with a redundant time. Parsing it with new Date()
+      // interprets it as LOCAL midnight, and toISOString() then shifts it
+      // to the previous UTC day in UTC+ timezones (e.g. Bangladesh). Treat
+      // it as the date it says, at UTC midnight.
+      if (/^[T\s]00:00(?::00(?:\.\d+)?)?$/.test(isoMatch[4])) {
+        const d = new Date(Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3])));
+        if (!Number.isNaN(d.getTime())) return d.toISOString();
+      } else {
+        const withTime = new Date(s);
+        if (!Number.isNaN(withTime.getTime())) return withTime.toISOString();
+      }
     } else {
       const d = new Date(Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3])));
       if (!Number.isNaN(d.getTime())) return d.toISOString();
@@ -260,8 +280,22 @@ export function parseImportDate(value: unknown): string | null {
 
   // Last resort: native parser (handles RFC strings, "2026/04/23", etc.)
   const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  if (!Number.isNaN(parsed.getTime())) {
+    // Date-only strings the regexes above do not cover ("2026/04/23") are
+    // parsed by the engine as LOCAL midnight; keep the intended calendar
+    // date instead of letting toISOString() shift it a day back in UTC+
+    // timezones. Real timestamps (non-midnight) keep instant semantics.
+    if (isLocalMidnight(parsed)) {
+      return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())).toISOString();
+    }
+    return parsed.toISOString();
+  }
   return null;
+}
+
+/** True when the Date sits exactly at midnight in the LOCAL timezone. */
+function isLocalMidnight(d: Date): boolean {
+  return d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
 }
 
 function normalizeYear(y: string): number {
@@ -299,6 +333,97 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export function isValidEmail(value: unknown): boolean {
   const s = String(value == null ? '' : value).trim();
   return s.length > 0 && EMAIL_RE.test(s);
+}
+
+/* ------------------------------------------------------------------
+   Statuses
+------------------------------------------------------------------- */
+
+/**
+ * Built-in FollowUpStatus dictionary — the app's documented default
+ * pipeline (metadata.seed.ts / DEFAULT_LEAD_STATUSES). Used only when the
+ * admin-configured `options` table has no active FollowUpStatus rows;
+ * otherwise the canonical dictionary comes from the database.
+ */
+export const DEFAULT_STATUS_DICTIONARY = [
+  'Untouched', 'Contacted', 'No Response', 'Busy', 'Interested',
+  'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked',
+  'Converted', 'Not Interested',
+];
+
+/**
+ * Case/spacing/punctuation-insensitive status key ("Follow up" and
+ * "Follow-up" both -> "followup").
+ */
+export function normalizeStatusKey(value: unknown): string {
+  return String(value == null ? '' : value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * LEGACY SHEET ALIASES: historical "Initial Status" / "Follow up" values
+ * written in the business's legacy sheet that are NOT literal spellings of
+ * a canonical FollowUpStatus option, but have ONE deterministic meaning in
+ * the existing taxonomy.
+ *
+ * This is NOT a new status taxonomy and adds NO new options — every target
+ * is an existing canonical value, and each alias only applies when that
+ * canonical value is actually present in the dictionary being used (an
+ * admin-configured list without the target stays authoritative and the
+ * value fails validation instead).
+ *
+ *  - "Unreachable"  -> "No Response"    (legacy call outcome: customer
+ *    could not be reached = no response in the current pipeline)
+ *  - "Follow up"    -> "Follow-up Set"  (legacy follow-up stage marker =
+ *    a follow-up is set in the current pipeline)
+ *
+ * Exact/case-variant canonical spellings ("No response", "Not interested",
+ * "Interested") need no alias — they already match the dictionary
+ * case-insensitively.
+ *
+ * MIRRORED in src/modules/leads/utils/leadUploadMapping.ts for the client
+ * preview — keep the two tables identical.
+ */
+const LEGACY_STATUS_ALIASES: Record<string, string> = {
+  unreachable: 'No Response',
+  followup: 'Follow-up Set',
+};
+
+export interface ImportStatusResolution {
+  /** false = value is not a canonical status nor a known legacy alias. */
+  ok: boolean;
+  /** Resolved canonical status ('' when the raw value was blank). */
+  status: string;
+}
+
+/**
+ * Resolve one raw sheet/API status against a canonical dictionary.
+ *  1. blank                      -> ok, ''
+ *  2. case/spacing-insensitive
+ *     canonical match            -> the canonical spelling
+ *  3. known legacy alias whose
+ *     target exists in the
+ *     dictionary                 -> the canonical target
+ *  4. anything else              -> NOT ok (caller reports an error —
+ *     never silently converted to "Untouched")
+ * Pure and shared by the bulk-import preview and the import itself, so the
+ * preview can never disagree with what the server will actually store.
+ */
+export function resolveImportStatus(rawValue: unknown, canonicalStatuses: string[]): ImportStatusResolution {
+  const raw = String(rawValue == null ? '' : rawValue).trim();
+  if (!raw) return { ok: true, status: '' };
+  const dict = new Map<string, string>();
+  for (const value of canonicalStatuses) {
+    const key = normalizeStatusKey(value);
+    if (key && !dict.has(key)) dict.set(key, value);
+  }
+  const direct = dict.get(normalizeStatusKey(raw));
+  if (direct) return { ok: true, status: direct };
+  const aliasTarget = LEGACY_STATUS_ALIASES[normalizeStatusKey(raw)];
+  if (aliasTarget) {
+    const resolved = dict.get(normalizeStatusKey(aliasTarget));
+    if (resolved) return { ok: true, status: resolved };
+  }
+  return { ok: false, status: raw };
 }
 
 /* ------------------------------------------------------------------
