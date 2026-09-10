@@ -249,6 +249,12 @@ async function main() {
       body: { managerId: EXEC_X },
     });
     check(`PUT /api/users cycle (Manager A -> Executive X) -> 400`, cycle.status === 400, `status=${cycle.status} body=${JSON.stringify(cycle.json)}`);
+    // Self-reporting
+    const selfReport = await req('PUT', `/api/users/${MGR_A}`, {
+      token: admin,
+      body: { managerId: MGR_A },
+    });
+    check('PUT /api/users self-reporting -> 400', selfReport.status === 400, `status=${selfReport.status} body=${JSON.stringify(selfReport.json)}`);
 
     /* ---------------- 3. Reporting-options endpoint ---------------- */
     log('\nD. Reporting-options dropdown source:');
@@ -327,9 +333,133 @@ async function main() {
       JSON.stringify(allUsers.find(u => u.employeeId === RETAIL_HEAD)?.subordinates));
     check('Users response exposes hierarchyLevel', typeof execXUser?.hierarchyLevel === 'number' && execXUser?.hierarchyLevel === 4, `level=${execXUser?.hierarchyLevel}`);
 
-    /* ---------------- 8. Setup stats ---------------- */
+    /* ---------------- 8. Setup stats (missing-manager business rule) ---------------- */
     const cfg2 = await req('GET', '/api/hierarchy-config', { token: admin });
-    check('Hierarchy config setup stats: all employees have managers', cfg2.json?.setup?.usersWithoutManager === 1, `withoutManager=${cfg2.json?.setup?.usersWithoutManager} (1 = the CEO)`);
+    const setup2 = cfg2.json?.setup || {};
+    check('CEO (Level 1) without a manager is NOT counted as missing', setup2.usersWithoutManager === 0, `withoutManager=${setup2.usersWithoutManager}`);
+    check('managerRequired counts only Level 2+ employees (8 of 9 ladder users)', setup2.managerRequired === 8 && setup2.totalUsers === 9, `total=${setup2.totalUsers} required=${setup2.managerRequired}`);
+    check('All Level-2+ employees have their reporting manager', setup2.usersWithManager === 8, `with=${setup2.usersWithManager}`);
+    check('No invalid links in the clean scenario (a manager-less CEO is a valid root)', (setup2.invalidLinks || []).length === 0, JSON.stringify(setup2.invalidLinks));
+
+    /* ---------------- 9. Missing-manager calculation ---------------- */
+    log('\nH. Missing-manager calculation (Level 1 CEO exempt, Level 2+ counted):');
+    // POST /users enforces the manager requirement for ladder roles; an admin
+    // PUT (edit) may clear a manager — e.g. while re-linking an employee —
+    // and the config must then count exactly the Level 2+ employees.
+    const clearHead = await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: '' } });
+    check('PUT /api/users can clear a manager (re-linking use case)', clearHead.status === 200, `status=${clearHead.status} body=${JSON.stringify(clearHead.json)}`);
+    const cfgH1 = await req('GET', '/api/hierarchy-config', { token: admin });
+    const h1 = cfgH1.json?.setup || {};
+    check('Level-2 employee (Retail Head) without a manager IS counted as missing',
+      h1.usersWithoutManager === 1 && (h1.invalidLinks || []).some(l => l.employeeId === RETAIL_HEAD && /no reporting manager/i.test(l.reason || '')),
+      `withoutManager=${h1.usersWithoutManager} links=${JSON.stringify(h1.invalidLinks)}`);
+
+    const clearExec = await req('PUT', `/api/users/${EXEC_X}`, { token: admin, body: { managerId: '' } });
+    check('PUT /api/users clears Executive X manager (Level 4)', clearExec.status === 200, `status=${clearExec.status}`);
+    const cfgH2 = await req('GET', '/api/hierarchy-config', { token: admin });
+    const h2 = cfgH2.json?.setup || {};
+    check('Level-4 employee without a manager is also counted (missing = 2)',
+      h2.usersWithoutManager === 2 && (h2.invalidLinks || []).some(l => l.employeeId === EXEC_X),
+      `withoutManager=${h2.usersWithoutManager} links=${JSON.stringify(h2.invalidLinks)}`);
+    check('CEO (Level 1, no manager) still NOT counted while others are missing',
+      h2.totalUsers === 9 && h2.managerRequired === 8 && h2.usersWithManager === 6,
+      `total=${h2.totalUsers} required=${h2.managerRequired} with=${h2.usersWithManager}`);
+
+    const restoreHead = await req('PUT', `/api/users/${RETAIL_HEAD}`, { token: admin, body: { managerId: CEO } });
+    const restoreExec = await req('PUT', `/api/users/${EXEC_X}`, { token: admin, body: { managerId: MGR_A } });
+    check('Correction accepted (Retail Head -> CEO, Executive X -> Manager A)', restoreHead.status === 200 && restoreExec.status === 200, `${restoreHead.status}/${restoreExec.status}`);
+    const cfgH3 = await req('GET', '/api/hierarchy-config', { token: admin });
+    check('Missing count returns to 0 after correction',
+      cfgH3.json?.setup?.usersWithoutManager === 0 && (cfgH3.json?.setup?.invalidLinks || []).length === 0,
+      `withoutManager=${cfgH3.json?.setup?.usersWithoutManager} links=${JSON.stringify(cfgH3.json?.setup?.invalidLinks)}`);
+
+    /* ---------------- 10. Hierarchy-change detection ---------------- */
+    log('\nI. Hierarchy-change detection (existing links flagged, never overwritten):');
+    // Move MANAGER from Level 3 to Level 4: every MANAGER employee now sits
+    // two levels under a Department Head, and every EXECUTIVE reports to a
+    // same-level manager. Both kinds of link must be flagged — and no
+    // manager_id may be silently modified by the server.
+    const changedLadder = ladderBody.map(a => (a.roleId === 'MANAGER' ? { roleId: a.roleId, level: 4 } : a));
+    const putChanged = await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: changedLadder } });
+    check('PUT /api/hierarchy-config (MANAGER moved to Level 4) -> 200', putChanged.status === 200, `status=${putChanged.status} body=${JSON.stringify(putChanged.json)}`);
+    const invalidAfter = putChanged.json?.data?.setup?.invalidLinks || [];
+    const mgrALink = invalidAfter.find(l => l.employeeId === MGR_A);
+    const execXLink = invalidAfter.find(l => l.employeeId === EXEC_X);
+    check('Flags Manager A (manager is now two levels up)', !!mgrALink, JSON.stringify(invalidAfter));
+    check('Flags Executive X (manager is now at the same level)', !!execXLink, JSON.stringify(invalidAfter));
+    check('Affected employees listed with name + reason', !!(mgrALink?.employeeName && mgrALink?.reason && execXLink?.reason), JSON.stringify(invalidAfter));
+    const usersI = (await req('GET', '/api/users', { token: admin })).json || [];
+    check('Manager A manager_id preserved (never silently overwritten)', usersI.find(u => u.employeeId === MGR_A)?.managerId === RETAIL_HEAD, String(usersI.find(u => u.employeeId === MGR_A)?.managerId));
+    check('Executive X manager_id preserved (never silently overwritten)', usersI.find(u => u.employeeId === EXEC_X)?.managerId === MGR_A, String(usersI.find(u => u.employeeId === EXEC_X)?.managerId));
+    check('An invalid link is not a missing manager (they still have one)', putChanged.json?.data?.setup?.usersWithoutManager === 0, `withoutManager=${putChanged.json?.data?.setup?.usersWithoutManager}`);
+
+    const putRestored = await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: ladderBody } });
+    check('Restoring the ladder clears the warnings', putRestored.status === 200 && (putRestored.json?.data?.setup?.invalidLinks || []).length === 0,
+      `status=${putRestored.status} links=${JSON.stringify(putRestored.json?.data?.setup?.invalidLinks)}`);
+
+    /* ---------------- 11. Realistic project ladder ---------------- */
+    log('\nJ. Realistic project ladder (CEO -> BH -> BE -> BDM -> ASM -> RM -> RO):');
+    // Role codes, names and the chain itself come from the project's own
+    // definitions (UserRole enum, Login.tsx designations and the enterprise
+    // hierarchy documented in src/modules/users/utils/dataScope.ts).
+    const ladderRolesJ = [
+      { roleId: 'CEO', level: 1, name: 'Chief Executive Officer', visibility: 'Organization' },
+      { roleId: 'BH', level: 2, name: 'Business Head', visibility: 'DownTeam' },
+      { roleId: 'BE', level: 3, name: 'Business Executive', visibility: 'DownTeam' },
+      { roleId: 'BDM', level: 4, name: 'Business Development Manager', visibility: 'DownTeam' },
+      { roleId: 'ASM', level: 5, name: 'Area Sales Manager', visibility: 'DownTeam' },
+      { roleId: 'RM', level: 6, name: 'Relationship Manager', visibility: 'DownTeam' },
+      { roleId: 'RO', level: 7, name: 'Relationship Officer', visibility: 'Own' },
+    ];
+    for (const role of ladderRolesJ) {
+      const r = await req('POST', '/api/roles', { token: admin, body: { roleId: role.roleId, roleName: role.name, hierarchyLevel: role.level, dataVisibility: role.visibility } });
+      check(`POST /api/roles ${role.roleId} (Level ${role.level}) -> saved`, r.status === 200, `status=${r.status}`);
+    }
+    // Every other business role leaves the ladder; existing manager_id links
+    // must be preserved untouched, not rewritten.
+    const rolesNowJ = await req('GET', '/api/roles', { token: admin });
+    const levelsJ = new Map(ladderRolesJ.map(r => [r.roleId, r.level]));
+    const assignmentsJ = (rolesNowJ.json || [])
+      .map(r => String(r.roleId).toUpperCase())
+      .filter(id => !['ADMIN', 'SUPERADMIN'].includes(id))
+      .map(id => ({ roleId: id, level: levelsJ.get(id) ?? 0 }));
+    const putJ = await req('PUT', '/api/hierarchy-config', { token: admin, body: { assignments: assignmentsJ } });
+    check('PUT /api/hierarchy-config (project ladder) -> 200', putJ.status === 200, `status=${putJ.status} body=${JSON.stringify(putJ.json)}`);
+
+    const BH = `BHH${stamp}`; const BE = `BEE${stamp}`; const BDM = `BDM${stamp}`;
+    const ASM = `ASM${stamp}`; const RM = `RMM${stamp}`; const RO = `ROO${stamp}`;
+    await createUser(BH, 'Business Head', 'BH', retailDept, CEO);
+    await createUser(BE, 'Business Executive', 'BE', retailDept, BH);
+    await createUser(BDM, 'Business Development Manager', 'BDM', retailDept, BE);
+    await createUser(ASM, 'Area Sales Manager', 'ASM', retailDept, BDM);
+    await createUser(RM, 'Relationship Manager', 'RM', retailDept, ASM);
+    await createUser(RO, 'Relationship Officer', 'RO', retailDept, RM);
+
+    const optsRO = await req('GET', `/api/users/reporting-options?role=RO&departmentId=${retailDept}`, { token: admin });
+    check('RO in Retail sees only its Relationship Manager as a candidate', optsRO.status === 200 && optsRO.json?.length === 1 && optsRO.json[0].employeeId === RM, JSON.stringify(optsRO.json?.map(o => o.employeeId)));
+
+    const usersJ = (await req('GET', '/api/users', { token: admin })).json || [];
+    const roUser = usersJ.find(u => u.employeeId === RO);
+    check('RO reportingChain = [RM, ASM, BDM, BE, BH, CEO]',
+      JSON.stringify(roUser?.reportingChain) === JSON.stringify([RM, ASM, BDM, BE, BH, CEO]), JSON.stringify(roUser?.reportingChain));
+
+    const cfgJ = await req('GET', '/api/hierarchy-config', { token: admin });
+    const setupJ = cfgJ.json?.setup || {};
+    check('Ladder stats: 7 ladder users, 6 manager-required, 0 missing, 0 invalid',
+      setupJ.totalUsers === 7 && setupJ.managerRequired === 6 && setupJ.usersWithManager === 6 && setupJ.usersWithoutManager === 0 && (setupJ.invalidLinks || []).length === 0,
+      JSON.stringify(setupJ));
+    check('Off-ladder scenario employees keep their manager_id (no rewrite)',
+      usersJ.find(u => u.employeeId === MGR_A)?.managerId === RETAIL_HEAD && usersJ.find(u => u.employeeId === EXEC_X)?.managerId === MGR_A,
+      `${usersJ.find(u => u.employeeId === MGR_A)?.managerId} / ${usersJ.find(u => u.employeeId === EXEC_X)?.managerId}`);
+
+    // DownTeam visibility across the realistic chain: the Business Head sees
+    // the deep-subtree RO lead, none of the other branches' leads.
+    await mkLead(RO, `LR${stamp}`);
+    await login(BH);
+    const bhLeads = await leadsOf(BH);
+    check('Business Head (DownTeam) sees only the RO lead from its subtree',
+      bhLeads.includes(`LR${stamp}`) && !bhLeads.includes(`LA${stamp}`) && !bhLeads.includes(`LX${stamp}`) && !bhLeads.includes(`LC${stamp}`),
+      JSON.stringify(bhLeads));
 
     log('');
     if (failures) { log(`✗ ${failures} check(s) FAILED`); process.exitCode = 1; }

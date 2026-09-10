@@ -17,7 +17,8 @@ import {
   Layers,
   Mail,
   UserCheck,
-  UserX
+  UserX,
+  AlertTriangle
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -223,6 +224,13 @@ export default function UserManagement() {
     });
     setManagerOptions([]);
     setIsUserModalOpen(true);
+  };
+
+  /** Opens the edit form for an employee flagged by the hierarchy checker,
+   *  so an admin can fix an invalid/missing Reporting Manager directly. */
+  const correctReportingLink = (u: User) => {
+    setActiveTab('employees');
+    openEditUser(u);
   };
 
   const openEditUser = (u: User) => {
@@ -515,7 +523,11 @@ export default function UserManagement() {
     try {
       const config = await orgService.saveHierarchyConfig(assignments);
       setHierConfig(config);
-      toast.success('Company ladder saved.');
+      if ((config.setup?.invalidLinks || []).length > 0) {
+        toast.warning('Ladder saved — but some existing reporting relationships are now invalid and need correction (see the list below).');
+      } else {
+        toast.success('Company ladder saved.');
+      }
     } catch (e: any) {
       toast.error(e?.message || 'Could not save the ladder.');
     } finally {
@@ -1065,25 +1077,55 @@ export default function UserManagement() {
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-slate-700">Reporting setup</span>
                 <span className="text-sm text-slate-500">
-                  {hierConfig.setup.usersWithManager} / {hierConfig.setup.totalUsers} employees have a reporting manager
+                  {hierConfig.setup.usersWithManager} / {hierConfig.setup.managerRequired ?? hierConfig.setup.totalUsers} employees have their required reporting manager
                 </span>
               </div>
               <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-[#978C21] transition-all"
-                  style={{ width: `${hierConfig.setup.totalUsers > 0 ? Math.round((hierConfig.setup.usersWithManager / hierConfig.setup.totalUsers) * 100) : 0}%` }}
+                  style={{ width: `${(hierConfig.setup.managerRequired ?? hierConfig.setup.totalUsers) > 0 ? Math.round((hierConfig.setup.usersWithManager / (hierConfig.setup.managerRequired ?? hierConfig.setup.totalUsers)) * 100) : 0}%` }}
                 />
               </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                Level 1 (CEO) is the root of the organization and does not need a reporting manager — only Level 2+ employees are counted.
+              </p>
               {hierConfig.setup.invalidLinks.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  {hierConfig.setup.invalidLinks.slice(0, 8).map(link => (
-                    <div key={link.employeeId} className="text-xs text-red-600">
-                      ⚠ {link.employeeName} ({link.employeeId}): {link.reason}
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-amber-800">
+                        Hierarchy changed. Some existing reporting relationships are no longer valid and require correction.
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        Update each affected employee's Reporting Manager below. Existing reporting assignments are never changed automatically.
+                      </p>
+                      <div className="mt-2 space-y-1">
+                        {hierConfig.setup.invalidLinks.slice(0, 8).map(link => {
+                          const target = users.find(u => u.employeeId === link.employeeId);
+                          return (
+                            <div key={link.employeeId} className="flex items-center justify-between gap-2 text-xs text-amber-900">
+                              <span className="min-w-0">
+                                ⚠ {link.employeeName} ({link.employeeId}): {link.reason}
+                              </span>
+                              {target && (
+                                <button
+                                  type="button"
+                                  onClick={() => correctReportingLink(target)}
+                                  className="shrink-0 px-2 py-0.5 rounded-md border border-amber-400 bg-white text-[11px] font-medium text-amber-800 hover:bg-amber-100 transition-colors"
+                                >
+                                  Correct →
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {hierConfig.setup.invalidLinks.length > 8 && (
+                          <div className="text-xs text-slate-400">…and {hierConfig.setup.invalidLinks.length - 8} more</div>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                  {hierConfig.setup.invalidLinks.length > 8 && (
-                    <div className="text-xs text-slate-400">…and {hierConfig.setup.invalidLinks.length - 8} more</div>
-                  )}
+                  </div>
                 </div>
               )}
             </div>

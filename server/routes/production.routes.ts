@@ -504,8 +504,10 @@ async function buildHierarchyConfig() {
     .filter(r => !(Number(r.hierarchy_level) > 0 && Number(r.hierarchy_level) < UNASSIGNED_LEVEL))
     .map(r => ({ roleId: String(r.role_code), roleName: r.role_name, employeeCount: usersResult.rows.filter((u: any) => String(u.role_code || '').toUpperCase() === String(r.role_code).toUpperCase() && u.is_active !== false).length }));
 
-  let usersWithManager = 0;
-  let ladderUsers = 0;
+  let usersWithManager = 0;      // Level-2+ ladder users that HAVE a manager
+  let ladderUsers = 0;           // active ladder users, incl. Level 1
+  let managerRequiredUsers = 0;  // Level-2+ ladder users (CEO is exempt)
+  let usersWithoutManager = 0;   // Level-2+ ladder users with NO manager
   const invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }> = [];
   const userById = new Map<string, any>(usersResult.rows.map((u: any) => [u.id, u]));
   const levelOfUser = (u: any): number => {
@@ -517,17 +519,21 @@ async function buildHierarchyConfig() {
     const level = levelOfUser(u);
     if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
     ladderUsers++;
-    if (u.manager_id) usersWithManager++;
-    if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
 
     if (level === 1) {
+      // Level 1 (CEO) is the root of the organization: a reporting manager
+      // is NOT required. Having one is the only invalid state at this level.
       if (u.manager_id) invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'A Level-1 (CEO) employee must not have a reporting manager.' });
       continue;
     }
+
+    managerRequiredUsers++;
     if (!u.manager_id) {
+      usersWithoutManager++;
       invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: `Level ${level} employee has no reporting manager.` });
       continue;
     }
+    usersWithManager++;
     const manager = userById.get(u.manager_id);
     if (!manager) {
       invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'Reporting manager not found.' });
@@ -546,8 +552,9 @@ async function buildHierarchyConfig() {
     unassignedRoles,
     setup: {
       totalUsers: ladderUsers,
+      managerRequired: managerRequiredUsers,   // Level 2+ only — the CEO (Level 1) is the root
       usersWithManager,
-      usersWithoutManager: Math.max(0, ladderUsers - usersWithManager),
+      usersWithoutManager,
       invalidLinks,
     },
     rules: {
@@ -2260,7 +2267,7 @@ router.get('/hierarchy-config', requireAuth, async (_req, res) => {
     return sendJson(res, 200, {
       levels: [],
       unassignedRoles: [],
-      setup: { totalUsers: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [] },
+      setup: { totalUsers: 0, managerRequired: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [] },
       rules: { levelGap: 1, sameDepartmentRequired: true, level1CrossesDepartments: true, description: 'Ladder configuration requires a database connection.' },
     });
   }
@@ -2278,7 +2285,16 @@ router.put('/hierarchy-config', requireAuth, requireAdmin, async (req, res) => {
   }
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    return sendJson(res, 200, { success: true, data: { levels: [] }, message: 'Ladder saved (demo mode).' });
+    return sendJson(res, 200, {
+      success: true,
+      message: 'Ladder saved (demo mode).',
+      data: {
+        levels: [],
+        unassignedRoles: [],
+        setup: { totalUsers: 0, managerRequired: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [] },
+        rules: { levelGap: 1, sameDepartmentRequired: true, level1CrossesDepartments: true, description: 'Ladder configuration requires a database connection.' },
+      },
+    });
   }
   const pool = getPool();
   const client = await pool.connect();

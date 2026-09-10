@@ -49,7 +49,11 @@ export interface HierarchyConfig {
   unassignedRoles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
   setup: {
     totalUsers: number;
+    /** Level 2+ employees — a reporting manager is required for them
+     *  (Level 1 / CEO is the organization root and is exempt). */
+    managerRequired: number;
     usersWithManager: number;
+    /** Level 2+ employees with NO manager (CEO never counted here). */
     usersWithoutManager: number;
     invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }>;
   };
