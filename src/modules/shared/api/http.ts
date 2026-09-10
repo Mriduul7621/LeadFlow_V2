@@ -38,10 +38,7 @@ function unwrapBody<T>(body: any): T {
   return body as T;
 }
 
-export async function apiRequest<T>(
-  path: string,
-  init: RequestInit = {}
-): Promise<T> {
+async function fetchAndHandle(path: string, init: RequestInit): Promise<any> {
   // Which session (if any) this request was sent with. lib/apiClient.ts
   // attaches exactly this token, so it identifies the session the server
   // is being asked about.
@@ -102,7 +99,31 @@ export async function apiRequest<T>(
     throw new ApiError(response.status, message, body);
   }
 
+  return body;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {}
+): Promise<T> {
+  const body = await fetchAndHandle(path, init);
   return unwrapBody<T>(body);
+}
+
+/**
+ * Envelope-aware request — uses the EXACT same fetch, auth, 401/session,
+ * base URL and error handling as apiRequest, but returns the raw envelope
+ * (including `pagination`) instead of unwrapping `data`.
+ * This allows callers that need pagination (e.g. scheduledActivityService
+ * listWithPagination) to get it with ONE request while staying on the
+ * shared authenticated layer.
+ */
+export async function apiRequestEnvelope<T>(
+  path: string,
+  init: RequestInit = {}
+): Promise<{ success: boolean; data: T; pagination?: any; message?: string } & Record<string, any>> {
+  const body = await fetchAndHandle(path, init);
+  return body as any;
 }
 
 /** JSON helper for POST/PUT/PATCH bodies. */

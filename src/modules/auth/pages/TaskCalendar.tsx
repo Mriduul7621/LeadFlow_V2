@@ -24,19 +24,23 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../store/authStore';
-import { leadService } from '../../leads/services/leadService';
-import { Lead, LeadStatus } from '../../shared/types';
+import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 interface CalendarEvent {
   id: string;
   leadId: string;
-  lead: Lead;
-  type: 'call' | 'meeting' | 'followup';
+  prospectName: string;
+  leadMobile?: string;
+  leadStatus?: string;
+  type: 'call' | 'meeting' | 'follow_up' | 'task';
   title: string;
   date: Date;
-  dateStr: string; // ISO string
+  dateStr: string; // ISO string (scheduledAt)
   remarks?: string;
+  status: string;
+  raw: ScheduledActivity;
 }
 
 const MONTHS = [
@@ -50,7 +54,6 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const { user } = useAuthStore();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [filteredEvents, setFilteredEvents] = useState<CalendarEvent[]>([]);
 
@@ -63,104 +66,123 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const [filterTypes, setFilterTypes] = useState({
     call: true,
     meeting: true,
-    followup: true
+    followup: true,
+    task: true
   });
 
   // Modal State
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [selectedDayEvents, setSelectedDayEvents] = useState<{ day: Date; events: CalendarEvent[] } | null>(null);
 
+  // Server-authoritative scheduled activities (Step 5C) — Asia/Dhaka, visibility-enforced.
+  // The calendar never derives events from lead fields; it fetches scheduled_activities.
   useEffect(() => {
-    const fetchLeadsAndBuildEvents = async () => {
+    const fetchScheduledActivities = async () => {
       if (!user) return;
       setLoading(true);
       try {
-        const fetchedLeads = await leadService.getLeads({ 
-          employeeId: user.employeeId, 
-          role: user.role 
-        });
-        setLeads(fetchedLeads);
-
-        // Map leads to calendar events
-        const mappedEvents: CalendarEvent[] = [];
-
-        fetchedLeads.forEach(lead => {
-          // 1. Next Call Date
-          if (lead.nextCallDate) {
-            mappedEvents.push({
-              id: `${lead.id}_call_${lead.nextCallDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'call',
-              title: `Call Scheduled: ${lead.prospectName}`,
-              date: new Date(lead.nextCallDate),
-              dateStr: lead.nextCallDate,
-              remarks: lead.otherInfo
-            });
+        // Derive Dhakal-range for the current view so the calendar stays performance-safe
+        // and server-filtered. For embedded mode (Dashboard) fetch a 90-day window around today.
+        const toYmd = (d: Date): string => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
+        let fromYmd: string | undefined;
+        let toYmdStr: string | undefined;
+        if (embedded) {
+          const today = new Date();
+          const start = new Date(today);
+          // 30 days before, 60 days after = 90 day window
+          start.setDate(today.getDate() - 30);
+          const end = new Date(today);
+          end.setDate(today.getDate() + 60);
+          fromYmd = toYmd(start);
+          toYmdStr = toYmd(end);
+        } else {
+          const y = currentDate.getFullYear();
+          const m = currentDate.getMonth();
+          if (viewMode === 'year') {
+            fromYmd = `${y}-01-01`;
+            toYmdStr = `${y}-12-31`;
+          } else if (viewMode === 'month') {
+            const last = new Date(y, m + 1, 0).getDate();
+            fromYmd = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+            toYmdStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+          } else if (viewMode === 'week') {
+            const current = new Date(currentDate);
+            const day = current.getDay();
+            const sunday = new Date(current);
+            sunday.setDate(current.getDate() - day);
+            const saturday = new Date(sunday);
+            saturday.setDate(sunday.getDate() + 6);
+            fromYmd = toYmd(sunday);
+            toYmdStr = toYmd(saturday);
+          } else {
+            // day
+            fromYmd = toYmd(currentDate);
+            toYmdStr = fromYmd;
           }
+        }
 
-          // 2. Meeting Date
-          if (lead.meetingDate) {
-            mappedEvents.push({
-              id: `${lead.id}_meet_${lead.meetingDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'meeting',
-              title: `Meeting: ${lead.prospectName}`,
-              date: new Date(lead.meetingDate),
-              dateStr: lead.meetingDate,
-              remarks: `Product Focus: ${lead.productName || 'N/A'}`
-            });
-          }
-
-          // 3. Next Follow-Up Date
-          if (lead.nextFollowUpDate) {
-            mappedEvents.push({
-              id: `${lead.id}_followup_${lead.nextFollowUpDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'followup',
-              title: `Follow-up: ${lead.prospectName}`,
-              date: new Date(lead.nextFollowUpDate),
-              dateStr: lead.nextFollowUpDate,
-              remarks: `Current Status: ${lead.currentStatus}`
-            });
-          }
+        const activities = await scheduledActivityService.list({
+          from: fromYmd,
+          to: toYmdStr,
+          limit: 200,
         });
 
-        // Sort events by chronological order
+        const mappedEvents: CalendarEvent[] = (activities || []).map((sa) => {
+          const iso = sa.scheduledAt || (sa as any).scheduled_at;
+          const d = new Date(iso);
+          const type = sa.activityType || (sa as any).activity_type;
+          // Title fallback: use explicit title or prospect fallback
+          const prospect = (sa as any).leadCustomerName || sa.title || 'Scheduled activity';
+          return {
+            id: sa.id,
+            leadId: sa.leadId || (sa as any).lead_id,
+            prospectName: (sa as any).leadCustomerName || prospect,
+            leadMobile: (sa as any).leadMobile || undefined,
+            leadStatus: (sa as any).leadStatus || undefined,
+            type: type as any,
+            title: sa.title || `${type === 'call' ? 'Call' : type === 'meeting' ? 'Meeting' : type === 'task' ? 'Task' : 'Follow-up'}: ${prospect}`,
+            date: d,
+            dateStr: iso,
+            remarks: sa.remarks || undefined,
+            status: sa.status,
+            raw: sa,
+          };
+        });
+
         mappedEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
         setEvents(mappedEvents);
       } catch (err) {
-        console.error('Error fetching calendar events:', err);
+        console.error('Error fetching scheduled activities:', err);
+        setEvents([]);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchLeadsAndBuildEvents();
-  }, [user]);
+    fetchScheduledActivities();
+  }, [user, currentDate, viewMode, embedded]);
 
   // Handle Filtering
   useEffect(() => {
     let result = events;
 
-    // Type filter
+    // Type filter (follow_up is stored as follow_up)
     result = result.filter(e => {
       if (e.type === 'call') return filterTypes.call;
       if (e.type === 'meeting') return filterTypes.meeting;
-      if (e.type === 'followup') return filterTypes.followup;
+      if (e.type === 'follow_up') return filterTypes.followup;
+      if (e.type === 'task') return (filterTypes as any).task;
       return true;
     });
 
-    // Text search filter
+    // Text search filter (server-authoritative fields only)
     if (searchQuery.trim() !== '') {
       const q = searchQuery.toLowerCase();
-      result = result.filter(e => 
-        e.lead.prospectName.toLowerCase().includes(q) ||
-        e.lead.mobile.toLowerCase().includes(q) ||
-        (e.lead.productName && e.lead.productName.toLowerCase().includes(q)) ||
-        (e.lead.campaignName && e.lead.campaignName.toLowerCase().includes(q))
+      result = result.filter(e =>
+        e.prospectName.toLowerCase().includes(q) ||
+        (e.leadMobile && e.leadMobile.toLowerCase().includes(q)) ||
+        e.title.toLowerCase().includes(q) ||
+        (e.remarks && e.remarks.toLowerCase().includes(q))
       );
     }
 
@@ -230,6 +252,36 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     setSelectedEvent(null);
     setSelectedDayEvents(null);
     navigate(`/leads?leadId=${leadId}`);
+  };
+
+  const handleComplete = async (ev: CalendarEvent) => {
+    try {
+      const res: any = await scheduledActivityService.complete(ev.id);
+      const updated = res?.scheduled || res?.data?.scheduled;
+      const patched = updated || { ...ev.raw, status: 'completed', completedAt: new Date().toISOString() };
+      setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, status: 'completed', raw: patched } : e));
+      setSelectedEvent(prev => prev && prev.id === ev.id ? { ...prev, status: 'completed', raw: patched } : prev);
+      // also patch selectedDayEvents if open
+      setSelectedDayEvents(prev => prev ? { ...prev, events: prev.events.map(e => e.id === ev.id ? { ...e, status: 'completed', raw: patched } : e) } : prev);
+      toast.success('Activity completed');
+    } catch (err: any) {
+      toast.error(err?.message || 'Complete failed');
+    }
+  };
+
+  const handleCancel = async (ev: CalendarEvent) => {
+    try {
+      const res: any = await scheduledActivityService.cancel(ev.id);
+      const updated = res?.data || res;
+      const patched = (updated && updated.id) ? updated : (updated?.scheduled || { ...ev.raw, status: 'cancelled' });
+      const finalPatched = (patched as any).status ? patched : { ...ev.raw, status: 'cancelled' };
+      setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, status: 'cancelled', raw: finalPatched } : e));
+      setSelectedEvent(prev => prev && prev.id === ev.id ? { ...prev, status: 'cancelled', raw: finalPatched } : prev);
+      setSelectedDayEvents(prev => prev ? { ...prev, events: prev.events.map(e => e.id === ev.id ? { ...e, status: 'cancelled', raw: finalPatched } : e) } : prev);
+      toast.success('Activity cancelled');
+    } catch (err: any) {
+      toast.error(err?.message || 'Cancel failed');
+    }
   };
 
   // Render Year View
@@ -367,7 +419,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         "p-1.5 text-[9px] font-black uppercase tracking-wider leading-snug cursor-pointer flex flex-col border border-l-2 text-left truncate transition-all hover:translate-x-0.5",
                         event.type === 'meeting' && "bg-amber-50 text-amber-700 border-amber-200 border-l-amber-500",
                         event.type === 'call' && "bg-sky-50 text-sky-700 border-sky-250 border-l-sky-500",
-                        event.type === 'followup' && "bg-emerald-50 text-emerald-700 border-emerald-200 border-l-emerald-500"
+                        event.type === 'follow_up' && "bg-emerald-50 text-emerald-700 border-emerald-200 border-l-emerald-500",
+                        (event.type as any) === 'followup' && "bg-emerald-50 text-emerald-700 border-emerald-200 border-l-emerald-500",
+                        event.type === 'task' && "bg-purple-50 text-purple-700 border-purple-200 border-l-purple-500"
                       )}
                     >
                       <span className="truncate font-black">{event.lead.prospectName}</span>
@@ -448,7 +502,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         "p-3 rounded-none border border-l-4 text-left cursor-pointer transition-all hover:shadow-md hover:-translate-y-0.5 space-y-1.5",
                         event.type === 'meeting' && "bg-amber-50 text-amber-800 border-amber-250 border-l-amber-500",
                         event.type === 'call' && "bg-sky-50 text-sky-800 border-sky-250 border-l-sky-500",
-                        event.type === 'followup' && "bg-emerald-50 text-emerald-805 border-emerald-250 border-l-emerald-500"
+                        event.type === 'follow_up' && "bg-emerald-50 text-emerald-800 border-emerald-250 border-l-emerald-500",
+                        (event.type as any) === 'followup' && "bg-emerald-50 text-emerald-800 border-emerald-250 border-l-emerald-500",
+                        event.type === 'task' && "bg-purple-50 text-purple-800 border-purple-250 border-l-purple-500"
                       )}
                     >
                       <span className="text-[10px] font-black uppercase tracking-wider block truncate">{event.lead.prospectName}</span>
@@ -530,7 +586,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     "p-4 border rounded-none flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 cursor-pointer hover:shadow-md transition-all group border-l-4",
                     event.type === 'meeting' && "bg-amber-50/40 text-amber-800 border-slate-200 border-l-amber-500",
                     event.type === 'call' && "bg-sky-50/40 text-sky-800 border-slate-200 border-l-sky-500",
-                    event.type === 'followup' && "bg-emerald-50/40 text-emerald-800 border-slate-200 border-l-emerald-500"
+                    event.type === 'follow_up' && "bg-emerald-50/40 text-emerald-800 border-slate-200 border-l-emerald-500",
+                    (event.type as any) === 'followup' && "bg-emerald-50/40 text-emerald-800 border-slate-200 border-l-emerald-500",
+                    event.type === 'task' && "bg-purple-50/40 text-purple-800 border-slate-200 border-l-purple-500"
                   )}
                 >
                   <div className="space-y-1.5 flex-1">
@@ -539,7 +597,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         "text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-none border",
                         event.type === 'meeting' && "bg-amber-100 text-amber-700 border-amber-200",
                         event.type === 'call' && "bg-sky-100 text-sky-700 border-sky-200",
-                        event.type === 'followup' && "bg-emerald-100 text-emerald-700 border-emerald-200"
+                        event.type === 'follow_up' && "bg-emerald-100 text-emerald-700 border-emerald-200",
+                        (event.type as any) === 'followup' && "bg-emerald-100 text-emerald-700 border-emerald-200",
+                        event.type === 'task' && "bg-purple-100 text-purple-700 border-purple-200"
                       )}>
                         {event.type}
                       </span>
@@ -701,6 +761,16 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               />
               Followups
             </label>
+
+            <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-purple-700 select-none">
+              <input 
+                type="checkbox" 
+                checked={(filterTypes as any).task} 
+                onChange={(e) => setFilterTypes({ ...filterTypes, task: (e.target as HTMLInputElement).checked } as any)}
+                className="w-3.5 h-3.5 accent-purple-500" 
+              />
+              Tasks
+            </label>
           </div>
 
           {/* Quick Filter Search */}
@@ -751,15 +821,17 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     "inline-flex items-center gap-1.5 px-2.5 py-1 border text-[8px] font-black uppercase tracking-widest",
                     selectedEvent.type === 'meeting' && "bg-amber-50 text-amber-700 border-amber-200",
                     selectedEvent.type === 'call' && "bg-sky-50 text-sky-700 border-sky-200",
-                    selectedEvent.type === 'followup' && "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    (selectedEvent.type === 'follow_up' || (selectedEvent.type as any) === 'followup') && "bg-emerald-50 text-emerald-700 border-emerald-200",
+                    selectedEvent.type === 'task' && "bg-purple-50 text-purple-700 border-purple-200"
                   )}>
                     {selectedEvent.type === 'meeting' && <Video className="w-3 h-3" />}
                     {selectedEvent.type === 'call' && <Phone className="w-3 h-3" />}
-                    {selectedEvent.type === 'followup' && <CalendarIcon className="w-3 h-3" />}
+                    {(selectedEvent.type === 'follow_up' || (selectedEvent.type as any) === 'followup') && <CalendarIcon className="w-3 h-3" />}
+                    {selectedEvent.type === 'task' && <FileText className="w-3 h-3" />}
                     {selectedEvent.type} Agenda Event
                   </span>
                   <h3 className="text-base font-black uppercase tracking-tight text-slate-900 mt-2">
-                    {selectedEvent.lead.prospectName}
+                    {selectedEvent.prospectName}
                   </h3>
                 </div>
                 <button
@@ -788,10 +860,10 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   <div className="p-3 bg-slate-50 border border-slate-100 space-y-1">
                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Current Pipeline Status</span>
                     <span className="text-[10px] font-black uppercase tracking-wider text-[#978C21] leading-none block mt-1">
-                      {selectedEvent.lead.currentStatus}
+                      {selectedEvent.leadStatus || selectedEvent.status}
                     </span>
                     <span className="text-[8px] font-mono font-bold text-slate-400 uppercase block mt-1">
-                      Economic Potential: {selectedEvent.lead.projectedNCP > 0 ? `${selectedEvent.lead.projectedNCP} NCP` : 'None Lock'}
+                      Economic Potential: {(selectedEvent.raw as any).durationMinutes ?? 0 > 0 ? `${(selectedEvent.raw as any).durationMinutes ?? 0} NCP` : 'None Lock'}
                     </span>
                   </div>
                 </div>
@@ -813,7 +885,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Layers className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Product Name: <span className="text-slate-800 font-black">{selectedEvent.lead.productName}</span></span>
+                      <span>Product Name: <span className="text-slate-800 font-black">{(selectedEvent.raw as any).title || selectedEvent.title}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
@@ -833,14 +905,31 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               </div>
 
               {/* Footer action */}
-              <div className="p-6 bg-[#FBFAF8] border-t border-slate-100 flex gap-3 justify-end">
+              <div className="p-6 bg-[#FBFAF8] border-t border-slate-100 flex gap-3 justify-end flex-wrap">
                 <button
                   onClick={() => setSelectedEvent(null)}
                   className="px-4.5 py-3 border border-slate-200 text-slate-550 hover:bg-slate-50 font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
                 >
                   Close Panel
                 </button>
-
+                {String(selectedEvent.status).toLowerCase() === 'scheduled' ? (
+                  <>
+                    <button
+                      onClick={() => handleComplete(selectedEvent)}
+                      className="px-4.5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
+                    >
+                      Complete
+                    </button>
+                    <button
+                      onClick={() => handleCancel(selectedEvent)}
+                      className="px-4.5 py-3 bg-amber-600 hover:bg-amber-700 text-white font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <span className={`px-3 py-2 border text-[10px] font-black uppercase tracking-widest ${String(selectedEvent.status).toLowerCase()==='completed' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>{selectedEvent.status}</span>
+                )}
                 <button
                   onClick={() => handleLaunchTracking(selectedEvent.leadId)}
                   className="px-5 py-3 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-[10px] uppercase tracking-widest italic transition-colors shadow-lg shadow-[#978C21]/15 flex items-center gap-1.5 cursor-pointer"
@@ -903,6 +992,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         "w-2.5 h-12 rounded-none shrink-0",
                         event.type === 'meeting' && "bg-amber-400",
                         event.type === 'call' && "bg-sky-400",
+                        event.type === 'task' && "bg-purple-400",
+                        event.type === 'follow_up' && "bg-emerald-400",
+                        (event.type as any) === 'followup' && "bg-emerald-400",
                         event.type === 'followup' && "bg-emerald-400"
                       )} />
                       

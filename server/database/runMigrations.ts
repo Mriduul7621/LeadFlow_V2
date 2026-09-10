@@ -29,6 +29,7 @@ import { up as persistenceHarmonization } from "./migrations/035_leadflow_persis
 import { up as finePermissions } from "./migrations/036_fine_permissions.js";
 import { up as leadActivities } from "./migrations/037_lead_activities.js";
 import { up as followupQueueIndexes } from "./migrations/038_followup_queue_indexes.js";
+import { up as scheduledActivities } from "./migrations/039_scheduled_activities.js";
 
 interface Migration {
 
@@ -193,6 +194,11 @@ const migrations: Migration[] = [
     {
         name: "Follow-up Queue Indexes",
         run: followupQueueIndexes,
+    },
+
+    {
+        name: "Scheduled Activities",
+        run: scheduledActivities,
     },
 
 ];
