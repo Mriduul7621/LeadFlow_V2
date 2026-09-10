@@ -89,6 +89,7 @@ const APP_FEATURES: FeatureMeta[] = [
   { key: 'campaign_breakdown', label: 'Campaign Breakdown', desc: 'View campaign details.' },
   { key: 'follow_up_strategy', label: 'Follow-up Strategy', desc: 'View follow-up lists.' },
   { key: 'task_calendar', label: 'Task Calendar', desc: 'View monthly task calendar.' },
+  { key: 'activities', label: 'Activities', desc: 'View today and tomorrow activity list.' },
   { key: 'team_progress', label: 'Team Progress', desc: 'View team hierarchy and members.' },
   {
     key: 'user_management',
@@ -432,6 +433,7 @@ export default function UserManagement() {
           '/campaign-breakdown': roleFormFeatures?.campaign_breakdown?.view ?? false,
           '/follow-up': roleFormFeatures?.follow_up_strategy?.view ?? false,
           '/task-calendar': roleFormFeatures?.task_calendar?.view ?? false,
+          '/activities': roleFormFeatures?.activities?.view ?? false,
           '/team': roleFormFeatures?.team_progress?.view ?? false,
           '/users': roleFormFeatures?.user_management?.view ?? isAdm,
           '/settings': roleFormFeatures?.settings_control?.view ?? isAdm,

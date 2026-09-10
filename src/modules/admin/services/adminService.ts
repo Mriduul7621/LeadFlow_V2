@@ -19,6 +19,8 @@ const FINE_PERMISSION_MODULES = [
   'trend_charts',
   'campaign_breakdown',
   'follow_up_strategy',
+  'task_calendar',
+  'activities',
   'team_progress',
   'user_management'
 ];
@@ -86,6 +88,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
       '/campaign-breakdown': true,
       '/follow-up': true,
       '/task-calendar': true,
+      '/activities': true,
       '/team': true,
       '/users': true,
       '/settings': true
@@ -118,6 +121,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
     campaign_breakdown: { view: true },
     follow_up_strategy: { view: true },
     task_calendar: { view: true },
+    activities: { view: true },
     team_progress: { view: true },
     user_management: {
       view: true,
@@ -162,6 +166,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
         else if (feat === 'campaign_breakdown') route = '/campaign-breakdown';
         else if (feat === 'follow_up_strategy') route = '/follow-up';
         else if (feat === 'task_calendar') route = '/task-calendar';
+        else if (feat === 'activities') route = '/activities';
         else if (feat === 'team_progress') route = '/team';
         else if (feat === 'user_management') route = '/users';
         else if (feat === 'settings_control') route = '/settings';
