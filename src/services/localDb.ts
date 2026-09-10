@@ -1,7 +1,5 @@
 import {
   Lead,
-  LeadStatus,
-  StatusHistoryEntry,
   SystemNotification,
   User,
 } from '../modules/shared/types';
@@ -73,50 +71,14 @@ export const localDb = {
     this.saveLeads(leads);
     return true;
   },
-  updateLeadStatus(
-    id: string,
-    status: LeadStatus,
-    collectedNCP?: number,
-    remarks?: string,
-    nextFollowUpDate?: string,
-    updatedBy?: string,
-    nextCallDate?: string,
-    meetingDate?: string,
-    sumAssured?: number,
-    productName?: string,
-    projectedNCP?: number,
-    lossReason?: string,
-    meetingType?: string,
-  ): boolean {
-    const lead = this.getLead(id);
-    if (!lead) return false;
-    const history: StatusHistoryEntry = {
-      status,
-      date: new Date().toISOString(),
-      remarks: remarks || '',
-      nextFollowUpDate,
-      nextCallDate,
-      meetingDate,
-      sumAssured,
-      productName,
-      updatedBy,
-      lossReason,
-      meetingType,
-    };
-    return this.updateLead(id, {
-      currentStatus: status,
-      collectedNCP,
-      nextFollowUpDate,
-      nextCallDate,
-      meetingDate,
-      sumAssured,
-      productName,
-      projectedNCP,
-      lossReason,
-      meetingType,
-      statusHistory: [...(lead.statusHistory || []), history],
-    });
-  },
+  /**
+   * NOTE (STEP 4A): the former local-only `updateLeadStatus()` helper was
+   * removed. Status/follow-up activity is authored exclusively by the server
+   * (POST /api/leads/:id/follow-up -> lead_activities + the status_history
+   * mirror). A localStorage status write could previously be mistaken for a
+   * persisted change, which is exactly the failure mode this removes: the
+   * offline store is a read cache, never a write target.
+   */
   deleteLead(id: string): boolean {
     const leads = this.getLeads();
     this.saveLeads(leads.filter(lead => lead.id !== id));

@@ -1,4 +1,4 @@
-import { Lead, LeadStatus, RolePermission, StatusHistoryEntry, User } from '../../shared/types';
+import { Lead, LeadActivityEntry, LeadStatus, FollowUpResult, FollowUpUpdate, RolePermission, User } from '../../shared/types';
 import { useAuthStore } from '../../auth/store/authStore';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
@@ -236,6 +236,20 @@ export const leadService = {
     localDb.clearAllLeads();
   },
 
+  /**
+   * Log a follow-up / status change through the dedicated server-authoritative
+   * endpoint (POST /api/leads/:id/follow-up).
+   *
+   * The client sends ONLY the business fields of the event. It never sends:
+   *   - statusHistory / assignmentHistory  (the server appends atomically)
+   *   - changedBy / updatedBy / actor      (server derives from the session)
+   *   - a client timestamp                 (the server clock is the event time)
+   * `updatedBy` stays in the signature purely so existing call sites keep
+   * compiling; it is deliberately NOT transmitted.
+   *
+   * The local cache is refreshed only after the server reports that
+   * PostgreSQL committed. A failed write throws - never a local success.
+   */
   async updateLeadStatus(
     leadId: string,
     status: LeadStatus,
@@ -251,55 +265,80 @@ export const leadService = {
     lossReason?: string,
     meetingType?: string,
   ): Promise<Lead | null> {
-    const existing = await this.getLead(leadId);
-    if (!existing) throw new ApiError(404, 'Lead not found. It may have been deleted.');
-    const history: StatusHistoryEntry = {
-      status,
-      date: new Date().toISOString(),
-      remarks: remarks || '',
-      nextFollowUpDate,
-      nextCallDate,
-      meetingDate,
-      sumAssured,
-      productName,
-      updatedBy,
-      lossReason,
-      meetingType,
+    void updatedBy; // intentionally not sent: the server owns the actor
+
+    const payload: FollowUpUpdate = { status };
+    // Only explicitly supplied fields are sent; omitted fields keep their
+    // stored value on the server (partial update / preserve-on-undefined).
+    const put = (key: keyof FollowUpUpdate, value: unknown) => {
+      if (value === undefined || value === null) return;
+      if (typeof value === 'string' && value.trim() === '') return;
+      (payload as Record<string, unknown>)[key] = value;
     };
-    return this.updateLead(
-      leadId,
+
+    put('collectedNCP', ncp);
+    put('remarks', remarks);
+    put('nextFollowUpDate', nextFollowUpDate);
+    put('nextCallDate', nextCallDate);
+    put('meetingDate', meetingDate);
+    put('sumAssured', sumAssured);
+    put('productName', productName);
+    put('projectedNCP', projectedNCP);
+    put('lossReason', lossReason);
+    put('meetingType', meetingType);
+
+    const result = await apiRequest<FollowUpResult>(
+      `/api/leads/${encodeURIComponent(leadId)}/follow-up`,
       {
-        currentStatus: status,
-        collectedNCP: ncp ?? existing.collectedNCP,
-        nextFollowUpDate: nextFollowUpDate ?? existing.nextFollowUpDate,
-        nextCallDate: nextCallDate ?? existing.nextCallDate,
-        meetingDate: meetingDate ?? existing.meetingDate,
-        sumAssured: sumAssured ?? existing.sumAssured,
-        productName: productName ?? existing.productName,
-        projectedNCP: projectedNCP ?? existing.projectedNCP,
-        lossReason: lossReason ?? existing.lossReason,
-        meetingType: meetingType ?? existing.meetingType,
-        statusHistory: [...(existing.statusHistory || []), history],
-      },
-      updatedBy
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
     );
+
+    // The server committed - only now mirror the authoritative state.
+    const saved = result?.lead;
+    if (saved) cacheLead(saved);
+    return saved ?? null;
   },
 
+  /**
+   * Direct single-lead read (GET /api/leads/:id) - one row, server-side
+   * visibility enforced. No longer fetches the whole /api/leads list.
+   * A 404 means "gone, or never visible to you" and is NOT resurrected
+   * from the offline cache; transport/5xx failures fall back to the cache.
+   */
   async getLead(leadId: string): Promise<Lead | null> {
     const cached = localDb.getLead(leadId);
     try {
-      const cloudLeads = await apiRequest<Lead[]>('/api/leads');
-      localDb.saveLeads(cloudLeads);
-      const match = cloudLeads.find(l => l.id === leadId);
-      if (match) {
-        localDb.updateLead(leadId, match);
-        return match;
+      const lead = await apiRequest<Lead>(`/api/leads/${encodeURIComponent(leadId)}`);
+      if (lead && typeof lead === 'object' && (lead as Lead).id) {
+        if (!localDb.updateLead(leadId, lead)) cacheLead(lead);
+        return lead;
       }
-      return null; // cloud says it is gone - do not resurrect from cache
+      return null;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
       if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
       return cached;
     }
+  },
+
+  /**
+   * The authoritative follow-up/status activity stream for one lead
+   * (newest first) from `lead_activities`. Rows are appended by the server
+   * inside the same transaction that updates the lead, so this is the only
+   * trustworthy activity source for LeadFlow-native activity.
+   *
+   * Returns [] when the lead has no LeadFlow-recorded activity yet - e.g. a
+   * lead imported from the legacy spreadsheet, which is a current-state
+   * snapshot and is deliberately NOT fabricated into event history.
+   */
+  async getLeadActivities(leadId: string): Promise<LeadActivityEntry[]> {
+    const result = await apiRequest<{ activities?: LeadActivityEntry[] }>(
+      `/api/leads/${encodeURIComponent(leadId)}/activities`
+    );
+    return Array.isArray(result?.activities) ? result.activities : [];
   },
 
   async addDocument(leadId: string, name: string, note: string | undefined, uploadedBy: string) {
@@ -325,26 +364,31 @@ export const leadService = {
     const fields: Partial<Lead> = { ...updatedFields };
 
     if (fields.assignedTo !== undefined && existing.assignedTo !== fields.assignedTo) {
-      fields.assignedBy = updater;
       fields.assignedDate = new Date().toISOString();
-      const assignmentEntry = {
-        id: `assign_${Date.now()}`,
-        fromEmployeeId: existing.assignedTo || undefined,
-        toEmployeeId: fields.assignedTo,
-        changedBy: updater,
-        date: new Date().toISOString(),
-      };
-      fields.assignmentHistory = [...(existing.assignmentHistory || []), assignmentEntry];
+      // NOTE: the assignment-history ENTRY is not built here any more. When
+      // the server sees the assignee change it appends the history entry
+      // itself (actor + time server-derived) onto the stored history - see
+      // POST /api/leads. Assignment architecture is unchanged by STEP 4A.
     }
 
     const payload: Lead = {
       ...existing,
       ...fields,
-      statusHistory: fields.statusHistory || existing.statusHistory || [],
-      assignmentHistory: fields.assignmentHistory || existing.assignmentHistory || [],
       documents: fields.documents || existing.documents || [],
-      timestamp: new Date().toISOString(),
     };
+
+    // STEP 4A: history arrays and audit metadata are server-owned and are
+    // never round-tripped. status_history / assignment_history are appended
+    // by the server inside the same transaction that writes the row, so the
+    // client sending (and potentially clobbering) the full array is both
+    // unnecessary and unsafe. `existing` carries those fields because the
+    // lead read model includes them - they are stripped before sending.
+    const outbound = payload as unknown as Record<string, unknown>;
+    delete outbound.statusHistory;
+    delete outbound.assignmentHistory;
+    delete outbound.createdBy;
+    delete outbound.updatedBy;
+    delete outbound.timestamp;
 
     const saved = await apiRequest<Lead>('/api/leads', {
       method: 'POST',

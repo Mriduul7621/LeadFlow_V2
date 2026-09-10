@@ -9,7 +9,7 @@ import { cn } from '../../../lib/utils';
 import { leadService } from '../services/leadService';
 import { notificationService } from '../../notifications/services/notificationService';
 import { useAuthStore } from '../../auth/store/authStore';
-import { Lead, SystemNotification } from '../../shared/types';
+import { Lead, LeadActivityEntry, StatusHistoryEntry, SystemNotification } from '../../shared/types';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 
 type TimelineEventType = 'status' | 'assignment' | 'document' | 'notification';
@@ -36,6 +36,9 @@ export default function Lead360() {
   const { user } = useAuthStore();
   const [lead, setLead] = useState<Lead | null>(null);
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
+  // Server-authoritative activity stream (lead_activities). Legacy
+  // status_history entries are only shown for events this table predates.
+  const [activities, setActivities] = useState<LeadActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<TimelineEventType | 'all'>('all');
   const [docName, setDocName] = useState('');
@@ -46,12 +49,18 @@ export default function Lead360() {
     if (!id) return;
     setLoading(true);
     try {
-      const [l, n] = await Promise.all([
+      // The lead itself comes from the dedicated single-lead endpoint, and
+      // its follow-up/status activity from the authoritative activity
+      // stream - not from a full lead-list fetch. Activity is allowed to
+      // fail independently: the lead profile must still render.
+      const [l, n, a] = await Promise.all([
         leadService.getLead(id),
         notificationService.getNotificationsForLead(id),
+        leadService.getLeadActivities(id).catch(() => [] as LeadActivityEntry[]),
       ]);
       setLead(l);
       setNotifications(n);
+      setActivities(a || []);
     } finally {
       setLoading(false);
     }
@@ -63,7 +72,20 @@ export default function Lead360() {
     if (!lead) return [];
     const events: TimelineEvent[] = [];
 
-    (lead.statusHistory || []).forEach((h, i) => {
+    // Status/follow-up events come from the SERVER-AUTHORITATIVE activity
+    // stream (lead_activities). entries in lead.statusHistory that carry an
+    // `activityId` are the same events mirrored for backward compatibility,
+    // so they are skipped to avoid double-rendering; the ones without it
+    // predate the activity table and stay visible as legacy history.
+    const activityDates = new Set(activities.map(a => String(a.date)));
+    const statusEvents: StatusHistoryEntry[] = [
+      ...activities,
+      ...(lead.statusHistory || []).filter(
+        h => !h.activityId && !activityDates.has(String(h.date))
+      ),
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    statusEvents.forEach((h, i) => {
       const parts: string[] = [];
       if (h.remarks) parts.push(h.remarks);
       if (h.lossReason) parts.push(`Loss Reason: ${h.lossReason}`);
@@ -74,7 +96,7 @@ export default function Lead360() {
       if (h.productName) parts.push(`Product: ${h.productName}`);
       if (h.sumAssured) parts.push(`Sum Assured: ${h.sumAssured}`);
       events.push({
-        id: `status_${i}_${h.date}`,
+        id: (h as LeadActivityEntry).id || `status_${i}_${h.date}`,
         type: 'status',
         date: h.date,
         title: `Status changed to "${h.status}"`,
@@ -118,7 +140,7 @@ export default function Lead360() {
     });
 
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [lead, notifications]);
+  }, [lead, notifications, activities]);
 
   const filteredTimeline = filter === 'all' ? timeline : timeline.filter(e => e.type === filter);
 

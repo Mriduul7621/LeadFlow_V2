@@ -342,3 +342,71 @@ dead code হিসেবে পুরো ফোল্ডার সরানো 
 
 
 
+# STEP 4A — Server-authoritative Lead Follow-up / Status Activity (নতুন সংযোজন)
+
+## সমস্যা কী ছিল
+Status change আগে browser থেকেই author হতো: `leadService.updateLeadStatus()`
+lead fetch করে, `statusHistory` client-side বানাতো, actor/date payload-এ
+নিজে দিতো, আর পুরো lead টা `POST /api/leads`-এ পাঠাতো। `getLead()` আবার
+পুরো `/api/leads` list টেনে একটা lead খুঁজতো। ফলে — actor/date spoofable,
+দুইজন একসাথে save করলে history হারাতো, পুরো array বারবার round-trip হতো,
+এবং server-side কোনো authoritative append path-ই ছিল না।
+
+## যা বানানো হয়েছে
+- **নতুন migration `037_lead_activities.ts`** (`runMigrations.ts`-এ
+  registered — নাহলে cold start-এ চিন্তা করত না) — append-only `lead_activities`
+  টেবিল (`lead_id`, `activity_type`, `status`, `remarks`, date/meeting/NCP/
+  product/lossReason fields, `created_by`, `created_at`) + `lead_id`/
+  `created_at` index। FK: `leads(id)` ON DELETE CASCADE, `users(id)`
+  ON DELETE SET NULL।
+- **নতুন endpoint `POST /api/leads/:id/follow-up`** — একটাই authoritative
+  path। `requireAuth`, existing `leads.edit` permission (fail closed),
+  existing visibility (Organization / FullTeam / DownTeam / Own) অক্ষরে
+  অক্ষরে reuse করা হয়েছে। `BEGIN → SELECT … FOR UPDATE → lead current state
+  update → activity insert → COMMIT`; যেকোনো failure-এ ROLLBACK (কোনো
+  partial activity নেই, কোনো fake success নেই)।
+- **`GET /api/leads/:id`** — direct single-lead read; soft-deleted lead
+  ফেরত দেয় না, অনুপস্থিত ও অদৃশ্য দুটোই 404 (record leak নেই)।
+- **`GET /api/leads/:id/activities`** — একই visibility, reverse chronological।
+- **Audit authority:** `changedBy`, `updatedBy`, `createdBy`, `actor`, `date`,
+  `timestamp`, `statusHistory`, `assignmentHistory` body-এ থাকলেই `400` —
+  silently ignore-ও না, accept-ও না। actor session user থেকে, event time
+  server clock থেকে। Status resolve হয় ঠিক bulk import-এর canonical
+  FollowUpStatus dictionary দিয়েই (`resolveImportStatus`) — unknown status
+  স্পষ্টভাবে fail করে, কখনো `Untouched`-এ convert হয় না।
+- **Partial update:** field omit করলে পুরনো value থাকে, explicit `null` দিলে
+  শুধু ওই field-টাই clear হয়। `leads.notes` (import-এর "Final Remarks")
+  follow-up remark-এ overwrite হয় না।
+- **Client:** `updateLeadStatus()` এখন শুধু business field পাঠায়; cache
+  update হয় server commit confirm করার পরেই। `getLead()` এখন
+  `GET /api/leads/:id` ব্যবহার করে — পুরো list আর টানে না।
+  `updateLead()` history array round-trip করে না। Offline/localStorage
+  status-write helper (`localDb.updateLeadStatus`) সরিয়ে দেওয়া হয়েছে।
+- **Lead360** এখন server-এর activity stream পড়ে; legacy `status_history`
+  শুধু activity-table-এর আগের event-গুলোর জন্য দেখানো হয় (`activityId`
+  দিয়ে de-dup) — তাই কিছুই ডুবে যায় না, কিছুই ডাবল দেখায় না। Page-এর
+  visual design অপরিবর্তিত।
+
+## compatibility (গুরুত্বপূর্ণ)
+- Legacy imported spreadsheet কখনো `lead_activities`-তে backfill করা হয়নি —
+  ওটা current-state snapshot, trustworthy event history না।
+- `leads.status_history` UI compatibility-র জন্য থাকছে, কিন্তু এখন server
+  সেটাকে **SQL-এর ভেতরেই** append করে (client-supplied array দিয়ে replace
+  নয়)। `LEAD_UPSERT_SQL`-এ preserve-on-empty guard যোগ হয়েছে, তাই history
+  না পাঠালে পুরনো history মুছে যায় না।
+- Bulk import, auth, visibility, hierarchy — কোনো behavior-ই বদলায়নি
+  (সব pre-existing টেস্ট সবুজ)।
+
+## টেস্ট ও রেজাল্ট
+- `server/tests/lead-follow-up-activity-integration.test.ts` (36 টেস্ট) —
+  আসল PGlite PostgreSQL + আসল router; migration 037 নিজে চালিয়েই টেবিল
+  তৈরি হয়। A–S, V + rollback, concurrency, spoof rejection, migration
+  registration guard সহ।
+- `server/tests/lead-follow-up-client-service.test.ts` (9 টেস্ট) — আসল
+  browser service গুলো আসল HTTP + DB-এর বিরুদ্ধে; T (list fetch হয় না),
+  Q (history/actor পাঠানো হয় না), U (DB failure = reject, cache অক্ষত)।
+- `npm test` → **172 টেস্ট, 0 fail** (আগের 127 + নতুন 45) ·
+  `npx tsc --noEmit` clean · `npx vite build` clean · `npm run build` clean ·
+  `npm run verify:serverless` clean (037 trace+compile-এর ভেতর আছে)।
+
+বিস্তারিত doc: `docs/LEAD_FOLLOW_UP_ACTIVITY.md`

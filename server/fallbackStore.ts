@@ -101,9 +101,33 @@ export interface FallbackWorkflowRule {
   createdDate?: string;
 }
 
+export interface FallbackLeadActivity {
+  id: string;
+  lead_id: string;
+  activity_type: string;
+  status: string | null;
+  remarks: string | null;
+  next_follow_up_at: string | null;
+  next_call_at: string | null;
+  meeting_at: string | null;
+  meeting_type: string | null;
+  collected_ncp: number | null;
+  projected_ncp: number | null;
+  sum_assured: number | null;
+  product_name: string | null;
+  loss_reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  created_by_employee_id?: string;
+  created_by_name?: string;
+  [key: string]: any;
+}
+
 export const fallbackStore = {
   users: [] as FallbackUser[],
   leads: [] as FallbackLead[],
+  /** Dev-demo mirror of the append-only `lead_activities` table. */
+  leadActivities: [] as FallbackLeadActivity[],
   notifications: [] as FallbackNotification[],
   metadataTypes: [
     { key: 'lead_status', label: 'Lead Status', description: 'Standard lifecycle states', isSystem: true, sortOrder: 1 },

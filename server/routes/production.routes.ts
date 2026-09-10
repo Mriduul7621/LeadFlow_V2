@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'node:crypto';
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
@@ -11,6 +12,7 @@ import {
   parseAmount,
   parseTat,
   resolveImportStatus,
+  normalizeStatusKey,
   DEFAULT_STATUS_DICTIONARY,
   rowFingerprint,
   type ImportRow,
@@ -3693,8 +3695,20 @@ const LEAD_UPSERT_SQL = `
     last_contacted_at = EXCLUDED.last_contacted_at,
     next_follow_up_at = EXCLUDED.next_follow_up_at,
     current_status = EXCLUDED.current_status,
-    status_history = EXCLUDED.status_history,
-    assignment_history = EXCLUDED.assignment_history,
+    /* History arrays are SERVER-owned (STEP 4A). The authoritative write
+       path for new status activity is POST /leads/:id/follow-up, which
+       appends lead_activities + leads.status_history in SQL. A client
+       that omits history must therefore never wipe what PostgreSQL already
+       holds, so an EMPTY supplied array preserves the stored history
+       instead of replacing it (same guard the bulk-import update uses). */
+    status_history = CASE
+      WHEN jsonb_array_length(COALESCE($23::jsonb, '[]'::jsonb)) > 0 THEN $23::jsonb
+      ELSE leads.status_history
+    END,
+    assignment_history = CASE
+      WHEN jsonb_array_length(COALESCE($24::jsonb, '[]'::jsonb)) > 0 THEN $24::jsonb
+      ELSE leads.assignment_history
+    END,
     documents = EXCLUDED.documents,
     custom_fields = leads.custom_fields || EXCLUDED.custom_fields,
     tags = EXCLUDED.tags,
@@ -3863,6 +3877,12 @@ router.post('/leads', requireAuth, async (req: any, res) => {
             finalAssignmentHistory = existingAssignHist.length > 0 ? existingAssignHist : record.assignmentHistory;
             finalStatusHistory = existingStatusHist.length > 0 ? existingStatusHist : record.statusHistory;
           }
+        }
+        // History is server-owned (STEP 4A): an omitted/empty client array
+        // must never wipe the stored history - the dev-demo equivalent of the
+        // preserve-on-empty guard in LEAD_UPSERT_SQL.
+        if (Array.isArray(finalStatusHistory) && finalStatusHistory.length === 0 && existingStatusHist.length > 0) {
+          finalStatusHistory = existingStatusHist;
         }
       }
       const lead: any = {
@@ -4706,6 +4726,648 @@ function leadParams(record: LeadRecord, leadCode: string): any[] {
     record.previousAssignedTo,
   ];
 }
+
+/* ====================================================================
+   SINGLE LEAD + SERVER-AUTHORITATIVE FOLLOW-UP / STATUS ACTIVITY
+   ------------------------------------------------------------------
+   GET  /leads/:id              direct single-lead read (no full-list fetch)
+   POST /leads/:id/follow-up    the ONE authoritative write path for new
+                                lead follow-up / status activity
+   GET  /leads/:id/activities   the authoritative activity stream (read)
+
+   Activity authority model
+     - `lead_activities` (migration 037) is an append-only event table.
+       Only the server ever writes it, so history cannot be rewritten.
+     - The actor (`created_by`) and the event time are derived from the
+       authenticated session + server clock. Client-supplied audit fields
+       are REJECTED, not ignored-then-trusted.
+     - `leads.status_history` (legacy JSONB the current UI renders) is
+       mirrored in the SAME transaction for backward compatibility and is
+       stamped with the activity id, so a consumer can tell "mirrored,
+       authoritative" entries apart from pre-existing/legacy ones. A
+       client never has to - and cannot - post the full history array.
+     - The legacy spreadsheet import is a CURRENT-STATE snapshot and is
+       deliberately NOT backfilled into lead_activities.
+   ==================================================================== */
+
+/** Activity kinds this API knows how to append. */
+export const LEAD_ACTIVITY_TYPES = ['status_update'] as const;
+/** The only kind STEP 4A writes; later activity kinds extend the list. */
+export const LEAD_ACTIVITY_TYPE_STATUS_UPDATE: 'status_update' = LEAD_ACTIVITY_TYPES[0];
+
+/**
+ * Fields that must NEVER arrive from a client on the follow-up route.
+ * They are audit data the server derives (actor + event time) or whole
+ * history arrays the client is no longer allowed to author. Presence is a
+ * hard 400 - a silent ignore would let a client believe it had forged an
+ * actor, and an explicit rejection is what makes the contract testable.
+ */
+export const FOLLOW_UP_SPOOF_KEYS = new Set([
+  'changedBy', 'changed_by',
+  'updatedBy', 'updated_by',
+  'createdBy', 'created_by',
+  'deletedBy', 'deleted_by',
+  'actor', 'performedBy', 'by',
+  'date', 'eventDate', 'activityDate', 'eventAt',
+  'timestamp', 'createdAt', 'created_at', 'timestamp_',
+  'statusHistory', 'status_history',
+  'assignmentHistory', 'assignment_history',
+]);
+
+/** Business fields a follow-up event may carry. Everything else in the
+ *  body is ignored (the lead profile is updated through POST /leads). */
+interface FollowUpPatch {
+  /** Canonical resolved status; '' means "no status change". */
+  status: string;
+  remarks?: string | null;
+  nextFollowUpDate?: string | null;
+  nextCallDate?: string | null;
+  meetingDate?: string | null;
+  meetingType?: string | null;
+  lossReason?: string | null;
+  productName?: string | null;
+  collectedNCP?: number | null;
+  projectedNCP?: number | null;
+  sumAssured?: number | null;
+}
+
+export interface FollowUpParseResult {
+  patch: FollowUpPatch;
+  /** Validation failures - a NON-EMPTY list means the request must be rejected. */
+  errors: string[];
+}
+
+/**
+ * Validate + normalize a follow-up request body (pure - no DB, no authz).
+ *
+ * Partial-update semantics: `undefined` (absent) PRESERVES the current
+ * value, while an explicit `null` / empty string CLEARS it. That is what
+ * lets a follow-up that only sets a next-call date leave every other
+ * current-state field untouched.
+ *
+ * Status is resolved through the SAME canonical FollowUpStatus dictionary
+ * the hardened bulk import uses (resolveImportStatus) - unknown statuses
+ * fail loudly and are never silently coerced to "Untouched".
+ */
+export function parseFollowUpPayload(body: any, canonicalStatuses: string[]): FollowUpParseResult {
+  const payload = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, any>) : {};
+  const errors: string[] = [];
+
+  const spoofed = Array.from(FOLLOW_UP_SPOOF_KEYS)
+    .filter(key => Object.prototype.hasOwnProperty.call(payload, key))
+    .sort();
+  if (spoofed.length > 0) {
+    return {
+      patch: { status: '' },
+      errors: [
+        `Client-controlled audit fields are not accepted on this endpoint: ${spoofed.join(', ')}. The server derives the actor and the event time from the authenticated session.`,
+      ],
+    };
+  }
+
+  const readText = (raw: any, label: string, maxLen: number): string | null | undefined => {
+    if (raw === undefined) return undefined;
+    if (raw === null) return null;
+    if (typeof raw === 'object') {
+      errors.push(`${label} must be text`);
+      return undefined;
+    }
+    const value = String(raw).trim();
+    return value ? value.slice(0, maxLen) : null;
+  };
+
+  const readDate = (raw: any, label: string): string | null | undefined => {
+    if (raw === undefined) return undefined;
+    if (raw === null) return null;
+    const value = String(raw).trim();
+    if (!value) return null;
+    const iso = dateOrNull(value);
+    if (!iso) {
+      errors.push(`${label} is not a valid date`);
+      return undefined;
+    }
+    return iso;
+  };
+
+  const readAmount = (raw: any, label: string): number | null | undefined => {
+    if (raw === undefined) return undefined;
+    if (raw === null) return null;
+    const value = typeof raw === 'string' ? raw.trim() : raw;
+    if (value === '') return null;
+    if (typeof value === 'object' || typeof value === 'boolean') {
+      errors.push(`${label} must be a number`);
+      return undefined;
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      errors.push(`${label} must be a number`);
+      return undefined;
+    }
+    if (num < 0) {
+      errors.push(`${label} cannot be negative`);
+      return undefined;
+    }
+    return num;
+  };
+
+  const patch: FollowUpPatch = { status: '' };
+
+  const nonBlank = (value: any): string => (value === undefined || value === null ? '' : String(value).trim());
+  const rawStatus = nonBlank(payload.status) || nonBlank(payload.currentStatus);
+  if (
+    rawStatus &&
+    nonBlank(payload.status) &&
+    nonBlank(payload.currentStatus) &&
+    normalizeStatusKey(nonBlank(payload.status)) !== normalizeStatusKey(nonBlank(payload.currentStatus))
+  ) {
+    errors.push('status and currentStatus disagree; send exactly one of them');
+  }
+  if (rawStatus) {
+    const resolution = resolveImportStatus(rawStatus, canonicalStatuses);
+    if (!resolution.ok) {
+      errors.push(
+        `Unknown status "${rawStatus}". Allowed FollowUpStatus values: ${canonicalStatuses.join(', ')}`
+      );
+    } else {
+      patch.status = resolution.status;
+    }
+  }
+
+  const remarks = readText(payload.remarks, 'Remarks', 4000);
+  if (remarks !== undefined) patch.remarks = remarks;
+  const nextFollowUpDate = readDate(payload.nextFollowUpDate, 'Next follow-up date');
+  if (nextFollowUpDate !== undefined) patch.nextFollowUpDate = nextFollowUpDate;
+  const nextCallDate = readDate(payload.nextCallDate, 'Next call date');
+  if (nextCallDate !== undefined) patch.nextCallDate = nextCallDate;
+  const meetingDate = readDate(payload.meetingDate, 'Meeting date');
+  if (meetingDate !== undefined) patch.meetingDate = meetingDate;
+  const meetingType = readText(payload.meetingType, 'Meeting type', 150);
+  if (meetingType !== undefined) patch.meetingType = meetingType;
+  const lossReason = readText(payload.lossReason, 'Loss reason', 255);
+  if (lossReason !== undefined) patch.lossReason = lossReason;
+  const productName = readText(payload.productName, 'Product name', 255);
+  if (productName !== undefined) patch.productName = productName;
+  const collectedNCP = readAmount(payload.collectedNCP, 'Collected NCP');
+  if (collectedNCP !== undefined) patch.collectedNCP = collectedNCP;
+  const projectedNCP = readAmount(payload.projectedNCP, 'Projected NCP');
+  if (projectedNCP !== undefined) patch.projectedNCP = projectedNCP;
+  const sumAssured = readAmount(payload.sumAssured, 'Sum assured');
+  if (sumAssured !== undefined) patch.sumAssured = sumAssured;
+
+  return { patch, errors };
+}
+
+/**
+ * The canonical status dictionary for follow-ups: the SAME resolution the
+ * hardened bulk import uses - active `options` rows of type
+ * FollowUpStatus, falling back to the app's documented built-in list when
+ * the metadata engine has nothing configured. One taxonomy, two callers.
+ */
+async function resolveCanonicalStatusDictionary(): Promise<string[]> {
+  if (!useDb()) {
+    const fromStore = fallbackStore.options
+      .filter((o: any) => (o.type === 'FollowUpStatus' || o.type === 'lead_status') && o.status !== 'Inactive')
+      .map((o: any) => String(o.value));
+    return fromStore.length > 0 ? fromStore : DEFAULT_STATUS_DICTIONARY;
+  }
+  try {
+    const result = await getPool().query(
+      `SELECT option_value FROM options WHERE field_key = 'FollowUpStatus' AND COALESCE(is_active, TRUE) = TRUE`
+    );
+    const list = result.rows.map((r: any) => String(r.option_value));
+    return list.length > 0 ? list : DEFAULT_STATUS_DICTIONARY;
+  } catch {
+    // options table not migrated/configured - the documented defaults are
+    // still an authoritative, closed dictionary (unknown values fail).
+    return DEFAULT_STATUS_DICTIONARY;
+  }
+}
+
+const LEAD_ACTIVITY_SELECT = `
+  SELECT a.*,
+         cu.employee_id AS created_by_employee_id,
+         cu.full_name AS created_by_name
+  FROM lead_activities a
+  LEFT JOIN users cu ON cu.id = a.created_by
+`;
+
+/** DB row -> the API read model (camelCase, timeline-ready). */
+function mapLeadActivityRow(row: any) {
+  const amount = (value: any): number | undefined =>
+    value == null || value === '' ? undefined : Number(value);
+  const stamp = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+  const employeeId = row.created_by_employee_id || '';
+  const fullName = row.created_by_name || '';
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    activityType: row.activity_type || 'status_update',
+    status: row.status || '',
+    date: stamp,
+    remarks: row.remarks || '',
+    nextFollowUpDate: row.next_follow_up_at || undefined,
+    nextCallDate: row.next_call_at || undefined,
+    meetingDate: row.meeting_at || undefined,
+    meetingType: row.meeting_type || undefined,
+    collectedNCP: amount(row.collected_ncp),
+    projectedNCP: amount(row.projected_ncp),
+    sumAssured: amount(row.sum_assured),
+    productName: row.product_name || undefined,
+    lossReason: row.loss_reason || undefined,
+    // Server-derived actor. `updatedBy` mirrors the legacy
+    // StatusHistoryEntry field name so both sources render identically.
+    updatedBy: fullName ? `${fullName} (${employeeId})` : employeeId,
+    updatedByEmployeeId: employeeId || undefined,
+    updatedByName: fullName || undefined,
+  };
+}
+
+/** Resolve a `:id` route param (lead_code or uuid) to a live lead row. */
+async function findLiveLead(exec: { query: Function }, ref: string, forUpdate = false): Promise<any | null> {
+  const result = await exec.query(
+    `SELECT * FROM leads
+     WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
+     LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
+    [ref]
+  );
+  return result.rows[0] || null;
+}
+
+/** Dev-demo (in-memory) follow-up record. Never used when a DB is configured. */
+function appendDemoActivity(lead: any, patch: FollowUpPatch, caller: CallerDbInfo) {
+  const eventAt = new Date().toISOString();
+  const effectiveStatus = patch.status || lead.currentStatus || 'Untouched';
+  const activity = {
+    id: randomUUID(),
+    lead_id: lead.id,
+    activity_type: LEAD_ACTIVITY_TYPE_STATUS_UPDATE,
+    status: effectiveStatus,
+    remarks: patch.remarks ?? null,
+    next_follow_up_at: patch.nextFollowUpDate ?? null,
+    next_call_at: patch.nextCallDate ?? null,
+    meeting_at: patch.meetingDate ?? null,
+    meeting_type: patch.meetingType ?? null,
+    collected_ncp: patch.collectedNCP ?? null,
+    projected_ncp: patch.projectedNCP ?? null,
+    sum_assured: patch.sumAssured ?? null,
+    product_name: patch.productName ?? null,
+    loss_reason: patch.lossReason ?? null,
+    created_by: caller.id,
+    created_at: eventAt,
+    created_by_employee_id: caller.employee_id,
+    created_by_name: '',
+  };
+  fallbackStore.leadActivities.push(activity as any);
+
+  const historyEntry: Record<string, any> = {
+    status: effectiveStatus,
+    date: eventAt,
+    remarks: patch.remarks ?? '',
+    updatedBy: caller.employee_id,
+    activityId: activity.id,
+  };
+  if (patch.nextFollowUpDate !== undefined) historyEntry.nextFollowUpDate = patch.nextFollowUpDate;
+  if (patch.nextCallDate !== undefined) historyEntry.nextCallDate = patch.nextCallDate;
+  if (patch.meetingDate !== undefined) historyEntry.meetingDate = patch.meetingDate;
+  if (patch.meetingType !== undefined) historyEntry.meetingType = patch.meetingType;
+  if (patch.lossReason !== undefined) historyEntry.lossReason = patch.lossReason;
+  if (patch.productName !== undefined) historyEntry.productName = patch.productName;
+  if (patch.collectedNCP !== undefined) historyEntry.collectedNCP = patch.collectedNCP;
+  if (patch.projectedNCP !== undefined) historyEntry.projectedNCP = patch.projectedNCP;
+  if (patch.sumAssured !== undefined) historyEntry.sumAssured = patch.sumAssured;
+
+  lead.currentStatus = effectiveStatus;
+  if (patch.nextFollowUpDate !== undefined) lead.nextFollowUpDate = patch.nextFollowUpDate;
+  if (patch.nextCallDate !== undefined) lead.nextCallDate = patch.nextCallDate;
+  if (patch.meetingDate !== undefined) lead.meetingDate = patch.meetingDate;
+  if (patch.meetingType !== undefined) lead.meetingType = patch.meetingType;
+  if (patch.lossReason !== undefined) lead.lossReason = patch.lossReason;
+  if (patch.productName !== undefined) lead.productName = patch.productName;
+  if (patch.collectedNCP !== undefined) lead.collectedNCP = patch.collectedNCP;
+  if (patch.projectedNCP !== undefined) lead.projectedNCP = patch.projectedNCP;
+  if (patch.sumAssured !== undefined) lead.sumAssured = patch.sumAssured;
+  if (patch.remarks !== undefined) lead.customFields = { ...(lead.customFields || {}), lastRemark: patch.remarks };
+  lead.lastFollowUpDate = eventAt;
+  lead.timestamp = eventAt;
+  lead.updatedBy = caller.id;
+  lead.statusHistory = [...(Array.isArray(lead.statusHistory) ? lead.statusHistory : []), historyEntry];
+  return activity;
+}
+
+/**
+ * POST /leads/:id/follow-up — append one server-authoritative follow-up /
+ * status activity AND update the lead's current state, atomically.
+ */
+router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+
+    // A follow-up is a lead edit: the existing `leads.edit` permission
+    // governs it. hasPermissionCode fails closed (missing definition,
+    // missing grant and DB error all deny).
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to update lead status.' });
+    }
+
+    const ref = String(req.params.id || '').trim();
+    if (!ref) {
+      return sendJson(res, 400, { success: false, message: 'A lead id or lead code is required.' });
+    }
+
+    const visibility = await resolveCallerVisibility(caller);
+    const statusList = await resolveCanonicalStatusDictionary();
+    const parsed = parseFollowUpPayload(req.body, statusList);
+    if (parsed.errors.length > 0) {
+      return sendJson(res, 400, { success: false, message: parsed.errors.join('; ') });
+    }
+    const patch = parsed.patch;
+
+    /* ---------------- dev-demo (in-memory, never in production) -------- */
+    if (!useDb()) {
+      if (!demoModeAllowed()) {
+        return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      }
+      const demoLead =
+        fallbackStore.leads.find((l: any) => String(l.id) === ref) ||
+        fallbackStore.leads.find((l: any) => String(l.leadCode || '') === ref) ||
+        null;
+      if (!demoLead) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found' });
+      }
+      if (!isLeadAccessible(demoLead, visibility, caller)) {
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead. It is outside your authorized scope.' });
+      }
+      const activity = appendDemoActivity(demoLead, patch, caller);
+      return sendJson(res, 200, {
+        success: true,
+        data: { lead: demoLead, activity: mapLeadActivityRow(activity) },
+      });
+    }
+
+    /* ---------------- PostgreSQL: one atomic transaction --------------- */
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lock the lead row: concurrent follow-ups on the same lead then
+      // serialize instead of racing on the mirrored history/current state.
+      const leadRow = await findLiveLead(client, ref, true);
+      if (!leadRow) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: 'Lead not found' });
+      }
+      // Existing server-side visibility (Organization / FullTeam /
+      // DownTeam / Own) - unchanged semantics from POST /leads.
+      if (!isLeadAccessible(leadRow, visibility, caller)) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead. It is outside your authorized scope.' });
+      }
+
+      const eventAt = new Date().toISOString();
+      const effectiveStatus = patch.status || leadRow.current_status || 'Untouched';
+      const activityId = randomUUID();
+
+      // custom_fields carries the current-state fields that have no
+      // dedicated column (collected NCP, meeting/next-call details).
+      // Merged - never replaced - so unrelated lead data survives.
+      const customPatch: Record<string, any> = {};
+      if (patch.collectedNCP !== undefined) customPatch.collectedNCP = patch.collectedNCP;
+      if (patch.nextCallDate !== undefined) customPatch.nextCallDate = patch.nextCallDate;
+      if (patch.meetingDate !== undefined) customPatch.meetingDate = patch.meetingDate;
+      if (patch.meetingType !== undefined) customPatch.meetingType = patch.meetingType;
+      if (patch.lossReason !== undefined) customPatch.lossReason = patch.lossReason;
+      if (patch.productName !== undefined) customPatch.productName = patch.productName;
+
+      const historyEntry: Record<string, any> = {
+        status: effectiveStatus,
+        date: eventAt,
+        remarks: patch.remarks ?? '',
+        updatedBy: caller.employee_id,
+        // Correlation id: proves this entry is a server-authored mirror of
+        // `lead_activities` (and lets consumers de-duplicate against it).
+        activityId,
+      };
+      if (patch.nextFollowUpDate !== undefined) historyEntry.nextFollowUpDate = patch.nextFollowUpDate;
+      if (patch.nextCallDate !== undefined) historyEntry.nextCallDate = patch.nextCallDate;
+      if (patch.meetingDate !== undefined) historyEntry.meetingDate = patch.meetingDate;
+      if (patch.meetingType !== undefined) historyEntry.meetingType = patch.meetingType;
+      if (patch.lossReason !== undefined) historyEntry.lossReason = patch.lossReason;
+      if (patch.productName !== undefined) historyEntry.productName = patch.productName;
+      if (patch.collectedNCP !== undefined) historyEntry.collectedNCP = patch.collectedNCP;
+      if (patch.projectedNCP !== undefined) historyEntry.projectedNCP = patch.projectedNCP;
+      if (patch.sumAssured !== undefined) historyEntry.sumAssured = patch.sumAssured;
+
+      /* --- 1. lead current state (partial update, preserve on undefined) */
+      const params: any[] = [leadRow.id];
+      const setClauses: string[] = [];
+      const bind = (value: any): string => `$${params.push(value)}`;
+
+      setClauses.push(`current_status = ${bind(effectiveStatus)}`);
+      if (patch.nextFollowUpDate !== undefined) {
+        setClauses.push(`next_follow_up_at = ${bind(patch.nextFollowUpDate)}`);
+      }
+      if (patch.projectedNCP !== undefined) {
+        setClauses.push(`expected_premium = ${bind(patch.projectedNCP)}`);
+      }
+      if (patch.sumAssured !== undefined) {
+        setClauses.push(`expected_value = ${bind(patch.sumAssured)}`);
+      }
+      if (Object.keys(customPatch).length > 0) {
+        setClauses.push(`custom_fields = COALESCE(leads.custom_fields, '{}'::jsonb) || ${bind(JSON.stringify(customPatch))}::jsonb`);
+      }
+      // The follow-up IS the contact touchpoint - server clock, not client.
+      setClauses.push('last_contacted_at = NOW()');
+      // Legacy JSONB append done IN SQL (never read-modify-write from the
+      // request body), so a concurrent history entry cannot be overwritten.
+      setClauses.push(
+        `status_history = (CASE WHEN jsonb_typeof(leads.status_history) = 'array' THEN leads.status_history ELSE '[]'::jsonb END) || ${bind(JSON.stringify([historyEntry]))}::jsonb`
+      );
+      setClauses.push(`updated_by = ${bind(caller.id)}`);
+      setClauses.push('updated_at = NOW()');
+
+      const updated = await client.query(
+        `UPDATE leads SET ${setClauses.join(', ')} WHERE id = $1 RETURNING id`,
+        params
+      );
+      if ((updated.rowCount ?? 0) === 0) {
+        // Row vanished (e.g. deleted concurrently) - nothing is committed.
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: 'Lead not found' });
+      }
+
+      /* --- 2. append-only activity row (same transaction) -------------- */
+      const activityRes = await client.query(
+        `INSERT INTO lead_activities (
+           id, lead_id, activity_type, status, remarks,
+           next_follow_up_at, next_call_at, meeting_at, meeting_type,
+           collected_ncp, projected_ncp, sum_assured, product_name, loss_reason,
+           created_by, created_at
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           $6, $7, $8, $9,
+           $10, $11, $12, $13, $14,
+           $15, $16
+         )
+         RETURNING *`,
+        [
+          activityId,
+          leadRow.id,
+          LEAD_ACTIVITY_TYPE_STATUS_UPDATE,
+          effectiveStatus,
+          patch.remarks ?? null,
+          patch.nextFollowUpDate ?? null,
+          patch.nextCallDate ?? null,
+          patch.meetingDate ?? null,
+          patch.meetingType ?? null,
+          patch.collectedNCP ?? null,
+          patch.projectedNCP ?? null,
+          patch.sumAssured ?? null,
+          patch.productName ?? null,
+          patch.lossReason ?? null,
+          caller.id,
+          eventAt,
+        ]
+      );
+      if (!activityRes.rows[0]) throw new Error('Activity insert did not return a row');
+
+      await client.query('COMMIT');
+
+      /* --- 3. read back the authoritative state after the commit ------- */
+      const fresh = await pool.query(`${LEAD_SELECT} WHERE l.id = $1`, [leadRow.id]);
+      const activityRow = await pool.query(`${LEAD_ACTIVITY_SELECT} WHERE a.id = $1`, [activityId]);
+      // The write already committed, so a vanished read-back row (hard delete
+      // in the meantime) must never turn into a 500 "failure" for a change
+      // that really persisted - the client just re-reads the list instead.
+      return sendJson(res, 200, {
+        success: true,
+        data: {
+          lead: fresh.rows[0] ? mapLeadRow(fresh.rows[0]) : null,
+          activity: activityRow.rows[0] ? mapLeadActivityRow(activityRow.rows[0]) : null,
+        },
+      });
+    } catch (error: any) {
+      // Any failure after BEGIN - including a failure of the activity
+      // insert alone - rolls the lead update back too: no partial
+      // activity, no fake success.
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      return sendJson(res, dbErrorStatus(error), {
+        success: false,
+        message: error?.message || 'Follow-up could not be recorded. No changes were saved.',
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up could not be recorded.' });
+  }
+});
+
+/**
+ * GET /leads/:id/activities — the authoritative activity stream for one
+ * lead, most recent first. Read requires the same lead visibility as the
+ * lead itself; soft-deleted leads 404 (no leak of hidden records).
+ */
+router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  const ref = String(req.params.id || '').trim();
+  if (!ref) return sendJson(res, 400, { success: false, message: 'A lead id or lead code is required.' });
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      const lead =
+        fallbackStore.leads.find((l: any) => String(l.id) === ref) ||
+        fallbackStore.leads.find((l: any) => String(l.leadCode || '') === ref) ||
+        null;
+      if (!lead || !isLeadAccessible(lead, visibility, caller)) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found' });
+      }
+      const activities = fallbackStore.leadActivities
+        .filter((a: any) => String(a.lead_id) === String(lead.id))
+        .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
+        .map(mapLeadActivityRow);
+      return sendJson(res, 200, { success: true, data: { activities } });
+    }
+
+    const leadRes = await getPool().query(
+      `SELECT id, assigned_to, custom_fields, created_by FROM leads
+       WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE LIMIT 1`,
+      [ref]
+    );
+    const leadRow = leadRes.rows[0];
+    // Inaccessible and absent are indistinguishable on purpose (404): a
+    // caller must not be able to probe which lead codes exist.
+    if (!leadRow || !isLeadAccessible(leadRow, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found' });
+    }
+
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : 200;
+    const result = await getPool().query(
+      `${LEAD_ACTIVITY_SELECT} WHERE a.lead_id = $1 ORDER BY a.created_at DESC, a.id DESC LIMIT $2`,
+      [leadRow.id, limit]
+    );
+    return sendJson(res, 200, {
+      success: true,
+      data: { activities: result.rows.map(mapLeadActivityRow) },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead activity fetch failed' });
+  }
+});
+
+/**
+ * GET /leads/:id — direct single-lead read.
+ * Replaces the previous "fetch the whole /api/leads list and filter
+ * client-side" lookup: same server-side visibility, one row returned.
+ */
+router.get('/leads/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  const ref = String(req.params.id || '').trim();
+  if (!ref) return sendJson(res, 400, { success: false, message: 'A lead id or lead code is required.' });
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      const lead =
+        fallbackStore.leads.find((l: any) => String(l.id) === ref) ||
+        fallbackStore.leads.find((l: any) => String(l.leadCode || '') === ref) ||
+        null;
+      if (!lead || !isLeadAccessible(lead, visibility, caller)) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found' });
+      }
+      return sendJson(res, 200, lead);
+    }
+
+    const result = await getPool().query(
+      `${LEAD_SELECT} WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1`,
+      [ref]
+    );
+    const row = result.rows[0];
+    if (!row || !isLeadAccessible(row, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found' });
+    }
+    return sendJson(res, 200, mapLeadRow(row));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
+  }
+});
 
 /**
  * Server-side guard for single-lead deletion - HARDENED

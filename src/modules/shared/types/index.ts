@@ -138,6 +138,49 @@ export interface StatusHistoryEntry {
   updatedBy?: string;
   lossReason?: string;
   meetingType?: string;
+  /**
+   * Present on every entry the SERVER appended (STEP 4A): the id of the
+   * `lead_activities` row this entry mirrors. Entries without it predate
+   * the server-authoritative activity path (legacy/manual writes) and are
+   * only ever shown alongside - never trusted as - the activity stream.
+   */
+  activityId?: string;
+  collectedNCP?: number;
+  projectedNCP?: number;
+}
+
+/**
+ * One row of the append-only `lead_activities` table - the authoritative
+ * follow-up/status activity stream for NEW LeadFlow activity. Read via
+ * GET /api/leads/:id/activities; it is the same shape as
+ * StatusHistoryEntry (plus identity/type) so both render identically.
+ */
+export interface LeadActivityEntry extends StatusHistoryEntry {
+  id: string;
+  activityType: string;
+  updatedByEmployeeId?: string;
+  updatedByName?: string;
+}
+
+/** Fields a follow-up update may carry (the ONLY accepted body). */
+export interface FollowUpUpdate {
+  status?: LeadStatus;
+  remarks?: string;
+  nextFollowUpDate?: string;
+  nextCallDate?: string;
+  meetingDate?: string;
+  meetingType?: string;
+  collectedNCP?: number;
+  projectedNCP?: number;
+  sumAssured?: number;
+  productName?: string;
+  lossReason?: string;
+}
+
+/** Response of POST /api/leads/:id/follow-up (post-Commit state). */
+export interface FollowUpResult {
+  lead: Lead;
+  activity: LeadActivityEntry;
 }
 
 export interface AssignmentHistoryEntry {
