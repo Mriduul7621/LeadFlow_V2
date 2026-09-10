@@ -1,6 +1,7 @@
 import { User } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
 import { apiRequest, ApiError } from '../../shared/api/http';
+import { extractLoginPayload } from '../../auth/services/loginContract';
 
 /**
  * userService.ts
@@ -41,13 +42,16 @@ export const userService = {
     email: string;
     password: string;
   }): Promise<{ token: string; user: User }> {
-    const body = await apiRequest<{ token: string; user: User }>('/api/auth/bootstrap-admin', {
+    // apiRequest unwraps `{ success, data }`; extractLoginPayload validates +
+    // normalizes the session and guarantees no credential field survives.
+    const body = await apiRequest<unknown>('/api/auth/bootstrap-admin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    cacheUser(body.user);
-    return body;
+    const session = extractLoginPayload(body);
+    cacheUser(session.user);
+    return session;
   },
 
   async createUser(user: User): Promise<User> {
