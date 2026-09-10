@@ -581,8 +581,8 @@ export default function Settings() {
                             <Globe className="w-5 h-5" />
                           </div>
                           <div>
-                            <h4 className="text-sm font-bold text-stone-700">System Sync</h4>
-                            <p className="text-[11px] text-stone-400 font-medium mt-1">Verify cloud database connection and synchronize local cache. Moved from header to System Tools.</p>
+                            <h4 className="text-sm font-bold text-stone-700">System Connection</h4>
+                            <p className="text-[11px] text-stone-400 font-medium mt-1">Check the current cloud database connection status.</p>
                           </div>
                         </div>
                         <button
@@ -590,17 +590,17 @@ export default function Settings() {
                             try {
                               const result = await databaseStatusService.checkDatabaseStatus();
                               if (result && (result as any).connected) {
-                                toast.success("Connected to the cloud database. All data is persisted directly to PostgreSQL.");
+                                toast.success("Cloud database connection is active.");
                               } else {
-                                toast.error((result as any)?.message || "Database connection failed. Changes cannot be persisted right now.");
+                                toast.error((result as any)?.message || "Cloud database connection could not be verified.");
                               }
                             } catch {
-                              toast.error("Failed to run sync. Check your cloud connection.");
+                              toast.error("Cloud database connection could not be verified.");
                             }
                           }}
                           className="px-4 py-2.5 bg-[#978C21] hover:bg-[#8a7f1e] text-white rounded-[10px] text-xs font-bold shadow-sm whitespace-nowrap flex items-center gap-2"
                         >
-                          <Wifi className="w-4 h-4" /> Sync Now
+                          <Wifi className="w-4 h-4" /> Check Connection
                         </button>
                       </div>
                       <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 flex items-center justify-between italic">

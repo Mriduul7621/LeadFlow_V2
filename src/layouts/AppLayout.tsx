@@ -31,7 +31,6 @@ import { notificationService } from '../modules/notifications/services/notificat
 import { adminService } from '../modules/admin/services/adminService';
 import { userService } from '../modules/users/services/userService';
 import { toast } from 'sonner';
-import { useTranslation } from '../modules/shared/utils/translations';
 import {
   readSessionCache,
   writeSessionCache,
@@ -40,24 +39,6 @@ import {
 // `menuAccess` override (dynamic) with static `roles.includes` fallback.
 // The single check `isItemVisible` + `visibleSections` + `userRoleNormalized === 'ADMIN'` bypass must remain.
 import { resolveMenuVisibility } from './menuVisibility';
-
-const labelToTranslationKey: Record<string, string> = {
-  'Dashboard': 'navDashboard',
-  'Add New Lead': 'navLeadGenerate',
-  'Bulk Upload': 'navLeadUpload',
-  'All Leads': 'navAllLeads',
-  'Lead Tracking': 'navLeadTracking',
-  'Performance': 'navExecutionIntell',
-  'NCP Progress': 'navNcpProgress',
-  'Trends': 'navTrendCharts',
-  'Campaigns': 'navCampaignBreakdown',
-  'Follow-up Queue': 'navFollowUpQueue',
-  'Task Calendar': 'navTaskCalendar',
-  'Activities': 'navActivities',
-  'Team': 'navTeamProgress',
-  'Users': 'navUserManagement',
-  'Settings': 'navSettings',
-};
 
 interface MenuItem {
   label: string;
@@ -82,6 +63,15 @@ const TEAM_ROLES = [
   UserRole.BUSINESS_EXECUTIVE,
   UserRole.BUSINESS_HEAD,
 ];
+
+const sectionLabelMap: Record<string, string> = {
+  navSectionOverview: 'Overview',
+  navSectionMyWork: 'My Work',
+  navSectionLeads: 'Leads',
+  navSectionInsights: 'Insights',
+  navSectionManagement: 'Management',
+  navSectionSystem: 'System',
+};
 
 const menuSections: MenuSection[] = [
   {
@@ -141,7 +131,6 @@ const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
 const NOTIFICATION_REFRESH_MS = 60_000;
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const { t, language, setLanguage } = useTranslation();
   const { user, logout } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
@@ -332,7 +321,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return () => clearInterval(intervalId);
   }, []);
 
-  // Offline / degraded-state indicator (shown ONLY when offline)
   useEffect(() => {
     const onOnline = () => setIsOffline(false);
     const onOffline = () => setIsOffline(true);
@@ -369,7 +357,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           mustChangePassword: false,
           password: undefined
         }, useAuthStore.getState().token || undefined, useAuthStore.getState().isOfflineMode);
-        toast.success("Password successfully rotated! Welcome to Shanta Lead Flow Client System.");
+        toast.success("Password updated successfully. Welcome to LeadFlow.");
       } catch (err: any) {
         toast.error(err.message || "Failed to update password. Try again.");
       } finally {
@@ -388,34 +376,34 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="mx-auto w-12 h-12 bg-[#978C21]/10 rounded-full flex items-center justify-center text-[#978C21] mb-2">
               <Lock className="w-6 h-6 animate-pulse" />
             </div>
-            <h2 className="text-sm font-black uppercase tracking-[0.18em] text-[#978C21]">Rotate Password</h2>
+            <h2 className="text-sm font-black uppercase tracking-[0.18em] text-[#978C21]">Set New Password</h2>
             <p className="text-[11px] text-stone-400 font-medium leading-relaxed">
-              For security compliance, you must rotate your temporary password upon onboarding.
+              For security, create a new password before continuing.
             </p>
           </div>
 
           <form onSubmit={handleForcedPasswordReset} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-600">{t('passwordLabel' as any)}</label>
+              <label className="text-sm font-medium text-stone-600">New Password</label>
               <input
                 type="password"
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="MINIMUM 6 CHARACTERS"
-                className="w-full px-4 py-3 bg-[#FFFCF8] border border-stone-200 focus:border-[#978C21] outline-none text-xs rounded-[10px] transition-all font-mono"
+                placeholder="Minimum 6 characters"
+                className="w-full px-4 py-3 bg-[#FFFCF8] border border-stone-200 focus:border-[#978C21] outline-none text-sm rounded-[10px] transition-all"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-600">{t('confirmPasswordLabel' as any)}</label>
+              <label className="text-sm font-medium text-stone-600">Confirm Password</label>
               <input
                 type="password"
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="RE-ENTER NEW PASSWORD"
-                className="w-full px-4 py-3 bg-[#FFFCF8] border border-stone-200 focus:border-[#978C21] outline-none text-xs rounded-[10px] transition-all font-mono"
+                placeholder="Re-enter new password"
+                className="w-full px-4 py-3 bg-[#FFFCF8] border border-stone-200 focus:border-[#978C21] outline-none text-sm rounded-[10px] transition-all"
               />
             </div>
 
@@ -425,7 +413,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               disabled={pwResetLoading}
               className="w-full py-4 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-xs uppercase tracking-widest transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer rounded-[10px]"
             >
-              {pwResetLoading ? 'Rotating credentials...' : 'Rotate and Log In'}
+              {pwResetLoading ? 'Updating password...' : 'Update Password & Continue'}
             </button>
           </form>
         </motion.div>
@@ -454,7 +442,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] flex text-brand-text font-sans">
-      {/* Sidebar - Desktop */}
       <motion.aside 
         initial={false}
         animate={{ width: isSidebarOpen ? 280 : 80 }}
@@ -489,7 +476,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {isSidebarOpen ? (
                 <div className={cn("pt-3 pb-1.5 px-3 first:pt-0", sectionIndex > 0 && "mt-1")}>
                   <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400 select-none">
-                    {t(section.labelKey as any)}
+                    {sectionLabelMap[section.labelKey] || section.labelKey}
                   </p>
                 </div>
               ) : (
@@ -514,7 +501,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-[#F3702B] rounded-r-full" aria-hidden="true" />
                     )}
                     <item.icon className={cn("w-[18px] h-[18px] shrink-0", isActive ? "text-white" : "text-stone-400 group-hover:text-[#978C21]")} />
-                    {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
+                    {isSidebarOpen && <span className="whitespace-nowrap">{item.label}</span>}
                   </Link>
                 );
               })}
@@ -533,7 +520,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </motion.aside>
 
-      {/* Mobile Menu */}
       <AnimatePresence>
         {isMobileMenuOpen && (
           <>
@@ -569,7 +555,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   <React.Fragment key={section.key}>
                     <div className={cn("pt-3 pb-1 px-3 first:pt-0", sectionIndex > 0 && "mt-1")}>
                       <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400 select-none">
-                        {t(section.labelKey as any)}
+                        {sectionLabelMap[section.labelKey] || section.labelKey}
                       </p>
                     </div>
                     {section.items.map((item) => {
@@ -585,7 +571,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                           )}
                         >
                           <item.icon className="w-[18px] h-[18px]" />
-                          <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
+                          <span>{item.label}</span>
                         </Link>
                       );
                     })}
@@ -598,7 +584,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </AnimatePresence>
 
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
-        {/* Top Header — lightweight, uncluttered */}
         <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
           <div className="flex items-center gap-3 lg:hidden">
              <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 rounded-[10px] hover:bg-stone-50" aria-label="Open menu">
@@ -613,7 +598,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                className="h-8 w-auto object-contain"
                referrerPolicy="no-referrer"
              />
-             {/* Compact business-friendly date/time without technical timezone text */}
              <div className="hidden md:flex items-center gap-2 ml-4 pl-4 border-l border-stone-100">
                 <div className="flex items-center gap-2 bg-[#FFFCF8] border border-stone-100 rounded-full px-3 py-1.5">
                   <Calendar className="w-3.5 h-3.5 text-[#978C21]" />
@@ -626,63 +610,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     {dhakaTime.timeStr || '--:--'}
                   </span>
                 </div>
-                {/* Degraded-state indicator ONLY when offline */}
                 {isOffline && (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-[11px] font-bold text-red-700" role="status" aria-live="polite">
                     <WifiOff className="w-3.5 h-3.5" />
-                    {t('degradedConnection' as any)}
+                    Connection degraded
                   </span>
                 )}
              </div>
           </div>
 
-          {/* Mobile compact time */}
           <div className="flex md:hidden items-center gap-2">
             <span className="text-xs font-mono font-semibold text-stone-600">{dhakaTime.timeStr || '--:--'}</span>
             {isOffline && <AlertCircle className="w-4 h-4 text-red-500" aria-label="Offline" />}
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
-             {/* Language Switcher — keyboard accessible, compact */}
-             <div className="flex items-center gap-1 bg-stone-100 border border-stone-200/50 p-1 rounded-full" id="layout-language-switcher" role="group" aria-label={t('selectLanguage' as any)}>
-               <button
-                 type="button"
-                 aria-pressed={language === 'en'}
-                 aria-label="English"
-                 onClick={() => setLanguage('en')}
-                 className={cn(
-                   "px-3 py-1 text-[11px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#0359B3]/20",
-                   language === 'en'
-                     ? "bg-[#978C21] text-white shadow-sm"
-                     : "text-stone-500 hover:text-stone-700"
-                 )}
-               >
-                 EN
-               </button>
-               <button
-                 type="button"
-                 aria-pressed={language === 'bn'}
-                 aria-label="Bangla"
-                 onClick={() => setLanguage('bn')}
-                 className={cn(
-                   "px-3 py-1 text-[11px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#0359B3]/20",
-                   language === 'bn'
-                     ? "bg-[#978C21] text-white shadow-sm"
-                     : "text-stone-500 hover:text-stone-700"
-                 )}
-               >
-                 BN
-               </button>
-             </div>
-
-             <div className="hidden sm:block h-6 w-px bg-stone-100 mx-1" />
-
              <div className="flex items-center gap-1 md:gap-2">
                 <div className="relative">
                    <button 
                      onClick={() => setIsNotifOpen(!isNotifOpen)}
                      className="relative p-2.5 border border-stone-100 rounded-[10px] text-stone-500 hover:text-[#978C21] hover:bg-stone-50 transition-all duration-150 hover:border-stone-200 bg-white shadow-sm"
-                     aria-label={t('notifications' as any)}
+                     aria-label="Notifications"
                      aria-haspopup="dialog"
                      aria-expanded={isNotifOpen}
                    >
@@ -701,10 +649,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                          onClick={() => setIsNotifOpen(false)}
                          aria-hidden="true"
                        />
-                       <div className="absolute right-0 mt-2 w-[340px] max-w-[92vw] bg-white border border-stone-100 rounded-[12px] shadow-xl py-3 z-50 text-left max-h-[420px] overflow-hidden flex flex-col" role="dialog" aria-label={t('notifications' as any)}>
+                       <div className="absolute right-0 mt-2 w-[340px] max-w-[92vw] bg-white border border-stone-100 rounded-[12px] shadow-xl py-3 z-50 text-left max-h-[420px] overflow-hidden flex flex-col" role="dialog" aria-label="Notifications">
                          <div className="px-4 py-2.5 border-b border-stone-100 flex justify-between items-center">
-                           <span className="text-sm font-bold text-stone-800">{t('notifications' as any)} {unreadCount > 0 && `(${unreadCount})`}</span>
-                           <button onClick={() => setIsNotifOpen(false)} className="p-1 rounded-full hover:bg-stone-50" aria-label={t('close' as any)}><X className="w-4 h-4 text-stone-400" /></button>
+                           <span className="text-sm font-bold text-stone-800">Notifications {unreadCount > 0 && `(${unreadCount})`}</span>
+                           <button onClick={() => setIsNotifOpen(false)} className="p-1 rounded-full hover:bg-stone-50" aria-label="Close"><X className="w-4 h-4 text-stone-400" /></button>
                           </div>
                           {notifications.length > 0 && (
                             <div className="px-3 py-2 border-b border-stone-50 flex items-center justify-between bg-[#FFFCF8]">
@@ -712,13 +660,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                 onClick={(e) => { e.stopPropagation(); handleMarkAllRead(); }}
                                 className="text-xs font-semibold text-[#978C21] hover:underline cursor-pointer px-2 py-1 rounded"
                               >
-                                {t('markAllRead' as any)}
+                                Mark All Read
                               </button>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleDeleteAll(); }}
                                 className="text-xs font-semibold text-red-600 hover:underline cursor-pointer px-2 py-1 rounded"
                               >
-                                {t('deleteAll' as any)}
+                                Delete All
                               </button>
                             </div>
                           )}
@@ -727,7 +675,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                            {notifications.length === 0 ? (
                              <div className="px-4 py-10 text-center">
                                <div className="w-10 h-10 rounded-full bg-stone-50 border border-stone-100 flex items-center justify-center mx-auto mb-3"><Bell className="w-5 h-5 text-stone-300" /></div>
-                               <p className="text-sm font-medium text-stone-500">{t('noNotifications' as any)}</p>
+                               <p className="text-sm font-medium text-stone-500">No notifications yet</p>
                              </div>
                            ) : (
                              notifications.map((notif) => (
@@ -774,7 +722,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   </button>
                   <div className="absolute right-0 top-[110%] w-64 bg-white rounded-[12px] shadow-xl border border-stone-100 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-all duration-150 transform origin-top-right z-50 overflow-hidden">
                     <div className="px-5 py-4 border-b border-stone-50">
-                      <p className="text-xs text-stone-400 font-medium">{t('loggedinas' as any)}</p>
+                      <p className="text-xs text-stone-400 font-medium">Logged in as</p>
                       <p className="text-sm text-stone-800 font-bold truncate mt-1">{user.name}</p>
                       <p className="text-xs text-stone-500 mt-1 truncate">{user.email}</p>
                       <span className="inline-flex mt-2 px-2 py-0.5 bg-[#978C21]/10 text-[#978C21] rounded-full text-[11px] font-bold border border-[#978C21]/20">{user.role}</span>
@@ -784,7 +732,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       className="w-full px-5 py-3 flex items-center gap-3 text-red-600 hover:bg-red-50 text-sm font-semibold transition-colors text-left"
                     >
                       <LogOut className="w-4 h-4" />
-                      {t('logout' as any)}
+                      Logout
                     </button>
                   </div>
                 </div>
@@ -792,7 +740,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        {/* Main Content Area */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
         </main>

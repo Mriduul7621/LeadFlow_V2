@@ -12,7 +12,6 @@ import { userService } from '../../users/services/userService';
 import { ApiError } from '../../shared/api/http';
 import { activateSession, loginWithCredentials } from '../services/authFlow';
 import { User, UserRole } from '../../shared/types';
-import { useTranslation } from '../../shared/utils/translations';
 import { preloadLeadStatuses, invalidateLeadStatusCache } from '../../workflow/utils/leadStatusMeta';
 
 function detectRoleFromEmployeeId(empId: string): UserRole {
@@ -24,8 +23,6 @@ function detectRoleFromEmployeeId(empId: string): UserRole {
   if (norm.startsWith('BDM')) return UserRole.BDM;
   if (norm.startsWith('BE')) return UserRole.BUSINESS_EXECUTIVE;
   if (norm.startsWith('BH')) return UserRole.BUSINESS_HEAD;
-
-  // Contains search fallback
   if (norm.includes('ADMIN')) return UserRole.ADMIN;
   if (norm.includes('BH') || norm.includes('BUSINESSHEAD')) return UserRole.BUSINESS_HEAD;
   if (norm.includes('BE') || norm.includes('BUSINESSEXECUTIVE') || norm.includes('EXEC')) return UserRole.BUSINESS_EXECUTIVE;
@@ -33,8 +30,7 @@ function detectRoleFromEmployeeId(empId: string): UserRole {
   if (norm.includes('ASM')) return UserRole.ASM;
   if (norm.includes('RM') || norm.includes('MANAGER')) return UserRole.RM;
   if (norm.includes('RO') || norm.includes('OFFICER')) return UserRole.RO;
-
-  return UserRole.RO; // default dynamic fallback
+  return UserRole.RO;
 }
 
 function getDesignationFromRole(role: UserRole): string {
@@ -70,7 +66,6 @@ const setupSchema = z.object({
 });
 
 export default function Login() {
-  const { t, language, setLanguage } = useTranslation();
   const navigate = useNavigate();
   const [showForm, setShowForm] = React.useState(false);
   const [isFirstTimeSetup, setIsFirstTimeSetup] = React.useState(false);
@@ -91,8 +86,6 @@ export default function Login() {
       const adminExists = await userService.checkAdminExists();
       setIsFirstTimeSetup(!adminExists);
     } catch (err) {
-      // Never decide first-run state from browser cache - ask the server
-      // again later; default to the login form with a clear error.
       console.error("Error checking admin existence:", err);
       setIsFirstTimeSetup(false);
       toast.error(
@@ -109,26 +102,12 @@ export default function Login() {
     checkUserCount();
   }, []);
 
-  // A session that has actually been established (login here, or a persisted
-  // token the server confirmed at startup) must never stay parked on /login.
-  // Both flags are required: `isAuthenticated` alone can be true for a
-  // persisted snapshot that startup validation has not cleared yet.
   React.useEffect(() => {
     if (isInitialized && isAuthenticated) {
       navigate('/', { replace: true });
     }
   }, [isInitialized, isAuthenticated, navigate]);
 
-  /**
-   * Everything that is merely nice-to-have once a session exists: refresh the
-   * read cache and warm the admin-configured lead-status metadata.
-   *
-   * It is called AFTER the session is established and AFTER navigation, and
-   * `activateSession` funnels it through a catch, so neither a localStorage
-   * failure nor a metadata outage can delay, fail or undo a login. localDb is
-   * a read cache only - it is written after the server confirmed the
-   * credentials against PostgreSQL and is never consulted to authenticate.
-   */
   const warmUpAfterAuthentication = (user: User) => {
     localDb.createUser(user);
     invalidateLeadStatusCache();
@@ -143,20 +122,12 @@ export default function Login() {
   const onSetupSubmit = async (data: any) => {
     try {
       const empId = data.employeeId.toUpperCase().trim();
-
-      // Create the first ADMIN account through the dedicated, guarded
-      // bootstrap endpoint. The server refuses this call (409) as soon
-      // as any ADMIN exists, validates the input, hashes the password
-      // with bcrypt and creates the user inside a database transaction.
       const session = await userService.bootstrapAdmin({
         fullName: data.fullName,
         employeeId: empId,
         email: data.email.toLowerCase().trim(),
         password: data.password,
       });
-
-      // Same post-login sequence as a normal login: session + navigation
-      // first, cache/metadata warm-up afterwards.
       await activateSession(session, {
         navigate,
         welcome: () => toast.success('Super Admin console initialized successfully!'),
@@ -174,25 +145,14 @@ export default function Login() {
 
   const onSubmit = async (data: any) => {
     const empId = data.username.toUpperCase().trim();
-
     try {
-      // Server-side login through the centralized API contract helper: the
-      // password is verified against the bcrypt hash in PostgreSQL and the
-      // `{ success, data }` envelope is unwrapped in exactly one place
-      // (shared/api/http.ts + auth/services/loginContract.ts).
       const session = await loginWithCredentials(empId, data.password);
-
-      // Establishes the authenticated Zustand state and navigates to '/',
-      // then (never before) kicks off the background warm-up.
       await activateSession(session, {
         navigate,
-        welcome: user => toast.success(t('welcomeMessage', { name: user.name })),
+        welcome: user => toast.success(`Welcome back, ${user.name}!`),
         afterAuthentication: warmUpAfterAuthentication,
       });
     } catch (err) {
-      // Meaningful server errors (invalid credentials, locked/inactive
-      // account, 503 database unavailable) are surfaced verbatim; nothing
-      // here can leave a half-authenticated state behind.
       console.error('Login failed:', err);
       const message =
         err instanceof ApiError
@@ -207,7 +167,6 @@ export default function Login() {
       className="min-h-screen bg-black flex flex-col items-center justify-between p-6 sm:p-8 relative overflow-hidden select-none font-sans"
       id="login-page-container"
     >
-      {/* Background Image with Dark Vignette Overlay */}
       <div 
         className="absolute inset-0 bg-cover bg-center opacity-85 transition-opacity duration-700 mix-blend-luminosity pointer-events-none scale-105"
         style={{ backgroundImage: `url(${bgImage})` }}
@@ -218,39 +177,12 @@ export default function Login() {
         id="login-dark-gradient"
       />
 
-      {/* Language Switcher in top right corner */}
-      <div className="absolute top-6 right-6 z-30 flex items-center gap-1 bg-black/50 backdrop-blur-md border border-white/10 p-1 rounded-full shadow-lg" id="login-language-switcher">
-        <button
-          type="button"
-          onClick={() => setLanguage('en')}
-          className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
-            language === 'en'
-              ? 'bg-[#978C21] text-white shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          EN
-        </button>
-        <button
-          type="button"
-          onClick={() => setLanguage('bn')}
-          className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
-            language === 'bn'
-              ? 'bg-[#978C21] text-white shadow-sm'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          BN
-        </button>
-      </div>
-
-      {/* Decorative Bottom Bar Indicator */}
       <div className="absolute bottom-6 left-8 z-20 hidden md:flex flex-col items-start gap-1" id="system-ready-indicator">
-        <span className="text-sm text-slate-400 opacity-70">{t('systemReady')}</span>
+        <span className="text-sm text-slate-400 opacity-70">System Ready</span>
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-ping" />
           <span className="text-sm text-slate-400 opacity-80">
-            {isFirstTimeSetup ? t('setupRequired') : t('secureNodeOnline')}
+            {isFirstTimeSetup ? 'Setup Required' : 'Secure Node Online'}
           </span>
         </div>
       </div>
@@ -259,10 +191,8 @@ export default function Login() {
         <ShieldCheck className="w-5 h-5 text-slate-500 opacity-40 hover:opacity-80 transition-opacity" />
       </div>
 
-      {/* Content Container */}
       <div className="flex-1 w-full flex flex-col items-center justify-center relative z-10 max-w-xl mx-auto" id="login-inner-wrap">
         
-        {/* Company Logo - Fully Visible and Prominent */}
         <motion.div
           initial={{ opacity: 0, y: -25 }}
           animate={{ opacity: 1, y: 0 }}
@@ -278,7 +208,6 @@ export default function Login() {
           />
         </motion.div>
 
-        {/* Institutional Pill Badge */}
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -290,7 +219,6 @@ export default function Login() {
           Institutional Lead Management
         </motion.div>
 
-        {/* Dynamic Inner Panel holding Presentation or Form */}
         <AnimatePresence mode="wait">
           {!showForm ? (
             <motion.div
@@ -302,7 +230,6 @@ export default function Login() {
               className="w-full flex flex-col items-center justify-center text-center space-y-6"
               id="presentation-panel"
             >
-              {/* Main Headlines */}
               <div className="space-y-1" id="headline-wrapper">
                 <h1 className="text-6xl sm:text-7xl font-black tracking-tight text-white uppercase leading-none select-none">
                   LEAD
@@ -312,17 +239,14 @@ export default function Login() {
                 </h1>
               </div>
 
-              {/* Subheading */}
               <h2 className="text-base sm:text-lg font-semibold text-white tracking-wide select-none">
-                {t('loginSubheading')}
+                Smart Lead Management System
               </h2>
 
-              {/* Small description copy */}
               <p className="text-slate-300 text-xs sm:text-sm font-medium leading-relaxed max-w-sm select-none opacity-80 decoration-none">
-                {t('loginDesc')}
+                Track your leads, manage your team, and boost your sales — all in one place.
               </p>
 
-              {/* Call To Action button */}
               <div className="pt-4" id="cta-button-container">
                 <motion.button 
                   whileHover={{ scale: 1.02 }}
@@ -331,7 +255,7 @@ export default function Login() {
                   className="px-8 py-3.5 bg-[#978C21] hover:bg-[#a59924] text-white rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-[#978C21]/20 group cursor-pointer"
                   id="login-now-btn"
                 >
-                  {isFirstTimeSetup ? t('initializeConsoleBtn') : t('loginButton')} 
+                  {isFirstTimeSetup ? 'Initialize Console' : 'Get Started'} 
                   <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                 </motion.button>
               </div>
@@ -346,96 +270,89 @@ export default function Login() {
               className="w-full max-w-sm bg-black/40 backdrop-blur-2xl border border-white/10 p-8 sm:p-10 rounded-2xl shadow-2xl relative overflow-hidden"
               id="glassmorphic-form-panel"
             >
-              {/* Top Accent line matching our theme */}
               <div className="absolute top-0 left-0 w-full h-1.5 bg-[#978C21]" id="border-accent" />
 
               {isFirstTimeSetup ? (
                 <>
                   <div className="text-center mb-6" id="setup-header">
-                    <h2 className="text-2xl font-bold text-white tracking-tight">{t('setupTitle')}</h2>
-                    <p className="text-[#978C21] text-sm text-[#978C21] mt-1">{t('setupSub')}</p>
+                    <h2 className="text-2xl font-bold text-white tracking-tight">Admin Setup</h2>
+                    <p className="text-[#978C21] text-sm mt-1">Create the first admin account</p>
                   </div>
 
                   <form onSubmit={handleSetupSubmit(onSetupSubmit)} className="space-y-4" id="setup-credentials-form">
-                    {/* Full Name input */}
                     <div className="space-y-1" id="setup-name-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('fullNameLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Full Name</label>
                       <div className="relative group">
                         <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...registerSetup('fullName')}
                           type="text" 
                           className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500"
-                          placeholder={t('fullNamePlaceholder')}
+                          placeholder="e.g. Mohammad Rahim"
                           autoComplete="off"
                         />
                       </div>
                       {setupErrors.fullName && <p className="text-[10px] text-red-400 font-bold">{setupErrors.fullName.message as string}</p>}
                     </div>
 
-                    {/* Employee ID input */}
                     <div className="space-y-1" id="setup-empid-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('employeeIdLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Employee ID</label>
                       <div className="relative group">
                         <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...registerSetup('employeeId')}
                           type="text" 
                           className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500 uppercase tracking-wider"
-                          placeholder={t('employeeIdPlaceholder')}
+                          placeholder="e.g. ADMIN or ADM001"
                           autoComplete="off"
                         />
                       </div>
                       {setupErrors.employeeId && <p className="text-[10px] text-red-400 font-bold">{setupErrors.employeeId.message as string}</p>}
                     </div>
 
-                    {/* Email input */}
                     <div className="space-y-1" id="setup-email-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('emailLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Email Address</label>
                       <div className="relative group">
                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...registerSetup('email')}
                           type="email" 
                           className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500"
-                          placeholder={t('emailPlaceholder')}
+                          placeholder="e.g. admin@company.com"
                           autoComplete="off"
                         />
                       </div>
                       {setupErrors.email && <p className="text-[10px] text-red-400 font-bold">{setupErrors.email.message as string}</p>}
                     </div>
 
-                    {/* Password input */}
                     <div className="space-y-1" id="setup-password-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('passwordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Password</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...registerSetup('password')}
                           type="password" 
                           className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-600"
-                          placeholder={t('passwordPlaceholder')}
+                          placeholder="Enter password"
                         />
                       </div>
                       {setupErrors.password && <p className="text-[10px] text-red-400 font-bold">{setupErrors.password.message as string}</p>}
                     </div>
 
-                    {/* Confirm Password input */}
                     <div className="space-y-1" id="setup-confirmpassword-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('confirmPasswordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Confirm Password</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...registerSetup('confirmPassword')}
                           type="password" 
                           className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-600"
-                          placeholder={t('passwordPlaceholder')}
+                          placeholder="Enter password"
                         />
                       </div>
                       {setupErrors.confirmPassword && <p className="text-[10px] text-red-400 font-bold">{setupErrors.confirmPassword.message as string}</p>}
                     </div>
 
-                    {/* Submit button */}
                     <button 
                       type="submit" 
                       disabled={isSetupSubmitting}
@@ -447,7 +364,7 @@ export default function Login() {
                       ) : (
                         <>
                           <ShieldCheck className="w-4 h-4" />
-                          {t('registerBtn')}
+                          Create Admin Account
                         </>
                       )}
                     </button>
@@ -456,44 +373,41 @@ export default function Login() {
               ) : (
                 <>
                   <div className="text-center mb-8" id="form-header">
-                    <h2 className="text-2xl font-black text-white uppercase tracking-tight">{t('systemLoginTitle')}</h2>
-                    <p className="text-[#978C21] text-[10px] font-bold uppercase tracking-widest mt-1">{t('systemLoginSub')}</p>
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tight">Welcome Back</h2>
+                    <p className="text-[#978C21] text-[10px] font-bold uppercase tracking-widest mt-1">Login with your credentials</p>
                   </div>
 
                   <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" id="credential-form">
                     
-                    {/* Employee ID input */}
                     <div className="space-y-2" id="username-field-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('loginEmpIdLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Employee ID</label>
                       <div className="relative group">
                         <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...register('username')}
                           type="text" 
                           className="w-full pl-11 pr-4 py-3.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-sm font-semibold text-white placeholder-slate-500 uppercase tracking-wider"
-                          placeholder={t('loginEmpIdPlaceholder')}
+                          placeholder="Enter your ID (e.g. RM001)"
                           autoComplete="off"
                         />
                       </div>
                       {errors.username && <p className="text-xs text-red-400 font-bold">{errors.username.message as string}</p>}
                     </div>
 
-                    {/* Password input */}
                     <div className="space-y-2" id="password-field-group">
-                      <label className="text-sm font-medium text-slate-300 block">{t('loginPasswordLabel')}</label>
+                      <label className="text-sm font-medium text-slate-300 block">Password</label>
                       <div className="relative group">
                         <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
                         <input 
                           {...register('password')}
                           type="password" 
                           className="w-full pl-11 pr-4 py-3.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-sm font-semibold text-white placeholder-slate-600"
-                          placeholder={t('loginPasswordPlaceholder')}
+                          placeholder="Enter your password"
                         />
                       </div>
                       {errors.password && <p className="text-xs text-red-400 font-bold">{errors.password.message as string}</p>}
                     </div>
 
-                    {/* Submit button */}
                     <button 
                       type="submit" 
                       disabled={isSubmitting}
@@ -505,7 +419,7 @@ export default function Login() {
                       ) : (
                         <>
                           <LogIn className="w-4 h-4" />
-                          {t('loginSubmitBtn')}
+                          Login
                         </>
                       )}
                     </button>
@@ -513,7 +427,6 @@ export default function Login() {
                 </>
               )}
 
-              {/* Back navigation */}
               <div className="mt-8 pt-6 border-t border-white/5 flex justify-center text-center" id="form-back-nav">
                 <button 
                   type="button"
@@ -521,7 +434,7 @@ export default function Login() {
                   className="text-sm text-slate-400 hover:text-[#978C21] transition-colors font-medium flex items-center gap-2 cursor-pointer"
                   id="back-trigger"
                 >
-                  <ArrowLeft className="w-3 h-3" /> {t('backToMainBtn')}
+                  <ArrowLeft className="w-3 h-3" /> Back to home
                 </button>
               </div>
 
@@ -531,7 +444,6 @@ export default function Login() {
 
       </div>
 
-      {/* Footer Copy */}
       <div className="relative z-10 w-full text-center pb-2 select-none" id="login-footer">
         <p className="text-sm text-slate-500 opacity-70">
           © 2024 Shanta Life Insurance. All Rights Reserved.
