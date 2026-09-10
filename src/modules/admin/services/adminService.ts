@@ -11,6 +11,7 @@ const KEYS = {
 
 const FINE_PERMISSION_MODULES = [
   'dashboard',
+  'activities',
   'lead_generate',
   'lead_upload',
   'lead_tracking',
@@ -76,6 +77,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
     isCustom: false,
     menuAccess: {
       '/': true,
+      '/activities': true,
       '/leads/new': true,
       '/leads/upload': true,
       '/leads/all': true,
@@ -112,6 +114,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
     lead_generate: { view: true, create: true },
     lead_upload: { view: true, upload: true, delete: true },
     lead_tracking: { view: true, status_update: true },
+    activities: { view: true },
     execution_intelligence: { view: true },
     ncp_progress: { view: true },
     trend_charts: { view: true },
@@ -153,6 +156,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
       Object.keys(f).forEach(feat => {
         let route = '';
         if (feat === 'dashboard') route = '/';
+        else if (feat === 'activities') route = '/activities';
         else if (feat === 'lead_generate') route = '/leads/new';
         else if (feat === 'lead_upload') route = '/leads/upload';
         else if (feat === 'lead_tracking') route = '/leads';

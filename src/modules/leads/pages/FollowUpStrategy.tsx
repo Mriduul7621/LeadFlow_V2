@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Calendar, Clock, History, Phone, User, AlertTriangle, ChevronRight, RefreshCw } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { cn } from '../../../lib/utils';
 import { leadService, type FollowUpQueueItem, type FollowUpQueueResult } from '../services/leadService';
 import { toast } from 'sonner';
@@ -67,8 +67,18 @@ function QueueRow({ item }: { item: FollowUpQueueItem }) {
   );
 }
 
+const VALID_BUCKETS: Bucket[] = ['overdue', 'today', 'upcoming'];
+
+function readBucketFromSearch(search: string): Bucket {
+  const params = new URLSearchParams(search);
+  const requested = params.get('bucket');
+  return (VALID_BUCKETS as string[]).includes(requested || '') ? (requested as Bucket) : 'overdue';
+}
+
 export default function FollowUpStrategy() {
-  const [active, setActive] = useState<Bucket>('overdue');
+  const location = useLocation();
+  // Dashboard "Follow-up Health" cards deep-link here via ?bucket=overdue|today|upcoming.
+  const [active, setActive] = useState<Bucket>(() => readBucketFromSearch(location.search));
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<FollowUpQueueResult | null>(null);
 
@@ -83,6 +93,12 @@ export default function FollowUpStrategy() {
       setLoading(false);
     }
   }, []);
+
+  // Re-sync the active tab whenever the deep-link query param changes
+  // (e.g. clicking a different Follow-up Health card while already on this page).
+  useEffect(() => {
+    setActive(readBucketFromSearch(location.search));
+  }, [location.search]);
 
   useEffect(() => {
     void load(active);

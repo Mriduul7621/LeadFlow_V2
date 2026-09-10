@@ -43,7 +43,7 @@ const labelToTranslationKey: Record<string, string> = {
   'NCP Progress': 'navNcpProgress',
   'Trends': 'navTrendCharts',
   'Campaigns': 'navCampaignBreakdown',
-  'Follow-ups': 'navFollowUpStrategy',
+  'Follow-up Queue': 'navFollowUpStrategy',
   'Task Calendar': 'navTaskCalendar',
   'Activities': 'navActivities',
   'Team': 'navTeamProgress',
@@ -51,24 +51,67 @@ const labelToTranslationKey: Record<string, string> = {
   'Settings': 'navSettings',
 };
 
+/**
+ * Sidebar grouping (Step 5B).
+ * ------------------------------------------------------------------
+ * Visual reorganization only — every entry still points at an existing,
+ * already-routed path (see src/App.tsx) and access is still gated purely
+ * by the pre-existing `roles` static fallback + dynamic `menuAccess`
+ * override resolved below (`filteredMenu`). No new routes, no new
+ * authorization model: grouping never widens or narrows what a role can
+ * already reach.
+ *
+ * "Pipeline" (LEADS group) is intentionally omitted — there is no
+ * dedicated /pipeline route yet, and Step 5B must not invent one.
+ */
+type MenuGroup = 'OVERVIEW' | 'MY_WORK' | 'LEADS' | 'INSIGHTS' | 'MANAGEMENT' | 'SYSTEM';
 
-const menuItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: Object.values(UserRole) },
-  { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole) },
-  { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
-  { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
-  { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: Object.values(UserRole) },
-  { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Trends', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM] },
-  { label: 'Follow-ups', icon: History, path: '/follow-up', roles: Object.values(UserRole) },
-  { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole) },
-  { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole) },
-  { label: 'Team', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD] },
-  { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
-  { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole) },
+const GROUP_ORDER: MenuGroup[] = ['OVERVIEW', 'MY_WORK', 'LEADS', 'INSIGHTS', 'MANAGEMENT', 'SYSTEM'];
+
+const GROUP_LABELS: Record<MenuGroup, string> = {
+  OVERVIEW: 'navSectionOverview',
+  MY_WORK: 'navSectionMyWork',
+  LEADS: 'navSectionLeads',
+  INSIGHTS: 'navSectionInsights',
+  MANAGEMENT: 'navSectionManagement',
+  SYSTEM: 'navSectionSystem',
+};
+
+const menuItems: Array<{ label: string; icon: any; path: string; roles: UserRole[]; group: MenuGroup }> = [
+  // OVERVIEW
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: Object.values(UserRole), group: 'OVERVIEW' },
+
+  // MY WORK — daily execution surfaces (today's work, calendar, follow-up queue)
+  { label: 'Activities', icon: Clock, path: '/activities', roles: Object.values(UserRole), group: 'MY_WORK' },
+  { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: Object.values(UserRole), group: 'MY_WORK' },
+  { label: 'Follow-up Queue', icon: History, path: '/follow-up', roles: Object.values(UserRole), group: 'MY_WORK' },
+
+  // LEADS
+  { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: Object.values(UserRole), group: 'LEADS' },
+  { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: Object.values(UserRole), group: 'LEADS' },
+  { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN], group: 'LEADS' },
+  { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN], group: 'LEADS' },
+
+  // INSIGHTS — server-authoritative reporting pages
+  { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM], group: 'INSIGHTS' },
+  { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM], group: 'INSIGHTS' },
+  { label: 'Trends', icon: Target, path: '/trend-charts', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM], group: 'INSIGHTS' },
+  { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: [UserRole.ADMIN, UserRole.RO, UserRole.RM], group: 'INSIGHTS' },
+
+  // MANAGEMENT
+  { label: 'Team', icon: Users, path: '/team', roles: [UserRole.ADMIN, UserRole.RM, UserRole.ASM, UserRole.BDM, UserRole.BUSINESS_EXECUTIVE, UserRole.BUSINESS_HEAD], group: 'MANAGEMENT' },
+  { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN], group: 'MANAGEMENT' },
+
+  // SYSTEM
+  { label: 'Settings', icon: Settings, path: '/settings', roles: Object.values(UserRole), group: 'SYSTEM' },
 ];
+
+/** Groups an already-permission-filtered menu list into ordered sections, dropping empty sections. */
+function groupMenuItems(items: typeof menuItems) {
+  return GROUP_ORDER
+    .map(group => ({ group, items: items.filter(i => i.group === group) }))
+    .filter(g => g.items.length > 0);
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { t, language, setLanguage } = useTranslation();
@@ -377,6 +420,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return item.roles.includes(userRoleNormalized as any) || item.roles.includes(userRoleName as any);
   });
 
+  // Visual grouping only — computed AFTER the permission filter above, so a
+  // group section simply never renders if every item inside it was already
+  // denied. Grouping itself grants/removes nothing.
+  const groupedMenu = groupMenuItems(filteredMenu);
+
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -412,25 +460,36 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           )}
         </div>
 
-        <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto">
-          {filteredMenu.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group relative text-sm font-medium",
-                  isActive 
-                    ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
-                    : "text-slate-400 hover:text-brand-text hover:bg-white"
-                )}
-              >
-                <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "group-hover:text-[#978C21]")} />
-                {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 px-4 space-y-4 overflow-y-auto">
+          {groupedMenu.map(({ group, items }) => (
+            <div key={group} className="space-y-1.5">
+              {isSidebarOpen && (
+                <p className="px-4 pt-2 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-slate-300 select-none">
+                  {t(GROUP_LABELS[group] as any)}
+                </p>
+              )}
+              {items.map((item) => {
+                const isActive = location.pathname === item.path;
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    title={!isSidebarOpen ? (t(labelToTranslationKey[item.label] as any) || item.label) : undefined}
+                    aria-label={t(labelToTranslationKey[item.label] as any) || item.label}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group relative text-sm font-medium",
+                      isActive 
+                        ? "bg-[#978C21] text-white shadow-lg shadow-[#978C21]/20" 
+                        : "text-slate-400 hover:text-brand-text hover:bg-white"
+                    )}
+                  >
+                    <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "group-hover:text-[#978C21]")} />
+                    {isSidebarOpen && <span className="whitespace-nowrap">{t(labelToTranslationKey[item.label] as any) || item.label}</span>}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -473,24 +532,32 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   <X className="w-5 h-5 text-slate-400" />
                 </button>
               </div>
-              <nav className="p-4 space-y-1">
-                {filteredMenu.map((item) => {
-                  const isActive = location.pathname === item.path;
-                  return (
-                    <Link
-                      key={item.path}
-                      to={item.path}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                        isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
-                      )}
-                    >
-                      <item.icon className="w-4 h-4" />
-                      <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
-                    </Link>
-                  );
-                })}
+              <nav className="p-4 space-y-4 overflow-y-auto max-h-[calc(100vh-6rem)]">
+                {groupedMenu.map(({ group, items }) => (
+                  <div key={group} className="space-y-1">
+                    <p className="px-4 pt-1 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-slate-300 select-none">
+                      {t(GROUP_LABELS[group] as any)}
+                    </p>
+                    {items.map((item) => {
+                      const isActive = location.pathname === item.path;
+                      return (
+                        <Link
+                          key={item.path}
+                          to={item.path}
+                          onClick={() => setIsMobileMenuOpen(false)}
+                          aria-label={t(labelToTranslationKey[item.label] as any) || item.label}
+                          className={cn(
+                            "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                            isActive ? "bg-slate-50 text-[#978C21]" : "text-slate-400 hover:bg-slate-50"
+                          )}
+                        >
+                          <item.icon className="w-4 h-4" />
+                          <span>{t(labelToTranslationKey[item.label] as any) || item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ))}
               </nav>
             </motion.aside>
           </>

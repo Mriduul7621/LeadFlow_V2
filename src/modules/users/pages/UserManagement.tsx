@@ -83,11 +83,12 @@ const APP_FEATURES: FeatureMeta[] = [
       { key: 'view_all_leads_tab', label: 'All Leads Tab', desc: 'Show All Leads in sidebar menu.' },
     ],
   },
+  { key: 'activities', label: 'Activities (My Work)', desc: 'View the Today/Tomorrow activities feed.' },
   { key: 'execution_intelligence', label: 'Execution Intelligence', desc: 'View execution dashboard.' },
   { key: 'ncp_progress', label: 'NCP Progress', desc: 'View NCP collection tracking.' },
   { key: 'trend_charts', label: 'Trend Charts', desc: 'View performance charts.' },
   { key: 'campaign_breakdown', label: 'Campaign Breakdown', desc: 'View campaign details.' },
-  { key: 'follow_up_strategy', label: 'Follow-up Strategy', desc: 'View follow-up lists.' },
+  { key: 'follow_up_strategy', label: 'Follow-up Queue', desc: 'View the overdue/due-today/upcoming follow-up queue.' },
   { key: 'task_calendar', label: 'Task Calendar', desc: 'View monthly task calendar.' },
   { key: 'team_progress', label: 'Team Progress', desc: 'View team hierarchy and members.' },
   {
@@ -422,6 +423,7 @@ export default function UserManagement() {
         isCustom: selectedRole ? selectedRole.isCustom : true,
         menuAccess: {
           '/': roleFormFeatures?.dashboard?.view ?? false,
+          '/activities': roleFormFeatures?.activities?.view ?? false,
           '/leads/new': roleFormFeatures?.lead_generate?.view ?? false,
           '/leads/upload': roleFormFeatures?.lead_upload?.view ?? false,
           '/leads/all': roleFormFeatures?.lead_tracking?.view_all_leads_tab ?? false,

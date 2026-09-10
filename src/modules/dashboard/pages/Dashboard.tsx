@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, AreaChart, Area
 } from 'recharts';
 import { 
-  TrendingUp, Zap, History, ChevronRight, Users, MessageSquare, Phone, Target, PieChart as PieIcon, Filter, Download, Info, Calendar as CalendarIcon, RefreshCw, LayoutDashboard, Database, CheckCircle, XCircle, AlertTriangle
+  TrendingUp, Zap, History, ChevronRight, Users, MessageSquare, Phone, Target, PieChart as PieIcon, Filter, Download, Info, Calendar as CalendarIcon, RefreshCw, LayoutDashboard, Database, CheckCircle, XCircle, AlertTriangle, Clock, ListChecks
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
@@ -19,6 +20,7 @@ import { workflowService } from '../../workflow/services/workflowService';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
+import { buildActivities, groupByCategory, type Activity } from '../../leads/utils/activityEngine';
 
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 
@@ -57,6 +59,19 @@ export default function Dashboard() {
   const [teamStats, setTeamStats] = useState<any[]>([]);
   const [campaignStats, setCampaignStats] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
+  // Canonical pipeline distribution + follow-up bucket counts — both sourced
+  // straight from GET /api/dashboard (statusCounts / followUpCounts), never
+  // re-derived client-side.
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [followUpCounts, setFollowUpCounts] = useState({ overdue: 0, today: 0, upcoming: 0, all: 0 });
+  const [totalLeads, setTotalLeads] = useState(0);
+  const [convertedCount, setConvertedCount] = useState(0);
+  const [pipelineLockedCount, setPipelineLockedCount] = useState(0);
+  // Today/Tomorrow activity feed for the Daily Execution section — reuses the
+  // same leadService.getLeads() + activityEngine pipeline as the existing
+  // Activities page (/activities). Never used as a KPI/authority source.
+  const [dailyActivities, setDailyActivities] = useState<Activity[]>([]);
+  const [dailyActivitiesLoading, setDailyActivitiesLoading] = useState(true);
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [alertDate, setAlertDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [popupSearch, setPopupSearch] = useState<string>('');
@@ -330,6 +345,31 @@ export default function Dashboard() {
     loadDashboardData();
   }, [user, period, customDates, selectedDate]);
 
+  // Daily Execution — Today & Tomorrow activity feed. Reuses the exact same
+  // leadService.getLeads() + activityEngine pipeline as the standalone
+  // Activities page (/activities); this is a read-only convenience view,
+  // never treated as an authoritative dashboard KPI source.
+  useEffect(() => {
+    let cancelled = false;
+    const loadActivities = async () => {
+      if (!user) return;
+      setDailyActivitiesLoading(true);
+      try {
+        const allLeads = await leadService.getLeads({ employeeId: user.employeeId, role: user.role });
+        if (cancelled) return;
+        const built = buildActivities(allLeads);
+        const grouped = groupByCategory(built);
+        setDailyActivities([...grouped.Today, ...grouped.Tomorrow]);
+      } catch (e) {
+        if (!cancelled) setDailyActivities([]);
+      } finally {
+        if (!cancelled) setDailyActivitiesLoading(false);
+      }
+    };
+    loadActivities();
+    return () => { cancelled = true; };
+  }, [user]);
+
   // Sync form states with selected lead
   useEffect(() => {
     if (selectedLead) {
@@ -550,6 +590,14 @@ export default function Dashboard() {
       })));
       setCampaignStats(metrics.campaignStats || []);
 
+      // Sales Pipeline (canonical statusCounts) + Follow-up Health buckets —
+      // both taken verbatim from the same authoritative GET /api/dashboard payload.
+      setStatusCounts(metrics.statusCounts || {});
+      setFollowUpCounts(metrics.followUpCounts || metrics.followUpsQueue || { overdue: 0, today: 0, upcoming: 0, all: 0 });
+      setTotalLeads(metrics.totalLeads || 0);
+      setConvertedCount(metrics.converted || 0);
+      setPipelineLockedCount(metrics.pipelineLocked || 0);
+
       // Detail rows for optional popup drill-downs are not used for KPI math.
       setLeads([]);
 
@@ -585,6 +633,11 @@ export default function Dashboard() {
       setTeamStats([]);
       setCampaignStats([]);
       setTrendData([]);
+      setStatusCounts({});
+      setFollowUpCounts({ overdue: 0, today: 0, upcoming: 0, all: 0 });
+      setTotalLeads(0);
+      setConvertedCount(0);
+      setPipelineLockedCount(0);
       toast.error('Dashboard synchronization failure');
     } finally {
       setLoading(false);
@@ -612,6 +665,16 @@ export default function Dashboard() {
     { name: 'Week 3', Collected: Math.round(stats.collected * 0.80), Projected: Math.round(stats.projected * 0.80) },
     { name: 'Week 4', Collected: stats.collected, Projected: stats.projected },
   ];
+
+  // Sales Pipeline — canonical current_status progression, values sourced
+  // exclusively from the authoritative GET /api/dashboard statusCounts map.
+  // No fabricated per-stage NCP: this is a pure count (+ optional % of the
+  // visible total) view of real lead volume by stage.
+  const PIPELINE_STAGES = [
+    'Untouched', 'Contacted', 'Interested', 'Meeting Fixed', 'Meeting Completed',
+    'Pipeline Locked', 'Converted',
+  ];
+  const pipelineTotal = PIPELINE_STAGES.reduce((sum, s) => sum + (statusCounts[s] || 0), 0);
 
   return (
     <div className="space-y-6 pb-12 bg-white font-sans">
@@ -678,174 +741,181 @@ export default function Dashboard() {
                <CalendarIcon className="w-3.5 h-3.5 text-[#978C21]" />
                <span className="text-sm font-medium text-[#978C21]">{formattedDateRange()}</span>
             </div>
+
+            <button
+               type="button"
+               onClick={() => loadDashboardData()}
+               title="Refresh dashboard metrics"
+               aria-label="Refresh dashboard metrics"
+               className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-sm text-slate-500 hover:text-[#978C21] hover:border-[#978C21]/40 transition-all shadow-sm"
+            >
+               <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
+               <span className="text-xs font-medium uppercase tracking-wide hidden sm:inline">Refresh</span>
+            </button>
          </div>
       </div>
 
-      {/* Snapshot Header */}
+      {/* Primary KPI row — server-authoritative GET /api/dashboard only. */}
       <div className="flex items-center gap-2 px-1">
          <p className="text-xs font-medium text-slate-400">Today's Snapshot / {new Date(selectedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
       </div>
 
-      {/* Snapshot Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 px-1">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 px-1">
         {[
-          { label: 'NEW LEADS', value: stats.newLeads, icon: Users, color: 'text-slate-400' },
-          { label: 'AGENT RESPONSES', value: stats.responses, sub: `${(stats.newLeads + stats.responses) > 0 ? ((stats.responses / (stats.responses + stats.newLeads)) * 100).toFixed(1) : 0}% Initial Response`, icon: History, color: 'text-brand-blue' },
-          { label: 'PIPELINE VOLUME', value: stats.pipeline, icon: TrendingUp, color: 'text-slate-400' },
-          { label: 'IMMEDIATE ALERTS', value: stats.alerts, icon: Zap, color: 'text-red-500', isCritical: true },
+          { label: 'TOTAL LEADS', value: totalLeads, icon: Users },
+          { label: 'UNTOUCHED', value: statusCounts['Untouched'] || 0, icon: Zap },
+          { label: 'DUE TODAY', value: followUpCounts.today, icon: Clock },
+          { label: 'OVERDUE', value: followUpCounts.overdue, icon: AlertTriangle, isCritical: true },
+          { label: 'CONVERTED', value: convertedCount, icon: CheckCircle, isPositive: true },
         ].map((stat, i) => (
-          <motion.button 
-            key={i}
-            onClick={() => {
-              const types = ['new_leads', 'agent_responses', 'pipeline_volume', 'immediate_alerts'];
-              setActivePopup(types[i]);
-              setPopupSearch('');
-            }}
+          <motion.div
+            key={stat.label}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
+            transition={{ delay: i * 0.06 }}
             className={cn(
-              "bg-white p-6 rounded-sm border border-slate-100 flex flex-col justify-between h-32 transition-all hover:border-[#978C21] cursor-pointer text-left select-none shadow-sm focus:outline-none w-full",
-              stat.isCritical && "bg-red-50/10 border-red-100 hover:border-red-500"
+              "bg-white p-5 rounded-sm border border-slate-100 flex flex-col justify-between h-28 shadow-sm",
+              stat.isCritical && "bg-red-50/10 border-red-100"
             )}
           >
-            <div className="w-full">
-               <p className="text-xs font-medium text-slate-500 leading-none mb-4">{stat.label}</p>
-               <h3 className={cn("text-4xl font-black text-brand-text tracking-tighter italic", stat.isCritical && "text-red-500")}>{stat.value}</h3>
+            <div className="flex items-center justify-between">
+               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{stat.label}</p>
+               <stat.icon className={cn("w-3.5 h-3.5 text-slate-300", stat.isCritical && "text-red-400", stat.isPositive && "text-[#10B981]")} />
             </div>
-            {stat.sub && (
-              <p className="text-[9px] font-bold text-slate-400 mt-1 italic leading-none">{stat.sub}</p>
-            )}
-          </motion.button>
+            <h3 className={cn(
+              "text-3xl font-black text-brand-text tracking-tighter italic",
+              stat.isCritical && "text-red-500",
+              stat.isPositive && "text-[#10B981]"
+            )}>{loading ? '—' : stat.value}</h3>
+          </motion.div>
         ))}
       </div>
 
-      {/* Quick Action Alerts block */}
-      <div className="bg-[#FBFAF8] p-6 rounded-sm border border-slate-100 mx-1">
-         <p className="text-xs font-medium text-slate-500 mb-3">Quick Actions & Alerts</p>
-         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            
-            {/* Action 1: Daily Call Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('call');
-                  setAlertDate(new Date().toISOString().substring(0, 10));
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-[#978C21] transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] group-hover:bg-[#978C21] group-hover:text-white transition-all">
-                  <Phone className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Daily Call Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => l.currentStatus === 'No Response' && l.nextCallDate && l.nextCallDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Calls Scheduled Today
-                  </p>
-               </div>
-            </button>
+      {/* Secondary KPI row — only authoritative figures; never a fabricated avgResponseTAT. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-1">
+        {[
+          { label: 'PROJECTED NCP', value: `৳${stats.projected.toLocaleString()}` },
+          { label: 'COLLECTED NCP', value: `৳${stats.collected.toLocaleString()}`, isPositive: true },
+          { label: 'CONVERSION RATE', value: stats.conversionRate },
+          { label: 'ACTIVE LEADS / PIPELINE LOCKED', value: `${stats.activeLeads} / ${pipelineLockedCount}` },
+        ].map((stat) => (
+          <div key={stat.label} className="bg-[#FBFAF8] p-4 rounded-sm border border-slate-100">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">{stat.label}</p>
+            <h4 className={cn("text-lg font-black text-brand-text italic tracking-tight", stat.isPositive && "text-[#10B981]")}>{loading ? '—' : stat.value}</h4>
+          </div>
+        ))}
+      </div>
 
-            {/* Action 1B: Tomorrow Call Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('call_tomorrow');
-                  setAlertDate(getTomorrowString());
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-[#978C21]/60 transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-amber-50/50 border border-amber-100/50 flex items-center justify-center text-[#978C21]/80 group-hover:bg-[#978C21] group-hover:text-white transition-all">
-                  <Phone className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Call Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => l.currentStatus === 'No Response' && l.nextCallDate && l.nextCallDate.substring(0, 10) === getTomorrowString()).length} Calls Tomorrow
-                  </p>
-               </div>
-            </button>
-
-            {/* Action 2: Daily Meeting Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('meeting');
-                  setAlertDate(new Date().toISOString().substring(0, 10));
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-blue-500 transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                  <CalendarIcon className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Daily Meeting Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => l.meetingDate && l.meetingDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Meetings Today
-                  </p>
-               </div>
-            </button>
-
-            {/* Action 2B: Tomorrow Meeting Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('meeting_tomorrow');
-                  setAlertDate(getTomorrowString());
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-blue-400 transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-blue-50/50 border border-blue-100/50 flex items-center justify-center text-blue-500 group-hover:bg-blue-500 group-hover:text-white transition-all">
-                  <CalendarIcon className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Meeting Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => l.meetingDate && l.meetingDate.substring(0, 10) === getTomorrowString()).length} Meetings Tomorrow
-                  </p>
-               </div>
-            </button>
-
-            {/* Action 3: Daily Follow-up Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('followup');
-                  setAlertDate(new Date().toISOString().substring(0, 10));
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-emerald-500 transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-all">
-                  <RefreshCw className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Daily Follow-up Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => ['Follow-up Set', 'Interested', 'Pipeline Locked'].includes(l.currentStatus) && l.nextFollowUpDate && l.nextFollowUpDate.substring(0, 10) === new Date().toISOString().substring(0, 10)).length} Follow-ups Today
-                  </p>
-               </div>
-            </button>
-
-            {/* Action 3B: Tomorrow Follow-up Alerts */}
-            <button
-               onClick={() => {
-                  setActivePopup('followup_tomorrow');
-                  setAlertDate(getTomorrowString());
-                  setPopupSearch('');
-               }}
-               className="flex items-center gap-4 bg-white p-5 rounded-sm border border-slate-150 hover:border-emerald-400 transition-all text-left group shadow-sm cursor-pointer"
-            >
-               <div className="w-12 h-12 rounded bg-emerald-50/50 border border-emerald-100/50 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all">
-                  <RefreshCw className="w-5 h-5" />
-               </div>
-               <div>
-                  <h4 className="text-sm font-semibold text-slate-700">Tomorrow Follow-up Alerts</h4>
-                  <p className="text-xs text-slate-400 mt-1">
-                     {getDateFilteredLeads().filter(l => ['Follow-up Set', 'Interested', 'Pipeline Locked'].includes(l.currentStatus) && l.nextFollowUpDate && l.nextFollowUpDate.substring(0, 10) === getTomorrowString()).length} Follow-ups Tomorrow
-                  </p>
-               </div>
-            </button>
-
+      {/* Sales Pipeline — canonical current_status sequence, authoritative statusCounts only. */}
+      <div className="bg-white rounded-sm border border-slate-100 shadow-sm mx-1 p-6">
+         <div className="flex items-center justify-between mb-5">
+            <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest">Sales Pipeline</p>
+            <p className="text-[10px] text-slate-300 uppercase tracking-widest">{pipelineTotal} leads across stages</p>
          </div>
+         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {PIPELINE_STAGES.map(stage => {
+              const count = statusCounts[stage] || 0;
+              const pct = pipelineTotal > 0 ? ((count / pipelineTotal) * 100).toFixed(0) : '0';
+              return (
+                <div key={stage} className="border border-slate-100 rounded-sm p-3 bg-[#FBFAF8]">
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-tight mb-2 h-6">{stage}</p>
+                   <p className="text-xl font-black text-brand-text italic leading-none">{loading ? '—' : count}</p>
+                   <p className="text-[9px] text-slate-300 font-bold mt-1">{pipelineTotal > 0 ? `${pct}%` : '—'}</p>
+                </div>
+              );
+            })}
+         </div>
+      </div>
+
+      {/* Daily Execution — Today & Tomorrow activity feed (left) + Task Calendar (right). */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mx-1">
+         <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+               <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest">Today &amp; Tomorrow Activity</p>
+               <Link to="/activities" className="text-[10px] font-bold text-[#978C21] uppercase tracking-widest hover:underline inline-flex items-center gap-1">
+                  All Activities <ChevronRight className="w-3 h-3" />
+               </Link>
+            </div>
+            {dailyActivitiesLoading ? (
+               <div className="flex-1 flex items-center justify-center py-10">
+                  <div className="w-8 h-8 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin" />
+               </div>
+            ) : dailyActivities.length === 0 ? (
+               <div className="flex-1 flex flex-col items-center justify-center py-10 text-center bg-[#FBFAF8] border border-dashed border-slate-100 rounded-sm">
+                  <ListChecks className="w-5 h-5 text-slate-300 mb-2" />
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No calls, meetings or follow-ups due today or tomorrow</p>
+               </div>
+            ) : (
+               <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+                  {dailyActivities.map(activity => (
+                     <button
+                        key={activity.id}
+                        onClick={() => window.location.assign(`/leads/${activity.leadId}`)}
+                        className="w-full flex items-center justify-between gap-3 p-3 bg-[#FBFAF8] hover:bg-white border border-transparent hover:border-[#978C21]/30 rounded-sm transition-all text-left"
+                     >
+                        <div className="min-w-0">
+                           <p className="text-xs font-semibold text-slate-700 truncate">{activity.prospectName}</p>
+                           <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-0.5">{activity.type} · {activity.category}</p>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-400 shrink-0">{new Date(activity.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
+                     </button>
+                  ))}
+               </div>
+            )}
+         </div>
+
+         {canAccess('dashboard', 'view_task_calendar') && (
+         <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6 overflow-hidden">
+            <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-4">Calendar</p>
+            <TaskCalendar embedded={true} />
+         </div>
+         )}
+      </div>
+
+      {/* Follow-up Health — authoritative Step 4B/5 bucket counts, deep-links into /follow-up. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-1">
+         {[
+           { bucket: 'overdue', label: 'Overdue', value: followUpCounts.overdue, isCritical: true },
+           { bucket: 'today', label: 'Due Today', value: followUpCounts.today },
+           { bucket: 'upcoming', label: 'Upcoming', value: followUpCounts.upcoming },
+         ].map(card => (
+            <Link
+               key={card.bucket}
+               to={`/follow-up?bucket=${card.bucket}`}
+               className={cn(
+                 "bg-white p-5 rounded-sm border border-slate-100 shadow-sm hover:border-[#978C21] transition-all flex items-center justify-between",
+                 card.isCritical && "hover:border-red-400"
+               )}
+            >
+               <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{card.label} Follow-ups</p>
+                  <p className={cn("text-2xl font-black italic text-brand-text", card.isCritical && "text-red-500")}>{loading ? '—' : card.value}</p>
+               </div>
+               <ChevronRight className="w-4 h-4 text-slate-200" />
+            </Link>
+         ))}
+      </div>
+
+      {/* Needs Attention — only fields derivable from existing authoritative data. */}
+      <div className="bg-[#FBFAF8] p-6 rounded-sm border border-slate-100 mx-1">
+         <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest mb-4">Needs Attention</p>
+         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Link to="/leads?status=Untouched" className="flex items-center justify-between gap-3 bg-white p-4 rounded-sm border border-slate-100 hover:border-[#978C21] transition-all">
+               <div>
+                  <p className="text-xs font-semibold text-slate-700">Untouched Leads</p>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Never contacted yet</p>
+               </div>
+               <span className="text-xl font-black italic text-brand-text">{loading ? '—' : (statusCounts['Untouched'] || 0)}</span>
+            </Link>
+            <Link to="/follow-up?bucket=overdue" className="flex items-center justify-between gap-3 bg-white p-4 rounded-sm border border-slate-100 hover:border-red-400 transition-all">
+               <div>
+                  <p className="text-xs font-semibold text-slate-700">Overdue Follow-ups</p>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Past their scheduled date</p>
+               </div>
+               <span className="text-xl font-black italic text-red-500">{loading ? '—' : followUpCounts.overdue}</span>
+            </Link>
+         </div>
+         <p className="text-[10px] text-slate-400 italic mt-4">Additional attention rules coming in a later phase.</p>
       </div>
 
       {/* Alert popup details list modal */}
@@ -1703,7 +1773,9 @@ export default function Dashboard() {
       </div>
       )}
 
-      {/* Campaign Performance Breakdown */}
+      {/* Lead Status Distribution — this is a canonical status breakdown from the
+          server, not real per-campaign attribution. Honestly labeled rather than
+          mislabeled as "Campaign Performance". */}
       {canAccess('dashboard', 'view_campaign_pie') && (
       <div className="bg-white rounded-sm border border-slate-100 shadow-sm mt-8 mx-1">
          <div className="px-8 py-6 flex items-center justify-between border-b border-slate-50">
@@ -1711,13 +1783,12 @@ export default function Dashboard() {
                <div className="w-10 h-10 rounded bg-[#978C21]/5 flex items-center justify-center text-[#978C21]">
                   <Database className="w-5 h-5" />
                </div>
-               <h4 className="text-brand-text text-[13px] font-black uppercase tracking-[0.2em] italic">Campaign Performance Intelligence</h4>
+               <h4 className="text-brand-text text-[13px] font-black uppercase tracking-[0.2em] italic">Lead Status Distribution</h4>
             </div>
             <div className="flex items-center gap-4">
-               <div className="flex items-center gap-3 border border-slate-100 px-4 py-2 rounded bg-white cursor-pointer hover:bg-slate-50 transition-all shadow-sm">
+               <div className="flex items-center gap-3 border border-slate-100 px-4 py-2 rounded bg-white shadow-sm">
                   <Filter className="w-4 h-4 text-slate-400" />
-                  <span className="text-[10px] font-black text-brand-text uppercase tracking-widest">All Campaigns</span>
-                  <ChevronRight className="w-4 h-4 text-slate-200" />
+                  <span className="text-[10px] font-black text-brand-text uppercase tracking-widest">All Statuses</span>
                </div>
             </div>
          </div>
@@ -1726,8 +1797,8 @@ export default function Dashboard() {
             <div className="flex flex-col lg:flex-row gap-20">
                <div className="flex-1">
                   <div>
-                    <h2 className="text-6xl font-black text-brand-text tracking-tighter italic leading-none serif">All Campaigns</h2>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-4 italic">Period: May 1 - May 31, 2026</p>
+                    <h2 className="text-6xl font-black text-brand-text tracking-tighter italic leading-none serif">Lead Status Distribution</h2>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-4 italic">Period: {formattedDateRange()}</p>
                   </div>
 
                   <div className="mt-20 flex flex-col xl:flex-row items-center gap-16">
@@ -1758,7 +1829,7 @@ export default function Dashboard() {
                            </PieChart>
                         </ResponsiveContainer>
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                           <span className="text-5xl font-black italic tracking-tighter text-brand-text leading-none">{(stats.newLeads + stats.responses)}</span>
+                           <span className="text-5xl font-black italic tracking-tighter text-brand-text leading-none">{totalLeads}</span>
                            <span className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-2">TOTAL LEADS</span>
                         </div>
                         </>
@@ -1767,7 +1838,7 @@ export default function Dashboard() {
 
                      <div className="w-full max-w-xl">
                         <div className="flex justify-between border-b border-slate-100 pb-3 mb-6">
-                           <p className="text-[11px] font-black text-slate-400 uppercase italic">Call Status</p>
+                           <p className="text-[11px] font-black text-slate-400 uppercase italic">Lead Status</p>
                            <p className="text-[11px] font-black text-slate-400 uppercase italic">Total</p>
                         </div>
                         <div className="space-y-1.5 ">
@@ -1779,7 +1850,7 @@ export default function Dashboard() {
                            ))}
                            <div className="flex items-center justify-between border-t border-slate-100 pt-6 mt-6">
                               <p className="text-[12px] font-black text-brand-text uppercase tracking-widest italic opacity-40">Grand Total</p>
-                              <h5 className="text-[18px] font-black text-brand-text italic leading-none">{(stats.newLeads + stats.responses)}</h5>
+                              <h5 className="text-[18px] font-black text-brand-text italic leading-none">{totalLeads}</h5>
                            </div>
                         </div>
                      </div>

@@ -12,11 +12,20 @@ export const translations = {
     navNcpProgress: "NCP Progress",
     navTrendCharts: "Trends",
     navCampaignBreakdown: "Campaigns",
-    navFollowUpStrategy: "Follow-ups",
+    navFollowUpStrategy: "Follow-up Queue",
     navTaskCalendar: "Task Calendar",
+    navActivities: "Today / Activities",
     navTeamProgress: "Team",
     navUserManagement: "Users",
     navSettings: "Settings",
+
+    // Sidebar section headings (Step 5B grouping)
+    navSectionOverview: "Overview",
+    navSectionMyWork: "My Work",
+    navSectionLeads: "Leads",
+    navSectionInsights: "Insights",
+    navSectionManagement: "Management",
+    navSectionSystem: "System",
 
     // General Words
     loading: "Loading...",
@@ -319,11 +328,20 @@ export const translations = {
     navNcpProgress: "NCP অগ্রগতি",
     navTrendCharts: "ট্রেন্ড",
     navCampaignBreakdown: "ক্যাম্পেইন",
-    navFollowUpStrategy: "ফলো-আপ",
+    navFollowUpStrategy: "ফলো-আপ কিউ",
     navTaskCalendar: "টাস্ক ক্যালেন্ডার",
+    navActivities: "আজকের কার্যক্রম",
     navTeamProgress: "টিম",
     navUserManagement: "ইউজার",
     navSettings: "সেটিংস",
+
+    // Sidebar section headings (Step 5B grouping)
+    navSectionOverview: "ওভারভিউ",
+    navSectionMyWork: "আমার কাজ",
+    navSectionLeads: "লিড",
+    navSectionInsights: "অন্তর্দৃষ্টি",
+    navSectionManagement: "ব্যবস্থাপনা",
+    navSectionSystem: "সিস্টেম",
 
     // General Words
     loading: "লোড হচ্ছে...",
