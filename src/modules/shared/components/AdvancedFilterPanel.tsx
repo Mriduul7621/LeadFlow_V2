@@ -17,6 +17,7 @@ import { settingsService } from '../../../services/settingsService';
 import { userService } from '../../users/services/userService';
 import { MOCK_DROPDOWNS } from '../../../mock/data';
 import { Lead } from '../types';
+import { useTranslation } from '../utils/translations';
 
 export interface FilterRule {
   id: string;
@@ -33,20 +34,20 @@ export interface SavedPreset {
 }
 
 export const FILTER_FIELDS = [
-  { value: 'prospectName', label: 'Prospect Name', type: 'string' },
-  { value: 'mobile', label: 'Mobile Number', type: 'string' },
-  { value: 'area', label: 'Area / Region', type: 'select', category: 'Area' },
-  { value: 'source', label: 'Lead Source', type: 'select', category: 'Source' },
-  { value: 'currentStatus', label: 'Operational Status', type: 'select', category: 'FollowUpStatus' },
-  { value: 'productName', label: 'Product Name', type: 'select', category: 'Product' },
-  { value: 'campaignName', label: 'Campaign Funnel', type: 'select', category: 'Campaign' },
-  { value: 'profession', label: 'Profession', type: 'select', category: 'Profession' },
-  { value: 'assignedTo', label: 'Assigned User (Emp ID)', type: 'select', category: 'Users' },
-  { value: 'collectedNCP', label: 'Collected NCP (৳)', type: 'number' },
-  { value: 'projectedNCP', label: 'Projected NCP (৳)', type: 'number' },
-  { value: 'sumAssured', label: 'Sum Assured (৳)', type: 'number' },
-  { value: 'creationDate', label: 'Creation Date', type: 'date' },
-  { value: 'nextFollowUpDate', label: 'Next Follow-up Date', type: 'date' }
+  { value: 'prospectName', labelKey: 'filterProspectName', type: 'string' },
+  { value: 'mobile', labelKey: 'filterMobileNumber', type: 'string' },
+  { value: 'area', labelKey: 'filterAreaRegion', type: 'select', category: 'Area' },
+  { value: 'source', labelKey: 'filterLeadSource', type: 'select', category: 'Source' },
+  { value: 'currentStatus', labelKey: 'filterOperationalStatus', type: 'select', category: 'FollowUpStatus' },
+  { value: 'productName', labelKey: 'filterProductName', type: 'select', category: 'Product' },
+  { value: 'campaignName', labelKey: 'filterCampaignFunnel', type: 'select', category: 'Campaign' },
+  { value: 'profession', labelKey: 'filterProfession', type: 'select', category: 'Profession' },
+  { value: 'assignedTo', labelKey: 'filterAssignedUser', type: 'select', category: 'Users' },
+  { value: 'collectedNCP', labelKey: 'filterCollectedNCP', type: 'number' },
+  { value: 'projectedNCP', labelKey: 'filterProjectedNCP', type: 'number' },
+  { value: 'sumAssured', labelKey: 'filterSumAssured', type: 'number' },
+  { value: 'creationDate', labelKey: 'filterCreationDate', type: 'date' },
+  { value: 'nextFollowUpDate', labelKey: 'filterNextFollowUpDate', type: 'date' }
 ];
 
 interface AdvancedFilterPanelProps {
@@ -56,6 +57,7 @@ interface AdvancedFilterPanelProps {
 }
 
 export default function AdvancedFilterPanel({ onFilterChange, allLeads, className }: AdvancedFilterPanelProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [matchType, setMatchType] = useState<'AND' | 'OR'>('AND');
   const [rules, setRules] = useState<FilterRule[]>([]);
@@ -275,42 +277,42 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
 
     if (config.type === 'number') {
       return [
-        { value: 'gt', label: 'Is Greater Than (>' },
-        { value: 'lt', label: 'Is Less Than (<)' },
-        { value: 'equals', label: 'Equals' },
-        { value: 'not_equals', label: 'Does Not Equal' },
-        { value: 'is_empty', label: 'Is Empty' },
-        { value: 'is_not_empty', label: 'Is Not Empty' }
+        { value: 'gt', labelKey: 'opGreaterThan' },
+        { value: 'lt', labelKey: 'opLessThan' },
+        { value: 'equals', labelKey: 'opEquals' },
+        { value: 'not_equals', labelKey: 'opNotEquals' },
+        { value: 'is_empty', labelKey: 'opIsEmpty' },
+        { value: 'is_not_empty', labelKey: 'opIsNotEmpty' }
       ];
     }
 
     if (config.type === 'date') {
       return [
-        { value: 'equals', label: 'Is On (Date)' },
-        { value: 'gt', label: 'Is After (Date)' },
-        { value: 'lt', label: 'Is Before (Date)' },
-        { value: 'is_empty', label: 'Is Empty' },
-        { value: 'is_not_empty', label: 'Is Not Empty' }
+        { value: 'equals', labelKey: 'opIsOn' },
+        { value: 'gt', labelKey: 'opIsAfter' },
+        { value: 'lt', labelKey: 'opIsBefore' },
+        { value: 'is_empty', labelKey: 'opIsEmpty' },
+        { value: 'is_not_empty', labelKey: 'opIsNotEmpty' }
       ];
     }
 
     if (config.type === 'select') {
       return [
-        { value: 'equals', label: 'Equals' },
-        { value: 'not_equals', label: 'Does Not Equal' },
-        { value: 'is_empty', label: 'Is Empty' },
-        { value: 'is_not_empty', label: 'Is Not Empty' }
+        { value: 'equals', labelKey: 'opEquals' },
+        { value: 'not_equals', labelKey: 'opNotEquals' },
+        { value: 'is_empty', labelKey: 'opIsEmpty' },
+        { value: 'is_not_empty', labelKey: 'opIsNotEmpty' }
       ];
     }
 
     return [
-      { value: 'contains', label: 'Contains' },
-      { value: 'equals', label: 'Equals' },
-      { value: 'not_equals', label: 'Does Not Equal' },
-      { value: 'starts_with', label: 'Starts With' },
-      { value: 'ends_with', label: 'Ends With' },
-      { value: 'is_empty', label: 'Is Empty' },
-      { value: 'is_not_empty', label: 'Is Not Empty' }
+      { value: 'contains', labelKey: 'opContains' },
+      { value: 'equals', labelKey: 'opEquals' },
+      { value: 'not_equals', labelKey: 'opNotEquals' },
+      { value: 'starts_with', labelKey: 'opStartsWith' },
+      { value: 'ends_with', labelKey: 'opEndsWith' },
+      { value: 'is_empty', labelKey: 'opIsEmpty' },
+      { value: 'is_not_empty', labelKey: 'opIsNotEmpty' }
     ];
   };
 
@@ -325,10 +327,10 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
       >
         <span className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-[#978C21]" />
-          Advanced Query & Segment Engine
+          {t('advancedQueryEngine')}
           {rules.length > 0 && (
             <span className="ml-2 px-2 py-0.5 bg-[#978C21] text-white text-[9px] rounded-full normal-case font-black">
-              {rules.length} active rule{rules.length > 1 ? 's' : ''}
+              {t('activeRules', { count: String(rules.length) })}
             </span>
           )}
         </span>
@@ -350,7 +352,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
               {presets.length > 0 && (
                 <div className="space-y-2">
                   <span className="text-[10px] uppercase tracking-widest text-slate-400 font-extrabold flex items-center gap-1">
-                    <FolderHeart className="w-3.5 h-3.5 text-[#978C21]" /> Saved Filter Segments
+                    <FolderHeart className="w-3.5 h-3.5 text-[#978C21]" /> {t('savedFilterSegments')}
                   </span>
                   <div className="flex flex-wrap gap-2">
                     {presets.map(p => (
@@ -369,7 +371,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                           type="button"
                           onClick={(e) => deletePreset(p.id, e)}
                           className="text-slate-400 hover:text-red-500 p-0.5 transition-colors"
-                          title="Delete Preset"
+                          title={t('deletePreset')}
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -384,7 +386,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-50 pb-3">
                   <div className="flex items-center gap-4">
                     <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                      Search Logic:
+                      {t('searchLogic')}:
                     </span>
                     <div className="inline-flex items-center bg-slate-100 p-0.5 rounded-sm border border-slate-200">
                       <button
@@ -396,7 +398,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                             : 'text-slate-400 hover:text-slate-700'
                         }`}
                       >
-                        Match ALL (AND)
+                        {t('matchAllAnd')}
                       </button>
                       <button
                         type="button"
@@ -407,7 +409,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                             : 'text-slate-400 hover:text-slate-700'
                         }`}
                       >
-                        Match ANY (OR)
+                        {t('matchAnyOr')}
                       </button>
                     </div>
                   </div>
@@ -419,7 +421,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                       className="px-3.5 py-2 bg-slate-100 hover:bg-[#978C21] hover:text-white border border-slate-200 rounded-sm text-[10px] font-black uppercase tracking-widest transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs text-slate-700"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Add Filter Condition
+                      {t('addFilterCondition')}
                     </button>
                     {rules.length > 0 && (
                       <button
@@ -428,7 +430,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                         className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 rounded-sm text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        Clear Filter
+                        {t('clearFilter')}
                       </button>
                     )}
                   </div>
@@ -438,8 +440,8 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                 {rules.length === 0 ? (
                   <div className="py-8 text-center text-slate-300 flex flex-col items-center gap-2 select-none border border-dashed border-slate-100 rounded-sm">
                     <Sliders className="w-8 h-8 text-slate-200" />
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em] italic">No active search filters applied</p>
-                    <p className="text-[9px] font-medium text-slate-400">Click the button above to add custom segment queries dynamically</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] italic">{t('noActiveFilters')}</p>
+                    <p className="text-[9px] font-medium text-slate-400">{t('addSegmentHint')}</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -459,28 +461,28 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                         >
                           {/* Selector: Field */}
                           <div className="md:col-span-4 space-y-1">
-                            <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Query Field</label>
+                            <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">{t('queryField')}</label>
                             <select
                               value={rule.field}
                               onChange={(e) => updateRule(rule.id, { field: e.target.value })}
                               className="w-full bg-white border border-slate-200 text-[10px] font-black uppercase tracking-wide py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21]"
                             >
                               {FILTER_FIELDS.map(f => (
-                                <option key={f.value} value={f.value}>{f.label}</option>
+                                <option key={f.value} value={f.value}>{t(f.labelKey as any)}</option>
                               ))}
                             </select>
                           </div>
 
                           {/* Selector: Operator */}
                           <div className="md:col-span-3 space-y-1">
-                            <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Comparison</label>
+                            <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">{t('comparison')}</label>
                             <select
                               value={rule.operator}
                               onChange={(e) => updateRule(rule.id, { operator: e.target.value as any })}
                               className="w-full bg-white border border-slate-200 text-[10px] font-black uppercase tracking-wide py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21]"
                             >
                               {getOperatorsForField(rule.field).map(op => (
-                                <option key={op.value} value={op.value}>{op.label}</option>
+                                <option key={op.value} value={op.value}>{t(op.labelKey as any)}</option>
                               ))}
                             </select>
                           </div>
@@ -489,7 +491,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                           <div className="md:col-span-4 space-y-1">
                             {!isNoValueOperator && (
                               <>
-                                <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Target Value</label>
+                                <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">{t('targetValue')}</label>
                                 {isDropdownField ? (
                                   selectedFieldConfig?.category === 'Users' ? (
                                     <select
@@ -497,7 +499,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                                       onChange={(e) => updateRule(rule.id, { value: e.target.value })}
                                       className="w-full bg-white border border-slate-200 text-[10px] font-black uppercase tracking-wide py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21]"
                                     >
-                                      <option value="">-- ANY ASSIGNEE --</option>
+                                      <option value="">-- {t('anyAssignee')} --</option>
                                       {users.map(u => (
                                         <option key={u.employeeId} value={u.employeeId}>
                                           {u.role}: {u.name} ({u.employeeId})
@@ -510,7 +512,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                                       onChange={(e) => updateRule(rule.id, { value: e.target.value })}
                                       className="w-full bg-white border border-slate-200 text-[10px] font-black uppercase tracking-wide py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21]"
                                     >
-                                      <option value="">-- CHOOSE CRITERIA --</option>
+                                      <option value="">-- {t('chooseCriteria')} --</option>
                                       {(dropdownOptions[selectedFieldConfig?.category || ''] || []).map(opt => (
                                         <option key={opt} value={opt}>{opt.toUpperCase()}</option>
                                       ))}
@@ -529,7 +531,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                                     value={rule.value}
                                     onChange={(e) => updateRule(rule.id, { value: e.target.value })}
                                     className="w-full bg-white border border-slate-200 text-[10px] font-black px-3 py-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
-                                    placeholder="Number..."
+                                    placeholder={t('numberPlaceholder')}
                                   />
                                 ) : (
                                   <input
@@ -537,7 +539,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                                     value={rule.value}
                                     onChange={(e) => updateRule(rule.id, { value: e.target.value })}
                                     className="w-full bg-white border border-slate-200 text-[10px] font-semibold px-3 py-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
-                                    placeholder="Search key..."
+                                    placeholder={t('searchKeyPlaceholder')}
                                   />
                                 )}
                               </>
@@ -550,7 +552,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                               type="button"
                               onClick={() => removeRule(rule.id)}
                               className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 transition-colors inline-block cursor-pointer"
-                              title="Delete Rule"
+                              title={t('deleteRule')}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -566,7 +568,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
               {rules.length > 0 && (
                 <div className="flex flex-col md:flex-row md:items-center justify-between border-t border-slate-50 pt-5 gap-4">
                   <div className="text-[9px] font-bold text-[#978C21] flex items-center gap-1">
-                    <HelpCircle className="w-3.5 h-3.5" /> Leads matching this filter matrix will dynamically update across your display list modules.
+                    <HelpCircle className="w-3.5 h-3.5" /> {t('filterMatrixHint')}
                   </div>
                   <div>
                     {!showSavePreset ? (
@@ -576,7 +578,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                         className="px-4 py-2 hover:bg-slate-50 border border-slate-200 text-[10px] font-black uppercase tracking-widest text-[#978C21] rounded-sm flex items-center gap-1.5 cursor-pointer shadow-xs"
                       >
                         <Save className="w-3.5 h-3.5 font-bold" />
-                        Save This Segment Preset
+                        {t('saveSegmentPreset')}
                       </button>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -584,7 +586,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                           type="text"
                           value={newPresetName}
                           onChange={(e) => setNewPresetName(e.target.value)}
-                          placeholder="PRESET SEGMENT NAME"
+                          placeholder={t('presetSegmentName').toUpperCase()}
                           className="bg-[#FBFAF8] border border-slate-200 px-3 py-2 text-[10px] uppercase font-black tracking-wider outline-none rounded-sm placeholder:opacity-40"
                         />
                         <button
@@ -593,14 +595,14 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
                           disabled={!newPresetName.trim()}
                           className="px-3.5 py-2.5 bg-slate-900 border border-transparent text-white hover:bg-black text-[10px] font-black uppercase tracking-widest rounded-sm disabled:opacity-45 cursor-pointer"
                         >
-                          Save
+                          {t('save')}
                         </button>
                         <button
                           type="button"
                           onClick={() => setShowSavePreset(false)}
                           className="text-[9px] font-black uppercase text-slate-400 hover:text-slate-700 px-2 tracking-widest cursor-pointer"
                         >
-                          Cancel
+                          {t('cancel')}
                         </button>
                       </div>
                     )}

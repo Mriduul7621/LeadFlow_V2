@@ -10,12 +10,14 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
+import { useTranslation } from '../../shared/utils/translations';
 import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 
 export default function ExecutionIntelligence() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const [period, setPeriod] = useState('TODAY');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().substring(0, 10));
   const [customDates, setCustomDates] = useState({ 
@@ -116,7 +118,7 @@ export default function ExecutionIntelligence() {
       setTeamStats(teamBreakdown.filter(t => t.assigned > 0 || t.collected > 0));
 
     } catch (err) {
-      toast.error('Execution intelligence retrieval failure');
+      toast.error(t('executionRetrievalFailure'));
     } finally {
       setLoading(false);
     }
@@ -211,15 +213,15 @@ export default function ExecutionIntelligence() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Team_Breakout");
     XLSX.writeFile(workbook, `Execution_Intelligence_Export_${period}.xlsx`);
-    toast.success("Team breakout list downloaded successfully!");
+    toast.success("{t('teamBreakoutDownloaded')}");
   };
 
   return (
     <div className="space-y-8 pb-24 bg-white font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Execution Intelligence</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Live Status ledger and Hierarchical Output Audit</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('executionTitle')}</h1>
+          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">{t('dailyStatusAudit')}</p>
         </div>
         <div className="flex items-center gap-3">
           <button 
@@ -238,12 +240,12 @@ export default function ExecutionIntelligence() {
               <LayoutDashboard className="w-4 h-4 text-[#978C21]" />
            </div>
            <div>
-              <h4 className="text-white text-sm font-semibold">Daily Status Audit</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Execution intelligence scope</p>
+              <h4 className="text-white text-sm font-semibold">{t('dailyStatusAudit')}</h4>
+              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{t('executionScope')}</p>
            </div>
         </div>
         <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
-           {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
+           {(['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'] as const).map(p => (
              <button 
                key={p}
                onClick={() => setPeriod(p)}
@@ -252,7 +254,7 @@ export default function ExecutionIntelligence() {
                  period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                )}
              >
-               {p}
+               {p === 'TODAY' ? t('periodToday') : p === 'THIS MONTH' ? t('periodThisMonth') : p === 'LAST MONTH' ? t('periodLastMonth') : t('periodCustom')}
              </button>
            ))}
            <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
@@ -266,7 +268,7 @@ export default function ExecutionIntelligence() {
       {period === 'CUSTOM' && (
         <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4 animate-fade-in">
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
+              <span className="text-xs font-medium text-slate-500">{t('startDate')}:</span>
               <input 
                 type="date" 
                 value={customDates.start}
@@ -275,7 +277,7 @@ export default function ExecutionIntelligence() {
               />
            </div>
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
+              <span className="text-xs font-medium text-slate-500">{t('endDate')}:</span>
               <input 
                 type="date" 
                 value={customDates.end}
@@ -295,12 +297,12 @@ export default function ExecutionIntelligence() {
           {/* Key KPI Cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
              {[
-               { id: 'contacted', label: 'CONTACTED CALLS', value: stats.contacted, icon: Phone, color: 'text-brand-blue' },
-               { id: 'meetings', label: 'MEETINGS COMPLETED', value: stats.meetings, icon: Users, color: 'text-slate-900' },
-               { id: 'followups', label: 'FOLLOW-UPS SET', value: stats.followUps, icon: RefreshCw, color: 'text-slate-500' },
-               { id: 'pipeline', label: 'PIPELINE LOCKED', value: stats.pipeline, icon: Target, color: 'text-slate-900' },
-               { id: 'projected', label: 'PROJECTED NCP', value: `৳${stats.projected.toLocaleString()}`, icon: TrendingUp, color: 'text-brand-text' },
-               { id: 'collected', label: 'COLLECTED NCP', value: `৳${stats.collected.toLocaleString()}`, icon: CheckCircle, color: 'text-[#10B981]', isGreen: true },
+               { id: 'contacted', label: t('contactedCalls'), value: stats.contacted, icon: Phone, color: 'text-brand-blue' },
+               { id: 'meetings', label: t('meetingsCompleted'), value: stats.meetings, icon: Users, color: 'text-slate-900' },
+               { id: 'followups', label: t('followUpsSet'), value: stats.followUps, icon: RefreshCw, color: 'text-slate-500' },
+               { id: 'pipeline', label: t('pipelineLockedCol'), value: stats.pipeline, icon: Target, color: 'text-slate-900' },
+               { id: 'projected', label: t('projectedNCP'), value: `৳${stats.projected.toLocaleString()}`, icon: TrendingUp, color: 'text-brand-text' },
+               { id: 'collected', label: t('collectedNCP'), value: `৳${stats.collected.toLocaleString()}`, icon: CheckCircle, color: 'text-[#10B981]', isGreen: true },
              ].map((stat, i) => (
                 <button
                    key={stat.id}
@@ -323,37 +325,37 @@ export default function ExecutionIntelligence() {
           <div className="bg-white rounded-sm border border-slate-100 overflow-hidden shadow-sm mt-8">
             <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <h4 className="text-[12px] font-black uppercase text-brand-text tracking-widest italic">Regional Agency Distribution</h4>
-                  <p className="text-[8px] uppercase tracking-widest text-slate-400 font-bold mt-1">Real-time team breakout numbers</p>
+                  <h4 className="text-[12px] font-black uppercase text-brand-text tracking-widest italic">{t('regionalAgencyDistribution')}</h4>
+                  <p className="text-[8px] uppercase tracking-widest text-slate-400 font-bold mt-1">{t('realtimeTeamBreakout')}</p>
                 </div>
                 <button 
                   onClick={handleExportTeamStats}
                   className="flex items-center gap-2 border border-slate-100 bg-white hover:bg-slate-50 hover:border-[#978C21]/20 px-4 py-2 text-[10px] uppercase font-black tracking-wider shadow-sm transition-all text-[#978C21]"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Export Sheet
+                  {t('exportSheet')}
                 </button>
             </div>
              <div className="overflow-x-auto">
                 <table className="w-full text-left">
                    <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
                       <tr>
-                         <th className="px-8 py-4">Team / Agency</th>
-                         <th className="px-6 py-4 text-center">Total Assigned</th>
-                         <th className="px-6 py-4 text-center text-brand-blue">No Call Yet</th>
-                         <th className="px-6 py-4 text-center">Contacted</th>
-                         <th className="px-6 py-4 text-center">Meetings</th>
-                         <th className="px-6 py-4 text-center font-bold">Follow-ups</th>
-                         <th className="px-6 py-4 text-center">Pipeline Locked</th>
-                         <th className="px-6 py-4 text-center text-[#10B981]">Collected NCP</th>
-                         <th className="px-6 py-4 text-center">Projected NCP</th>
+                         <th className="px-8 py-4">{t('teamAgency')}</th>
+                         <th className="px-6 py-4 text-center">{t('totalAssigned')}</th>
+                         <th className="px-6 py-4 text-center text-brand-blue">{t('noCallYet')}</th>
+                         <th className="px-6 py-4 text-center">{t('contacted')}</th>
+                         <th className="px-6 py-4 text-center">{t('meetings')}</th>
+                         <th className="px-6 py-4 text-center font-bold">{t('followUps')}</th>
+                         <th className="px-6 py-4 text-center">{t('pipelineLockedCol')}</th>
+                         <th className="px-6 py-4 text-center text-[#10B981]">{t('collectedNCP')}</th>
+                         <th className="px-6 py-4 text-center">{t('projectedNCP')}</th>
                       </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-50 italic text-[11px]">
                       {teamStats.length === 0 ? (
                          <tr>
                             <td colSpan={9} className="text-center py-12 text-slate-400 font-bold uppercase tracking-widest italic text-[10px]">
-                               No active team records matched for this range
+                               {t('noActiveTeamRecords')}
                             </td>
                          </tr>
                       ) : (
@@ -393,7 +395,7 @@ export default function ExecutionIntelligence() {
                    <div className="flex items-center justify-between border-b border-slate-100 pb-6 mb-8">
                       <div>
                          <h2 className="text-2xl font-black text-brand-text uppercase italic tracking-tighter leading-none">{activePopup.replace('_', ' ')} list</h2>
-                         <p className="text-[9px] font-black text-[#978C21] uppercase tracking-widest mt-1.5 italic">Drill Down Lead Intelligence details</p>
+                         <p className="text-[9px] font-black text-[#978C21] uppercase tracking-widest mt-1.5 italic">{t('drillDownDetails')}</p>
                       </div>
                       <button 
                         onClick={() => setActivePopup(null)}
@@ -407,7 +409,7 @@ export default function ExecutionIntelligence() {
                       <Search className="w-4 h-4 text-slate-400" />
                       <input 
                         type="text" 
-                        placeholder="Filter drilldown by client name, mobile or area..." 
+                        placeholder="{t('filterDrilldown')}" 
                         value={popupSearch}
                         onChange={(e) => setPopupSearch(e.target.value)}
                         className="bg-transparent border-none text-[10px] font-bold uppercase text-slate-800 placeholder-slate-400 outline-none w-full"
@@ -419,17 +421,17 @@ export default function ExecutionIntelligence() {
                         <table className="w-full text-left">
                            <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
                               <tr>
-                                 <th className="px-6 py-4">Client Name</th>
-                                 <th className="px-6 py-4">Area</th>
-                                 <th className="px-6 py-4 text-center">NCP Collected</th>
-                                 <th className="px-6 py-4 text-center">Current Status</th>
+                                 <th className="px-6 py-4">{t('clientName')}</th>
+                                 <th className="px-6 py-4">{t('area')}</th>
+                                 <th className="px-6 py-4 text-center">{t('ncpCollected')}</th>
+                                 <th className="px-6 py-4 text-center">{t('currentStatus')}</th>
                               </tr>
                            </thead>
                            <tbody className="divide-y divide-slate-50 text-[11px] italic font-medium">
                               {getFilteredLeadsForPopup().length === 0 ? (
                                  <tr>
                                     <td colSpan={4} className="text-center py-12 text-slate-400 font-bold uppercase tracking-widest text-[9px] italic">
-                                       No active logs registered for this KPI
+                                       {t('noActiveLogs')}
                                     </td>
                                  </tr>
                               ) : (
@@ -457,7 +459,7 @@ export default function ExecutionIntelligence() {
                      onClick={() => setActivePopup(null)}
                      className="w-full py-4 bg-slate-900 hover:bg-slate-850 text-white font-black uppercase tracking-widest text-[10px] rounded-sm shadow-md transition-all italic"
                    >
-                     Close intelligence panel
+                     {t('closeIntelligencePanel')}
                    </button>
                 </div>
               </motion.div>

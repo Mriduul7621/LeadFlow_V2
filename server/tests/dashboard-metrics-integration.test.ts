@@ -594,6 +594,14 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     const loadEnd = page.indexOf('const formattedDateRange');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
-    assert.ok(page.includes('No trend data available') || loadBody.includes('setTrendData([])') || loadBody.includes('metrics.trendData'));
+    // Localization moved the empty-state string into the translation dictionary;
+    // the trend section must still read the server series (metrics.trendData)
+    // and render the localized noTrendData empty state.
+    const translations = fs.readFileSync(path.join(process.cwd(), 'src/modules/shared/utils/translations.ts'), 'utf-8');
+    assert.ok(translations.includes('No trend data available'), 'noTrendData English string must remain in the dictionary');
+    assert.ok(
+      page.includes("t('noTrendData')") || page.includes('metrics?.trendData') || page.includes('metrics.trendData'),
+      'page still fabricates trend from current totals',
+    );
   });
 });

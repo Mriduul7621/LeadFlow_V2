@@ -9,10 +9,12 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
+import { useTranslation } from '../../shared/utils/translations';
 import { toast } from 'sonner';
 
 export default function CampaignBreakdown() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const [period, setPeriod] = useState('THIS MONTH');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().substring(0, 10));
   const [customDates, setCustomDates] = useState({ 
@@ -82,7 +84,7 @@ export default function CampaignBreakdown() {
       setCampaignStats(breakdown.filter(item => item.value > 0 || true));
 
     } catch (err) {
-      toast.error('Campaign Breakdown calculations failure.');
+      toast.error(t('campaignBreakdownFailure'));
     } finally {
       setLoading(false);
     }
@@ -111,8 +113,8 @@ export default function CampaignBreakdown() {
     <div className="space-y-8 pb-24 bg-white font-sans text-slate-800 animate-fade-in">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Campaign Breakdown</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Campaign distributions, statuses, conversion rates and shares</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('campaignBreakdownTitle')}</h1>
+          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">{t('campaignSubtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           <button 
@@ -131,8 +133,8 @@ export default function CampaignBreakdown() {
               <Database className="w-5 h-5 text-[#978C21]" />
            </div>
            <div>
-              <h4 className="text-white text-sm font-semibold">Campaign-wise lead distribution</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Campaign details reporting scope</p>
+              <h4 className="text-white text-sm font-semibold">{t('campaignDistributions')}</h4>
+              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{t('campaignReportingScope')}</p>
            </div>
         </div>
         <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
@@ -208,15 +210,15 @@ export default function CampaignBreakdown() {
                  </ResponsiveContainer>
                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                     <span className="text-5xl font-black italic tracking-tighter text-brand-text leading-none">{grandTotal}</span>
-                    <span className="text-[9px] text-slate-400 uppercase font-black tracking-widest mt-2 block">TOTAL LEADS</span>
+                    <span className="text-[9px] text-slate-400 uppercase font-black tracking-widest mt-2 block">{t('totalLeadsCount')}</span>
                  </div>
               </div>
 
               {/* Right Side: Legend breakout list */}
               <div className="w-full flex-1 max-w-xl">
                  <div className="flex justify-between border-b border-slate-100 pb-3 mb-6">
-                    <p className="text-[11px] font-black text-slate-400 uppercase italic">Call Status Group</p>
-                    <p className="text-[11px] font-black text-slate-400 uppercase italic">Distribution Volume</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase italic">{t('callStatusGroup')}</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase italic">{t('distributionVolume')}</p>
                  </div>
                  <div className="space-y-1.5 max-h-[45vh] overflow-y-auto pr-2">
                     {campaignStats.map((item, i) => (
@@ -229,7 +231,7 @@ export default function CampaignBreakdown() {
                        </div>
                     ))}
                     <div className="flex items-center justify-between border-t border-slate-100 pt-6 mt-6">
-                       <p className="text-[12px] font-black text-brand-text uppercase tracking-widest italic opacity-40">Grand Total sum</p>
+                       <p className="text-[12px] font-black text-brand-text uppercase tracking-widest italic opacity-40">{t('grandTotal')}</p>
                        <h5 className="text-[18px] font-black text-brand-text italic leading-none">{grandTotal}</h5>
                     </div>
                  </div>

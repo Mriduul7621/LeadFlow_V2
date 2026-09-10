@@ -98,7 +98,7 @@ export default function Login() {
       toast.error(
         err instanceof ApiError
           ? err.message
-          : 'Could not verify the database. Please check the server configuration and try again.'
+          : t('couldNotVerifyDatabase')
       );
     } finally {
       setCheckingSetup(false);
@@ -159,7 +159,7 @@ export default function Login() {
       // first, cache/metadata warm-up afterwards.
       await activateSession(session, {
         navigate,
-        welcome: () => toast.success('Super Admin console initialized successfully!'),
+        welcome: () => toast.success(t('setupSuccess')),
         afterAuthentication: warmUpAfterAuthentication,
       });
     } catch (err) {
@@ -167,7 +167,7 @@ export default function Login() {
       const message =
         err instanceof ApiError
           ? err.message
-          : "Failed to setup Super Admin account. Please try again.";
+          : t('setupFailed');
       toast.error(message);
     }
   };
@@ -197,7 +197,7 @@ export default function Login() {
       const message =
         err instanceof ApiError
           ? err.message
-          : 'Login failed. Please check your connection and try again.';
+          : t('loginFailed');
       toast.error(message);
     }
   };
@@ -218,29 +218,36 @@ export default function Login() {
         id="login-dark-gradient"
       />
 
-      {/* Language Switcher in top right corner */}
-      <div className="absolute top-6 right-6 z-30 flex items-center gap-1 bg-black/50 backdrop-blur-md border border-white/10 p-1 rounded-full shadow-lg" id="login-language-switcher">
+      {/* Language Switcher in top right corner — selectable before login. */}
+      <div
+        className="absolute top-6 right-6 z-30 flex items-center gap-1 bg-black/50 backdrop-blur-md border border-white/10 p-1 rounded-full shadow-lg"
+        id="login-language-switcher"
+        role="group"
+        aria-label={t('languageLabel')}
+      >
         <button
           type="button"
           onClick={() => setLanguage('en')}
+          aria-pressed={language === 'en'}
           className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
             language === 'en'
               ? 'bg-[#978C21] text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          EN
+          {t('languageEnglish')}
         </button>
         <button
           type="button"
           onClick={() => setLanguage('bn')}
+          aria-pressed={language === 'bn'}
           className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-all cursor-pointer ${
             language === 'bn'
               ? 'bg-[#978C21] text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          BN
+          {t('languageBangla')}
         </button>
       </div>
 
@@ -272,7 +279,7 @@ export default function Login() {
         >
           <img 
             src="https://lh3.googleusercontent.com/d/1NrB07Qg9d6yhOib8gds5g4-HZLmbJng3"
-            alt="Shanta Life Logo"
+            alt={t('shantaLifeLogo')}
             className="h-24 md:h-28 w-auto object-contain transition-all duration-300"
             referrerPolicy="no-referrer"
           />
@@ -287,7 +294,7 @@ export default function Login() {
           id="institutional-pill-badge"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-pulse"></span>
-          Institutional Lead Management
+          {t('institutionalLeadManagement')}
         </motion.div>
 
         {/* Dynamic Inner Panel holding Presentation or Form */}
@@ -534,7 +541,7 @@ export default function Login() {
       {/* Footer Copy */}
       <div className="relative z-10 w-full text-center pb-2 select-none" id="login-footer">
         <p className="text-sm text-slate-500 opacity-70">
-          © 2024 Shanta Life Insurance. All Rights Reserved.
+          {t('loginFooter')}
         </p>
       </div>
     </div>

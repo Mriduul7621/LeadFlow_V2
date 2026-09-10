@@ -40,6 +40,7 @@ const SERVICE = () => read('src/modules/dashboard/services/dashboardService.ts')
 const LAYOUT = () => read('src/layouts/AppLayout.tsx');
 const APP = () => read('src/App.tsx');
 const FOLLOWUP = () => read('src/modules/leads/pages/FollowUpStrategy.tsx');
+const TRANSLATIONS = () => read('src/modules/shared/utils/translations.ts');
 
 /** Every route the sidebar is allowed to reference (must exist in App.tsx). */
 const REAL_ROUTES = [
@@ -108,7 +109,10 @@ describe('Dashboard UX Step 5B — source guards', () => {
 
   it('D. no fabricated trend series restored', () => {
     const dashboard = DASHBOARD();
-    assert.ok(dashboard.includes('No trend data available'), 'trend empty state must remain');
+    // The trend empty state is now localized via the translation system; the
+    // English source string must still exist in the dictionary.
+    assert.ok(dashboard.includes("t('noTrendData')"), 'trend empty state must use the localized noTrendData key');
+    assert.ok(TRANSLATIONS().includes('No trend data available'), 'noTrendData English string must remain');
     // No client-generated sample series.
     assert.ok(!dashboard.includes('CAMPAIGN_TREND_DATA'), 'must not ship a hardcoded trend series');
     assert.ok(dashboard.includes('metrics?.trendData') || dashboard.includes('metrics.trendData'), 'trend section must read metrics.trendData');
@@ -209,8 +213,8 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(page.includes("canAccess('lead_generate', 'create')"), 'quick action must gate on lead_generate.create capability');
     // Only rendered when the user may create leads.
     assert.ok(page.includes('{canCreateLead &&'), 'quick action must be conditionally rendered on the permission');
-    // Accessible on icon-only (small) screens.
-    assert.ok(page.includes('aria-label="Add Lead"'), 'quick action needs an accessible label for icon-only screens');
+    // Accessible on icon-only (small) screens — label is now localized.
+    assert.ok(page.includes('aria-label={t(\'addLead\')}'), 'quick action needs a localized accessible label for icon-only screens');
   });
 
   it('O. Today/Tomorrow activity loads from follow-up queue + server scheduled_activities, not getLeads() (Step 5C supersedes Step 5B)', () => {

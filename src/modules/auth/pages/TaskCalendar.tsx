@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Calendar as CalendarIcon, 
   ChevronLeft, 
@@ -24,6 +24,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../store/authStore';
+import { useTranslation } from '../../shared/utils/translations';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -43,23 +44,42 @@ interface CalendarEvent {
   raw: ScheduledActivity;
 }
 
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const VIEW_MODES = ['year', 'month', 'week', 'day'] as const;
+type ViewMode = (typeof VIEW_MODES)[number];
 
 export default function TaskCalendar({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuthStore();
+  const { t, language, activityLabel } = useTranslation();
   const navigate = useNavigate();
+
+  // Localized month / day names for calendar chrome.
+  const monthNames = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(language === 'bn' ? 'bn-BD' : 'en-US', { month: 'long', timeZone: 'UTC' });
+    return Array.from({ length: 12 }, (_, i) => fmt.format(new Date(Date.UTC(2020, i, 1))));
+  }, [language]);
+
+  const dayNames = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(language === 'bn' ? 'bn-BD' : 'en-US', { weekday: 'short', timeZone: 'UTC' });
+    // 2020-11-01 is a Sunday; the next 7 days cover Sun..Sat.
+    return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(Date.UTC(2020, 10, 1 + i))));
+  }, [language]);
+
+  const viewModeLabel = (mode: string): string => {
+    switch (mode) {
+      case 'year': return t('viewYear');
+      case 'month': return t('viewMonth');
+      case 'week': return t('viewWeek');
+      case 'day': return t('viewDay');
+      default: return mode;
+    }
+  };
   const [loading, setLoading] = useState(true);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [filteredEvents, setFilteredEvents] = useState<CalendarEvent[]>([]);
 
   // Calendar State
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [viewMode, setViewMode] = useState<'year' | 'month' | 'week' | 'day'>('month');
+  const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [searchQuery, setSearchQuery] = useState('');
   
   // Event Type Filters
@@ -132,7 +152,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           const d = new Date(iso);
           const type = sa.activityType || (sa as any).activity_type;
           // Title fallback: use explicit title or prospect fallback
-          const prospect = (sa as any).leadCustomerName || sa.title || 'Scheduled activity';
+          const prospect = (sa as any).leadCustomerName || sa.title || t('scheduledActivity');
           return {
             id: sa.id,
             leadId: sa.leadId || (sa as any).lead_id,
@@ -140,7 +160,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
             leadMobile: (sa as any).leadMobile || undefined,
             leadStatus: (sa as any).leadStatus || undefined,
             type: type as any,
-            title: sa.title || `${type === 'call' ? 'Call' : type === 'meeting' ? 'Meeting' : type === 'task' ? 'Task' : 'Follow-up'}: ${prospect}`,
+            title: sa.title || `${activityLabel(type)}: ${prospect}`,
             date: d,
             dateStr: iso,
             remarks: sa.remarks || undefined,
@@ -263,9 +283,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       setSelectedEvent(prev => prev && prev.id === ev.id ? { ...prev, status: 'completed', raw: patched } : prev);
       // also patch selectedDayEvents if open
       setSelectedDayEvents(prev => prev ? { ...prev, events: prev.events.map(e => e.id === ev.id ? { ...e, status: 'completed', raw: patched } : e) } : prev);
-      toast.success('Activity completed');
+      toast.success(t('activityCompleted'));
     } catch (err: any) {
-      toast.error(err?.message || 'Complete failed');
+      toast.error(err?.message || t('completeFailed'));
     }
   };
 
@@ -278,9 +298,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, status: 'cancelled', raw: finalPatched } : e));
       setSelectedEvent(prev => prev && prev.id === ev.id ? { ...prev, status: 'cancelled', raw: finalPatched } : prev);
       setSelectedDayEvents(prev => prev ? { ...prev, events: prev.events.map(e => e.id === ev.id ? { ...e, status: 'cancelled', raw: finalPatched } : e) } : prev);
-      toast.success('Activity cancelled');
+      toast.success(t('activityCancelled'));
     } catch (err: any) {
-      toast.error(err?.message || 'Cancel failed');
+      toast.error(err?.message || t('cancelFailed'));
     }
   };
 
@@ -288,7 +308,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const renderYearView = () => {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in duration-300">
-        {MONTHS.map((mName, mIdx) => {
+        {monthNames.map((mName, mIdx) => {
           const daysInM = getDaysInMonthCount(year, mIdx);
           const firstDayIdx = getFirstDayOfMonthIndex(year, mIdx);
           
@@ -312,7 +332,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 {mName}
               </button>
               <div className="grid grid-cols-7 text-center gap-y-1">
-                {DAYS_OF_WEEK.map(day => (
+                {dayNames.map(day => (
                   <span key={day} className="text-[8px] font-mono font-black text-slate-300 uppercase select-none">{day.charAt(0)}</span>
                 ))}
                 {monthDays.map((d, index) => {
@@ -368,7 +388,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     return (
       <div className="border border-slate-200/60 rounded-sm overflow-hidden bg-[#FBFAF8] shadow-sm animate-in fade-in duration-300">
         <div className="grid grid-cols-7 text-center bg-white border-b border-slate-200/60 divide-x divide-slate-100">
-          {DAYS_OF_WEEK.map(day => (
+          {dayNames.map(day => (
             <div key={day} className="py-3 text-[10px] font-black tracking-widest text-slate-400 uppercase italic">
               {day}
             </div>
@@ -405,7 +425,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       onClick={() => handleDayClick(day, dayEvents)}
                       className="text-[8px] font-black text-[#978C21] uppercase tracking-wider hover:underline leading-none p-1 cursor-pointer"
                     >
-                      {dayEvents.length} Tasks
+                      {dayEvents.length} {t('tasks')}
                     </button>
                   )}
                 </div>
@@ -437,7 +457,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       onClick={() => handleDayClick(day, dayEvents)}
                       className="w-full text-center py-1 text-[8px] font-black text-slate-400 hover:text-[#978C21] uppercase tracking-widest block border border-dashed border-slate-200 bg-white"
                     >
-                      + {dayEvents.length - 3} More
+                      + {dayEvents.length - 3} {t('more')}
                     </button>
                   )}
                 </div>
@@ -469,7 +489,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   activeToday && "bg-[#F9F9F4]/70"
                 )}
               >
-                <span className="text-[9px] font-mono font-black text-slate-400 uppercase tracking-widest italic">{DAYS_OF_WEEK[day.getDay()]}</span>
+                <span className="text-[9px] font-mono font-black text-slate-400 uppercase tracking-widest italic">{dayNames[day.getDay()]}</span>
                 <span className={cn(
                   "text-lg font-mono font-black tracking-tighter w-8 h-8 flex items-center justify-center rounded-none leading-none",
                   activeToday ? "bg-[#978C21] text-white shadow-md shadow-[#978C21]/15" : "text-slate-800"
@@ -477,7 +497,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   {day.getDate()}
                 </span>
                 <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider">
-                  {dayEvents.length} Active Tasks
+                  {dayEvents.length} {t('tasks')}
                 </span>
               </div>
             );
@@ -491,7 +511,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               <div key={day.toString()} className="p-3 space-y-3 bg-[#FBFAF8]">
                 {dayEvents.length === 0 ? (
                   <div className="h-full flex items-center justify-center py-20 text-[8px] text-slate-350 uppercase font-black font-mono tracking-widest italic text-center select-none">
-                    No Tasks
+                    {t('noTasks')}
                   </div>
                 ) : (
                   dayEvents.map(event => (
@@ -508,14 +528,14 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       )}
                     >
                       <span className="text-[10px] font-black uppercase tracking-wider block truncate">{event.lead.prospectName}</span>
-                      <p className="text-[8px] uppercase tracking-wider opacity-90 line-clamp-2">{event.remarks || 'No notes specified.'}</p>
+                      <p className="text-[8px] uppercase tracking-wider opacity-90 line-clamp-2">{event.remarks || t('noNotesSpecified')}</p>
                       
                       <div className="pt-1.5 border-t border-black/5 flex items-center justify-between text-[8px] font-mono font-bold opacity-80">
                         <span className="flex items-center gap-0.5">
                           <Clock className="w-2.5 h-2.5 shrink-0" />
                           {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        <span className="uppercase">{event.type}</span>
+                        <span className="uppercase">{activityLabel(event.type)}</span>
                       </div>
                     </div>
                   ))
@@ -536,30 +556,30 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in fade-in duration-300">
         <div className="lg:col-span-4 bg-[#FBFAF8] border border-slate-200/60 p-6 rounded-sm space-y-6">
           <div className="space-y-1 pb-4 border-b border-slate-100">
-            <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest italic block">{DAYS_OF_WEEK[currentDate.getDay()]}</span>
+            <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest italic block">{dayNames[currentDate.getDay()]}</span>
             <h3 className="text-xl font-black uppercase tracking-tight text-slate-950">
-              {MONTHS[currentDate.getMonth()]} {currentDate.getDate()}, {currentDate.getFullYear()}
+              {monthNames[currentDate.getMonth()]} {currentDate.getDate()}, {currentDate.getFullYear()}
             </h3>
             <p className="text-[9px] text-[#978C21] font-black uppercase tracking-wider">
-              {dayEvents.length} Registered tasks for today
+              {t('registeredTasksToday', { count: dayEvents.length })}
             </p>
           </div>
 
           <div className="space-y-4">
             <div className="p-4 bg-white border border-slate-150 rounded-sm space-y-3">
-              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block">Daily Overview stats</span>
+              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block">{t('dailyOverview')}</span>
               <div className="grid grid-cols-3 text-center divide-x divide-slate-100">
                 <div className="px-1.5">
                   <span className="text-lg font-black text-sky-600 font-mono italic">{dayEvents.filter(e => e.type === 'call').length}</span>
-                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">Calls</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">{t('calls')}</span>
                 </div>
                 <div className="px-1.5">
                   <span className="text-lg font-black text-amber-600 font-mono italic">{dayEvents.filter(e => e.type === 'meeting').length}</span>
-                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">Meetings</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">{t('meetings')}</span>
                 </div>
                 <div className="px-1.5">
                   <span className="text-lg font-black text-emerald-600 font-mono italic">{dayEvents.filter(e => e.type === 'followup').length}</span>
-                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">Follows</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase block tracking-wider mt-1">{t('follows')}</span>
                 </div>
               </div>
             </div>
@@ -567,13 +587,13 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
         </div>
 
         <div className="lg:col-span-8 bg-white border border-slate-250/60 p-6 rounded-sm space-y-4 shadow-sm min-h-[350px]">
-          <h4 className="text-xs font-black uppercase tracking-widest text-slate-900 border-b border-slate-100 pb-3">Hour-by-Hour Task Agenda</h4>
+          <h4 className="text-xs font-black uppercase tracking-widest text-slate-900 border-b border-slate-100 pb-3">{t('hourByHourAgenda')}</h4>
           
           {dayEvents.length === 0 ? (
             <div className="py-20 border border-dashed border-slate-200 rounded-sm text-center flex flex-col justify-center items-center gap-4 bg-[#FBFAF8]">
               <span className="w-10 h-10 bg-slate-50 border border-slate-150 flex items-center justify-center text-slate-400 rounded-full font-mono text-xs">0</span>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest italic">
-                There are no actions scheduled for this date.
+                {t('noActionsScheduled')}
               </p>
             </div>
           ) : (
@@ -601,14 +621,14 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         (event.type as any) === 'followup' && "bg-emerald-100 text-emerald-700 border-emerald-200",
                         event.type === 'task' && "bg-purple-100 text-purple-700 border-purple-200"
                       )}>
-                        {event.type}
+                        {activityLabel(event.type)}
                       </span>
                       <span className="text-[9px] font-mono text-slate-400 tracking-wider">
                         ⏰ {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                     <h5 className="text-xs font-black uppercase tracking-wide text-slate-900">{event.lead.prospectName}</h5>
-                    <p className="text-[9px] text-slate-500 font-medium leading-relaxed italic">{event.remarks || 'No notes defined.'}</p>
+                    <p className="text-[9px] text-slate-500 font-medium leading-relaxed italic">{event.remarks || t('noNotesDefined')}</p>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
@@ -619,7 +639,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       }}
                       className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#978C21] text-slate-650 hover:text-[#978C21] text-[9px] font-black uppercase tracking-widest flex items-center gap-1 cursor-pointer"
                     >
-                      Open <ExternalLink className="w-3 h-3" />
+                      {t('open')} <ExternalLink className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
@@ -639,13 +659,13 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           <div>
             <h4 className="text-[28px] font-black text-brand-text tracking-tighter italic leading-none serif flex items-center gap-3">
               <CalendarIcon className="w-6 h-6 text-[#978C21]" />
-              Task Calendar
+              {t('taskCalendarTitle')}
             </h4>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 ml-0.5">Role Action Schedule & Follow-up Agenda</p>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 ml-0.5">{t('taskCalendarSubtitle')}</p>
           </div>
           {/* View Mode Switcher */}
           <div className="flex items-center gap-1 border border-slate-200/60 p-1 rounded-sm bg-[#FBFAF8] shadow-sm">
-            {(['year', 'month', 'week', 'day'] as const).map((mode) => (
+            {VIEW_MODES.map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
@@ -656,7 +676,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     : "text-slate-400 hover:text-slate-800 hover:bg-slate-100"
                 )}
               >
-                {mode}
+                {viewModeLabel(mode)}
               </button>
             ))}
           </div>
@@ -668,14 +688,14 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               <CalendarIcon className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-4xl font-black tracking-tighter text-slate-900 uppercase italic serif leading-none">Task Calendar</h1>
-              <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Unified Schedule & Action Agenda Interface</p>
+              <h1 className="text-4xl font-black tracking-tighter text-slate-900 uppercase italic serif leading-none">{t('taskCalendarTitle')}</h1>
+              <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">{t('taskCalendarSubtitleAlt')}</p>
             </div>
           </div>
 
           {/* View Mode Switcher */}
           <div className="flex items-center gap-1 border border-slate-200/60 p-1.5 rounded-sm bg-[#FBFAF8] shadow-sm">
-            {(['year', 'month', 'week', 'day'] as const).map((mode) => (
+            {VIEW_MODES.map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
@@ -686,7 +706,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     : "text-slate-400 hover:text-slate-800 hover:bg-slate-100"
                 )}
               >
-                {mode}
+                {viewModeLabel(mode)}
               </button>
             ))}
           </div>
@@ -706,9 +726,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           
           <span className="text-xs font-black uppercase tracking-widest text-slate-850 font-mono select-none min-w-[130px] text-center italic">
             {viewMode === 'year' && `${year}`}
-            {viewMode === 'month' && `${MONTHS[month]} ${year}`}
-            {viewMode === 'week' && `Week of ${getWeekDays(currentDate)[0].getDate()} ${MONTHS[getWeekDays(currentDate)[0].getMonth()]}`}
-            {viewMode === 'day' && `${currentDate.getDate()} ${MONTHS[month]} ${year}`}
+            {viewMode === 'month' && `${monthNames[month]} ${year}`}
+            {viewMode === 'week' && t('weekOf', { date: `${getWeekDays(currentDate)[0].getDate()} ${monthNames[getWeekDays(currentDate)[0].getMonth()]}` })}
+            {viewMode === 'day' && `${currentDate.getDate()} ${monthNames[month]} ${year}`}
           </span>
 
           <button
@@ -722,7 +742,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
             onClick={() => setCurrentDate(new Date())}
             className="px-3.5 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-[9px] font-black uppercase tracking-widest text-slate-600 cursor-pointer leading-none"
           >
-            Today
+            {t('today')}
           </button>
         </div>
 
@@ -730,7 +750,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
         <div className="flex flex-wrap items-center gap-4 w-full md:w-auto justify-end">
           {/* Checkbox controls for filter types */}
           <div className="flex items-center gap-3 bg-white border border-slate-200 p-1.5 px-3">
-            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic mr-1">LEGEND:</span>
+            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic mr-1">{t('legend')}:</span>
             
             <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-sky-700 select-none">
               <input 
@@ -739,7 +759,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 onChange={(e) => setFilterTypes({ ...filterTypes, call: e.target.checked })}
                 className="w-3.5 h-3.5 accent-sky-500" 
               />
-              Calls
+              {t('filterCalls')}
             </label>
 
             <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-amber-700 select-none">
@@ -749,7 +769,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 onChange={(e) => setFilterTypes({ ...filterTypes, meeting: e.target.checked })}
                 className="w-3.5 h-3.5 accent-amber-500" 
               />
-              Meetings
+              {t('filterMeetings')}
             </label>
 
             <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-emerald-700 select-none">
@@ -759,7 +779,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 onChange={(e) => setFilterTypes({ ...filterTypes, followup: e.target.checked })}
                 className="w-3.5 h-3.5 accent-emerald-500" 
               />
-              Followups
+              {t('filterFollowUps')}
             </label>
 
             <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-purple-700 select-none">
@@ -769,7 +789,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 onChange={(e) => setFilterTypes({ ...filterTypes, task: (e.target as HTMLInputElement).checked } as any)}
                 className="w-3.5 h-3.5 accent-purple-500" 
               />
-              Tasks
+              {t('filterTasks')}
             </label>
           </div>
 
@@ -780,7 +800,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search Prospect..."
+              placeholder={`${t('search')}...`}
               className="outline-none bg-transparent w-full text-[10px] font-black uppercase tracking-wider placeholder:text-slate-300 font-mono"
             />
           </div>
@@ -791,7 +811,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       {loading ? (
         <div className="py-32 flex flex-col justify-center items-center gap-4">
           <div className="w-10 h-10 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin" />
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic animate-pulse">Syncing Agenda schedules...</p>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic animate-pulse">{t('loading')}</p>
         </div>
       ) : (
         <div className="min-h-[400px]">
@@ -828,7 +848,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     {selectedEvent.type === 'call' && <Phone className="w-3 h-3" />}
                     {(selectedEvent.type === 'follow_up' || (selectedEvent.type as any) === 'followup') && <CalendarIcon className="w-3 h-3" />}
                     {selectedEvent.type === 'task' && <FileText className="w-3 h-3" />}
-                    {selectedEvent.type} Agenda Event
+                    {activityLabel(selectedEvent.type)}
                   </span>
                   <h3 className="text-base font-black uppercase tracking-tight text-slate-900 mt-2">
                     {selectedEvent.prospectName}
@@ -847,7 +867,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                 <div className="grid grid-cols-2 gap-4">
                   {/* Scheduled Time */}
                   <div className="p-3 bg-slate-50 border border-slate-100 space-y-1">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Date & Time</span>
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">{t('dateTime')}</span>
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-800 font-mono leading-none block">
                       {selectedEvent.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                     </span>
@@ -858,48 +878,48 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
                   {/* Status */}
                   <div className="p-3 bg-slate-50 border border-slate-100 space-y-1">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Current Pipeline Status</span>
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">{t('currentPipelineStatus')}</span>
                     <span className="text-[10px] font-black uppercase tracking-wider text-[#978C21] leading-none block mt-1">
                       {selectedEvent.leadStatus || selectedEvent.status}
                     </span>
                     <span className="text-[8px] font-mono font-bold text-slate-400 uppercase block mt-1">
-                      Economic Potential: {(selectedEvent.raw as any).durationMinutes ?? 0 > 0 ? `${(selectedEvent.raw as any).durationMinutes ?? 0} NCP` : 'None Lock'}
+                      {t('economicPotential')}: {(selectedEvent.raw as any).durationMinutes ?? 0 > 0 ? `${(selectedEvent.raw as any).durationMinutes ?? 0} NCP` : t('noneLock')}
                     </span>
                   </div>
                 </div>
 
                 {/* Demographics details */}
                 <div className="space-y-3">
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block border-b border-slate-100 pb-1">Client Demographics</span>
+                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block border-b border-slate-100 pb-1">{t('clientDemographics')}</span>
                   
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[10px] uppercase font-mono">
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Phone className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Mobile: <span className="text-slate-800 font-black">{selectedEvent.lead.mobile}</span></span>
+                      <span>{t('mobile')}: <span className="text-slate-800 font-black">{selectedEvent.lead.mobile}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Tag className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Campaign: <span className="text-slate-800 font-black">{selectedEvent.lead.campaignName}</span></span>
+                      <span>{t('campaign')}: <span className="text-slate-800 font-black">{selectedEvent.lead.campaignName}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Layers className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Product Name: <span className="text-slate-800 font-black">{(selectedEvent.raw as any).title || selectedEvent.title}</span></span>
+                      <span>{t('productName')}: <span className="text-slate-800 font-black">{(selectedEvent.raw as any).title || selectedEvent.title}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <MapPin className="w-3.5 h-3.5 text-slate-300" />
-                      <span className="truncate">Area: <span className="text-slate-800 font-black" title={selectedEvent.lead.area}>{selectedEvent.lead.area}</span></span>
+                      <span className="truncate">{t('area')}: <span className="text-slate-800 font-black" title={selectedEvent.lead.area}>{selectedEvent.lead.area}</span></span>
                     </div>
                   </div>
                 </div>
 
                 {/* Remarks */}
                 <div className="p-4 bg-[#FBFAF8] border border-slate-200/60 rounded-sm space-y-2">
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block">Notes & contextual Remarks</span>
+                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block">{t('notesRemarks')}</span>
                   <p className="text-[10px] text-slate-600 font-medium leading-relaxed italic">
-                    "{selectedEvent.remarks || 'No detailed remarks recorded for this agenda slot.'}"
+                    "{selectedEvent.remarks || t('noRemarksRecorded')}"
                   </p>
                 </div>
               </div>
@@ -910,7 +930,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   onClick={() => setSelectedEvent(null)}
                   className="px-4.5 py-3 border border-slate-200 text-slate-550 hover:bg-slate-50 font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
                 >
-                  Close Panel
+                  {t('closePanel')}
                 </button>
                 {String(selectedEvent.status).toLowerCase() === 'scheduled' ? (
                   <>
@@ -918,13 +938,13 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       onClick={() => handleComplete(selectedEvent)}
                       className="px-4.5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
                     >
-                      Complete
+                      {t('complete')}
                     </button>
                     <button
                       onClick={() => handleCancel(selectedEvent)}
                       className="px-4.5 py-3 bg-amber-600 hover:bg-amber-700 text-white font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
                     >
-                      Cancel
+                      {t('cancel')}
                     </button>
                   </>
                 ) : (
@@ -934,7 +954,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   onClick={() => handleLaunchTracking(selectedEvent.leadId)}
                   className="px-5 py-3 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-[10px] uppercase tracking-widest italic transition-colors shadow-lg shadow-[#978C21]/15 flex items-center gap-1.5 cursor-pointer"
                 >
-                  Launch Tracking Terminal
+                  {t('launchTracking')}
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -959,10 +979,10 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               <div className="bg-[#FBFAF8] p-6 border-b border-slate-100 flex items-center justify-between">
                 <div className="space-y-1">
                   <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block">
-                    {DAYS_OF_WEEK[selectedDayEvents.day.getDay()]} Agenda List
+                    {t('agendaList', { day: dayNames[selectedDayEvents.day.getDay()] })}
                   </span>
                   <h3 className="text-base font-black uppercase tracking-tight text-slate-900">
-                    {MONTHS[selectedDayEvents.day.getMonth()]} {selectedDayEvents.day.getDate()}, {selectedDayEvents.day.getFullYear()}
+                    {monthNames[selectedDayEvents.day.getMonth()]} {selectedDayEvents.day.getDate()}, {selectedDayEvents.day.getFullYear()}
                   </h3>
                 </div>
                 <button
@@ -977,7 +997,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
               <div className="p-6 max-h-[350px] overflow-y-auto divide-y divide-slate-100 scrollbar-thin space-y-4">
                 {selectedDayEvents.events.length === 0 ? (
                   <div className="py-12 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest italic font-mono">
-                    No active tasks scheduled for this day.
+                    {t('noTasksThisDay')}
                   </div>
                 ) : (
                   selectedDayEvents.events.map(event => (
@@ -1006,14 +1026,14 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                             event.type === 'call' && "bg-sky-50 border-sky-200 text-sky-600",
                             event.type === 'followup' && "bg-emerald-50 border-emerald-200 text-emerald-600"
                           )}>
-                            {event.type}
+                            {activityLabel(event.type)}
                           </span>
                           <span className="text-[8.5px] font-mono text-slate-400 font-black">
                             ⏰ {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
                         <h4 className="text-xs font-black uppercase text-slate-850 truncate group-hover:text-[#978C21] transition-colors">{event.lead.prospectName}</h4>
-                        <p className="text-[9px] text-slate-450 line-clamp-1 italic font-medium">{event.remarks || 'No notes registered.'}</p>
+                        <p className="text-[9px] text-slate-450 line-clamp-1 italic font-medium">{event.remarks || t('noNotesRegistered')}</p>
                       </div>
 
                       <ChevronRight className="w-4 h-4 text-slate-300 shrink-0 self-center group-hover:translate-x-0.5 transition-transform" />
@@ -1028,7 +1048,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   onClick={() => setSelectedDayEvents(null)}
                   className="px-4.5 py-2.5 border border-slate-200 text-slate-500 hover:bg-slate-50 font-black text-[10px] uppercase tracking-widest italic cursor-pointer"
                 >
-                  Close Agenda List
+                  {t('closeAgendaList')}
                 </button>
               </div>
             </motion.div>

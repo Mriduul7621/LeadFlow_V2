@@ -9,7 +9,6 @@ import {
   Settings, 
   ChevronRight,
   LogOut,
-  RefreshCw,
   Calendar,
   Clock,
   Menu,
@@ -19,7 +18,8 @@ import {
   TrendingUp,
   PieChart as PieIcon,
   Target,
-  Lock
+  Lock,
+  WifiOff
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -224,7 +224,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       
       if (now - lastActivity > 1800000) { // 30 minutes = 1,800,000ms
         clearInterval(checkTimeoutInterval);
-        toast.error("Session expired due to 30 minutes of inactivity.", {
+        toast.error(t('sessionExpiredToast'), {
           duration: 7000,
           id: "session-timeout-toast"
         });
@@ -262,7 +262,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         window.removeEventListener(ev, handleGesture);
       });
     };
-  }, [user, logout, navigate]);
+  }, [user, logout, navigate, t]);
 
   /**
    * Notifications — NO 8-second polling.
@@ -341,10 +341,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     try {
       await notificationService.markAllNotificationsAsRead(user.employeeId);
       syncNotifications(notifications.map(n => ({ ...n, read: true })));
-      toast.success("All notifications marked as read");
+      toast.success(t('syncAllReadOk'));
     } catch (err) {
       console.error(err);
-      toast.error("Failed to mark notifications as read");
+      toast.error(t('syncAllReadFailed'));
     }
   };
 
@@ -353,10 +353,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     try {
       await notificationService.deleteAllNotifications(user.employeeId);
       syncNotifications([]);
-      toast.success("All notifications deleted successfully");
+      toast.success(t('syncDeleteAllOk'));
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete notifications");
+      toast.error(t('syncDeleteAllFailed'));
     }
   };
 
@@ -408,24 +408,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return () => clearInterval(intervalId);
   }, []);
 
-  const [isSyncing, setIsSyncing] = useState(false);
+  /**
+   * Connectivity indicator — shown ONLY when there is an actual problem.
+   * A single, on-mount probe of the server database status determines
+   * whether a degraded-state indicator is required; there is no polling
+   * and no permanent "Connected" noise in the header. Normal server
+   * synchronization behavior is untouched.
+   */
+  const [dbUnreachable, setDbUnreachable] = useState(false);
 
-  const handleSync = async () => {
-    setIsSyncing(true);
-    toast.loading("Checking database connection...", { id: "sync-toast" });
-    try {
-      const result = await databaseStatusService.checkDatabaseStatus();
-      if (result && result.connected) {
-        toast.success("Connected to the cloud database. All data is stored in PostgreSQL.", { id: "sync-toast" });
-      } else {
-        toast.error(result?.message || "Database connection failed. Changes cannot be persisted right now.", { id: "sync-toast" });
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const result = await databaseStatusService.checkDatabaseStatus();
+        if (!cancelled) setDbUnreachable(!(result && result.connected));
+      } catch {
+        if (!cancelled) setDbUnreachable(true);
       }
-    } catch (err) {
-      toast.error("Could not verify the database connection.", { id: "sync-toast" });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+    };
+    void probe();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   if (!user) return <>{children}</>;
 
@@ -434,11 +441,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       e.preventDefault();
       const trimmed = newPassword.trim();
       if (trimmed.length < 6) {
-        toast.error("Security policy requires password to be at least 6 characters.");
+        toast.error(t('passwordPolicyMin6'));
         return;
       }
       if (trimmed !== confirmPassword.trim()) {
-        toast.error("Confirm password does not match new password.");
+        toast.error(t('passwordMismatch'));
         return;
       }
       setPwResetLoading(true);
@@ -452,9 +459,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           mustChangePassword: false,
           password: undefined
         }, useAuthStore.getState().token || undefined, useAuthStore.getState().isOfflineMode);
-        toast.success("Password successfully rotated! Welcome to Shanta Lead Flow Client System.");
+        toast.success(t('passwordRotatedOk'));
       } catch (err: any) {
-        toast.error(err.message || "Failed to update password. Try again.");
+        toast.error(err.message || t('passwordRotateFailed'));
       } finally {
         setPwResetLoading(false);
       }
@@ -471,34 +478,34 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="mx-auto w-12 h-12 bg-[#978C21]/10 rounded-full flex items-center justify-center text-[#978C21] mb-2">
               <Lock className="w-6 h-6 animate-pulse" />
             </div>
-            <h2 className="text-sm font-black uppercase tracking-[0.2em] text-[#978C21] italic">Rotate Password</h2>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-              For security compliance, you must rotate your temporary password upon onboarding.
+            <h2 className="text-sm font-bold text-brand-text">{t('rotatePassword')}</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              {t('rotatePasswordDesc')}
             </p>
           </div>
 
           <form onSubmit={handleForcedPasswordReset} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-600">New Password</label>
+              <label className="label-standard">{t('newPasswordLabel')}</label>
               <input
                 type="password"
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="MINIMUM 6 CHARACTERS"
-                className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-200 focus:border-[#978C21] outline-none text-xs rounded-none transition-all uppercase tracking-widest font-mono"
+                placeholder={t('newPasswordPlaceholder')}
+                className="input-standard"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-600">Confirm Password</label>
+              <label className="label-standard">{t('confirmNewPasswordLabel')}</label>
               <input
                 type="password"
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="RE-ENTER NEW PASSWORD"
-                className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-200 focus:border-[#978C21] outline-none text-xs rounded-none transition-all uppercase tracking-widest font-mono"
+                placeholder={t('confirmNewPasswordPlaceholder')}
+                className="input-standard"
               />
             </div>
 
@@ -506,9 +513,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               id="submit_forced_reset"
               type="submit"
               disabled={pwResetLoading}
-              className="w-full py-4 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-xs uppercase tracking-widest italic transition-colors shadow-lg shadow-[#978C21]/20 flex items-center justify-center gap-2 cursor-pointer"
+              className="btn-primary w-full"
             >
-              {pwResetLoading ? 'Rotating credentials...' : 'Rotate and Log In'}
+              {pwResetLoading ? t('rotatingCredentials') : t('rotateAndLogin')}
             </button>
           </form>
         </motion.div>
@@ -562,7 +569,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="flex items-center">
                <img 
                  src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                 alt="Shanta Life Logo"
+                 alt={t('shantaLifeLogo')}
                  className="h-12 w-auto object-contain"
                  referrerPolicy="no-referrer"
                />
@@ -571,7 +578,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
              <div className="flex items-center justify-center">
                 <img 
                   src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                  alt="Shanta Life Logo"
+                  alt={t('shantaLifeLogo')}
                   className="h-7 w-auto object-contain animate-pulse-slow"
                   referrerPolicy="no-referrer"
                 />
@@ -645,7 +652,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <div className="flex items-center">
                    <img 
                      src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                     alt="Shanta Life Logo"
+                     alt={t('shantaLifeLogo')}
                      className="h-10 w-auto object-contain"
                      referrerPolicy="no-referrer"
                    />
@@ -699,79 +706,77 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="hidden lg:flex items-center select-none">
              <img 
                src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-               alt="Shanta Life Logo"
+               alt={t('shantaLifeLogo')}
                className="h-12 w-auto object-contain"
                referrerPolicy="no-referrer"
              />
           </div>
 
-          <div className="flex items-center gap-6">
-             <div className="hidden md:flex items-center">
-                <span className="text-[11px] font-black text-[#978C21] capitalize tracking-wider italic mr-6">Dhaka Standard Time</span>
-                <div className="flex items-center border border-slate-100 rounded-sm divide-x divide-slate-50 px-2 py-1 shadow-sm bg-[#FBFAF8]">
-                   <div className="px-4 py-1.5 flex items-center gap-3">
-                      <Calendar className="w-3.5 h-3.5 text-[#978C21]" />
-                      <span className="text-[10px] font-black text-slate-600 italic tracking-wider leading-none">
-                        {dhakaTime.dayStr ? `${dhakaTime.dayStr.substring(0, 3)}, ${dhakaTime.dateStr}` : 'Loading Date...'}
+          <div className="flex items-center gap-5">
+             {/* Compact business clock (no technical timezone wording). */}
+             <div className="hidden md:flex items-center gap-2">
+                <div className="flex items-center border border-border rounded-control px-3 py-1.5 shadow-sm bg-surface-soft">
+                   <div className="flex items-center gap-2 pr-3">
+                      <Calendar className="w-3.5 h-3.5 text-brand-primary" />
+                      <span className="text-xs font-semibold text-slate-600 leading-none">
+                        {dhakaTime.dayStr ? `${dhakaTime.dayStr.substring(0, 3)}, ${dhakaTime.dateStr}` : t('loadingDate')}
                       </span>
                    </div>
-                   <div className="px-4 py-1.5 flex items-center gap-3 bg-white shadow-inner rounded-sm">
-                      <Clock className="w-3.5 h-3.5 text-[#978C21]" />
-                      <span className="text-[10px] font-mono font-black text-slate-800 tracking-widest leading-none">
-                        {dhakaTime.timeStr || '--:--:-- --'}
+                   <div className="flex items-center gap-2 pl-3 border-l border-border">
+                      <Clock className="w-3.5 h-3.5 text-brand-primary" />
+                      <span className="text-xs font-semibold tabular-nums text-slate-800 leading-none">
+                        {dhakaTime.timeStr || '--:--'}
                       </span>
                    </div>
                 </div>
              </div>
-             
-             <div className="h-6 w-px bg-slate-100 mx-2" />
 
-             {/* Premium Language Switcher inside App Layout Header */}
-             <div className="flex items-center gap-1 bg-slate-100 border border-slate-200/50 p-1 rounded-full shadow-inner" id="layout-language-switcher">
+             {/* Connectivity indicator — visible only when the database is unreachable. */}
+             {dbUnreachable && (
+                <button
+                  type="button"
+                  title={t('connectionIssueTooltip')}
+                  aria-label={t('connectionIssue')}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-control bg-amber-50 border border-amber-200 text-amber-700"
+                >
+                  <WifiOff className="w-4 h-4" aria-hidden="true" />
+                  <span className="text-xs font-semibold">{t('connectionIssue')}</span>
+                </button>
+             )}
+
+             {/* Language Switcher inside App Layout Header */}
+             <div className="flex items-center gap-1 bg-surface-soft border border-border p-1 rounded-control" id="layout-language-switcher" role="group" aria-label={t('languageLabel')}>
                <button
                  type="button"
                  onClick={() => setLanguage('en')}
+                 aria-pressed={language === 'en'}
                  className={cn(
-                   "px-2.5 py-1 text-[8px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer",
+                   "px-2.5 py-1 text-xs font-semibold rounded-control transition-colors duration-150 cursor-pointer",
                    language === 'en'
-                     ? "bg-[#978C21] text-white shadow-sm"
-                     : "text-slate-400 hover:text-slate-600"
+                     ? "bg-brand-primary text-white shadow-sm"
+                     : "text-slate-500 hover:text-brand-text"
                  )}
                >
-                 EN
+                 {t('languageEnglish')}
                </button>
                <button
                  type="button"
                  onClick={() => setLanguage('bn')}
+                 aria-pressed={language === 'bn'}
                  className={cn(
-                   "px-2.5 py-1 text-[8px] font-black uppercase tracking-wider rounded-full transition-all cursor-pointer",
+                   "px-2.5 py-1 text-xs font-semibold rounded-control transition-colors duration-150 cursor-pointer",
                    language === 'bn'
-                     ? "bg-[#978C21] text-white shadow-sm"
-                     : "text-slate-400 hover:text-slate-600"
+                     ? "bg-brand-primary text-white shadow-sm"
+                     : "text-slate-500 hover:text-brand-text"
                  )}
                >
-                 BN
+                 {t('languageBangla')}
                </button>
              </div>
 
-             <div className="h-6 w-px bg-slate-100 mx-2" />
+             <div className="h-6 w-px bg-border" aria-hidden="true" />
 
-             <div className="flex items-center gap-4">
-                <button 
-                  onClick={handleSync}
-                  disabled={isSyncing}
-                  title={isSyncing ? "Syncing..." : "Sync data with cloud"}
-                  className={cn(
-                    "p-2.5 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm flex items-center justify-center gap-2",
-                    isSyncing ? "text-slate-400 bg-slate-50 border-slate-200 cursor-not-allowed" : "text-[#978C21]"
-                  )}
-                >
-                   <RefreshCw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
-                   <span className="hidden md:inline text-sm font-medium text-[#978C21]">
-                     {isSyncing ? "Syncing..." : "Sync"}
-                   </span>
-                </button>
-
+             <div className="flex items-center gap-3">
                 {/* Real-time Notification Bell container */}
                 <div className="relative">
                    <button 
@@ -794,7 +799,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                        />
                        <div className="absolute right-0 mt-2 w-[330px] bg-white border border-slate-100 rounded-sm shadow-2xl py-3 z-50 text-left max-h-96 overflow-y-auto">
                          <div className="px-4 py-2 border-b border-slate-50 flex justify-between items-center">
-                           <span className="text-sm font-semibold text-slate-800">🔔 Notifications ({unreadCount} new)</span>
+                           <span className="text-sm font-semibold text-slate-800">{t('notificationsNew', { count: String(unreadCount) })}</span>
                           </div>
                           {notifications.length > 0 && (
                             <div className="px-4 py-1.5 border-b border-slate-50 flex items-center justify-between bg-[#FDFDFB]">
@@ -805,7 +810,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                 }}
                                 className="text-xs font-medium text-[#978C21] hover:underline cursor-pointer"
                               >
-                                Mark All Read
+                                {t('markAllRead')}
                               </button>
                               <button 
                                 onClick={(e) => {
@@ -814,7 +819,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                 }}
                                 className="text-xs font-medium text-red-500 hover:underline cursor-pointer"
                               >
-                                Delete All
+                                {t('deleteAll')}
                               </button>
                             </div>
                           )}
@@ -822,7 +827,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                          <div className="divide-y divide-slate-50">
                            {notifications.length === 0 ? (
                              <div className="px-4 py-8 text-center text-sm text-slate-400">
-                               No notifications yet
+                               {t('noNotifications')}
                              </div>
                            ) : (
                              notifications.map((notif) => (
@@ -869,7 +874,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   {/* Profile Popup */}
                   <div className="absolute right-0 top-[120%] w-64 bg-white rounded-sm shadow-2xl border border-slate-100 py-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 transform origin-top-right scale-95 group-hover:scale-100 z-50">
                     <div className="px-6 py-4 border-b border-slate-50 mb-2">
-                      <p className="text-xs text-slate-400 mb-2">Logged in as</p>
+                      <p className="text-xs text-slate-400 mb-2">{t('loggedinas')}</p>
                       <p className="text-base text-slate-800 font-semibold truncate">{user.name}</p>
                       <p className="text-sm text-slate-400 mt-1">{user.email}</p>
                     </div>
@@ -878,7 +883,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       className="w-full px-6 py-4 flex items-center gap-4 text-red-500 hover:bg-red-50 text-sm font-medium transition-colors"
                     >
                       <LogOut className="w-4 h-4" />
-                      Logout
+                      {t('logout')}
                     </button>
                   </div>
                 </div>

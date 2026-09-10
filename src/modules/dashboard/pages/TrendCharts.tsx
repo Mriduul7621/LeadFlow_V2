@@ -9,10 +9,12 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
+import { useTranslation } from '../../shared/utils/translations';
 import { toast } from 'sonner';
 
 export default function TrendCharts() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const [period, setPeriod] = useState('THIS MONTH');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().substring(0, 10));
   const [customDates, setCustomDates] = useState({ 
@@ -135,7 +137,7 @@ export default function TrendCharts() {
       });
 
     } catch (err) {
-      toast.error('Trend charts data calculation failure');
+      toast.error(t('trendCalcFailure'));
     } finally {
       setLoading(false);
     }
@@ -164,8 +166,8 @@ export default function TrendCharts() {
     <div className="space-y-8 pb-24 bg-white font-sans animate-fade-in text-slate-800">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Trend Analysis</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Leads generation velocities, peak times and load maps</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('trendAnalysisTitle')}</h1>
+          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">{t('trendSubtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           <button 
@@ -184,8 +186,8 @@ export default function TrendCharts() {
               <TrendingUp className="w-4 h-4 text-[#978C21]" />
            </div>
            <div>
-              <h4 className="text-white text-sm font-semibold">Lead generation over time</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Timeline velocity tracking scope</p>
+              <h4 className="text-white text-sm font-semibold">{t('trendSubtitle')}</h4>
+              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{t('timelineVelocityScope')}</p>
            </div>
         </div>
         <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
@@ -240,7 +242,7 @@ export default function TrendCharts() {
         <div className="space-y-6">
           {/* Main Chart Area */}
           <div className="bg-white rounded-sm border border-slate-100 p-8 md:p-10 shadow-sm">
-             <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest text-center italic mb-8">Campaign lead generation Trend line</p>
+             <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest text-center italic mb-8">{t('campaignTrendLine')}</p>
              <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                    <AreaChart data={trendData}>
@@ -260,25 +262,25 @@ export default function TrendCharts() {
                       <Tooltip 
                         contentStyle={{ borderRadius: '4px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: '900' }}
                       />
-                      <Area type="monotone" dataKey="value" stroke="#978C21" strokeWidth={4} fillOpacity={1} fill="url(#colorValue)" dot={{ fill: '#978C21', strokeWidth: 3, r: 6, stroke: '#fff' }} name="Leads Count" />
+                      <Area type="monotone" dataKey="value" stroke="#978C21" strokeWidth={4} fillOpacity={1} fill="url(#colorValue)" dot={{ fill: '#978C21', strokeWidth: 3, r: 6, stroke: '#fff' }} name={t('leadsCount')} />
                    </AreaChart>
                 </ResponsiveContainer>
              </div>
-             <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest text-center italic mt-10">Daily lead creation count</p>
+             <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest text-center italic mt-10">{t('dailyLeadCreationCount')}</p>
           </div>
 
           {/* Trend Summary Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
              <div className="bg-slate-50 border border-slate-100 p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Total Processed Leads</p>
+                <p className="text-xs font-medium text-slate-500 mb-3 italic">{t('totalProcessedLeads')}</p>
                 <h4 className="text-3xl font-black text-slate-900 italic leading-none">{summaryStats.totalLeads}</h4>
              </div>
              <div className="bg-slate-50 border border-slate-100 p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Generation Velocity</p>
+                <p className="text-xs font-medium text-slate-500 mb-3 italic">{t('generationVelocity')}</p>
                 <h4 className="text-2xl font-black text-[#978C21] italic leading-none">{summaryStats.velocity}</h4>
              </div>
              <div className="bg-[#2D2D2D] text-white p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Peak Performance Point</p>
+                <p className="text-xs font-medium text-slate-500 mb-3 italic">{t('peakPerformancePoint')}</p>
                 <h4 className="text-2xl font-black text-[#10B981] italic leading-none uppercase">{summaryStats.peakInterval}</h4>
              </div>
           </div>
