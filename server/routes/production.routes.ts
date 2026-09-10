@@ -23,6 +23,7 @@ import {
   parseYmd,
   dhakaStartUtc,
   addCalendarDays,
+  classifyFollowUpBucket,
 } from '../utils/businessTime.js';
 
 /**
@@ -5697,34 +5698,531 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
 
 
 /* ====================================================================
-   DASHBOARD
+   DASHBOARD — server-authoritative metrics (Step 5)
+   ------------------------------------------------------------------
+   - PostgreSQL is source of truth
+   - Same visibility resolver as leads / follow-up queue
+   - Soft-deleted leads never count
+   - Follow-up buckets reuse Asia/Dhaka business-day helpers (Step 4B)
+   - Query params (role/employeeId/assignedTo) cannot widen scope
 ==================================================================== */
+
+const DASHBOARD_STATUS_KEYS = [
+  'Untouched',
+  'Contacted',
+  'No Response',
+  'Busy',
+  'Interested',
+  'Follow-up Set',
+  'Meeting Fixed',
+  'Meeting Completed',
+  'Pipeline Locked',
+  'Converted',
+  'Not Interested',
+] as const;
+
+function emptyStatusCounts(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of DASHBOARD_STATUS_KEYS) out[s] = 0;
+  return out;
+}
+
+function parseDashboardPeriod(query: any): { start: Date | null; end: Date | null; label: string } {
+  const period = String(query?.period || 'ALL').trim().toUpperCase();
+  const bounds = getDhakaBusinessDayBounds(new Date());
+  const { y, m, d } = (() => {
+    const parts = bounds.todayDate.split('-').map(Number);
+    return { y: parts[0], m: parts[1], d: parts[2] };
+  })();
+
+  if (period === 'TODAY') {
+    const selected = parseYmd(query?.selectedDate ? String(query.selectedDate) : bounds.todayDate) || { y, m, d };
+    const start = dhakaStartUtc(selected.y, selected.m, selected.d);
+    const next = addCalendarDays(selected.y, selected.m, selected.d, 1);
+    const end = dhakaStartUtc(next.y, next.m, next.d);
+    return { start, end, label: 'TODAY' };
+  }
+  if (period === 'THIS_MONTH' || period === 'THIS MONTH') {
+    const start = dhakaStartUtc(y, m, 1);
+    const nextMonth = m === 12 ? { y: y + 1, m: 1 } : { y, m: m + 1 };
+    const end = dhakaStartUtc(nextMonth.y, nextMonth.m, 1);
+    return { start, end, label: 'THIS_MONTH' };
+  }
+  if (period === 'LAST_MONTH' || period === 'LAST MONTH') {
+    const prev = m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
+    const start = dhakaStartUtc(prev.y, prev.m, 1);
+    const end = dhakaStartUtc(y, m, 1);
+    return { start, end, label: 'LAST_MONTH' };
+  }
+  if (period === 'CUSTOM') {
+    const from = parseYmd(query?.startDate ? String(query.startDate) : null);
+    const to = parseYmd(query?.endDate ? String(query.endDate) : null);
+    if (!from || !to) return { start: null, end: null, label: 'CUSTOM' };
+    const start = dhakaStartUtc(from.y, from.m, from.d);
+    const next = addCalendarDays(to.y, to.m, to.d, 1);
+    const end = dhakaStartUtc(next.y, next.m, next.d);
+    return { start, end, label: 'CUSTOM' };
+  }
+  return { start: null, end: null, label: 'ALL' };
+}
+
+function buildDashboardVisibilitySql(
+  visibility: { all: boolean; userIds: string[]; employeeIds: string[] },
+  params: any[]
+): string {
+  if (visibility.all) return 'TRUE';
+  params.push(visibility.userIds, visibility.employeeIds);
+  const pUser = params.length - 1;
+  const pEmp = params.length;
+  return `(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`;
+}
+
+function numOr0(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function conversionRatePct(converted: number, total: number): string {
+  if (!total || total <= 0) return '0.0%';
+  return ((converted / total) * 100).toFixed(1) + '%';
+}
+
+function leadProjectedNcp(lead: any): number {
+  if (lead.projectedNCP != null) return numOr0(lead.projectedNCP);
+  if (lead.expected_premium != null) return numOr0(lead.expected_premium);
+  const cf = lead.customFields || lead.custom_fields || {};
+  return numOr0(cf.projectedNCP);
+}
+
+function leadCollectedNcp(lead: any): number {
+  if (lead.collectedNCP != null) return numOr0(lead.collectedNCP);
+  const cf = lead.customFields || lead.custom_fields || {};
+  return numOr0(cf.collectedNCP);
+}
+
+function leadSumAssured(lead: any): number {
+  if (lead.sumAssured != null) return numOr0(lead.sumAssured);
+  if (lead.expected_value != null) return numOr0(lead.expected_value);
+  const cf = lead.customFields || lead.custom_fields || {};
+  return numOr0(cf.sumAssured);
+}
+
+function computeDashboardFromLeads(
+  leads: any[],
+  followUpCounts: { overdue: number; today: number; upcoming: number; all: number },
+  bounds: ReturnType<typeof getDhakaBusinessDayBounds>,
+  periodLabel: string,
+  agents: Array<{ employeeId: string; name: string; role?: string }> = []
+) {
+  const statusCounts = emptyStatusCounts();
+  let totalLeads = 0;
+  let activeLeads = 0;
+  let converted = 0;
+  let notInterested = 0;
+  let projected = 0;
+  let collected = 0;
+  let sumAssured = 0;
+  let pipelineVolume = 0;
+  let contactedCombo = 0;
+  let meetings = 0;
+  let followUpsSet = 0;
+  let responses = 0;
+
+  for (const raw of leads) {
+    const status = String(raw.currentStatus || raw.current_status || 'Untouched');
+    totalLeads += 1;
+    if (statusCounts[status] !== undefined) statusCounts[status] += 1;
+    else statusCounts[status] = (statusCounts[status] || 0) + 1;
+
+    const proj = leadProjectedNcp(raw);
+    const coll = leadCollectedNcp(raw);
+    const sa = leadSumAssured(raw);
+    projected += proj;
+    collected += coll;
+    sumAssured += sa;
+    if (coll > 0 || proj > 0) pipelineVolume += 1;
+    if (status !== 'Untouched') responses += 1;
+    if (status !== 'Converted' && status !== 'Not Interested') activeLeads += 1;
+    if (status === 'Converted') converted += 1;
+    if (status === 'Not Interested') notInterested += 1;
+    if (['Contacted', 'Interested', 'Follow-up Set'].includes(status)) contactedCombo += 1;
+    if (status === 'Meeting Fixed') meetings += 1;
+    if (status === 'Follow-up Set') followUpsSet += 1;
+  }
+
+  const agentStats = agents.map(agent => {
+    const agentLeads = leads.filter(l => {
+      const assigned = String(l.assignedTo || l.assigned_to_employee_id || (l.customFields || l.custom_fields || {}).assignedTo || '').toUpperCase();
+      return assigned === String(agent.employeeId).toUpperCase();
+    });
+    const agentCollected = agentLeads.reduce((a, l) => a + leadCollectedNcp(l), 0);
+    const agentProjected = agentLeads.reduce((a, l) => a + leadProjectedNcp(l), 0);
+    const agentConverted = agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Converted').length;
+    return {
+      name: agent.name,
+      employeeId: agent.employeeId,
+      assigned: agentLeads.length,
+      total: agentLeads.length,
+      noCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
+      nextCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
+      followUp: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
+      followUpAlert: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
+      converted: agentConverted,
+      collected: agentCollected,
+      projected: agentProjected,
+      conversion: conversionRatePct(agentConverted, agentLeads.length),
+    };
+  });
+
+  const teams = ['Gulshan', 'Banani', 'Dhanmondi', 'Uttara', 'Mirpur'];
+  const teamStats = teams.map(team => {
+    const teamLeads = leads.filter(l => String(l.area || '').includes(team));
+    return {
+      team,
+      assigned: teamLeads.length,
+      noCall: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
+      contacted: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Contacted').length,
+      meetings: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Meeting Fixed').length,
+      followUps: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
+      pipeline: teamLeads.filter(l => leadProjectedNcp(l) > 0).length,
+      collected: teamLeads.reduce((a, l) => a + leadCollectedNcp(l), 0),
+      projected: teamLeads.reduce((a, l) => a + leadProjectedNcp(l), 0),
+    };
+  }).filter(t => t.assigned > 0);
+
+  const campaignStats = [
+    'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
+    'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked',
+  ].map((name, i) => ({
+    name,
+    value: statusCounts[name] || 0,
+    color: ['#e2e8f0', '#0F172A', '#334155', '#64748B', '#94A3B8', '#1E293B', '#CBD5E1', '#978C21', '#475569'][i],
+  }));
+
+  return {
+    timezone: BUSINESS_TIMEZONE,
+    todayDate: bounds.todayDate,
+    bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+    period: periodLabel,
+    totalLeads,
+    activeLeads,
+    converted,
+    notInterested,
+    statusCounts,
+    newLeads: statusCounts['Untouched'] || 0,
+    responses,
+    pipeline: pipelineVolume,
+    pipelineLocked: statusCounts['Pipeline Locked'] || 0,
+    alerts: statusCounts['Untouched'] || 0,
+    contacted: contactedCombo,
+    meetings,
+    followUps: followUpsSet,
+    projected,
+    collected,
+    sumAssured,
+    conversionRate: conversionRatePct(converted, totalLeads),
+    conversionRateValue: totalLeads > 0 ? Number(((converted / totalLeads) * 100).toFixed(1)) : 0,
+    avgResponseTAT: '24.0h',
+    followUpsQueue: followUpCounts,
+    followUpCounts,
+    agentStats,
+    teamStats,
+    campaignStats,
+    // backward-compatible aliases
+    leadCount: totalLeads,
+    userCount: agents.length,
+  };
+}
 
 router.get('/dashboard', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
-  if (!useDb()) {
-    return sendJson(res, 200, { success: true, data: { leadCount: fallbackStore.leads.length, userCount: fallbackStore.users.length } });
-  }
   try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+
+    // Fail closed: require dashboard.view or leads.view (admin bypass inside hasPermissionCode).
+    const canDashboard = await hasPermissionCode(caller, 'dashboard.view');
+    const canLeads = await hasPermissionCode(caller, 'leads.view');
+    if (!canDashboard && !canLeads) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view the dashboard.' });
+    }
+
+    // Forged role / employee / assignedTo params MUST NOT widen scope.
+    // Visibility is always derived from the authenticated session.
+    const visibility = await resolveCallerVisibility(caller);
+    const bounds = getDhakaBusinessDayBounds(new Date());
+    const period = parseDashboardPeriod(req.query || {});
+
+    // Follow-up queue counts — same semantics as GET /leads/follow-ups (Step 4B).
+    const terminalList = [...TERMINAL_LEAD_STATUSES];
+    const todayLit = bounds.todayStartIso.replace(/'/g, "''");
+    const tomorrowLit = bounds.tomorrowStartIso.replace(/'/g, "''");
+    const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      let leads = (fallbackStore.leads || []).filter((l: any) => {
+        if (l.is_deleted === true) return false;
+        if (!visibility.all) {
+          const assigned = String(l.assignedTo || '').toUpperCase();
+          if (!assigned || !visEmp.includes(assigned)) return false;
+        }
+        if (period.start && period.end) {
+          const t = new Date(l.timestamp || l.creationDate || l.created_at || 0).getTime();
+          if (!(t >= period.start.getTime() && t < period.end.getTime())) return false;
+        }
+        return true;
+      });
+
+      const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+      const fuBase = (fallbackStore.leads || []).filter((l: any) => {
+        if (l.is_deleted === true) return false;
+        const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+        if (!nfd) return false;
+        if (!visibility.all) {
+          const assigned = String(l.assignedTo || '').toUpperCase();
+          if (!assigned || !visEmp.includes(assigned)) return false;
+        }
+        const st = String(l.currentStatus || '');
+        if (terminal.has(st.toLowerCase())) return false;
+        return true;
+      });
+      const followUpCounts = { overdue: 0, today: 0, upcoming: 0, all: fuBase.length };
+      for (const l of fuBase) {
+        const b = classifyFollowUpBucket(l.nextFollowUpDate || l.next_follow_up_at, bounds);
+        if (b === 'overdue' || b === 'today' || b === 'upcoming') followUpCounts[b] += 1;
+      }
+
+      const agents = (fallbackStore.users || [])
+        .filter((u: any) => {
+          if (!visibility.all) {
+            const emp = String(u.employeeId || '').toUpperCase();
+            return visEmp.includes(emp);
+          }
+          return true;
+        })
+        .map((u: any) => ({ employeeId: u.employeeId, name: u.fullName || u.name || u.employeeId, role: u.role }));
+
+      const data = computeDashboardFromLeads(leads, followUpCounts, bounds, period.label, agents);
+      return sendJson(res, 200, { success: true, data });
+    }
+
     const pool = getPool();
-    // Same server-side visibility scope as the leads list, so dashboard
-    // counters can never leak another team's totals.
-    const caller = req.currentUser || {};
-    const visibility = await resolveVisibility(String(caller.id || ''), String(caller.role || caller.roleCode || ''));
-    const [leads, users] = await Promise.all([
-      visibility.all
-        ? pool.query('SELECT COUNT(*)::int AS count FROM leads WHERE is_deleted = FALSE')
-        : pool.query(
-            `SELECT COUNT(*)::int AS count FROM leads
-              WHERE is_deleted = FALSE
-                AND (assigned_to::text = ANY($1::text[]) OR custom_fields->>'assignedTo' = ANY($2::text[]))`,
-            [visibility.userIds, visibility.employeeIds]
-          ),
-      visibility.all
-        ? pool.query('SELECT COUNT(*)::int AS count FROM users')
-        : pool.query('SELECT COUNT(*)::int AS count FROM users WHERE id = ANY($1::uuid[])', [visibility.userIds]),
+
+    // ---- Lead metric aggregates (one query) ----
+    const metricParams: any[] = [];
+    const metricWhere: string[] = ['l.is_deleted = FALSE'];
+    metricWhere.push(buildDashboardVisibilitySql(visibility, metricParams));
+    if (period.start && period.end) {
+      metricParams.push(period.start.toISOString(), period.end.toISOString());
+      metricWhere.push(`l.created_at >= $${metricParams.length - 1}::timestamp AND l.created_at < $${metricParams.length}::timestamp`);
+    }
+
+    // projected = expected_premium column, with custom_fields fallback
+    // collected = custom_fields.collectedNCP (no dedicated column)
+    // sum assured = expected_value column, with custom_fields fallback
+    const metricSql = `
+      SELECT
+        COUNT(*)::int AS total_leads,
+        COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS untouched,
+        COUNT(*) FILTER (WHERE l.current_status = 'Contacted')::int AS contacted,
+        COUNT(*) FILTER (WHERE l.current_status = 'No Response')::int AS no_response,
+        COUNT(*) FILTER (WHERE l.current_status = 'Busy')::int AS busy,
+        COUNT(*) FILTER (WHERE l.current_status = 'Interested')::int AS interested,
+        COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_up_set,
+        COUNT(*) FILTER (WHERE l.current_status = 'Meeting Fixed')::int AS meeting_fixed,
+        COUNT(*) FILTER (WHERE l.current_status = 'Meeting Completed')::int AS meeting_completed,
+        COUNT(*) FILTER (WHERE l.current_status = 'Pipeline Locked')::int AS pipeline_locked,
+        COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
+        COUNT(*) FILTER (WHERE l.current_status = 'Not Interested')::int AS not_interested,
+        COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'Untouched')::int AS responses,
+        COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'Converted' AND l.current_status IS DISTINCT FROM 'Not Interested')::int AS active_leads,
+        COUNT(*) FILTER (WHERE l.current_status IN ('Contacted','Interested','Follow-up Set'))::int AS contacted_combo,
+        COUNT(*) FILTER (
+          WHERE COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0) > 0
+             OR COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0) > 0
+        )::int AS pipeline_volume,
+        COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected_ncp,
+        COALESCE(SUM(COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0)), 0)::float AS collected_ncp,
+        COALESCE(SUM(COALESCE(l.expected_value, NULLIF(l.custom_fields->>'sumAssured','')::numeric, 0)), 0)::float AS sum_assured
+      FROM leads l
+      WHERE ${metricWhere.join(' AND ')}
+    `;
+
+    // ---- Follow-up queue counts (match Step 4B exactly; no period filter) ----
+    const fuParams: any[] = [];
+    const fuWhere: string[] = [
+      'l.is_deleted = FALSE',
+      'l.next_follow_up_at IS NOT NULL',
+    ];
+    fuParams.push(terminalList);
+    fuWhere.push(`l.current_status <> ALL($${fuParams.length}::text[])`);
+    fuWhere.push(buildDashboardVisibilitySql(visibility, fuParams));
+    const fuCountSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${fuWhere.join(' AND ')} GROUP BY 1`;
+
+    // ---- Agent breakdown (RO-like roles under visibility) ----
+    const agentParams: any[] = [];
+    const agentWhere: string[] = ['l.is_deleted = FALSE'];
+    agentWhere.push(buildDashboardVisibilitySql(visibility, agentParams));
+    if (period.start && period.end) {
+      agentParams.push(period.start.toISOString(), period.end.toISOString());
+      agentWhere.push(`l.created_at >= $${agentParams.length - 1}::timestamp AND l.created_at < $${agentParams.length}::timestamp`);
+    }
+    const agentSql = `
+      SELECT
+        COALESCE(au.employee_id, UPPER(l.custom_fields->>'assignedTo'), 'UNASSIGNED') AS employee_id,
+        COALESCE(au.full_name, UPPER(l.custom_fields->>'assignedTo'), 'Unassigned') AS full_name,
+        COUNT(*)::int AS assigned,
+        COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS no_call,
+        COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_up,
+        COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
+        COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected,
+        COALESCE(SUM(COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0)), 0)::float AS collected
+      FROM leads l
+      LEFT JOIN users au ON au.id = l.assigned_to
+      WHERE ${agentWhere.join(' AND ')}
+      GROUP BY 1, 2
+      ORDER BY assigned DESC
+      LIMIT 200
+    `;
+
+    // ---- Team / area breakdown ----
+    const teamParams: any[] = [];
+    const teamWhere: string[] = ['l.is_deleted = FALSE'];
+    teamWhere.push(buildDashboardVisibilitySql(visibility, teamParams));
+    if (period.start && period.end) {
+      teamParams.push(period.start.toISOString(), period.end.toISOString());
+      teamWhere.push(`l.created_at >= $${teamParams.length - 1}::timestamp AND l.created_at < $${teamParams.length}::timestamp`);
+    }
+    const teamSql = `
+      SELECT team, assigned, no_call, contacted, meetings, follow_ups, pipeline, collected, projected FROM (
+        SELECT 'Gulshan' AS team
+        UNION ALL SELECT 'Banani'
+        UNION ALL SELECT 'Dhanmondi'
+        UNION ALL SELECT 'Uttara'
+        UNION ALL SELECT 'Mirpur'
+      ) t
+      CROSS JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS assigned,
+          COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS no_call,
+          COUNT(*) FILTER (WHERE l.current_status = 'Contacted')::int AS contacted,
+          COUNT(*) FILTER (WHERE l.current_status = 'Meeting Fixed')::int AS meetings,
+          COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_ups,
+          COUNT(*) FILTER (WHERE COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0) > 0)::int AS pipeline,
+          COALESCE(SUM(COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0)), 0)::float AS collected,
+          COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected
+        FROM leads l
+        WHERE ${teamWhere.join(' AND ')}
+          AND COALESCE(l.area, '') ILIKE '%' || t.team || '%'
+      ) s
+      WHERE s.assigned > 0
+    `;
+
+    const [metricRes, fuRes, agentRes, teamRes] = await Promise.all([
+      pool.query(metricSql, metricParams),
+      pool.query(fuCountSql, fuParams),
+      pool.query(agentSql, agentParams),
+      pool.query(teamSql, teamParams),
     ]);
-    return sendJson(res, 200, { success: true, data: { leadCount: leads.rows[0].count, userCount: users.rows[0].count } });
+
+    const m = metricRes.rows[0] || {};
+    const statusCounts = emptyStatusCounts();
+    statusCounts['Untouched'] = numOr0(m.untouched);
+    statusCounts['Contacted'] = numOr0(m.contacted);
+    statusCounts['No Response'] = numOr0(m.no_response);
+    statusCounts['Busy'] = numOr0(m.busy);
+    statusCounts['Interested'] = numOr0(m.interested);
+    statusCounts['Follow-up Set'] = numOr0(m.follow_up_set);
+    statusCounts['Meeting Fixed'] = numOr0(m.meeting_fixed);
+    statusCounts['Meeting Completed'] = numOr0(m.meeting_completed);
+    statusCounts['Pipeline Locked'] = numOr0(m.pipeline_locked);
+    statusCounts['Converted'] = numOr0(m.converted);
+    statusCounts['Not Interested'] = numOr0(m.not_interested);
+
+    const totalLeads = numOr0(m.total_leads);
+    const converted = numOr0(m.converted);
+    const followUpCounts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    for (const row of fuRes.rows) {
+      const b = String(row.bucket);
+      const c = numOr0(row.cnt);
+      if (b === 'overdue' || b === 'today' || b === 'upcoming') followUpCounts[b] = c;
+      followUpCounts.all += c;
+    }
+
+    const agentStats = agentRes.rows.map((row: any) => ({
+      name: row.full_name,
+      employeeId: row.employee_id,
+      assigned: numOr0(row.assigned),
+      total: numOr0(row.assigned),
+      noCall: numOr0(row.no_call),
+      nextCall: numOr0(row.no_call),
+      followUp: numOr0(row.follow_up),
+      followUpAlert: numOr0(row.follow_up),
+      converted: numOr0(row.converted),
+      collected: numOr0(row.collected),
+      projected: numOr0(row.projected),
+      conversion: conversionRatePct(numOr0(row.converted), numOr0(row.assigned)),
+    }));
+
+    const teamStats = teamRes.rows.map((row: any) => ({
+      team: row.team,
+      assigned: numOr0(row.assigned),
+      noCall: numOr0(row.no_call),
+      contacted: numOr0(row.contacted),
+      meetings: numOr0(row.meetings),
+      followUps: numOr0(row.follow_ups),
+      pipeline: numOr0(row.pipeline),
+      collected: numOr0(row.collected),
+      projected: numOr0(row.projected),
+    }));
+
+    const campaignStats = [
+      'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
+      'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked',
+    ].map((name, i) => ({
+      name,
+      value: statusCounts[name] || 0,
+      color: ['#e2e8f0', '#0F172A', '#334155', '#64748B', '#94A3B8', '#1E293B', '#CBD5E1', '#978C21', '#475569'][i],
+    }));
+
+    const data = {
+      timezone: BUSINESS_TIMEZONE,
+      todayDate: bounds.todayDate,
+      bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+      period: period.label,
+      totalLeads,
+      activeLeads: numOr0(m.active_leads),
+      converted,
+      notInterested: numOr0(m.not_interested),
+      statusCounts,
+      newLeads: statusCounts['Untouched'] || 0,
+      responses: numOr0(m.responses),
+      pipeline: numOr0(m.pipeline_volume),
+      pipelineLocked: statusCounts['Pipeline Locked'] || 0,
+      alerts: statusCounts['Untouched'] || 0,
+      contacted: numOr0(m.contacted_combo),
+      meetings: statusCounts['Meeting Fixed'] || 0,
+      followUps: statusCounts['Follow-up Set'] || 0,
+      projected: numOr0(m.projected_ncp),
+      collected: numOr0(m.collected_ncp),
+      sumAssured: numOr0(m.sum_assured),
+      conversionRate: conversionRatePct(converted, totalLeads),
+      conversionRateValue: totalLeads > 0 ? Number(((converted / totalLeads) * 100).toFixed(1)) : 0,
+      avgResponseTAT: '24.0h',
+      followUpsQueue: followUpCounts,
+      followUpCounts,
+      agentStats,
+      teamStats,
+      campaignStats,
+      leadCount: totalLeads,
+      userCount: agentStats.length,
+    };
+
+    return sendJson(res, 200, { success: true, data });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Dashboard fetch failed' });
   }
