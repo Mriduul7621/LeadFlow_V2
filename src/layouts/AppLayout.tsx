@@ -32,6 +32,11 @@ import { adminService } from '../modules/admin/services/adminService';
 import { userService } from '../modules/users/services/userService';
 import { toast } from 'sonner';
 import { useTranslation } from '../modules/shared/utils/translations';
+import {
+  readSessionCache,
+  writeSessionCache,
+} from '../modules/shared/api/sessionCache';
+import { resolveMenuVisibility } from './menuVisibility';
 
 const labelToTranslationKey: Record<string, string> = {
   'Dashboard': 'navDashboard',
@@ -138,6 +143,14 @@ const menuSections: MenuSection[] = [
   },
 ];
 
+/**
+ * Session-scoped freshness for shared session data (per user, in-memory):
+ * the layout remounts on every route change, so these values are reused
+ * across navigations instead of being re-requested on every click.
+ */
+const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
+const NOTIFICATION_REFRESH_MS = 60_000;
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { t, language, setLanguage } = useTranslation();
   const { user, logout } = useAuthStore();
@@ -151,20 +164,45 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pwResetLoading, setPwResetLoading] = useState(false);
+  /** Latest notification refresher (panel-open refresh, no stale closure). */
+  const refreshNotifsRef = React.useRef<() => void>(() => undefined);
 
+  /**
+   * Role / menu permissions — session-scoped, NO 6-second polling.
+   * - Served instantly from the in-memory session cache when fresh, so a
+   *   navigation (which remounts this layout) performs zero requests.
+   * - Fetched once per session when absent or stale.
+   * - Invalidated by the explicit role/permission save flows
+   *   (adminService) — the saved change then takes effect immediately.
+   * - A conservative tick re-checks at most every 5 minutes and only
+   *   while the tab is visible (not seconds-level polling).
+   */
   useEffect(() => {
+    if (!user) return;
+    const cacheKey = `roles:${user.id}`;
+    const cached = readSessionCache<RolePermission[]>(cacheKey);
+    if (cached) setRolesPermissions(cached.value);
+
     const fetchPerms = async () => {
       try {
         const rp = await adminService.getRoles();
+        writeSessionCache(cacheKey, rp);
         setRolesPermissions(rp);
       } catch (err) {
         console.error(err);
       }
     };
-    fetchPerms();
-    // Re-check periodically
-    const rTimer = setInterval(fetchPerms, 6000);
-    return () => clearInterval(rTimer);
+
+    const isFresh = Boolean(cached) && Date.now() - cached!.fetchedAt <= ROLE_MENU_TTL_MS;
+    if (!isFresh) void fetchPerms();
+
+    const tick = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const entry = readSessionCache<RolePermission[]>(cacheKey);
+      if (!entry || Date.now() - entry.fetchedAt > ROLE_MENU_TTL_MS) void fetchPerms();
+    }, 60_000);
+
+    return () => clearInterval(tick);
   }, [user]);
 
   // 30-Minute Inactivity Session Timeout with Multi-Tab Synchronization
@@ -226,31 +264,83 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     };
   }, [user, logout, navigate]);
 
+  /**
+   * Notifications — NO 8-second polling.
+   * - Initial fetch once per session (session cache makes the layout
+   *   remount-on-navigation free).
+   * - Refreshed when the panel is opened (explicit user action), and the
+   *   mutation handlers below sync DB-backed state after the server
+   *   confirms each change.
+   * - A low-frequency (60s) background refresh keeps the unread badge
+   *   reasonably current; it is paused while the tab is hidden.
+   * - localStorage remains a read-only offline cache — the DB/API stays
+   *   authoritative.
+   */
   useEffect(() => {
     if (!user) return;
-    const fetchNotifs = async () => {
-      try {
-        const list = await notificationService.getNotifications(user.employeeId);
-        setNotifications(list);
-      } catch (err) {
-        console.error(err);
+    const cacheKey = `notifications:${user.employeeId || user.id}`;
+    const cached = readSessionCache<SystemNotification[]>(cacheKey);
+    if (cached) setNotifications(cached.value);
+
+    let stopped = false;
+    let inFlight: Promise<void> | null = null;
+    const fetchNotifs = (): Promise<void> => {
+      // In-flight de-duplication: opening the panel while the session
+      // fetch is still running must not double the request.
+      if (!inFlight) {
+        inFlight = (async () => {
+          try {
+            const list = await notificationService.getNotifications(user.employeeId);
+            if (stopped) return;
+            writeSessionCache(cacheKey, list);
+            setNotifications(list);
+          } catch (err) {
+            console.error(err);
+          } finally {
+            inFlight = null;
+          }
+        })();
       }
+      return inFlight;
     };
-    fetchNotifs();
-    const timer = setInterval(fetchNotifs, 8000);
-    return () => clearInterval(timer);
+    refreshNotifsRef.current = fetchNotifs;
+
+    if (!cached) void fetchNotifs();
+
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void fetchNotifs();
+    }, NOTIFICATION_REFRESH_MS);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      refreshNotifsRef.current = () => undefined;
+    };
   }, [user]);
+
+  // Opening the panel is an explicit user action: fetch fresh.
+  useEffect(() => {
+    if (isNotifOpen) void refreshNotifsRef.current();
+  }, [isNotifOpen]);
+
+  /** Apply a server-confirmed notification mutation to state AND cache. */
+  const syncNotifications = (next: SystemNotification[]) => {
+    if (!user) return;
+    writeSessionCache(`notifications:${user.employeeId || user.id}`, next);
+    setNotifications(next);
+  };
 
   const handleMarkAsRead = async (id: string) => {
     await notificationService.markNotificationAsRead(id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    syncNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
   const handleMarkAllRead = async () => {
     if (!user) return;
     try {
       await notificationService.markAllNotificationsAsRead(user.employeeId);
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      syncNotifications(notifications.map(n => ({ ...n, read: true })));
       toast.success("All notifications marked as read");
     } catch (err) {
       console.error(err);
@@ -262,7 +352,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (!user) return;
     try {
       await notificationService.deleteAllNotifications(user.employeeId);
-      setNotifications([]);
+      syncNotifications([]);
       toast.success("All notifications deleted successfully");
     } catch (err) {
       console.error(err);
@@ -428,27 +518,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const userRoleName = user.role || '';
   const userRoleNormalized = userRoleName.toUpperCase();
+  // ADMIN bypass is preserved (see resolveMenuVisibility in
+  // menuVisibility.ts): the admin always sees every menu item.
+  const isAdminUser = userRoleNormalized === 'ADMIN';
   const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
 
   /**
    * Single, authoritative visibility check used by BOTH the grouped sidebar
    * and the mobile drawer. Semantics are unchanged from the previous flat
    * menu: ADMIN always sees everything, then the dynamic role `menuAccess`
-   * override wins when configured, otherwise the static role fallback applies.
+   * override wins when configured, otherwise the static role fallback
+   * applies (the `item.roles` check, i.e. roles.includes on the raw role).
+   *
+   * The exact precedence lives in menuVisibility.ts (resolveMenuVisibility)
+   * so it is unit-testable without rendering the layout.
    */
   const isItemVisible = (item: MenuItem): boolean => {
-    // If Admin, they always have access to everything
-    if (userRoleNormalized === 'ADMIN') return true;
-
-    // Check if custom / role permission overrides menu access
-    if (matchedPermission && matchedPermission.menuAccess !== undefined) {
-      if (matchedPermission.menuAccess[item.path] !== undefined) {
-        return matchedPermission.menuAccess[item.path];
-      }
-    }
-
-    // Otherwise fallback to static roles check
-    return item.roles.includes(userRoleNormalized as any) || item.roles.includes(userRoleName as any);
+    void isAdminUser; // document the bypass; enforced inside resolveMenuVisibility
+    return resolveMenuVisibility(userRoleName, matchedPermission, item);
   };
 
   // Sections are only rendered when at least one of their items is visible,

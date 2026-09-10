@@ -1,12 +1,17 @@
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission } from '../types';
+import { readSessionCache, writeSessionCache } from '../api/sessionCache';
+import { ROLES_CACHE_CHANGED_EVENT } from '../utils/localCacheEvents';
 import { useEffect, useState } from 'react';
 
 /**
  * usePermissions - Custom React context hook for fine-grained functional permission checking.
- * Built with staff-level scalability in mind, including passive cross-tab state syncing 
+ * Built with staff-level scalability in mind, including passive cross-tab state syncing
  * & cached authorization checks to ensure 0-lag animations and high frame rates.
  */
+
+/** Session-scoped freshness for the user's own permission sheet (5 min). */
+const USER_PERMISSIONS_TTL_MS = 5 * 60 * 1000;
 export function usePermissions() {
   const { user } = useAuthStore();
   const [roles, setRoles] = useState<RolePermission[]>([]);
@@ -27,20 +32,21 @@ export function usePermissions() {
     // Initialize immediate values
     loadRoles();
 
-    // Listen to storage events to keep updated in case other tabs or screens modify roles
+    // Cross-tab: the browser fires `storage` only for writes from OTHER tabs.
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'lf_local_roles_permissions') {
         loadRoles();
       }
     };
+    // Same-tab: the writer (adminService) emits ROLES_CACHE_CHANGED_EVENT
+    // right after it writes the cache — no timer polling needed.
+    const handleSameTab = () => loadRoles();
     window.addEventListener('storage', handleStorage);
-    
-    // Periodically poll local storage to stay up to date with same-tab updates
-    const interval = setInterval(loadRoles, 3000);
+    window.addEventListener(ROLES_CACHE_CHANGED_EVENT, handleSameTab);
 
     return () => {
       window.removeEventListener('storage', handleStorage);
-      clearInterval(interval);
+      window.removeEventListener(ROLES_CACHE_CHANGED_EVENT, handleSameTab);
     };
   }, []);
 
@@ -50,6 +56,19 @@ export function usePermissions() {
     async function loadServerPermissions() {
       if (!user?.id) {
         setServerPermissions(null);
+        return;
+      }
+
+      // This is the signed-in user's OWN permission sheet — shared
+      // session data. It must not be re-requested on every route change:
+      // a fresh (TTL) session-scoped result is reused, and the override
+      // save flow invalidates it. On fetch failure the previous
+      // semantics hold (null -> role-matrix fallback; stale cache is
+      // never promoted to authoritative).
+      const cacheKey = `userPermissions:${user.id}`;
+      const cached = readSessionCache<Record<string, boolean>>(cacheKey);
+      if (cached && Date.now() - cached.fetchedAt <= USER_PERMISSIONS_TTL_MS) {
+        setServerPermissions(cached.value);
         return;
       }
 
@@ -67,7 +86,10 @@ export function usePermissions() {
           return result;
         }, {});
 
-        if (!cancelled) setServerPermissions(permissions);
+        if (!cancelled) {
+          writeSessionCache(cacheKey, permissions);
+          setServerPermissions(permissions);
+        }
       } catch {
         if (!cancelled) setServerPermissions(null);
       }

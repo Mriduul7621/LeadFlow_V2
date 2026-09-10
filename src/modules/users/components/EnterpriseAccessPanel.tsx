@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { ShieldCheck, History, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { User } from '../../shared/types';
+import { useAuthStore } from '../../auth/store/authStore';
+import { invalidateSessionCache } from '../../shared/api/sessionCache';
 
 interface PermissionRow {
   permission_code: string;
@@ -63,6 +65,15 @@ export default function EnterpriseAccessPanel({ users }: { users: User[] }) {
       return;
     }
     toast.success('User permission overrides saved.');
+
+    // If the saved overrides belong to the signed-in user, their
+    // session-scoped permission sheet is now stale: invalidate it so the
+    // next permission check sees the new grants (other users' overrides
+    // never touch this session's cache).
+    const currentUser = useAuthStore.getState().user;
+    if (currentUser && (currentUser.id === selectedUserId || currentUser.employeeId === selectedUserId)) {
+      invalidateSessionCache(`userPermissions:${currentUser.id}`);
+    }
   };
 
   return (
