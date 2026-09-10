@@ -58,6 +58,14 @@ Canonical `current_status` values only (no silent merges):
 | Collected NCP | `custom_fields.collectedNCP` (no dedicated column) |
 | Sum Assured | `leads.expected_value`, fallback `custom_fields.sumAssured` |
 
+## Intentionally unavailable metrics (no fabrication)
+
+| Field | Behavior |
+| --- | --- |
+| `avgResponseTAT` | Always `null` until a proven first-contact timestamp exists. UI shows **N/A**. Never defaults to `24.0h`. |
+| `teamStats` | Always `[]` for Step 5. Area text (Gulshan/Banani/…) is **not** a team identity. Real Team Performance deferred to Step 5B / hierarchy joins. |
+| `trendData` | Always `[]` until the server publishes real time-series. UI shows **No trend data available**. A single aggregate total is not a trend. |
+
 ## Follow-up counts
 
 `data.followUpCounts` / `data.followUpsQueue`:

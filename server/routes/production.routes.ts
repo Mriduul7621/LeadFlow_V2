@@ -5874,21 +5874,9 @@ function computeDashboardFromLeads(
     };
   });
 
-  const teams = ['Gulshan', 'Banani', 'Dhanmondi', 'Uttara', 'Mirpur'];
-  const teamStats = teams.map(team => {
-    const teamLeads = leads.filter(l => String(l.area || '').includes(team));
-    return {
-      team,
-      assigned: teamLeads.length,
-      noCall: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
-      contacted: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Contacted').length,
-      meetings: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Meeting Fixed').length,
-      followUps: teamLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
-      pipeline: teamLeads.filter(l => leadProjectedNcp(l) > 0).length,
-      collected: teamLeads.reduce((a, l) => a + leadCollectedNcp(l), 0),
-      projected: teamLeads.reduce((a, l) => a + leadProjectedNcp(l), 0),
-    };
-  }).filter(t => t.assigned > 0);
+  // Team Performance deferred: area text is not a canonical team identity.
+  // Return empty until hierarchy/team joins land in a dedicated step.
+  const teamStats: any[] = [];
 
   const campaignStats = [
     'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
@@ -5922,12 +5910,14 @@ function computeDashboardFromLeads(
     sumAssured,
     conversionRate: conversionRatePct(converted, totalLeads),
     conversionRateValue: totalLeads > 0 ? Number(((converted / totalLeads) * 100).toFixed(1)) : 0,
-    avgResponseTAT: '24.0h',
+    // Avg Response TAT is unavailable until a proven first-contact timestamp exists.
+    avgResponseTAT: null,
     followUpsQueue: followUpCounts,
     followUpCounts,
     agentStats,
     teamStats,
     campaignStats,
+    trendData: [],
     // backward-compatible aliases
     leadCount: totalLeads,
     userCount: agents.length,
@@ -6089,44 +6079,11 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       LIMIT 200
     `;
 
-    // ---- Team / area breakdown ----
-    const teamParams: any[] = [];
-    const teamWhere: string[] = ['l.is_deleted = FALSE'];
-    teamWhere.push(buildDashboardVisibilitySql(visibility, teamParams));
-    if (period.start && period.end) {
-      teamParams.push(period.start.toISOString(), period.end.toISOString());
-      teamWhere.push(`l.created_at >= $${teamParams.length - 1}::timestamp AND l.created_at < $${teamParams.length}::timestamp`);
-    }
-    const teamSql = `
-      SELECT team, assigned, no_call, contacted, meetings, follow_ups, pipeline, collected, projected FROM (
-        SELECT 'Gulshan' AS team
-        UNION ALL SELECT 'Banani'
-        UNION ALL SELECT 'Dhanmondi'
-        UNION ALL SELECT 'Uttara'
-        UNION ALL SELECT 'Mirpur'
-      ) t
-      CROSS JOIN LATERAL (
-        SELECT
-          COUNT(*)::int AS assigned,
-          COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS no_call,
-          COUNT(*) FILTER (WHERE l.current_status = 'Contacted')::int AS contacted,
-          COUNT(*) FILTER (WHERE l.current_status = 'Meeting Fixed')::int AS meetings,
-          COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_ups,
-          COUNT(*) FILTER (WHERE COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0) > 0)::int AS pipeline,
-          COALESCE(SUM(COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0)), 0)::float AS collected,
-          COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected
-        FROM leads l
-        WHERE ${teamWhere.join(' AND ')}
-          AND COALESCE(l.area, '') ILIKE '%' || t.team || '%'
-      ) s
-      WHERE s.assigned > 0
-    `;
-
-    const [metricRes, fuRes, agentRes, teamRes] = await Promise.all([
+    // Team Performance deferred (Step 5B): do not invent teams from area text.
+    const [metricRes, fuRes, agentRes] = await Promise.all([
       pool.query(metricSql, metricParams),
       pool.query(fuCountSql, fuParams),
       pool.query(agentSql, agentParams),
-      pool.query(teamSql, teamParams),
     ]);
 
     const m = metricRes.rows[0] || {};
@@ -6168,17 +6125,8 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       conversion: conversionRatePct(numOr0(row.converted), numOr0(row.assigned)),
     }));
 
-    const teamStats = teamRes.rows.map((row: any) => ({
-      team: row.team,
-      assigned: numOr0(row.assigned),
-      noCall: numOr0(row.no_call),
-      contacted: numOr0(row.contacted),
-      meetings: numOr0(row.meetings),
-      followUps: numOr0(row.follow_ups),
-      pipeline: numOr0(row.pipeline),
-      collected: numOr0(row.collected),
-      projected: numOr0(row.projected),
-    }));
+    // Empty until canonical team/hierarchy metrics are implemented.
+    const teamStats: any[] = [];
 
     const campaignStats = [
       'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
@@ -6212,12 +6160,14 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       sumAssured: numOr0(m.sum_assured),
       conversionRate: conversionRatePct(converted, totalLeads),
       conversionRateValue: totalLeads > 0 ? Number(((converted / totalLeads) * 100).toFixed(1)) : 0,
-      avgResponseTAT: '24.0h',
+      // No fabricated TAT — null until a proven first-contact source exists.
+      avgResponseTAT: null,
       followUpsQueue: followUpCounts,
       followUpCounts,
       agentStats,
       teamStats,
       campaignStats,
+      trendData: [],
       leadCount: totalLeads,
       userCount: agentStats.length,
     };

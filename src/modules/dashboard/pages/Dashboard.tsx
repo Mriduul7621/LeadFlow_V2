@@ -20,16 +20,6 @@ import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
 
-const CAMPAIGN_TREND_DATA = [
-  { date: '01 May', value: 40 },
-  { date: '05 May', value: 65 },
-  { date: '10 May', value: 45 },
-  { date: '15 May', value: 90 },
-  { date: '20 May', value: 70 },
-  { date: '25 May', value: 85 },
-  { date: '31 May', value: 110 },
-];
-
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
@@ -61,7 +51,7 @@ export default function Dashboard() {
     collected: 0,
     activeLeads: 0,
     conversionRate: '0.0%',
-    avgResponseTAT: '24.0h'
+    avgResponseTAT: null as string | null,
   });
   const [agentStats, setAgentStats] = useState<any[]>([]);
   const [teamStats, setTeamStats] = useState<any[]>([]);
@@ -70,7 +60,8 @@ export default function Dashboard() {
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [alertDate, setAlertDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [popupSearch, setPopupSearch] = useState<string>('');
-  const [trendData, setTrendData] = useState<{ date: string; value: number }[]>(CAMPAIGN_TREND_DATA);
+  // Empty until the server provides real time-series points — never fabricate a single-point "trend".
+  const [trendData, setTrendData] = useState<{ date: string; value: number }[]>([]);
 
   // Status updating state fields
   const [selectedLead, setSelectedLead] = useState<any | null>(null);
@@ -544,7 +535,7 @@ export default function Dashboard() {
         collected: metrics.collected || 0,
         activeLeads: metrics.activeLeads || 0,
         conversionRate: metrics.conversionRate || '0.0%',
-        avgResponseTAT: metrics.avgResponseTAT || '24.0h',
+        avgResponseTAT: metrics.avgResponseTAT == null || metrics.avgResponseTAT === '' ? null : metrics.avgResponseTAT,
       });
 
       setAgentStats((metrics.agentStats || []).map((row: any) => ({
@@ -571,10 +562,8 @@ export default function Dashboard() {
         }
       }
 
-      // Simple trend from server period totals (no fabricated history).
-      setTrendData([
-        { date: metrics.todayDate || 'Period', value: metrics.totalLeads || 0 },
-      ]);
+      // No fabricated single-point trend from current totals.
+      setTrendData(Array.isArray(metrics.trendData) ? metrics.trendData : []);
 
     } catch (err) {
       // Prefer explicit error over silently presenting stale totals as current.
@@ -590,11 +579,12 @@ export default function Dashboard() {
         collected: 0,
         activeLeads: 0,
         conversionRate: '0.0%',
-        avgResponseTAT: '24.0h',
+        avgResponseTAT: null,
       });
       setAgentStats([]);
       setTeamStats([]);
       setCampaignStats([]);
+      setTrendData([]);
       toast.error('Dashboard synchronization failure');
     } finally {
       setLoading(false);
@@ -1509,6 +1499,12 @@ export default function Dashboard() {
                            </div>
                         </td>
                      </tr>
+                  ) : teamStats.length === 0 ? (
+                     <tr>
+                        <td colSpan={10} className="px-8 py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[10px]">
+                           Team performance unavailable — canonical team metrics are not published yet
+                        </td>
+                     </tr>
                   ) : teamStats.map((row, i) => (
                      <tr key={i} className="hover:bg-slate-50 transition-colors group">
                         <td className="px-8 py-5 text-[12px] font-black uppercase text-slate-600">{row.team}</td>
@@ -1624,7 +1620,7 @@ export default function Dashboard() {
                   className="text-left cursor-pointer hover:bg-slate-50 p-2 rounded transition-all select-none border-0 outline-none w-full"
                >
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic leading-none mb-3">Avg Response TAT</p>
-                  <h4 className="text-2xl md:text-3xl font-black text-brand-text italic tracking-tighter leading-none">{stats.avgResponseTAT}</h4>
+                  <h4 className="text-2xl md:text-3xl font-black text-brand-text italic tracking-tighter leading-none">{stats.avgResponseTAT ?? 'N/A'}</h4>
                </button>
                <button 
                   onClick={() => {
@@ -1677,6 +1673,11 @@ export default function Dashboard() {
                   <AlertTriangle className="w-5 h-5 text-[#978C21] mb-1 animate-pulse" />
                   <p className="text-[10px] font-black text-slate-900 uppercase">Clearance Unauthorized</p>
                   <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Role credentials lack permissions to view visual analytical indexes.</p>
+               </div>
+            ) : trendData.length === 0 ? (
+               <div className="h-full w-full flex flex-col items-center justify-center bg-[#FBFAF8] border border-dashed border-slate-100 rounded-sm p-4 text-center">
+                  <p className="text-[10px] font-black text-slate-900 uppercase">No trend data available</p>
+                  <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Historical time-series is not published by the server yet.</p>
                </div>
             ) : (
                <ResponsiveContainer width="100%" height="100%">

@@ -86,12 +86,15 @@ export interface DashboardMetrics {
   sumAssured: number;
   conversionRate: string;
   conversionRateValue: number;
-  avgResponseTAT: string;
+  /** Null when no authoritative first-contact TAT is available. Never a fabricated default. */
+  avgResponseTAT: string | null;
   followUpsQueue: DashboardFollowUpCounts;
   followUpCounts: DashboardFollowUpCounts;
   agentStats: DashboardAgentStat[];
   teamStats: DashboardTeamStat[];
   campaignStats: DashboardCampaignStat[];
+  /** Empty until the server provides real time-series points. */
+  trendData?: Array<{ date: string; value: number }>;
   leadCount?: number;
   userCount?: number;
 }
@@ -143,12 +146,13 @@ function emptyMetrics(): DashboardMetrics {
     sumAssured: 0,
     conversionRate: '0.0%',
     conversionRateValue: 0,
-    avgResponseTAT: '24.0h',
+    avgResponseTAT: null,
     followUpsQueue: zeroFu,
     followUpCounts: zeroFu,
     agentStats: [],
     teamStats: [],
     campaignStats: [],
+    trendData: [],
   };
 }
 
@@ -178,6 +182,9 @@ export const dashboardService = {
       agentStats: Array.isArray(data.agentStats) ? data.agentStats : [],
       teamStats: Array.isArray(data.teamStats) ? data.teamStats : [],
       campaignStats: Array.isArray(data.campaignStats) ? data.campaignStats : [],
+      trendData: Array.isArray(data.trendData) ? data.trendData : [],
+      // Preserve null TAT — never coerce to a fabricated default hours value.
+      avgResponseTAT: data.avgResponseTAT == null || data.avgResponseTAT === '' ? null : String(data.avgResponseTAT),
     };
   },
 };

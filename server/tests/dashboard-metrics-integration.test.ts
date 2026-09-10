@@ -528,4 +528,72 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.equal(dash.body.data.followUpCounts.all, queue.body.data.counts.all);
     assert.equal(dash.body.data.followUpCounts.all, 1);
   });
+
+  it('U. empty/no-data dashboard does not report fabricated avgResponseTAT 24.0h', async () => {
+    const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.totalLeads, 0);
+    // Must be null/undefined/empty — never a default hours string.
+    const tat = res.body.data.avgResponseTAT;
+    assert.ok(tat == null || tat === '', `expected null TAT, got ${JSON.stringify(tat)}`);
+    assert.notEqual(String(tat || ''), '24.0h');
+    assert.ok(!String(tat || '').includes('24.0'));
+  });
+
+  it('V. teamStats is not generated from a hardcoded location/area list', async () => {
+    // Even with area-named leads, teamStats must stay empty (no area→team fake mapping).
+    await insertLead({
+      code: 'area_g',
+      name: 'Area G',
+      mobile: '01720000037',
+      assignedTo: employeeA.id,
+      status: 'Contacted',
+      area: 'Gulshan',
+      custom: { assignedTo: 'EMPA' },
+    });
+    await insertLead({
+      code: 'area_b',
+      name: 'Area B',
+      mobile: '01720000038',
+      assignedTo: employeeA.id,
+      status: 'Contacted',
+      area: 'Banani',
+      custom: { assignedTo: 'EMPA' },
+    });
+    const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.data.teamStats));
+    assert.equal(res.body.data.teamStats.length, 0);
+
+    const route = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const start = route.indexOf("/* ====================================================================\n   DASHBOARD");
+    const body = start >= 0 ? route.slice(start) : '';
+    assert.ok(body.length > 0, 'dashboard section missing');
+    for (const place of ['Gulshan', 'Banani', 'Dhanmondi', 'Uttara', 'Mirpur']) {
+      assert.ok(!body.includes(place), `dashboard section still hardcodes area/team name ${place}`);
+    }
+    assert.ok(!body.includes("avgResponseTAT: '24.0h'"), 'dashboard still fabricates 24.0h TAT');
+  });
+
+  it('W. dashboard does not fabricate trend series from current totals', async () => {
+    await insertLead({
+      code: 'trend_a',
+      name: 'Trend A',
+      mobile: '01720000039',
+      assignedTo: employeeA.id,
+      status: 'Untouched',
+      custom: { assignedTo: 'EMPA' },
+    });
+    const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.data.trendData));
+    assert.equal(res.body.data.trendData.length, 0);
+
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+    const loadStart = page.indexOf('const loadDashboardData');
+    const loadEnd = page.indexOf('const formattedDateRange');
+    const loadBody = page.slice(loadStart, loadEnd);
+    assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
+    assert.ok(page.includes('No trend data available') || loadBody.includes('setTrendData([])') || loadBody.includes('metrics.trendData'));
+  });
 });
