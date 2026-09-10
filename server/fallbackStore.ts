@@ -147,14 +147,26 @@ export interface FallbackScheduledActivity {
   duration_minutes?: number | null;
   remarks?: string | null;
   status: string;
+  priority?: string | null;
+  meetingType?: string | null;
+  meeting_type?: string | null;
+  location?: string | null;
   createdBy?: string | null;
   created_by?: string | null;
   assignedTo?: string | null;
   assigned_to?: string | null;
+  updatedBy?: string | null;
+  updated_by?: string | null;
   createdAt: string;
   created_at?: string;
   updatedAt?: string;
   updated_at?: string;
+  completedAt?: string | null;
+  completed_at?: string | null;
+  completedBy?: string | null;
+  completed_by?: string | null;
+  completedActivityId?: string | null;
+  completed_activity_id?: string | null;
 }
 
 export const fallbackStore = {

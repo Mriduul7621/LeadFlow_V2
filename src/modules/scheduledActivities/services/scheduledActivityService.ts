@@ -1,4 +1,4 @@
-import { apiRequest } from '../../shared/api/http';
+import { apiRequest, ApiError } from '../../shared/api/http';
 
 /**
  * scheduledActivityService.ts — Step 5C
@@ -9,8 +9,9 @@ import { apiRequest } from '../../shared/api/http';
  * No localStorage / localDb authority.
  */
 
-export type ScheduledActivityType = 'call' | 'meeting' | 'follow_up';
+export type ScheduledActivityType = 'call' | 'meeting' | 'follow_up' | 'task';
 export type ScheduledActivityStatus = 'scheduled' | 'completed' | 'cancelled';
+export type ScheduledActivityPriority = 'LOW' | 'NORMAL' | 'MEDIUM' | 'HIGH';
 
 export interface ScheduledActivity {
   id: string;
@@ -25,14 +26,26 @@ export interface ScheduledActivity {
   duration_minutes?: number | null;
   remarks?: string | null;
   status: ScheduledActivityStatus;
+  priority?: ScheduledActivityPriority | string | null;
+  meetingType?: string | null;
+  meeting_type?: string | null;
+  location?: string | null;
   createdBy?: string | null;
   created_by?: string | null;
   assignedTo?: string | null;
   assigned_to?: string | null;
+  updatedBy?: string | null;
+  updated_by?: string | null;
   createdAt: string;
   created_at?: string;
   updatedAt?: string;
   updated_at?: string;
+  completedAt?: string | null;
+  completed_at?: string | null;
+  completedBy?: string | null;
+  completed_by?: string | null;
+  completedActivityId?: string | null;
+  completed_activity_id?: string | null;
   // joined lead convenience
   leadCustomerName?: string | null;
   leadMobile?: string | null;
@@ -45,6 +58,8 @@ export interface ScheduledActivityListParams {
   leadId?: string;
   activityType?: ScheduledActivityType;
   status?: ScheduledActivityStatus;
+  priority?: ScheduledActivityPriority | string;
+  assignedTo?: string; // employeeId or userId — narrowing filter
   limit?: number;
   offset?: number;
 }
@@ -61,42 +76,41 @@ function toQuery(params: ScheduledActivityListParams): string {
   if (params.leadId) q.set('leadId', params.leadId);
   if (params.activityType) q.set('activityType', params.activityType);
   if (params.status) q.set('status', params.status);
+  if (params.priority) q.set('priority', String(params.priority));
+  if (params.assignedTo) q.set('assignedTo', String(params.assignedTo));
   if (params.limit !== undefined) q.set('limit', String(params.limit));
   if (params.offset !== undefined) q.set('offset', String(params.offset));
   const s = q.toString();
   return s ? `?${s}` : '';
 }
 
+async function fetchScheduledPage(qs: string, params: ScheduledActivityListParams): Promise<{ items: ScheduledActivity[]; pagination: { limit: number; offset: number; total: number } }> {
+  // Single-request helper — do not call apiRequest + fetch (would double request)
+  const resp = await fetch(`/api/scheduled-activities${qs}`, { headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+  const text = await resp.text().catch(() => '');
+  let body: any = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  if (!resp.ok) {
+    const msg = (body && (body.message || body.error)) || `Request failed with status ${resp.status}.`;
+    throw new ApiError(resp.status, msg, body);
+  }
+  if (body && body.success === true && Array.isArray(body.data)) {
+    return { items: body.data as ScheduledActivity[], pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
+  }
+  if (Array.isArray(body)) return { items: body as ScheduledActivity[], pagination: { limit: params.limit || 50, offset: params.offset || 0, total: (body as any).length } };
+  if (body && Array.isArray(body.data)) return { items: body.data, pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
+  return { items: [], pagination: { limit: params.limit || 50, offset: params.offset || 0, total: 0 } };
+}
+
 export const scheduledActivityService = {
   async list(params: ScheduledActivityListParams = {}): Promise<ScheduledActivity[]> {
-    const qs = toQuery(params);
-    const res = await apiRequest<ScheduledActivity[] | { data: ScheduledActivity[]; pagination: any }>(`/api/scheduled-activities${qs}`);
-    // Unwrap helper may have returned array directly (via {success,data}) or object with data
-    if (Array.isArray(res)) return res as ScheduledActivity[];
-    if (res && typeof res === 'object' && 'data' in (res as any) && Array.isArray((res as any).data)) {
-      return (res as any).data as ScheduledActivity[];
-    }
-    // Fallback: if wrapped as {success,data,pagination}
-    if (res && typeof res === 'object' && Array.isArray((res as any))) return res as any;
-    return res as unknown as ScheduledActivity[];
+    const { items } = await fetchScheduledPage(toQuery(params), params);
+    return items;
   },
 
   async listWithPagination(params: ScheduledActivityListParams = {}): Promise<{ items: ScheduledActivity[]; pagination: { limit: number; offset: number; total: number } }> {
     const qs = toQuery(params);
-    const raw: any = await apiRequest<any>(`/api/scheduled-activities${qs}`);
-    // When apiRequest unwraps {success,data}, data is array; but we need pagination from raw fetch
-    // So do a direct fetch to capture pagination if needed
-    // Instead, use fetch directly for full envelope
-    try {
-      const resp = await fetch(`/api/scheduled-activities${qs}`, { headers: { 'Content-Type': 'application/json' } });
-      const body = await resp.json().catch(() => ({}));
-      if (body && body.success && Array.isArray(body.data)) {
-        return { items: body.data as ScheduledActivity[], pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
-      }
-    } catch {}
-    // Fallback to simple list
-    const items = Array.isArray(raw) ? raw : raw?.data || [];
-    return { items, pagination: raw?.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: items.length } };
+    return fetchScheduledPage(qs, params);
   },
 
   async getById(id: string): Promise<ScheduledActivity> {
@@ -115,6 +129,10 @@ export const scheduledActivityService = {
     remarks?: string | null;
     durationMinutes?: number | null;
     status?: ScheduledActivityStatus;
+    priority?: ScheduledActivityPriority | string | null;
+    meetingType?: string | null;
+    location?: string | null;
+    assignedTo?: string | null;
   }): Promise<ScheduledActivity> {
     return apiRequest<ScheduledActivity>('/api/scheduled-activities', {
       method: 'POST',
@@ -132,12 +150,31 @@ export const scheduledActivityService = {
       remarks: string | null;
       durationMinutes: number | null;
       status: ScheduledActivityStatus;
+      priority: ScheduledActivityPriority | string | null;
+      meetingType: string | null;
+      location: string | null;
+      assignedTo: string | null;
     }>
   ): Promise<ScheduledActivity> {
     return apiRequest<ScheduledActivity>(`/api/scheduled-activities/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  },
+
+  async complete(id: string, payload?: Record<string, any>): Promise<{ scheduled: ScheduledActivity; activity: any }> {
+    return apiRequest<{ scheduled: ScheduledActivity; activity: any }>(`/api/scheduled-activities/${encodeURIComponent(id)}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+  },
+
+  async cancel(id: string): Promise<ScheduledActivity> {
+    return apiRequest<ScheduledActivity>(`/api/scheduled-activities/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
     });
   },
 

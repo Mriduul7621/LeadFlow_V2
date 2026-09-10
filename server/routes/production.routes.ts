@@ -6099,14 +6099,19 @@ function computeDashboardFromLeads(
    fallbackStore mirror for local development.
    =================================================================== */
 
-const SCHEDULED_TYPES = ['call', 'meeting', 'follow_up'] as const;
+const SCHEDULED_TYPES = ['call', 'meeting', 'follow_up', 'task'] as const;
 type ScheduledType = typeof SCHEDULED_TYPES[number];
 const SCHEDULED_STATUSES = ['scheduled', 'completed', 'cancelled'] as const;
 type ScheduledStatus = typeof SCHEDULED_STATUSES[number];
+const SCHEDULED_PRIORITIES = ['LOW', 'NORMAL', 'MEDIUM', 'HIGH'] as const;
+type ScheduledPriority = typeof SCHEDULED_PRIORITIES[number];
 const SCHEDULED_MAX_LIMIT = 200;
 const SCHEDULED_DEFAULT_LIMIT = 50;
 
 function mapScheduledActivityRow(row: any) {
+  const completedAtRaw = row.completed_at ?? row.completedAt ?? null;
+  const completedByRaw = row.completed_by ?? row.completedBy ?? null;
+  const completedActRaw = row.completed_activity_id ?? row.completedActivityId ?? null;
   return {
     id: row.id,
     leadId: row.lead_id || row.leadId,
@@ -6120,14 +6125,26 @@ function mapScheduledActivityRow(row: any) {
     duration_minutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
     remarks: row.remarks ?? null,
     status: row.status || 'scheduled',
+    priority: row.priority || 'NORMAL',
+    meetingType: row.meeting_type ?? row.meetingType ?? null,
+    meeting_type: row.meeting_type ?? row.meetingType ?? null,
+    location: row.location ?? null,
     createdBy: row.created_by || row.createdBy || null,
     created_by: row.created_by || row.createdBy || null,
     assignedTo: row.assigned_to || row.assignedTo || null,
     assigned_to: row.assigned_to || row.assignedTo || null,
+    updatedBy: row.updated_by || row.updatedBy || null,
+    updated_by: row.updated_by || row.updatedBy || null,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
     created_at: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
     updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
+    completedAt: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
+    completed_at: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
+    completedBy: completedByRaw || null,
+    completed_by: completedByRaw || null,
+    completedActivityId: completedActRaw || null,
+    completed_activity_id: completedActRaw || null,
     leadCustomerName: row.lead_customer_name || row.customer_name || row.leadCustomerName || null,
     leadMobile: row.lead_mobile || row.leadMobile || null,
     leadStatus: row.lead_current_status || row.leadStatus || null,
@@ -6141,11 +6158,19 @@ function parseScheduledAt(value: any): Date | null {
   return d;
 }
 
+function normalizePriority(value: any): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const v = String(value).trim().toUpperCase();
+  if (!SCHEDULED_PRIORITIES.includes(v as any)) return null;
+  return v;
+}
+
 /* ------------------------------------------------------------------
    GET /scheduled-activities — calendar list, visibility enforced
-   Query: from=YYYY-MM-DD, to=YYYY-MM-DD, leadId, activityType, status,
-          limit, offset
+   Query: from=YYYY-MM-DD, to=YYYY-MM-DD, leadId, activityType,
+          status, priority, assignedTo, limit, offset
    Scope: Same Own/DownTeam/FullTeam/Organization as leads (via parent lead).
+   assignedTo is a NARROWING filter only — it never widens visibility.
 ------------------------------------------------------------------- */
 router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
@@ -6170,6 +6195,11 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     if (statusFilter && !SCHEDULED_STATUSES.includes(statusFilter as any)) {
       return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
     }
+    const priorityFilter = req.query?.priority ? String(req.query.priority).trim().toUpperCase() : '';
+    if (priorityFilter && !SCHEDULED_PRIORITIES.includes(priorityFilter as any)) {
+      return sendJson(res, 400, { success: false, message: `priority must be one of ${SCHEDULED_PRIORITIES.join(', ')}.` });
+    }
+    const assignedToRaw = req.query?.assignedTo ? String(req.query.assignedTo).trim() : (req.query?.assigned_to ? String(req.query.assigned_to).trim() : '');
 
     let limit = Number(req.query?.limit);
     if (!Number.isFinite(limit) || limit <= 0) limit = SCHEDULED_DEFAULT_LIMIT;
@@ -6179,6 +6209,21 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     offset = Math.floor(offset);
 
     const visibility = await resolveCallerVisibility(caller);
+
+    // assignedTo NARROWING filter — never widens visibility
+    let assignedFilter: { userId: string; employeeId: string } | null = null;
+    let assignedOutOfScope = false;
+    if (assignedToRaw) {
+      const resolved = await resolveAssignedTo(assignedToRaw);
+      if (!resolved || !isAssignedToAllowed(resolved, visibility, caller)) {
+        assignedOutOfScope = true;
+      } else {
+        assignedFilter = resolved;
+      }
+    }
+    if (assignedOutOfScope) {
+      return sendJson(res, 200, { success: true, data: [], pagination: { limit, offset, total: 0 } });
+    }
 
     // Demo mode (no DB) — filter in-memory
     if (!useDb()) {
@@ -6191,6 +6236,8 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
         if (leadIdFilter && String(sa.leadId) !== leadIdFilter && String(sa.lead_id) !== leadIdFilter) return false;
         if (typeFilter && String(sa.activityType || sa.activity_type).toLowerCase() !== typeFilter) return false;
         if (statusFilter && String(sa.status).toLowerCase() !== statusFilter) return false;
+        if (priorityFilter && String(sa.priority || 'NORMAL').toUpperCase() !== priorityFilter) return false;
+        if (assignedFilter && String(sa.assignedTo || sa.assigned_to || '').toUpperCase() !== assignedFilter.employeeId.toUpperCase() && String(sa.assignedTo || sa.assigned_to || '') !== assignedFilter.userId) return false;
         const t = new Date(sa.scheduledAt || sa.scheduled_at).getTime();
         if (fromYmd) {
           const fromStart = dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).getTime();
@@ -6237,6 +6284,14 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     if (statusFilter) {
       params.push(statusFilter);
       where.push(`LOWER(sa.status) = LOWER($${params.length})`);
+    }
+    if (priorityFilter) {
+      params.push(priorityFilter);
+      where.push(`UPPER(sa.priority) = UPPER($${params.length})`);
+    }
+    if (assignedFilter) {
+      params.push(assignedFilter.userId);
+      where.push(`sa.assigned_to::text = $${params.length}`);
     }
     if (fromYmd) {
       params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
@@ -6356,12 +6411,18 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     const rawRemarks = body.remarks;
     const rawDuration = body.durationMinutes ?? body.duration_minutes ?? body.duration;
     const rawStatus = body.status;
+    const rawPriority = body.priority;
+    const rawMeetingType = body.meetingType ?? body.meeting_type;
+    const rawLocation = body.location;
+    const rawAssignedTo = body.assignedTo ?? body.assigned_to;
 
     const leadId = rawLeadId !== undefined && rawLeadId !== null ? String(rawLeadId).trim() : '';
     const activityType = rawType !== undefined && rawType !== null ? String(rawType).trim().toLowerCase() : '';
     const title = rawTitle !== undefined && rawTitle !== null ? String(rawTitle).trim().slice(0, 255) : null;
     const remarks = rawRemarks !== undefined && rawRemarks !== null ? String(rawRemarks).trim() : null;
     const status = rawStatus !== undefined && rawStatus !== null ? String(rawStatus).trim().toLowerCase() : 'scheduled';
+    const meetingType = rawMeetingType !== undefined && rawMeetingType !== null ? String(rawMeetingType).trim().slice(0, 255) : null;
+    const location = rawLocation !== undefined && rawLocation !== null ? String(rawLocation).trim().slice(0, 255) : null;
 
     if (!leadId) {
       perf.finish(res);
@@ -6371,9 +6432,18 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
       perf.finish(res);
       return sendJson(res, 400, { success: false, message: `activityType must be one of ${SCHEDULED_TYPES.join(', ')}.` });
     }
-    if (!SCHEDULED_STATUSES.includes(status as any)) {
+    if (!SCHEDULED_STATUSES.includes(status as any) || status !== 'scheduled') {
       perf.finish(res);
-      return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
+      return sendJson(res, 400, { success: false, message: `status must be 'scheduled' on create.` });
+    }
+    let priority: string = 'NORMAL';
+    if (rawPriority !== undefined && rawPriority !== null && String(rawPriority).trim() !== '') {
+      const p = normalizePriority(rawPriority);
+      if (!p) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: `priority must be one of ${SCHEDULED_PRIORITIES.join(', ')}.` });
+      }
+      priority = p;
     }
     const scheduledAt = parseScheduledAt(rawAt);
     if (!scheduledAt) {
@@ -6393,6 +6463,24 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     // Validate lead exists and is visible to caller
     const visibility = await resolveCallerVisibility(caller);
     let leadRow: any = null;
+    let assignedToId: string | null = null;
+    let requestedAssignee: { userId: string; employeeId: string } | null = null;
+    if (rawAssignedTo !== undefined && rawAssignedTo !== null && String(rawAssignedTo).trim() !== '') {
+      const resolved = await resolveAssignedTo(String(rawAssignedTo).trim());
+      if (!resolved) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: 'assignedTo was not found.' });
+      }
+      if (!(await hasPermissionCode(caller, 'leads.assign'))) {
+        perf.finish(res);
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign activities.' });
+      }
+      if (!isAssignedToAllowed(resolved, visibility, caller)) {
+        perf.finish(res);
+        return sendJson(res, 403, { success: false, message: 'You cannot assign to that user (outside your visibility).' });
+      }
+      requestedAssignee = resolved;
+    }
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === leadId || String((l as any).leadCode) === leadId);
@@ -6412,7 +6500,15 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
           return sendJson(res, 404, { success: false, message: 'Lead not found.' });
         }
       }
-      leadRow = lead;
+      // Determine assigned_to: requested assignee else lead's assigned_to
+      if (requestedAssignee) {
+        const u = fallbackStore.users.find(x => x.employeeId.toUpperCase() === requestedAssignee!.employeeId.toUpperCase() || x.id === requestedAssignee!.userId);
+        assignedToId = u ? u.id : (requestedAssignee.userId);
+      } else {
+        const leadAssigneeEmp = String((lead as any).assignedTo || '');
+        const u = fallbackStore.users.find(x => x.employeeId.toUpperCase() === leadAssigneeEmp.toUpperCase());
+        assignedToId = u ? u.id : null;
+      }
       const id = createId('sched');
       const nowIso = new Date().toISOString();
       const entry: any = {
@@ -6428,15 +6524,28 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
         duration_minutes: durationMinutes,
         remarks: remarks || null,
         status,
+        priority,
+        meetingType: meetingType || null,
+        meeting_type: meetingType || null,
+        location: location || null,
         createdBy: caller.id,
         created_by: caller.id,
-        assignedTo: (lead as any).assignedTo || null,
-        assigned_to: (lead as any).assignedTo || null,
+        assignedTo: assignedToId ? (fallbackStore.users.find(x=>x.id===assignedToId)?.employeeId || assignedToId) : null,
+        assigned_to: assignedToId,
+        updatedBy: caller.id,
+        updated_by: caller.id,
         createdAt: nowIso,
         created_at: nowIso,
         updatedAt: nowIso,
         updated_at: nowIso,
+        completedAt: null,
+        completed_at: null,
+        completedBy: null,
+        completed_by: null,
+        completedActivityId: null,
+        completed_activity_id: null,
       };
+      (entry as any).priority = priority;
       (fallbackStore as any).scheduledActivities.push(entry);
       perf.span('db.insert');
       perf.finish(res);
@@ -6460,11 +6569,14 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
     perf.span('lead.visibility');
 
+    if (requestedAssignee) assignedToId = requestedAssignee.userId;
+    else assignedToId = leadRow.assigned_to || null;
+
     const insertRes = await pool.query(
-      `INSERT INTO scheduled_activities (lead_id, activity_type, title, scheduled_at, duration_minutes, remarks, status, created_by, assigned_to)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO scheduled_activities (lead_id, activity_type, title, scheduled_at, duration_minutes, remarks, status, priority, meeting_type, location, created_by, assigned_to, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $11)
        RETURNING *`,
-      [leadRow.id, activityType, title, scheduledAt.toISOString(), durationMinutes, remarks, status, caller.id, leadRow.assigned_to || null]
+      [leadRow.id, activityType, title, scheduledAt.toISOString(), durationMinutes, remarks, status, priority, meetingType, location, caller.id, assignedToId]
     );
     if (!insertRes.rows[0]) {
       perf.finish(res);
@@ -6485,7 +6597,9 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
 });
 
 /* ------------------------------------------------------------------
-   PUT /scheduled-activities/:id — update, visibility enforced
+   PUT /scheduled-activities/:id — update, visibility + immutability
+   Only PENDING/SCHEDULED (status='scheduled') is editable. COMPLETED/
+   CANCELLED are immutable (409). Server-derived updated_by.
 ------------------------------------------------------------------- */
 router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
@@ -6505,6 +6619,10 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     const rawRemarks = body.remarks;
     const rawDuration = body.durationMinutes ?? body.duration_minutes ?? body.duration;
     const rawStatus = body.status;
+    const rawPriority = body.priority;
+    const rawMeetingType = body.meetingType ?? body.meeting_type;
+    const rawLocation = body.location;
+    const rawAssignedTo = body.assignedTo ?? body.assigned_to;
 
     let hasAny = false;
     const patch: any = {};
@@ -6543,10 +6661,43 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       hasAny = true;
     }
     if (rawStatus !== undefined) {
-      const v = String(rawStatus).trim().toLowerCase();
-      if (!SCHEDULED_STATUSES.includes(v as any)) return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
-      patch.status = v;
+      return sendJson(res, 400, { success: false, message: 'Status cannot be changed via PUT — use complete/cancel endpoints.' });
+    }
+    if (rawPriority !== undefined) {
+      if (rawPriority === null || String(rawPriority).trim() === '') {
+        patch.priority = 'NORMAL';
+      } else {
+        const p = normalizePriority(rawPriority);
+        if (!p) return sendJson(res, 400, { success: false, message: `priority must be one of ${SCHEDULED_PRIORITIES.join(', ')}.` });
+        patch.priority = p;
+      }
       hasAny = true;
+    }
+    if (rawMeetingType !== undefined) {
+      patch.meeting_type = rawMeetingType === null ? null : String(rawMeetingType).trim().slice(0, 255) || null;
+      hasAny = true;
+    }
+    if (rawLocation !== undefined) {
+      patch.location = rawLocation === null ? null : String(rawLocation).trim().slice(0, 255) || null;
+      hasAny = true;
+    }
+    if (rawAssignedTo !== undefined) {
+      if (rawAssignedTo === null || String(rawAssignedTo).trim() === '') {
+        patch.assigned_to = null;
+        hasAny = true;
+      } else {
+        const resolved = await resolveAssignedTo(String(rawAssignedTo).trim());
+        if (!resolved) return sendJson(res, 400, { success: false, message: 'assignedTo was not found.' });
+        const visibilityForAssign = await resolveCallerVisibility(caller);
+        if (!(await hasPermissionCode(caller, 'leads.assign'))) {
+          return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign activities.' });
+        }
+        if (!isAssignedToAllowed(resolved, visibilityForAssign, caller)) {
+          return sendJson(res, 403, { success: false, message: 'You cannot assign to that user (outside your visibility).' });
+        }
+        patch.assigned_to = resolved.userId;
+        hasAny = true;
+      }
     }
 
     if (!hasAny) return sendJson(res, 400, { success: false, message: 'No valid fields to update.' });
@@ -6558,6 +6709,9 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
       if (idx < 0) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const existing = (fallbackStore as any).scheduledActivities[idx];
+      if (String(existing.status).toLowerCase() !== 'scheduled') {
+        return sendJson(res, 409, { success: false, message: `Cannot edit a ${existing.status} activity.` });
+      }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
@@ -6572,7 +6726,16 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       if (patch.title !== undefined) updated.title = patch.title;
       if (patch.remarks !== undefined) updated.remarks = patch.remarks;
       if (patch.duration_minutes !== undefined) { updated.durationMinutes = patch.duration_minutes; updated.duration_minutes = patch.duration_minutes; }
-      if (patch.status !== undefined) updated.status = patch.status;
+      if (patch.priority !== undefined) updated.priority = patch.priority;
+      if (patch.meeting_type !== undefined) { updated.meetingType = patch.meeting_type; updated.meeting_type = patch.meeting_type; }
+      if (patch.location !== undefined) updated.location = patch.location;
+      if (patch.assigned_to !== undefined) {
+        const u = fallbackStore.users.find(x => x.id === patch.assigned_to);
+        updated.assignedTo = u ? u.employeeId : patch.assigned_to;
+        updated.assigned_to = patch.assigned_to;
+      }
+      updated.updatedBy = caller.id;
+      updated.updated_by = caller.id;
       updated.updatedAt = nowIso;
       updated.updated_at = nowIso;
       (fallbackStore as any).scheduledActivities[idx] = updated;
@@ -6591,6 +6754,9 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     if (!isLeadAccessible({ assigned_to: existingRow.lead_assigned_to, custom_fields: existingRow.lead_custom_fields, created_by: existingRow.lead_created_by }, visibility, caller)) {
       return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     }
+    if (String(existingRow.status).toLowerCase() !== 'scheduled') {
+      return sendJson(res, 409, { success: false, message: `Cannot edit a ${existingRow.status} activity.` });
+    }
 
     const setClauses: string[] = [];
     const params: any[] = [];
@@ -6600,7 +6766,11 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     if (patch.title !== undefined) { setClauses.push(`title = $${idx++}`); params.push(patch.title); }
     if (patch.remarks !== undefined) { setClauses.push(`remarks = $${idx++}`); params.push(patch.remarks); }
     if (patch.duration_minutes !== undefined) { setClauses.push(`duration_minutes = $${idx++}`); params.push(patch.duration_minutes); }
-    if (patch.status !== undefined) { setClauses.push(`status = $${idx++}`); params.push(patch.status); }
+    if (patch.priority !== undefined) { setClauses.push(`priority = $${idx++}`); params.push(patch.priority); }
+    if (patch.meeting_type !== undefined) { setClauses.push(`meeting_type = $${idx++}`); params.push(patch.meeting_type); }
+    if (patch.location !== undefined) { setClauses.push(`location = $${idx++}`); params.push(patch.location); }
+    if (patch.assigned_to !== undefined) { setClauses.push(`assigned_to = $${idx++}`); params.push(patch.assigned_to); }
+    setClauses.push(`updated_by = $${idx++}`); params.push(caller.id);
     setClauses.push(`updated_at = NOW()`);
     const idParam = idx++;
     params.push(id);
@@ -6619,7 +6789,9 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
 });
 
 /* ------------------------------------------------------------------
-   DELETE /scheduled-activities/:id — hard delete, visibility enforced
+   DELETE /scheduled-activities/:id — hard delete (compatibility)
+   Prefer CANCEL for normal business cancellation; DELETE is retained
+   but also respects immutability: only scheduled can be hard-deleted.
 ------------------------------------------------------------------- */
 router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
@@ -6639,6 +6811,9 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
       const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
       if (idx < 0) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const existing = (fallbackStore as any).scheduledActivities[idx];
+      if (String(existing.status).toLowerCase() !== 'scheduled') {
+        return sendJson(res, 409, { success: false, message: `Cannot delete a ${existing.status} activity — use cancel for pending work.` });
+      }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
@@ -6661,10 +6836,352 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
     if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
       return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     }
+    if (String(row.status).toLowerCase() !== 'scheduled') {
+      return sendJson(res, 409, { success: false, message: `Cannot delete a ${row.status} activity — use cancel for pending work.` });
+    }
     await getPool().query(`DELETE FROM scheduled_activities WHERE id::text = $1`, [id]);
     return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity delete failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   POST /scheduled-activities/:id/complete — atomic completion
+   1. lock FOR UPDATE, verify scheduled, verify lead visibility
+   2. create ONE lead_activities row (immutable history)
+   3. for FOLLOW_UP, reuse canonical follow-up logic if payload
+      contains status/remarks/nextFollowUp data (update lead)
+   4. mark scheduled COMPLETED with server time/by/activity_id
+   5. COMMIT — duplicate complete returns 409 without duplicate row
+------------------------------------------------------------------- */
+router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, res) => {
+  const perf = createPerf('scheduled.complete');
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
+    if (!caller) { perf.finish(res); return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' }); }
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) { perf.span('authz.permission'); perf.finish(res); return sendJson(res, 403, { success: false, message: 'You do not have permission to complete scheduled activities.' }); }
+    perf.span('authz.permission');
+    const id = String(req.params.id || '').trim();
+    if (!id) { perf.finish(res); return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' }); }
+    const body = req.body || {};
+    const rawRemarks = body.remarks;
+    const rawStatus = body.status ?? body.currentStatus;
+    const rawNextFollowUpDate = body.nextFollowUpDate ?? body.next_follow_up_at ?? body.nextFollowUpAt;
+    const rawNextCallDate = body.nextCallDate ?? body.next_call_at;
+    const rawMeetingDate = body.meetingDate ?? body.meeting_at;
+    const rawMeetingType = body.meetingType ?? body.meeting_type;
+    const rawCollectedNCP = body.collectedNCP ?? body.collected_ncp;
+    const rawProjectedNCP = body.projectedNCP ?? body.projected_ncp;
+    const rawSumAssured = body.sumAssured ?? body.sum_assured;
+    const rawProductName = body.productName ?? body.product_name;
+    const rawLossReason = body.lossReason ?? body.loss_reason;
+    const visibility = await resolveCallerVisibility(caller);
+    if (!useDb()) {
+      if (!demoModeAllowed()) { perf.finish(res); return sendJson(res, 503, { success: false, message: 'Database is not configured.' }); }
+      const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
+      if (idx < 0) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      const sched = (fallbackStore as any).scheduledActivities[idx];
+      if (String(sched.status).toLowerCase() !== 'scheduled') { perf.finish(res); return sendJson(res, 409, { success: false, message: `Scheduled activity already ${sched.status}.` }); }
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
+      if (!lead || (lead as any).is_deleted === true) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      }
+      const nowIso = new Date().toISOString();
+      const historyId = createId('activity');
+      const isFollowUp = String(sched.activityType || sched.activity_type).toLowerCase() === 'follow_up';
+      let statusForHistory = (lead as any).currentStatus || 'Interested';
+      let remarksForHistory = rawRemarks !== undefined && rawRemarks !== null ? String(rawRemarks) : (sched.remarks || '');
+      if (isFollowUp && rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '') {
+        const dict = fallbackStore.options.filter((o: any) => o.type === 'FollowUpStatus' && o.status !== 'Inactive').map((o: any) => o.value);
+        if (dict.length > 0 && !dict.includes(String(rawStatus).trim())) { perf.finish(res); return sendJson(res, 400, { success: false, message: `Invalid status "${rawStatus}".` }); }
+        statusForHistory = String(rawStatus).trim();
+      }
+      if (isFollowUp) {
+        if (rawStatus !== undefined && String(rawStatus).trim() !== '') (lead as any).currentStatus = statusForHistory;
+        if (remarksForHistory !== undefined) (lead as any).notes = remarksForHistory;
+        const nfd = rawNextFollowUpDate !== undefined && String(rawNextFollowUpDate).trim() !== '' ? String(rawNextFollowUpDate) : undefined;
+        if (nfd !== undefined) { try { new Date(nfd).toISOString(); (lead as any).nextFollowUpDate = nfd; } catch {} }
+        (lead as any).lastFollowUpDate = nowIso;
+        (lead as any).followUpCount = Number((lead as any).followUpCount || 0) + 1;
+        const cf = (lead as any).custom_fields || {};
+        if (rawNextCallDate !== undefined) cf.nextCallDate = String(rawNextCallDate);
+        if (rawMeetingDate !== undefined) cf.meetingDate = String(rawMeetingDate);
+        if (rawMeetingType !== undefined) cf.meetingType = String(rawMeetingType);
+        if (rawCollectedNCP !== undefined) cf.collectedNCP = Number(rawCollectedNCP);
+        if (rawProjectedNCP !== undefined) cf.projectedNCP = Number(rawProjectedNCP);
+        if (rawSumAssured !== undefined) cf.sumAssured = Number(rawSumAssured);
+        if (rawProductName !== undefined) cf.productName = String(rawProductName);
+        if (rawLossReason !== undefined) cf.lossReason = String(rawLossReason);
+        (lead as any).custom_fields = cf;
+        const sh = Array.isArray((lead as any).statusHistory) ? (lead as any).statusHistory : [];
+        sh.push({ status: statusForHistory, date: nowIso, remarks: remarksForHistory, updatedBy: caller.employee_id });
+        (lead as any).statusHistory = sh;
+      }
+      const activity: any = {
+        id: historyId,
+        leadId: String(lead.id),
+        activityType: isFollowUp ? 'follow_up' : String(sched.activityType || sched.activity_type),
+        activity_type: isFollowUp ? 'follow_up' : String(sched.activityType || sched.activity_type),
+        status: statusForHistory,
+        remarks: remarksForHistory,
+        nextFollowUpAt: rawNextFollowUpDate !== undefined ? String(rawNextFollowUpDate) : null,
+        next_follow_up_at: rawNextFollowUpDate !== undefined ? String(rawNextFollowUpDate) : null,
+        nextCallAt: rawNextCallDate !== undefined ? String(rawNextCallDate) : null,
+        next_call_at: rawNextCallDate !== undefined ? String(rawNextCallDate) : null,
+        meetingAt: rawMeetingDate !== undefined ? String(rawMeetingDate) : (String(sched.activityType).toLowerCase() === 'meeting' ? sched.scheduledAt || sched.scheduled_at : null),
+        meeting_at: rawMeetingDate !== undefined ? String(rawMeetingDate) : (String(sched.activityType).toLowerCase() === 'meeting' ? sched.scheduledAt || sched.scheduled_at : null),
+        meetingType: rawMeetingType !== undefined ? String(rawMeetingType) : (sched.meetingType || sched.meeting_type || null),
+        meeting_type: rawMeetingType !== undefined ? String(rawMeetingType) : (sched.meetingType || sched.meeting_type || null),
+        collectedNcp: rawCollectedNCP !== undefined ? Number(rawCollectedNCP) : null,
+        collected_ncp: rawCollectedNCP !== undefined ? Number(rawCollectedNCP) : null,
+        projectedNcp: rawProjectedNCP !== undefined ? Number(rawProjectedNCP) : null,
+        projected_ncp: rawProjectedNCP !== undefined ? Number(rawProjectedNCP) : null,
+        sumAssured: rawSumAssured !== undefined ? Number(rawSumAssured) : null,
+        sum_assured: rawSumAssured !== undefined ? Number(rawSumAssured) : null,
+        productName: rawProductName !== undefined ? String(rawProductName) : null,
+        product_name: rawProductName !== undefined ? String(rawProductName) : null,
+        lossReason: rawLossReason !== undefined ? String(rawLossReason) : null,
+        loss_reason: rawLossReason !== undefined ? String(rawLossReason) : null,
+        createdBy: caller.id,
+        created_by: caller.id,
+        createdAt: nowIso,
+        created_at: nowIso,
+      };
+      (fallbackStore as any).leadActivities.push(activity);
+      sched.status = 'completed';
+      sched.completedAt = nowIso;
+      sched.completed_at = nowIso;
+      sched.completedBy = caller.id;
+      sched.completed_by = caller.id;
+      sched.completedActivityId = historyId;
+      sched.completed_activity_id = historyId;
+      sched.updatedBy = caller.id;
+      sched.updated_by = caller.id;
+      sched.updatedAt = nowIso;
+      sched.updated_at = nowIso;
+      perf.span('db.complete');
+      perf.finish(res);
+      return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(sched), activity: mapActivityRow(activity) } });
+    }
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const schedRes = await client.query(
+        `SELECT sa.*, l.id AS lead_db_id, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.current_status AS lead_current_status
+         FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
+         WHERE sa.id::text = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!schedRes.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      const schedRow: any = schedRes.rows[0];
+      if (String(schedRow.status).toLowerCase() !== 'scheduled') { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 409, { success: false, message: `Scheduled activity already ${schedRow.status}.` }); }
+      if (schedRow.lead_is_deleted === true) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      if (!isLeadAccessible({ assigned_to: schedRow.lead_assigned_to, custom_fields: schedRow.lead_custom_fields, created_by: schedRow.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      const nowForDb = new Date();
+      const nowIso = nowForDb.toISOString();
+      const activityType = String(schedRow.activity_type).toLowerCase();
+      const isFollowUp = activityType === 'follow_up';
+      let statusForHistory = String(schedRow.lead_current_status || 'Interested');
+      let remarksForHistory: string | null = schedRow.remarks || null;
+      if (isFollowUp) {
+        if (rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '') {
+          const dict = await getFollowUpStatusValues().catch(() => []);
+          const trimmed = String(rawStatus).trim();
+          if (dict.length > 0) {
+            const matched = dict.find((s: string) => s.toLowerCase() === trimmed.toLowerCase()) || dict.find((s: string) => s === trimmed);
+            if (!matched) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 400, { success: false, message: `Invalid status "${rawStatus}".` }); }
+            statusForHistory = matched;
+          } else {
+            statusForHistory = trimmed;
+          }
+        }
+        if (rawRemarks !== undefined && rawRemarks !== null) remarksForHistory = String(rawRemarks).trim() || null;
+      } else {
+        if (rawRemarks !== undefined && rawRemarks !== null) remarksForHistory = String(rawRemarks).trim() || schedRow.remarks || null;
+      }
+      const nextFollowUpDateInput = rawNextFollowUpDate !== undefined && rawNextFollowUpDate !== null && String(rawNextFollowUpDate).trim() !== '' ? dateOrNull(String(rawNextFollowUpDate).trim()) : undefined;
+      if (rawNextFollowUpDate !== undefined && rawNextFollowUpDate !== null && String(rawNextFollowUpDate).trim() !== '' && nextFollowUpDateInput === null) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 400, { success: false, message: 'Invalid nextFollowUpDate.' }); }
+      const nextCallDateInput = rawNextCallDate !== undefined && rawNextCallDate !== null && String(rawNextCallDate).trim() !== '' ? dateOrNull(String(rawNextCallDate).trim()) : undefined;
+      if (rawNextCallDate !== undefined && String(rawNextCallDate).trim() !== '' && nextCallDateInput === null) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 400, { success: false, message: 'Invalid nextCallDate.' }); }
+      const meetingDateInput = rawMeetingDate !== undefined && String(rawMeetingDate).trim() !== '' ? dateOrNull(String(rawMeetingDate).trim()) : undefined;
+      if (rawMeetingDate !== undefined && String(rawMeetingDate).trim() !== '' && meetingDateInput === null) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 400, { success: false, message: 'Invalid meetingDate.' }); }
+      if (isFollowUp && (rawStatus !== undefined || rawRemarks !== undefined || nextFollowUpDateInput !== undefined || nextCallDateInput !== undefined || meetingDateInput !== undefined || rawMeetingType !== undefined || rawCollectedNCP !== undefined || rawProjectedNCP !== undefined || rawSumAssured !== undefined || rawProductName !== undefined || rawLossReason !== undefined)) {
+        const leadId = schedRow.lead_db_id;
+        const leadLock = await client.query(`SELECT * FROM leads WHERE id = $1 FOR UPDATE`, [leadId]);
+        const leadRow = leadLock.rows[0];
+        if (!leadRow) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Lead not found.' }); }
+        const newStatus = rawStatus !== undefined && String(rawStatus).trim() !== '' ? statusForHistory : String(leadRow.current_status || 'Interested');
+        const existingHistory: any[] = Array.isArray(leadRow.status_history) ? leadRow.status_history : [];
+        const cfExisting: Record<string, any> = leadRow.custom_fields && typeof leadRow.custom_fields === 'object' ? leadRow.custom_fields : {};
+        const collectedNCPInput = rawCollectedNCP !== undefined && String(rawCollectedNCP).trim() !== '' ? parseNumeric(rawCollectedNCP) : undefined;
+        const projectedNCPInput = rawProjectedNCP !== undefined && String(rawProjectedNCP).trim() !== '' ? parseNumeric(rawProjectedNCP) : undefined;
+        const sumAssuredInput = rawSumAssured !== undefined && String(rawSumAssured).trim() !== '' ? parseNumeric(rawSumAssured) : undefined;
+        const productNameInput = rawProductName !== undefined && String(rawProductName).trim() !== '' ? String(rawProductName).trim().slice(0,255) : undefined;
+        const lossReasonInput = rawLossReason !== undefined && String(rawLossReason).trim() !== '' ? String(rawLossReason).trim() : undefined;
+        const meetingTypeInput = rawMeetingType !== undefined && String(rawMeetingType).trim() !== '' ? String(rawMeetingType).trim().slice(0,255) : undefined;
+        const historyEntry: Record<string, any> = {
+          status: newStatus,
+          date: nowIso,
+          remarks: remarksForHistory !== null ? remarksForHistory : '',
+          nextFollowUpDate: nextFollowUpDateInput !== undefined ? nextFollowUpDateInput! : (leadRow.next_follow_up_at ? new Date(leadRow.next_follow_up_at).toISOString() : undefined),
+          nextCallDate: nextCallDateInput !== undefined ? nextCallDateInput! : undefined,
+          meetingDate: meetingDateInput !== undefined ? meetingDateInput! : undefined,
+          sumAssured: sumAssuredInput !== undefined ? sumAssuredInput! : (leadRow.expected_value != null ? Number(leadRow.expected_value) : undefined),
+          productName: productNameInput !== undefined ? productNameInput! : undefined,
+          lossReason: lossReasonInput !== undefined ? lossReasonInput! : undefined,
+          meetingType: meetingTypeInput !== undefined ? meetingTypeInput! : undefined,
+          collectedNCP: collectedNCPInput !== undefined ? collectedNCPInput! : undefined,
+          projectedNCP: projectedNCPInput !== undefined ? projectedNCPInput! : undefined,
+          updatedBy: caller.employee_id,
+          changedBy: caller.employee_id,
+        };
+        const newHistory = [...existingHistory, historyEntry];
+        const newCustomFields: Record<string, any> = { ...(cfExisting || {}) };
+        if (nextCallDateInput !== undefined) newCustomFields.nextCallDate = nextCallDateInput;
+        if (meetingDateInput !== undefined) newCustomFields.meetingDate = meetingDateInput;
+        if (meetingTypeInput !== undefined) newCustomFields.meetingType = meetingTypeInput;
+        if (productNameInput !== undefined) newCustomFields.productName = productNameInput;
+        if (lossReasonInput !== undefined) newCustomFields.lossReason = lossReasonInput;
+        if (collectedNCPInput !== undefined) newCustomFields.collectedNCP = collectedNCPInput;
+        if (projectedNCPInput !== undefined) newCustomFields.projectedNCP = projectedNCPInput;
+        if (sumAssuredInput !== undefined) newCustomFields.sumAssured = sumAssuredInput;
+        const setClauses: string[] = [];
+        const params: any[] = [];
+        let idx2 = 1;
+        if (rawStatus !== undefined && String(rawStatus).trim() !== '') { setClauses.push(`current_status = $${idx2++}`); params.push(newStatus); }
+        if (remarksForHistory !== null || rawRemarks !== undefined) { setClauses.push(`notes = $${idx2++}`); params.push(remarksForHistory); }
+        if (nextFollowUpDateInput !== undefined) { setClauses.push(`next_follow_up_at = $${idx2++}`); params.push(nextFollowUpDateInput); }
+        setClauses.push(`last_contacted_at = $${idx2++}`); params.push(nowForDb);
+        if (projectedNCPInput !== undefined) { setClauses.push(`expected_premium = $${idx2++}`); params.push(projectedNCPInput); }
+        if (sumAssuredInput !== undefined) { setClauses.push(`expected_value = $${idx2++}`); params.push(sumAssuredInput); }
+        setClauses.push(`status_history = $${idx2++}::jsonb`); params.push(JSON.stringify(newHistory));
+        setClauses.push(`custom_fields = $${idx2++}::jsonb`); params.push(JSON.stringify(newCustomFields));
+        setClauses.push(`updated_by = $${idx2++}`); params.push(caller.id);
+        setClauses.push(`updated_at = NOW()`);
+        setClauses.push(`follow_up_count = COALESCE(follow_up_count, 0) + 1`);
+        const leadIdParamIdx = idx2++; params.push(leadId);
+        const updateSql = `UPDATE leads SET ${setClauses.join(', ')} WHERE id = $${leadIdParamIdx} RETURNING *`;
+        await client.query(updateSql, params);
+        const actInsert = await client.query(
+          `INSERT INTO lead_activities
+             (lead_id, activity_type, status, remarks, next_follow_up_at, next_call_at, meeting_at, meeting_type, collected_ncp, projected_ncp, sum_assured, product_name, loss_reason, created_by, created_at)
+           VALUES ($1, 'follow_up', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+          [leadId, newStatus, remarksForHistory, nextFollowUpDateInput !== undefined ? nextFollowUpDateInput : null, nextCallDateInput !== undefined ? nextCallDateInput : null, meetingDateInput !== undefined ? meetingDateInput : null, meetingTypeInput !== undefined ? meetingTypeInput : null, collectedNCPInput !== undefined ? collectedNCPInput : null, projectedNCPInput !== undefined ? projectedNCPInput : null, sumAssuredInput !== undefined ? sumAssuredInput : null, productNameInput !== undefined ? productNameInput : null, lossReasonInput !== undefined ? lossReasonInput : null, caller.id, nowForDb]
+        );
+        if (!actInsert.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' }); }
+        const insertedActId = actInsert.rows[0].id;
+        await client.query(`UPDATE scheduled_activities SET status='completed', completed_at=$1, completed_by=$2, completed_activity_id=$3, updated_by=$2, updated_at=NOW() WHERE id=$4`, [nowForDb, caller.id, insertedActId, schedRow.id]);
+        await client.query('COMMIT');
+        perf.span('db.complete');
+        perf.finish(res);
+        const schedOut = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
+        const actOut = await getPool().query(`SELECT * FROM lead_activities WHERE id=$1`, [insertedActId]);
+        return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(schedOut.rows[0]), activity: mapActivityRow(actOut.rows[0]) } });
+      }
+      const historyStatus = String(schedRow.lead_current_status || 'Interested');
+      const histRemarks = remarksForHistory;
+      let meetingAtVal: string | null = null;
+      if (activityType === 'meeting' || activityType === 'task') meetingAtVal = schedRow.scheduled_at ? new Date(schedRow.scheduled_at).toISOString() : null;
+      else if (meetingDateInput !== undefined) meetingAtVal = meetingDateInput;
+      const actInsert2 = await client.query(
+        `INSERT INTO lead_activities
+           (lead_id, activity_type, status, remarks, next_follow_up_at, next_call_at, meeting_at, meeting_type, collected_ncp, projected_ncp, sum_assured, product_name, loss_reason, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+        [schedRow.lead_db_id, activityType, historyStatus, histRemarks, null, null, meetingAtVal, schedRow.meeting_type || null, null, null, null, null, null, caller.id, nowForDb]
+      );
+      if (!actInsert2.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' }); }
+      const insertedId2 = actInsert2.rows[0].id;
+      await client.query(`UPDATE scheduled_activities SET status='completed', completed_at=$1, completed_by=$2, completed_activity_id=$3, updated_by=$2, updated_at=NOW() WHERE id=$4`, [nowForDb, caller.id, insertedId2, schedRow.id]);
+      await client.query('COMMIT');
+      perf.span('db.complete');
+      perf.finish(res);
+      const schedOut2 = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
+      const actOut2 = await getPool().query(`SELECT * FROM lead_activities WHERE id=$1`, [insertedId2]);
+      return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(schedOut2.rows[0]), activity: mapActivityRow(actOut2.rows[0]) } });
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      perf.finish(res);
+      return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Complete failed.' });
+    } finally {
+      try { client.release(); } catch {}
+    }
+  } catch (error: any) {
+    try { createPerf('scheduled.complete').finish(res); } catch {}
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Complete failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   POST /scheduled-activities/:id/cancel — preserves row, status
+   Only scheduled can be cancelled; completed/cancelled are 409.
+------------------------------------------------------------------- */
+router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to cancel scheduled activities.' });
+    }
+    const id = String(req.params.id || '').trim();
+    if (!id) return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' });
+    const visibility = await resolveCallerVisibility(caller);
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
+      if (idx < 0) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const sched = (fallbackStore as any).scheduledActivities[idx];
+      if (String(sched.status).toLowerCase() === 'completed') return sendJson(res, 409, { success: false, message: 'Cannot cancel a completed activity.' });
+      if (String(sched.status).toLowerCase() === 'cancelled') return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
+      if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+      const nowIso = new Date().toISOString();
+      sched.status = 'cancelled';
+      sched.updatedBy = caller.id;
+      sched.updated_by = caller.id;
+      sched.updatedAt = nowIso;
+      sched.updated_at = nowIso;
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...sched, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+    }
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query(
+        `SELECT sa.*, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields
+         FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
+         WHERE sa.id::text = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!r.rows[0]) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      const row = r.rows[0];
+      if (row.lead_is_deleted === true) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      if (String(row.status).toLowerCase() === 'completed') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Cannot cancel a completed activity.' }); }
+      if (String(row.status).toLowerCase() === 'cancelled') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' }); }
+      await client.query(`UPDATE scheduled_activities SET status='cancelled', updated_by=$1, updated_at=NOW() WHERE id=$2`, [caller.id, row.id]);
+      await client.query('COMMIT');
+      const out = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [row.id]);
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(out.rows[0]) });
+    } catch (e: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      return sendJson(res, dbErrorStatus(e), { success: false, message: e?.message || 'Cancel failed.' });
+    } finally {
+      try { client.release(); } catch {}
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Cancel failed.' });
   }
 });
 

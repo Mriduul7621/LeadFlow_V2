@@ -551,13 +551,13 @@ export default function Dashboard() {
                                 to={`/leads/${encodeURIComponent(sa.leadId)}`}
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
                               >
-                                <div className={cn('w-8 h-8 rounded-sm border flex items-center justify-center shrink-0', sa.activityType === 'meeting' ? 'bg-amber-50 border-amber-100 text-amber-600' : sa.activityType === 'call' ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600')}>
+                                <div className={cn('w-8 h-8 rounded-sm border flex items-center justify-center shrink-0', sa.activityType === 'meeting' ? 'bg-amber-50 border-amber-100 text-amber-600' : sa.activityType === 'call' ? 'bg-sky-50 border-sky-100 text-sky-600' : sa.activityType === 'task' ? 'bg-purple-50 border-purple-100 text-purple-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600')}>
                                   <CalendarIcon className="w-3.5 h-3.5" />
                                 </div>
                                 <div className="min-w-0 flex-1">
                                   <p className="text-sm font-semibold text-slate-800 truncate">{sa.leadCustomerName || sa.title || 'Scheduled activity'}</p>
                                   <p className="text-[10px] text-slate-400 uppercase tracking-wider">
-                                    {sa.activityType === 'call' ? 'Call' : sa.activityType === 'meeting' ? 'Meeting' : 'Follow-up'} · {formatDhakaDue(sa.scheduledAt)}
+                                    {sa.activityType === 'call' ? 'Call' : sa.activityType === 'meeting' ? 'Meeting' : sa.activityType === 'task' ? 'Task' : 'Follow-up'} · {formatDhakaDue(sa.scheduledAt)}
                                     {sa.title ? ` · ${sa.title}` : ''}
                                   </p>
                                 </div>
@@ -571,7 +571,7 @@ export default function Dashboard() {
                       </div>
                     ))}
                     <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-3">
-                      Follow-ups from the server follow-up queue and calls/meetings from server <span className="font-semibold">scheduled_activities</span> (Asia/Dhaka, visibility-enforced) — no full lead-list fetch runs for this panel.
+                      Follow-ups from the server follow-up queue and calls/meetings/tasks from server <span className="font-semibold">scheduled_activities</span> (Asia/Dhaka, visibility-enforced) — no full lead-list fetch runs for this panel.
                     </p>
                   </div>
                 )}
