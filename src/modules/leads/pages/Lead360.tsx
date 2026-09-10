@@ -7,6 +7,7 @@ import {
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
 import { leadService } from '../services/leadService';
+import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { notificationService } from '../../notifications/services/notificationService';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, SystemNotification } from '../../shared/types';
@@ -43,25 +44,69 @@ export default function Lead360() {
   const [addingDoc, setAddingDoc] = useState(false);
 
   const [activities, setActivities] = useState<any[]>([]);
+  const [scheduled, setScheduled] = useState<ScheduledActivity[]>([]);
+  const [schedForm, setSchedForm] = useState<{ activityType: 'call' | 'meeting' | 'follow_up'; scheduledAt: string; title: string; remarks: string; durationMinutes: string }>({ activityType: 'call', scheduledAt: '', title: '', remarks: '', durationMinutes: '30' });
+  const [schedSaving, setSchedSaving] = useState(false);
 
   const load = async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const [l, n, a] = await Promise.all([
+      const [l, n, a, s] = await Promise.all([
         leadService.getLead(id),
         notificationService.getNotificationsForLead(id),
         (leadService as any).getLeadActivities ? (leadService as any).getLeadActivities(id) : Promise.resolve([]),
+        scheduledActivityService.getByLead(id).catch(() => []),
       ]);
       setLead(l);
       setNotifications(n);
       setActivities(Array.isArray(a) ? a : []);
+      setScheduled(Array.isArray(s) ? s : []);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => { load(); }, [id]);
+
+  const handleSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !schedForm.scheduledAt) {
+      toast.error('Scheduled date & time is required.');
+      return;
+    }
+    setSchedSaving(true);
+    try {
+      const d = new Date(schedForm.scheduledAt);
+      if (!Number.isFinite(d.getTime())) throw new Error('Invalid date');
+      await scheduledActivityService.create({
+        leadId: id,
+        activityType: schedForm.activityType,
+        scheduledAt: d.toISOString(),
+        title: schedForm.title || null,
+        remarks: schedForm.remarks || null,
+        durationMinutes: schedForm.durationMinutes ? Number(schedForm.durationMinutes) : null,
+      });
+      toast.success('Scheduled activity created.');
+      setSchedForm({ activityType: 'call', scheduledAt: '', title: '', remarks: '', durationMinutes: '30' });
+      const s = await scheduledActivityService.getByLead(id).catch(() => []);
+      setScheduled(Array.isArray(s) ? s : []);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to schedule activity.');
+    } finally {
+      setSchedSaving(false);
+    }
+  };
+
+  const handleDeleteScheduled = async (saId: string) => {
+    try {
+      await scheduledActivityService.remove(saId);
+      toast.success('Scheduled activity removed.');
+      setScheduled(prev => prev.filter(s => s.id !== saId));
+    } catch (err: any) {
+      toast.error(err?.message || 'Delete failed.');
+    }
+  };
 
   const timeline: TimelineEvent[] = useMemo(() => {
     if (!lead) return [];
@@ -263,6 +308,39 @@ export default function Lead360() {
             <p className="text-[12px] font-black text-brand-text mt-1">{lead.creationDate ? new Date(lead.creationDate).toLocaleDateString() : '-'}</p>
           </div>
         </div>
+      </div>
+
+      {/* Scheduled Activities — server-authoritative calendar (Step 5C) */}
+      <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
+        <h3 className="text-sm font-black uppercase tracking-[0.14em] text-slate-700 mb-4">Scheduled Activities</h3>
+        <p className="text-[11px] text-slate-400 mb-4">Server-authoritative calendar (Asia/Dhaka, visibility-enforced) — calls, meetings and follow-ups tied to this lead. Stored in <code className="px-1 py-0.5 bg-slate-100 rounded text-[10px]">scheduled_activities</code>.</p>
+        <form onSubmit={handleSchedule} className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6 bg-[#FBFAF8] border border-slate-100 p-4 rounded-sm">
+          <select value={schedForm.activityType} onChange={e => setSchedForm({ ...schedForm, activityType: e.target.value as any })} className="border border-slate-200 rounded-sm px-2 py-2 text-xs bg-white">
+            <option value="call">Call</option>
+            <option value="meeting">Meeting</option>
+            <option value="follow_up">Follow-up</option>
+          </select>
+          <input type="datetime-local" value={schedForm.scheduledAt} onChange={e => setSchedForm({ ...schedForm, scheduledAt: e.target.value })} className="border border-slate-200 rounded-sm px-2 py-2 text-xs" required />
+          <input type="text" placeholder="Title (optional)" value={schedForm.title} onChange={e => setSchedForm({ ...schedForm, title: e.target.value })} className="border border-slate-200 rounded-sm px-2 py-2 text-xs" />
+          <input type="number" placeholder="Duration (min)" value={schedForm.durationMinutes} onChange={e => setSchedForm({ ...schedForm, durationMinutes: e.target.value })} className="border border-slate-200 rounded-sm px-2 py-2 text-xs" min={1} max={1440} />
+          <button type="submit" disabled={schedSaving} className="bg-[#978C21] text-white text-xs font-bold px-3 py-2 rounded-sm disabled:opacity-50">Schedule</button>
+          <input type="text" placeholder="Remarks (optional)" value={schedForm.remarks} onChange={e => setSchedForm({ ...schedForm, remarks: e.target.value })} className="md:col-span-5 border border-slate-200 rounded-sm px-2 py-2 text-xs" />
+        </form>
+        {scheduled.length === 0 ? (
+          <p className="text-xs text-slate-400 border border-dashed border-slate-200 rounded-sm px-4 py-6 text-center">No scheduled activities for this lead yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {scheduled.map(sa => (
+              <div key={sa.id} className="flex items-center justify-between gap-3 border border-slate-100 rounded-sm px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-800 truncate">{sa.title || (sa.activityType === 'call' ? 'Call' : sa.activityType === 'meeting' ? 'Meeting' : 'Follow-up')} · {sa.activityType}</p>
+                  <p className="text-[11px] text-slate-400">{new Date(sa.scheduledAt).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} · {sa.status} {sa.remarks ? `· ${sa.remarks}` : ''}</p>
+                </div>
+                <button onClick={() => handleDeleteScheduled(sa.id)} className="text-[11px] font-bold text-red-500 hover:text-red-700 border border-red-100 px-2 py-1 rounded-sm">Delete</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Timeline */}

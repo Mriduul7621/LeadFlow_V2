@@ -1,9 +1,10 @@
 /**
  * dashboard-ux-step5b-source-guards.test.ts
  * ------------------------------------------------------------------
- * Step 5B source guards. These are fast, dependency-free checks that read
- * the frontend source files and assert the data-authority and navigation
- * contracts the redesign must not regress:
+ * Step 5B source guards (updated for Step 5C).
+ * These are fast, dependency-free checks that read the frontend source
+ * files and assert the data-authority and navigation contracts the
+ * redesign must not regress:
  *
  *   - Dashboard KPIs come only from the server dashboard response
  *   - No fabricated avgResponseTAT / area-team list / trend series
@@ -13,6 +14,11 @@
  *   - Role menuAccess still drives show/hide; admin bypass intact
  *   - No new route bypasses ProtectedRoute
  *   - Mobile sidebar still works
+ *
+ * Step 5C supersedes guards E and O: Daily Execution/Calendar now use
+ * server-authoritative scheduled_activities (Asia/Dhaka, visibility-
+ * enforced) instead of the Step 5B placeholder note. See
+ * docs/SCHEDULED_ACTIVITIES.md.
  *
  * Behavioral metrics tests (visibility, soft-delete, follow-up parity, etc.)
  * live in dashboard-metrics-integration.test.ts and remain green.
@@ -108,9 +114,10 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(dashboard.includes('metrics?.trendData') || dashboard.includes('metrics.trendData'), 'trend section must read metrics.trendData');
   });
 
-  it('E. no client getLeads/localStorage/localDb KPI authority', () => {
+  it('E. no client getLeads/localStorage/localDb KPI authority (Step 5C: scheduled_activities is server-authoritative, KPIs still from dashboard)', () => {
     // Scope to the KPI loader only (loadDashboardData). The KPI loader itself
-    // must never touch client lead lists.
+    // must never touch client lead lists — Step 5C adds server scheduled_activities
+    // for Daily Execution/Calendar but KPIs remain dashboard-only.
     const page = DASHBOARD();
     const start = page.indexOf('const loadDashboardData');
     const end = page.indexOf('const loadDailyExecution');
@@ -121,6 +128,9 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(!body.includes('localDb'), 'loadDashboardData must not read localDb');
     assert.ok(!body.includes('filteredLeads.filter'), 'loadDashboardData must not filter a client lead list for totals');
     assert.ok(!body.includes('getLeads('), 'loadDashboardData must not call client getLeads()');
+    // Step 5C supersedes the old Step 5B note: Dashboard still must not call getLeads anywhere,
+    // calls/meetings now come from server scheduled_activities.
+    assert.ok(!page.includes('leadService.getLeads'), 'Dashboard must not call leadService.getLeads() (replaced by server scheduled_activities in Step 5C)');
   });
 
   it('F. calendar remains available from dashboard and navigation', () => {
@@ -203,15 +213,20 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(page.includes('aria-label="Add Lead"'), 'quick action needs an accessible label for icon-only screens');
   });
 
-  it('O. Today/Tomorrow activity loads from follow-up queue, not getLeads()', () => {
+  it('O. Today/Tomorrow activity loads from follow-up queue + server scheduled_activities, not getLeads() (Step 5C supersedes Step 5B)', () => {
     const page = DASHBOARD();
     // Blocker regression: the Daily Execution panel must not fetch the full lead list.
-    assert.ok(!page.includes('leadService.getLeads'), 'Dashboard must not call leadService.getLeads()');
+    assert.ok(!page.includes('leadService.getLeads'), 'Dashboard must not call leadService.getLeads() — Step 5C replaces it with server scheduled_activities');
     assert.ok(!page.includes('buildActivities('), 'Dashboard must not derive activities from a full client lead list');
-    // It must read the server-authoritative follow-up queue instead.
-    assert.ok(page.includes('getFollowUpQueue'), 'Daily Execution must use leadService.getFollowUpQueue');
+    // Follow-ups must still read the server-authoritative follow-up queue.
+    assert.ok(page.includes('getFollowUpQueue'), 'Daily Execution must use leadService.getFollowUpQueue for follow-ups');
     assert.ok(page.includes("bucket: 'today'"), 'panel must request today follow-ups');
-    // Unsupported activity types (calls/meetings) get an explicit limited note until Step 5C.
-    assert.ok(page.includes('scheduled_activities in Step 5C'), 'panel must note call/meeting activities arrive in Step 5C');
+    // Step 5C supersedes Step 5B: calls/meetings are now server-authoritative via scheduled_activities (Asia/Dhaka, visibility-enforced).
+    assert.ok(page.includes('scheduledActivityService'), 'Daily Execution must use scheduledActivityService (server-authoritative scheduled_activities) — Step 5C supersedes Step 5B placeholder');
+    assert.ok(page.includes('scheduled_activities'), 'panel must reference server scheduled_activities');
+    assert.ok(page.includes('Asia/Dhaka') || page.includes('Asia/Dhaka'), 'scheduled activities must be Dhaka-aware');
+    // Old Step 5B placeholder note is superseded by real integration.
+    assert.ok(!page.includes('scheduled_activities in Step 5C'), 'old Step 5B placeholder note must be superseded by real scheduled_activities integration (Step 5C)');
+    assert.ok(page.includes('scheduledActivityService.list'), 'Daily Execution must fetch scheduled activities by Dhaka date');
   });
 });

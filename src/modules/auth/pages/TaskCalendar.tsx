@@ -24,19 +24,22 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../store/authStore';
-import { leadService } from '../../leads/services/leadService';
-import { Lead, LeadStatus } from '../../shared/types';
+import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { useNavigate } from 'react-router-dom';
 
 interface CalendarEvent {
   id: string;
   leadId: string;
-  lead: Lead;
-  type: 'call' | 'meeting' | 'followup';
+  prospectName: string;
+  leadMobile?: string;
+  leadStatus?: string;
+  type: 'call' | 'meeting' | 'follow_up';
   title: string;
   date: Date;
-  dateStr: string; // ISO string
+  dateStr: string; // ISO string (scheduledAt)
   remarks?: string;
+  status: string;
+  raw: ScheduledActivity;
 }
 
 const MONTHS = [
@@ -50,7 +53,6 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const { user } = useAuthStore();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [filteredEvents, setFilteredEvents] = useState<CalendarEvent[]>([]);
 
@@ -70,97 +72,114 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [selectedDayEvents, setSelectedDayEvents] = useState<{ day: Date; events: CalendarEvent[] } | null>(null);
 
+  // Server-authoritative scheduled activities (Step 5C) — Asia/Dhaka, visibility-enforced.
+  // The calendar never derives events from lead fields; it fetches scheduled_activities.
   useEffect(() => {
-    const fetchLeadsAndBuildEvents = async () => {
+    const fetchScheduledActivities = async () => {
       if (!user) return;
       setLoading(true);
       try {
-        const fetchedLeads = await leadService.getLeads({ 
-          employeeId: user.employeeId, 
-          role: user.role 
-        });
-        setLeads(fetchedLeads);
-
-        // Map leads to calendar events
-        const mappedEvents: CalendarEvent[] = [];
-
-        fetchedLeads.forEach(lead => {
-          // 1. Next Call Date
-          if (lead.nextCallDate) {
-            mappedEvents.push({
-              id: `${lead.id}_call_${lead.nextCallDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'call',
-              title: `Call Scheduled: ${lead.prospectName}`,
-              date: new Date(lead.nextCallDate),
-              dateStr: lead.nextCallDate,
-              remarks: lead.otherInfo
-            });
+        // Derive Dhakal-range for the current view so the calendar stays performance-safe
+        // and server-filtered. For embedded mode (Dashboard) fetch a 90-day window around today.
+        const toYmd = (d: Date): string => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
+        let fromYmd: string | undefined;
+        let toYmdStr: string | undefined;
+        if (embedded) {
+          const today = new Date();
+          const start = new Date(today);
+          // 30 days before, 60 days after = 90 day window
+          start.setDate(today.getDate() - 30);
+          const end = new Date(today);
+          end.setDate(today.getDate() + 60);
+          fromYmd = toYmd(start);
+          toYmdStr = toYmd(end);
+        } else {
+          const y = currentDate.getFullYear();
+          const m = currentDate.getMonth();
+          if (viewMode === 'year') {
+            fromYmd = `${y}-01-01`;
+            toYmdStr = `${y}-12-31`;
+          } else if (viewMode === 'month') {
+            const last = new Date(y, m + 1, 0).getDate();
+            fromYmd = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+            toYmdStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+          } else if (viewMode === 'week') {
+            const current = new Date(currentDate);
+            const day = current.getDay();
+            const sunday = new Date(current);
+            sunday.setDate(current.getDate() - day);
+            const saturday = new Date(sunday);
+            saturday.setDate(sunday.getDate() + 6);
+            fromYmd = toYmd(sunday);
+            toYmdStr = toYmd(saturday);
+          } else {
+            // day
+            fromYmd = toYmd(currentDate);
+            toYmdStr = fromYmd;
           }
+        }
 
-          // 2. Meeting Date
-          if (lead.meetingDate) {
-            mappedEvents.push({
-              id: `${lead.id}_meet_${lead.meetingDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'meeting',
-              title: `Meeting: ${lead.prospectName}`,
-              date: new Date(lead.meetingDate),
-              dateStr: lead.meetingDate,
-              remarks: `Product Focus: ${lead.productName || 'N/A'}`
-            });
-          }
-
-          // 3. Next Follow-Up Date
-          if (lead.nextFollowUpDate) {
-            mappedEvents.push({
-              id: `${lead.id}_followup_${lead.nextFollowUpDate}`,
-              leadId: lead.id,
-              lead,
-              type: 'followup',
-              title: `Follow-up: ${lead.prospectName}`,
-              date: new Date(lead.nextFollowUpDate),
-              dateStr: lead.nextFollowUpDate,
-              remarks: `Current Status: ${lead.currentStatus}`
-            });
-          }
+        const activities = await scheduledActivityService.list({
+          from: fromYmd,
+          to: toYmdStr,
+          limit: 200,
         });
 
-        // Sort events by chronological order
+        const mappedEvents: CalendarEvent[] = (activities || []).map((sa) => {
+          const iso = sa.scheduledAt || (sa as any).scheduled_at;
+          const d = new Date(iso);
+          const type = sa.activityType || (sa as any).activity_type;
+          // Title fallback: use explicit title or prospect fallback
+          const prospect = (sa as any).leadCustomerName || sa.title || 'Scheduled activity';
+          return {
+            id: sa.id,
+            leadId: sa.leadId || (sa as any).lead_id,
+            prospectName: (sa as any).leadCustomerName || prospect,
+            leadMobile: (sa as any).leadMobile || undefined,
+            leadStatus: (sa as any).leadStatus || undefined,
+            type: type as any,
+            title: sa.title || `${type === 'call' ? 'Call' : type === 'meeting' ? 'Meeting' : 'Follow-up'}: ${prospect}`,
+            date: d,
+            dateStr: iso,
+            remarks: sa.remarks || undefined,
+            status: sa.status,
+            raw: sa,
+          };
+        });
+
         mappedEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
         setEvents(mappedEvents);
       } catch (err) {
-        console.error('Error fetching calendar events:', err);
+        console.error('Error fetching scheduled activities:', err);
+        setEvents([]);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchLeadsAndBuildEvents();
-  }, [user]);
+    fetchScheduledActivities();
+  }, [user, currentDate, viewMode, embedded]);
 
   // Handle Filtering
   useEffect(() => {
     let result = events;
 
-    // Type filter
+    // Type filter (follow_up is stored as follow_up)
     result = result.filter(e => {
       if (e.type === 'call') return filterTypes.call;
       if (e.type === 'meeting') return filterTypes.meeting;
-      if (e.type === 'followup') return filterTypes.followup;
+      if (e.type === 'follow_up') return filterTypes.followup;
       return true;
     });
 
-    // Text search filter
+    // Text search filter (server-authoritative fields only)
     if (searchQuery.trim() !== '') {
       const q = searchQuery.toLowerCase();
-      result = result.filter(e => 
-        e.lead.prospectName.toLowerCase().includes(q) ||
-        e.lead.mobile.toLowerCase().includes(q) ||
-        (e.lead.productName && e.lead.productName.toLowerCase().includes(q)) ||
-        (e.lead.campaignName && e.lead.campaignName.toLowerCase().includes(q))
+      result = result.filter(e =>
+        e.prospectName.toLowerCase().includes(q) ||
+        (e.leadMobile && e.leadMobile.toLowerCase().includes(q)) ||
+        e.title.toLowerCase().includes(q) ||
+        (e.remarks && e.remarks.toLowerCase().includes(q))
       );
     }
 
@@ -759,7 +778,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     {selectedEvent.type} Agenda Event
                   </span>
                   <h3 className="text-base font-black uppercase tracking-tight text-slate-900 mt-2">
-                    {selectedEvent.lead.prospectName}
+                    {selectedEvent.prospectName}
                   </h3>
                 </div>
                 <button
@@ -788,10 +807,10 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   <div className="p-3 bg-slate-50 border border-slate-100 space-y-1">
                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Current Pipeline Status</span>
                     <span className="text-[10px] font-black uppercase tracking-wider text-[#978C21] leading-none block mt-1">
-                      {selectedEvent.lead.currentStatus}
+                      {selectedEvent.leadStatus || selectedEvent.status}
                     </span>
                     <span className="text-[8px] font-mono font-bold text-slate-400 uppercase block mt-1">
-                      Economic Potential: {selectedEvent.lead.projectedNCP > 0 ? `${selectedEvent.lead.projectedNCP} NCP` : 'None Lock'}
+                      Economic Potential: {(selectedEvent.raw as any).durationMinutes ?? 0 > 0 ? `${(selectedEvent.raw as any).durationMinutes ?? 0} NCP` : 'None Lock'}
                     </span>
                   </div>
                 </div>
@@ -813,7 +832,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Layers className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Product Name: <span className="text-slate-800 font-black">{selectedEvent.lead.productName}</span></span>
+                      <span>Product Name: <span className="text-slate-800 font-black">{(selectedEvent.raw as any).title || selectedEvent.title}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">

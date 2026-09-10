@@ -6085,6 +6085,641 @@ function computeDashboardFromLeads(
   };
 }
 
+
+/* ===================================================================
+   SCHEDULED ACTIVITIES — SERVER-AUTHORITATIVE CALENDAR (Step 5C)
+   ------------------------------------------------------------------
+   Dedicated table `scheduled_activities` powers both the Dashboard
+   Daily Execution panel (Today/Tomorrow) and the Task Calendar.
+   Each row is scoped to a lead; visibility is inherited from the
+   parent lead via the same Own/DownTeam/FullTeam/Organization
+   enforcement used for GET /leads and GET /leads/follow-ups.
+   Business time is Asia/Dhaka; scheduled_at is stored as UTC.
+   All mutations are PostgreSQL-authoritative with a dev-demo
+   fallbackStore mirror for local development.
+   =================================================================== */
+
+const SCHEDULED_TYPES = ['call', 'meeting', 'follow_up'] as const;
+type ScheduledType = typeof SCHEDULED_TYPES[number];
+const SCHEDULED_STATUSES = ['scheduled', 'completed', 'cancelled'] as const;
+type ScheduledStatus = typeof SCHEDULED_STATUSES[number];
+const SCHEDULED_MAX_LIMIT = 200;
+const SCHEDULED_DEFAULT_LIMIT = 50;
+
+function mapScheduledActivityRow(row: any) {
+  return {
+    id: row.id,
+    leadId: row.lead_id || row.leadId,
+    lead_id: row.lead_id || row.leadId,
+    activityType: row.activity_type || row.activityType,
+    activity_type: row.activity_type || row.activityType,
+    title: row.title ?? null,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
+    scheduled_at: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
+    durationMinutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
+    duration_minutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
+    remarks: row.remarks ?? null,
+    status: row.status || 'scheduled',
+    createdBy: row.created_by || row.createdBy || null,
+    created_by: row.created_by || row.createdBy || null,
+    assignedTo: row.assigned_to || row.assignedTo || null,
+    assigned_to: row.assigned_to || row.assignedTo || null,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
+    leadCustomerName: row.lead_customer_name || row.customer_name || row.leadCustomerName || null,
+    leadMobile: row.lead_mobile || row.leadMobile || null,
+    leadStatus: row.lead_current_status || row.leadStatus || null,
+  };
+}
+
+function parseScheduledAt(value: any): Date | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const d = new Date(String(value).trim());
+  if (!Number.isFinite(d.getTime())) return null;
+  return d;
+}
+
+/* ------------------------------------------------------------------
+   GET /scheduled-activities — calendar list, visibility enforced
+   Query: from=YYYY-MM-DD, to=YYYY-MM-DD, leadId, activityType, status,
+          limit, offset
+   Scope: Same Own/DownTeam/FullTeam/Organization as leads (via parent lead).
+------------------------------------------------------------------- */
+router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+
+    const fromYmd = parseYmd(req.query?.from ? String(req.query.from) : null);
+    const toYmd = parseYmd(req.query?.to ? String(req.query.to) : null);
+    if (req.query?.from && !fromYmd) return sendJson(res, 400, { success: false, message: 'from must be YYYY-MM-DD.' });
+    if (req.query?.to && !toYmd) return sendJson(res, 400, { success: false, message: 'to must be YYYY-MM-DD.' });
+
+    const leadIdFilter = req.query?.leadId ? String(req.query.leadId).trim() : (req.query?.lead_id ? String(req.query.lead_id).trim() : '');
+    const typeFilter = req.query?.activityType ? String(req.query.activityType).trim().toLowerCase() : (req.query?.activity_type ? String(req.query.activity_type).trim().toLowerCase() : '');
+    if (typeFilter && !SCHEDULED_TYPES.includes(typeFilter as any)) {
+      return sendJson(res, 400, { success: false, message: `activityType must be one of ${SCHEDULED_TYPES.join(', ')}.` });
+    }
+    const statusFilter = req.query?.status ? String(req.query.status).trim().toLowerCase() : '';
+    if (statusFilter && !SCHEDULED_STATUSES.includes(statusFilter as any)) {
+      return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
+    }
+
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit) || limit <= 0) limit = SCHEDULED_DEFAULT_LIMIT;
+    limit = Math.min(Math.floor(limit), SCHEDULED_MAX_LIMIT);
+    let offset = Number(req.query?.offset);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    offset = Math.floor(offset);
+
+    const visibility = await resolveCallerVisibility(caller);
+
+    // Demo mode (no DB) — filter in-memory
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      let rows = (fallbackStore as any).scheduledActivities || [];
+      // Visibility via lead
+      const leadById = new Map((fallbackStore.leads || []).map((l: any) => [String(l.id), l]));
+      rows = rows.filter((sa: any) => {
+        if (leadIdFilter && String(sa.leadId) !== leadIdFilter && String(sa.lead_id) !== leadIdFilter) return false;
+        if (typeFilter && String(sa.activityType || sa.activity_type).toLowerCase() !== typeFilter) return false;
+        if (statusFilter && String(sa.status).toLowerCase() !== statusFilter) return false;
+        const t = new Date(sa.scheduledAt || sa.scheduled_at).getTime();
+        if (fromYmd) {
+          const fromStart = dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).getTime();
+          if (t < fromStart) return false;
+        }
+        if (toYmd) {
+          const next = addCalendarDays(toYmd.y, toYmd.m, toYmd.d, 1);
+          const toEnd = dhakaStartUtc(next.y, next.m, next.d).getTime();
+          if (t >= toEnd) return false;
+        }
+        // Visibility: lead must be visible
+        const lead = leadById.get(String(sa.leadId || sa.lead_id));
+        if (!lead) return false;
+        if (lead.is_deleted === true) return false;
+        if (!visibility.all) {
+          const assigned = String((lead as any).assignedTo || '').toUpperCase();
+          if (!assigned || !visEmp.includes(assigned)) return false;
+        }
+        // Also respect soft-deleted lead check already done
+        return true;
+      });
+      rows.sort((a: any, b: any) => new Date(a.scheduledAt || a.scheduled_at).getTime() - new Date(b.scheduledAt || b.scheduled_at).getTime());
+      const total = rows.length;
+      const page = rows.slice(offset, offset + limit);
+      const items = page.map((r: any) => {
+        const lead = leadById.get(String(r.leadId || r.lead_id));
+        return mapScheduledActivityRow({ ...r, lead_customer_name: (lead as any)?.prospectName || (lead as any)?.customerName, lead_mobile: (lead as any)?.mobile, lead_current_status: (lead as any)?.currentStatus });
+      });
+      return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
+    }
+
+    const pool = getPool();
+    const params: any[] = [];
+    const where: string[] = ['l.is_deleted = FALSE'];
+
+    if (leadIdFilter) {
+      params.push(leadIdFilter);
+      where.push(`sa.lead_id::text = $${params.length} OR sa.lead_id IN (SELECT id FROM leads WHERE lead_code = $${params.length})`);
+    }
+    if (typeFilter) {
+      params.push(typeFilter);
+      where.push(`LOWER(sa.activity_type) = LOWER($${params.length})`);
+    }
+    if (statusFilter) {
+      params.push(statusFilter);
+      where.push(`LOWER(sa.status) = LOWER($${params.length})`);
+    }
+    if (fromYmd) {
+      params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
+      where.push(`sa.scheduled_at >= $${params.length}::timestamp`);
+    }
+    if (toYmd) {
+      const next = addCalendarDays(toYmd.y, toYmd.m, toYmd.d, 1);
+      params.push(dhakaStartUtc(next.y, next.m, next.d).toISOString());
+      where.push(`sa.scheduled_at < $${params.length}::timestamp`);
+    }
+    if (!visibility.all) {
+      params.push(visibility.userIds, visibility.employeeIds);
+      const pUser = params.length - 1;
+      const pEmp = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+    }
+
+    const whereSql = where.join(' AND ');
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
+    const total = Number(countRes.rows[0]?.cnt || 0);
+
+    params.push(limit, offset);
+    const pLimit = params.length - 1;
+    const pOffset = params.length;
+    const listRes = await pool.query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+       FROM scheduled_activities sa
+       JOIN leads l ON l.id = sa.lead_id
+       WHERE ${whereSql}
+       ORDER BY sa.scheduled_at ASC
+       LIMIT $${pLimit} OFFSET $${pOffset}`,
+      params
+    );
+    const items = listRes.rows.map(mapScheduledActivityRow);
+    return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activities fetch failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   GET /scheduled-activities/:id — single item, visibility enforced
+------------------------------------------------------------------- */
+router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const id = String(req.params.id || '').trim();
+    if (!id) return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' });
+
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const row = (fallbackStore as any).scheduledActivities.find((r: any) => String(r.id) === id);
+      if (!row) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(row.leadId || row.lead_id));
+      if (!lead || lead.is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...row, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+    }
+
+    const pool = getPool();
+    const r = await pool.query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status,
+              l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
+       FROM scheduled_activities sa
+       JOIN leads l ON l.id = sa.lead_id
+       WHERE sa.id::text = $1 LIMIT 1`,
+      [id]
+    );
+    if (!r.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    const row = r.rows[0];
+    if (row.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    }
+    return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(row) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity fetch failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   POST /scheduled-activities — create, visibility + validation
+------------------------------------------------------------------- */
+router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
+  const perf = createPerf('scheduled.create');
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
+    if (!caller) {
+      perf.finish(res);
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      perf.span('authz.permission');
+      perf.finish(res);
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to schedule activities.' });
+    }
+    perf.span('authz.permission');
+
+    const body = req.body || {};
+    const rawLeadId = body.leadId ?? body.lead_id ?? body.lead_id?.trim?.();
+    const rawType = body.activityType ?? body.activity_type;
+    const rawAt = body.scheduledAt ?? body.scheduled_at ?? body.scheduled_at;
+    const rawTitle = body.title;
+    const rawRemarks = body.remarks;
+    const rawDuration = body.durationMinutes ?? body.duration_minutes ?? body.duration;
+    const rawStatus = body.status;
+
+    const leadId = rawLeadId !== undefined && rawLeadId !== null ? String(rawLeadId).trim() : '';
+    const activityType = rawType !== undefined && rawType !== null ? String(rawType).trim().toLowerCase() : '';
+    const title = rawTitle !== undefined && rawTitle !== null ? String(rawTitle).trim().slice(0, 255) : null;
+    const remarks = rawRemarks !== undefined && rawRemarks !== null ? String(rawRemarks).trim() : null;
+    const status = rawStatus !== undefined && rawStatus !== null ? String(rawStatus).trim().toLowerCase() : 'scheduled';
+
+    if (!leadId) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: 'leadId is required.' });
+    }
+    if (!activityType || !SCHEDULED_TYPES.includes(activityType as any)) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: `activityType must be one of ${SCHEDULED_TYPES.join(', ')}.` });
+    }
+    if (!SCHEDULED_STATUSES.includes(status as any)) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
+    }
+    const scheduledAt = parseScheduledAt(rawAt);
+    if (!scheduledAt) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: 'scheduledAt is required and must be a valid ISO timestamp.' });
+    }
+    let durationMinutes: number | null = null;
+    if (rawDuration !== undefined && rawDuration !== null && String(rawDuration).trim() !== '') {
+      const n = Number(String(rawDuration).trim());
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0 || n > 1440) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: 'durationMinutes must be an integer between 1 and 1440.' });
+      }
+      durationMinutes = n;
+    }
+
+    // Validate lead exists and is visible to caller
+    const visibility = await resolveCallerVisibility(caller);
+    let leadRow: any = null;
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === leadId || String((l as any).leadCode) === leadId);
+      if (!lead) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      if ((lead as any).is_deleted === true) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) {
+          perf.finish(res);
+          return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+        }
+      }
+      leadRow = lead;
+      const id = createId('sched');
+      const nowIso = new Date().toISOString();
+      const entry: any = {
+        id,
+        leadId: String((lead as any).id),
+        lead_id: String((lead as any).id),
+        activityType,
+        activity_type: activityType,
+        title: title || null,
+        scheduledAt: scheduledAt.toISOString(),
+        scheduled_at: scheduledAt.toISOString(),
+        durationMinutes,
+        duration_minutes: durationMinutes,
+        remarks: remarks || null,
+        status,
+        createdBy: caller.id,
+        created_by: caller.id,
+        assignedTo: (lead as any).assignedTo || null,
+        assigned_to: (lead as any).assignedTo || null,
+        createdAt: nowIso,
+        created_at: nowIso,
+        updatedAt: nowIso,
+        updated_at: nowIso,
+      };
+      (fallbackStore as any).scheduledActivities.push(entry);
+      perf.span('db.insert');
+      perf.finish(res);
+      return sendJson(res, 201, { success: true, data: mapScheduledActivityRow({ ...entry, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+    }
+
+    const pool = getPool();
+    // Resolve lead by id or lead_code, visibility check via isLeadAccessible after fetch
+    leadRow = await findLeadByIdRaw(leadId, false);
+    if (!leadRow) {
+      perf.finish(res);
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    if (leadRow.is_deleted === true) {
+      perf.finish(res);
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    if (!isLeadAccessible(leadRow, visibility, caller)) {
+      perf.finish(res);
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    perf.span('lead.visibility');
+
+    const insertRes = await pool.query(
+      `INSERT INTO scheduled_activities (lead_id, activity_type, title, scheduled_at, duration_minutes, remarks, status, created_by, assigned_to)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [leadRow.id, activityType, title, scheduledAt.toISOString(), durationMinutes, remarks, status, caller.id, leadRow.assigned_to || null]
+    );
+    if (!insertRes.rows[0]) {
+      perf.finish(res);
+      return sendJson(res, 500, { success: false, message: 'Scheduled activity creation failed.' });
+    }
+    perf.span('db.insert');
+    perf.finish(res);
+    const out = await pool.query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
+      [insertRes.rows[0].id]
+    );
+    return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(out.rows[0] || insertRes.rows[0]) });
+  } catch (error: any) {
+    try { createPerf('scheduled.create').finish(res); } catch {}
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity creation failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   PUT /scheduled-activities/:id — update, visibility enforced
+------------------------------------------------------------------- */
+router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to update scheduled activities.' });
+    }
+    const id = String(req.params.id || '').trim();
+    if (!id) return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' });
+
+    const body = req.body || {};
+    const rawType = body.activityType ?? body.activity_type;
+    const rawAt = body.scheduledAt ?? body.scheduled_at;
+    const rawTitle = body.title;
+    const rawRemarks = body.remarks;
+    const rawDuration = body.durationMinutes ?? body.duration_minutes ?? body.duration;
+    const rawStatus = body.status;
+
+    let hasAny = false;
+    const patch: any = {};
+
+    if (rawType !== undefined) {
+      const v = String(rawType).trim().toLowerCase();
+      if (!SCHEDULED_TYPES.includes(v as any)) return sendJson(res, 400, { success: false, message: `activityType must be one of ${SCHEDULED_TYPES.join(', ')}.` });
+      patch.activity_type = v;
+      hasAny = true;
+    }
+    if (rawAt !== undefined) {
+      if (rawAt === null || String(rawAt).trim() === '') return sendJson(res, 400, { success: false, message: 'scheduledAt cannot be empty.' });
+      const d = parseScheduledAt(rawAt);
+      if (!d) return sendJson(res, 400, { success: false, message: 'scheduledAt must be a valid ISO timestamp.' });
+      patch.scheduled_at = d.toISOString();
+      hasAny = true;
+    }
+    if (rawTitle !== undefined) {
+      patch.title = rawTitle === null ? null : String(rawTitle).trim().slice(0, 255) || null;
+      hasAny = true;
+    }
+    if (rawRemarks !== undefined) {
+      patch.remarks = rawRemarks === null ? null : String(rawRemarks).trim() || null;
+      hasAny = true;
+    }
+    if (rawDuration !== undefined) {
+      if (rawDuration === null || String(rawDuration).trim() === '') {
+        patch.duration_minutes = null;
+      } else {
+        const n = Number(String(rawDuration).trim());
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0 || n > 1440) {
+          return sendJson(res, 400, { success: false, message: 'durationMinutes must be an integer between 1 and 1440.' });
+        }
+        patch.duration_minutes = n;
+      }
+      hasAny = true;
+    }
+    if (rawStatus !== undefined) {
+      const v = String(rawStatus).trim().toLowerCase();
+      if (!SCHEDULED_STATUSES.includes(v as any)) return sendJson(res, 400, { success: false, message: `status must be one of ${SCHEDULED_STATUSES.join(', ')}.` });
+      patch.status = v;
+      hasAny = true;
+    }
+
+    if (!hasAny) return sendJson(res, 400, { success: false, message: 'No valid fields to update.' });
+
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
+      if (idx < 0) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const existing = (fallbackStore as any).scheduledActivities[idx];
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
+      if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+      const nowIso = new Date().toISOString();
+      const updated = { ...existing };
+      if (patch.activity_type !== undefined) { updated.activityType = patch.activity_type; updated.activity_type = patch.activity_type; }
+      if (patch.scheduled_at !== undefined) { updated.scheduledAt = patch.scheduled_at; updated.scheduled_at = patch.scheduled_at; }
+      if (patch.title !== undefined) updated.title = patch.title;
+      if (patch.remarks !== undefined) updated.remarks = patch.remarks;
+      if (patch.duration_minutes !== undefined) { updated.durationMinutes = patch.duration_minutes; updated.duration_minutes = patch.duration_minutes; }
+      if (patch.status !== undefined) updated.status = patch.status;
+      updated.updatedAt = nowIso;
+      updated.updated_at = nowIso;
+      (fallbackStore as any).scheduledActivities[idx] = updated;
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...updated, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+    }
+
+    // Verify existence and lead visibility before update
+    const existingRes = await getPool().query(
+      `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id::text = $1 LIMIT 1`,
+      [id]
+    );
+    if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    const existingRow = existingRes.rows[0];
+    if (existingRow.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    if (!isLeadAccessible({ assigned_to: existingRow.lead_assigned_to, custom_fields: existingRow.lead_custom_fields, created_by: existingRow.lead_created_by }, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    }
+
+    const setClauses: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+    if (patch.activity_type !== undefined) { setClauses.push(`activity_type = $${idx++}`); params.push(patch.activity_type); }
+    if (patch.scheduled_at !== undefined) { setClauses.push(`scheduled_at = $${idx++}`); params.push(patch.scheduled_at); }
+    if (patch.title !== undefined) { setClauses.push(`title = $${idx++}`); params.push(patch.title); }
+    if (patch.remarks !== undefined) { setClauses.push(`remarks = $${idx++}`); params.push(patch.remarks); }
+    if (patch.duration_minutes !== undefined) { setClauses.push(`duration_minutes = $${idx++}`); params.push(patch.duration_minutes); }
+    if (patch.status !== undefined) { setClauses.push(`status = $${idx++}`); params.push(patch.status); }
+    setClauses.push(`updated_at = NOW()`);
+    const idParam = idx++;
+    params.push(id);
+    const sql = `UPDATE scheduled_activities SET ${setClauses.join(', ')} WHERE id::text = $${idParam} RETURNING *`;
+    const upd = await getPool().query(sql, params);
+    if (!upd.rows[0]) return sendJson(res, 500, { success: false, message: 'Scheduled activity update failed.' });
+    const out = await getPool().query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
+      [upd.rows[0].id]
+    );
+    return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(out.rows[0] || upd.rows[0]) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity update failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   DELETE /scheduled-activities/:id — hard delete, visibility enforced
+------------------------------------------------------------------- */
+router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to delete scheduled activities.' });
+    }
+    const id = String(req.params.id || '').trim();
+    if (!id) return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' });
+
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const idx = (fallbackStore as any).scheduledActivities.findIndex((r: any) => String(r.id) === id);
+      if (idx < 0) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const existing = (fallbackStore as any).scheduledActivities[idx];
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
+      if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+      (fallbackStore as any).scheduledActivities.splice(idx, 1);
+      return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
+    }
+
+    const existingRes = await getPool().query(
+      `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id::text = $1 LIMIT 1`,
+      [id]
+    );
+    if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    const row = existingRes.rows[0];
+    if (row.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    }
+    await getPool().query(`DELETE FROM scheduled_activities WHERE id::text = $1`, [id]);
+    return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity delete failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   GET /leads/:id/scheduled-activities — convenience listing for a lead
+------------------------------------------------------------------- */
+router.get('/leads/:id/scheduled-activities', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const leadParam = String(req.params.id || '').trim();
+    if (!leadParam) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+
+    const visibility = await resolveCallerVisibility(caller);
+    let leadRow: any = null;
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === leadParam);
+      if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      if ((lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      if (!visibility.all) {
+        const assigned = String((lead as any).assignedTo || '').toUpperCase();
+        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      leadRow = lead;
+      const items = ((fallbackStore as any).scheduledActivities || [])
+        .filter((sa: any) => String(sa.leadId || sa.lead_id) === String(leadRow.id))
+        .sort((a: any, b: any) => new Date(a.scheduledAt || a.scheduled_at).getTime() - new Date(b.scheduledAt || b.scheduled_at).getTime())
+        .map((r: any) => mapScheduledActivityRow({ ...r, lead_customer_name: (leadRow as any).prospectName, lead_mobile: (leadRow as any).mobile, lead_current_status: (leadRow as any).currentStatus }));
+      return sendJson(res, 200, { success: true, data: items });
+    }
+
+    leadRow = await findLeadByIdRaw(leadParam, false);
+    if (!leadRow) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    if (leadRow.is_deleted === true) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    if (!isLeadAccessible(leadRow, visibility, caller)) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+
+    const r = await getPool().query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
+       WHERE sa.lead_id = $1 ORDER BY sa.scheduled_at ASC`,
+      [leadRow.id]
+    );
+    return sendJson(res, 200, { success: true, data: r.rows.map(mapScheduledActivityRow) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activities fetch failed.' });
+  }
+});
+
+
 router.get('/dashboard', requireAuth, async (req: any, res) => {
   const perf = createPerf('dashboard');
   if (sendDbUnavailable(res)) return;

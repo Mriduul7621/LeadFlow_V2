@@ -24,25 +24,25 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
+import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
 
 /**
- * Dashboard (Step 5B) — role-aligned CRM / sales-execution workspace.
+ * Dashboard (Step 5C) — role-aligned CRM / sales-execution workspace.
  * ------------------------------------------------------------------
  * Every KPI, pipeline and follow-up figure on this page binds ONLY to the
  * server-authoritative GET /api/dashboard response (PostgreSQL + Asia/Dhaka
  * + Own/DownTeam/FullTeam/Organization visibility). Client lead lists are
  * never used as a source for authoritative totals.
  *
- * The "Today & Tomorrow" panel reads the server-authoritative follow-up
- * queue (GET /api/leads/follow-ups) for follow-up items only — it never
- * fetches the full lead list as a dashboard-load dependency. Call and
- * meeting scheduled activities are deferred to Step 5C (scheduled_activities)
- * and are shown as an explicit limited note rather than fabricated.
+ * The "Today & Tomorrow" panel is server-authoritative:
+ *   - Follow-ups come from the server follow-up queue (GET /api/leads/follow-ups)
+ *   - Calls & meetings come from the server scheduled_activities table
+ *     (GET /api/scheduled-activities?from=&to=, Asia/Dhaka) — the calendar
+ *     and this panel never fetch the full lead list.
  *
- * Intentionally deferred (see docs/DASHBOARD_UX_STEP5B.md):
- *  - scheduled_activities backend (Step 5C)
+ * Intentionally deferred (see docs/DASHBOARD_UX_STEP5B.md, docs/SCHEDULED_ACTIVITIES.md):
  *  - real trend time-series endpoint
  *  - canonical team performance
  *  - advanced "needs attention" rules / lead scoring
@@ -191,10 +191,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
-  // Today/Tomorrow follow-ups (informational only — see file header).
-  // Sourced from the server follow-up queue, never from a full client lead list.
+  // Today/Tomorrow follow-ups + scheduled activities (informational only — see file header).
+  // Sourced from server follow-up queue and server scheduled_activities, never from a full client lead list.
   const [todayFollowUps, setTodayFollowUps] = useState<FollowUpQueueItem[]>([]);
   const [tomorrowFollowUps, setTomorrowFollowUps] = useState<FollowUpQueueItem[]>([]);
+  const [todayScheduled, setTodayScheduled] = useState<ScheduledActivity[]>([]);
+  const [tomorrowScheduled, setTomorrowScheduled] = useState<ScheduledActivity[]>([]);
   const [dailyLoading, setDailyLoading] = useState(true);
 
   const loadDashboardData = useCallback(async () => {
@@ -221,25 +223,35 @@ export default function Dashboard() {
   }, [user, period, selectedDate, customDates]);
 
   /**
-   * Daily Execution (Today & Tomorrow) — performance-safe.
+   * Daily Execution (Today & Tomorrow) — server-authoritative, performance-safe.
    *
-   * Uses the server-authoritative follow-up queue (GET /api/leads/follow-ups)
-   * instead of fetching the full lead list on every dashboard load. Call and
-   * meeting activity types are not yet backed by a scheduled_activities
-   * entity, so they are surfaced via an explicit "coming in Step 5C" note
-   * rather than fabricated from a full client lead fetch.
+   * Follow-ups use the server follow-up queue (GET /api/leads/follow-ups).
+   * Calls & meetings use the server scheduled_activities calendar
+   * (GET /api/scheduled-activities?from=&to=, Asia/Dhaka, visibility-enforced).
+   * The panel never fetches the full lead list.
    */
   const loadDailyExecution = useCallback(async () => {
     if (!user) return;
     setDailyLoading(true);
     try {
-      const [todayRes, upcomingRes] = await Promise.all([
+      // Dhaka calendar date for "today" (Asia/Dhaka is UTC+6, no DST).
+      const dhakaToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
+      const dhakaTodayDate = new Date(dhakaToday + 'T00:00:00.000Z');
+      // Compute tomorrow's YMD in Dhaka by adding one UTC day to dhakaToday's UTC midnight minus 6h offset handling
+      // Simpler: interpret dhakaToday as UTC-midnight and add 1 day, then re-format.
+      const tomorrowYmd = (() => {
+        const base = new Date(dhakaToday + 'T00:00:00.000Z');
+        const next = new Date(base.getTime() + 86_400_000);
+        return next.toISOString().slice(0, 10);
+      })();
+
+      const [todayRes, upcomingRes, scheduledRes] = await Promise.all([
         leadService.getFollowUpQueue({ bucket: 'today', limit: 50 }),
         leadService.getFollowUpQueue({ bucket: 'upcoming', limit: 50 }),
+        scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 }),
       ]);
       setTodayFollowUps(todayRes.items ?? []);
       // "Tomorrow" is the first Dhaka day inside the server's `upcoming` bucket.
-      // Asia/Dhaka has no DST, so a day is exactly 24h past the server-provided bound.
       const tomorrowStartMs = new Date(upcomingRes.bounds.tomorrowStart).getTime();
       const tomorrowEndMs = tomorrowStartMs + 86_400_000;
       setTomorrowFollowUps(
@@ -248,9 +260,24 @@ export default function Dashboard() {
           return t >= tomorrowStartMs && t < tomorrowEndMs;
         }),
       );
+
+      // Split scheduled activities by Dhaka calendar date (Asia/Dhaka).
+      const isDhakaDate = (iso: string, ymd: string): boolean => {
+        try {
+          const d = new Date(iso);
+          const asYmd = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
+          return asYmd === ymd;
+        } catch {
+          return false;
+        }
+      };
+      setTodayScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, dhakaToday)));
+      setTomorrowScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, tomorrowYmd)));
     } catch {
       setTodayFollowUps([]);
       setTomorrowFollowUps([]);
+      setTodayScheduled([]);
+      setTomorrowScheduled([]);
     } finally {
       setDailyLoading(false);
     }
@@ -466,7 +493,7 @@ export default function Dashboard() {
           <section className="space-y-4">
             <SectionHeading
               title="Daily Execution"
-              desc="Today & Tomorrow activity and the task calendar · scheduled_activities backend arrives in Step 5C"
+              desc="Today & Tomorrow activity and the task calendar · follow-ups + scheduled_activities (server-authoritative, Asia/Dhaka)"
             />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
               {/* LEFT: Today & Tomorrow */}
@@ -484,21 +511,21 @@ export default function Dashboard() {
                 ) : (
                   <div className="space-y-6">
                     {[
-                      { label: 'Today', items: todayFollowUps },
-                      { label: 'Tomorrow', items: tomorrowFollowUps },
+                      { label: 'Today', followUps: todayFollowUps, scheduled: todayScheduled },
+                      { label: 'Tomorrow', followUps: tomorrowFollowUps, scheduled: tomorrowScheduled },
                     ].map((group) => (
                       <div key={group.label}>
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{group.label}</p>
-                          <span className="text-[10px] font-bold text-slate-400">{group.items.length}</span>
+                          <span className="text-[10px] font-bold text-slate-400">{group.followUps.length + group.scheduled.length}</span>
                         </div>
-                        {group.items.length === 0 ? (
+                        {group.followUps.length === 0 && group.scheduled.length === 0 ? (
                           <div className="rounded-sm border border-dashed border-slate-200 px-4 py-4 text-[11px] text-slate-400">
-                            No follow-ups due {group.label.toLowerCase()}.
+                            No activities due {group.label.toLowerCase()}.
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            {group.items.slice(0, 8).map((item) => (
+                            {group.followUps.slice(0, 6).map((item) => (
                               <Link
                                 key={item.id}
                                 to={`/leads/${encodeURIComponent(item.id)}`}
@@ -518,13 +545,33 @@ export default function Dashboard() {
                                 </span>
                               </Link>
                             ))}
+                            {group.scheduled.slice(0, 6).map((sa) => (
+                              <Link
+                                key={sa.id}
+                                to={`/leads/${encodeURIComponent(sa.leadId)}`}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
+                              >
+                                <div className={cn('w-8 h-8 rounded-sm border flex items-center justify-center shrink-0', sa.activityType === 'meeting' ? 'bg-amber-50 border-amber-100 text-amber-600' : sa.activityType === 'call' ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600')}>
+                                  <CalendarIcon className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-slate-800 truncate">{sa.leadCustomerName || sa.title || 'Scheduled activity'}</p>
+                                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+                                    {sa.activityType === 'call' ? 'Call' : sa.activityType === 'meeting' ? 'Meeting' : 'Follow-up'} · {formatDhakaDue(sa.scheduledAt)}
+                                    {sa.title ? ` · ${sa.title}` : ''}
+                                  </p>
+                                </div>
+                                <span className="px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-wider border shrink-0 bg-white border-slate-200 text-slate-500">
+                                  {sa.activityType}
+                                </span>
+                              </Link>
+                            ))}
                           </div>
                         )}
                       </div>
                     ))}
-                    <p className="text-[10px] text-slate-400 italic border-t border-slate-100 pt-3">
-                      Follow-ups come from the server follow-up queue — no full lead-list fetch runs for this panel.
-                      Call and meeting scheduled activities arrive with scheduled_activities in Step 5C.
+                    <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-3">
+                      Follow-ups from the server follow-up queue and calls/meetings from server <span className="font-semibold">scheduled_activities</span> (Asia/Dhaka, visibility-enforced) — no full lead-list fetch runs for this panel.
                     </p>
                   </div>
                 )}

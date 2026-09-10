@@ -134,6 +134,29 @@ export interface FallbackLeadActivity {
   created_at?: string;
 }
 
+export interface FallbackScheduledActivity {
+  id: string;
+  leadId: string;
+  lead_id?: string;
+  activityType: string;
+  activity_type?: string;
+  title?: string | null;
+  scheduledAt: string;
+  scheduled_at?: string;
+  durationMinutes?: number | null;
+  duration_minutes?: number | null;
+  remarks?: string | null;
+  status: string;
+  createdBy?: string | null;
+  created_by?: string | null;
+  assignedTo?: string | null;
+  assigned_to?: string | null;
+  createdAt: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+}
+
 export const fallbackStore = {
   users: [] as FallbackUser[],
   leads: [] as FallbackLead[],
@@ -163,6 +186,7 @@ export const fallbackStore = {
   ] as FallbackOption[],
   workflowRules: [] as FallbackWorkflowRule[],
   leadActivities: [] as FallbackLeadActivity[],
+  scheduledActivities: [] as FallbackScheduledActivity[],
 };
 
 export function createId(prefix: string): string {
