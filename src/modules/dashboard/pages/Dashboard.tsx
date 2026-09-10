@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users,
@@ -13,15 +13,20 @@ import {
   Calendar as CalendarIcon,
   RefreshCw,
   ChevronRight,
+  ChevronDown,
   CalendarClock,
   ArrowRight,
   Info,
   History,
   Plus,
+  Phone,
+  UsersRound,
+  ListChecks,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useTranslation } from '../../shared/utils/translations';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
@@ -29,31 +34,25 @@ import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
 
 /**
- * Dashboard (Step 5C) — role-aligned CRM / sales-execution workspace.
+ * Dashboard — role-aligned CRM / sales-execution workspace.
  * ------------------------------------------------------------------
  * Every KPI, pipeline and follow-up figure on this page binds ONLY to the
- * server-authoritative GET /api/dashboard response (PostgreSQL + Asia/Dhaka
- * + Own/DownTeam/FullTeam/Organization visibility). Client lead lists are
+ * GET /api/dashboard response (PostgreSQL-backed, Asia/Dhaka business dates,
+ * Own/DownTeam/FullTeam/Organization visibility). Client lead lists are
  * never used as a source for authoritative totals.
  *
- * The "Today & Tomorrow" panel is server-authoritative:
+ * The "Today & Tomorrow" panel:
  *   - Follow-ups come from the server follow-up queue (GET /api/leads/follow-ups)
  *   - Calls & meetings come from the server scheduled_activities table
  *     (GET /api/scheduled-activities?from=&to=, Asia/Dhaka) — the calendar
  *     and this panel never fetch the full lead list.
- *
- * Intentionally deferred (see docs/DASHBOARD_UX_STEP5B.md, docs/SCHEDULED_ACTIVITIES.md):
- *  - real trend time-series endpoint
- *  - canonical team performance
- *  - advanced "needs attention" rules / lead scoring
  */
 
-const DEFAULT_TODAY = new Date().toISOString().substring(0, 10);
+const BUSINESS_TZ = 'Asia/Dhaka';
 
-const PERIODS = ['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM', 'ALL'] as const;
-type PeriodKey = (typeof PERIODS)[number];
+type PeriodKey = 'TODAY' | 'WTD' | 'MTD' | 'LMTD' | 'YTD' | 'CUSTOM' | 'ALL';
 
-/** Canonical pipeline stages from existing current_status values (Step 5). */
+/** Canonical pipeline stages from existing current_status values. */
 const PIPELINE_STAGES = [
   'Untouched',
   'Contacted',
@@ -67,11 +66,11 @@ const PIPELINE_STAGES = [
 const formatMoney = (n: number) => `৳ ${Number(n || 0).toLocaleString('en-US')}`;
 const formatCount = (n: number) => Number(n || 0).toLocaleString('en-US');
 
-/** Format a follow-up timestamp in the business timezone (Asia/Dhaka). */
+/** Format a timestamp in the business timezone (Asia/Dhaka). */
 function formatDhakaDue(iso: string): string {
   try {
     return new Date(iso).toLocaleString('en-GB', {
-      timeZone: 'Asia/Dhaka',
+      timeZone: BUSINESS_TZ,
       day: 'numeric',
       month: 'short',
       hour: '2-digit',
@@ -83,86 +82,332 @@ function formatDhakaDue(iso: string): string {
   }
 }
 
-function toQueryPeriod(period: PeriodKey): string {
-  if (period === 'THIS MONTH') return 'THIS_MONTH';
-  if (period === 'LAST MONTH') return 'LAST_MONTH';
-  if (period === 'CUSTOM') return 'CUSTOM';
-  if (period === 'TODAY') return 'TODAY';
-  return 'ALL';
+/** Today's calendar date in Asia/Dhaka as { y, m, d, ymd }. */
+function dhakaTodayParts(): { y: number; m: number; d: number; ymd: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const y = get('year');
+  const m = get('month');
+  const d = get('day');
+  return { y, m, d, ymd: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` };
+}
+
+function toYmd(y: number, m: number, d: number): string {
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
+ * Resolve WTD / MTD / LMTD / YTD to explicit Dhaka date bounds. The server
+ * only knows TODAY / THIS_MONTH / LAST_MONTH / CUSTOM / ALL natively, so the
+ * "to date" periods are sent through the existing CUSTOM query with resolved
+ * startDate/endDate. All KPI aggregation remains server-side; the UI only
+ * resolves which explicit bounds to request.
+ */
+function resolveRange(period: PeriodKey): { start: string; end: string } | null {
+  const { y, m, d } = dhakaTodayParts();
+  if (period === 'WTD') {
+    const asUtc = new Date(Date.UTC(y, m - 1, d));
+    const dow = asUtc.getUTCDay(); // 0 = Sunday (Bangladesh week start)
+    const sunday = new Date(Date.UTC(y, m - 1, d - dow));
+    return {
+      start: toYmd(sunday.getUTCFullYear(), sunday.getUTCMonth() + 1, sunday.getUTCDate()),
+      end: toYmd(y, m, d),
+    };
+  }
+  if (period === 'MTD') return { start: toYmd(y, m, 1), end: toYmd(y, m, d) };
+  if (period === 'LMTD') {
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const lastDayOfPrev = new Date(Date.UTC(prevY, prevM, 0)).getUTCDate();
+    const day = Math.min(d, lastDayOfPrev);
+    return { start: toYmd(prevY, prevM, 1), end: toYmd(prevY, prevM, day) };
+  }
+  if (period === 'YTD') return { start: toYmd(y, 1, 1), end: toYmd(y, m, d) };
+  return null;
+}
+
+/** Format a Y-M-D calendar date with locale-appropriate month names. */
+function fmtYmd(ymd: string, lang: 'en' | 'bn'): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const month = new Intl.DateTimeFormat(lang === 'bn' ? 'bn-BD' : 'en-GB', {
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(dt);
+  return `${d} ${month} ${y}`;
 }
 
 /* ------------------------------------------------------------------ */
 /*  Small presentational pieces                                        */
 /* ------------------------------------------------------------------ */
 
+type KpiTone = 'blue' | 'success' | 'danger' | 'warning' | 'gold' | 'neutral';
+
 interface KpiCardProps {
   label: string;
   value: string;
   sub?: string;
   icon: React.ComponentType<{ className?: string }>;
-  tone?: 'default' | 'danger' | 'success' | 'brand';
+  tone?: KpiTone;
 }
 
-function KpiCard({ label, value, sub, icon: Icon, tone = 'default' }: KpiCardProps) {
+const KPI_TONES: Record<KpiTone, { card: string; icon: string; value: string; bar: string }> = {
+  blue: {
+    card: 'border-brand-blue/15 bg-brand-blue/[0.04]',
+    icon: 'bg-brand-blue/10 text-brand-blue',
+    value: 'text-brand-blue',
+    bar: 'from-brand-blue to-brand-blue/60',
+  },
+  success: {
+    card: 'border-emerald-200/70 bg-emerald-50/40',
+    icon: 'bg-emerald-100 text-emerald-700',
+    value: 'text-emerald-700',
+    bar: 'from-emerald-500 to-emerald-300',
+  },
+  danger: {
+    card: 'border-red-200/70 bg-red-50/40',
+    icon: 'bg-red-100 text-red-600',
+    value: 'text-red-600',
+    bar: 'from-red-500 to-red-300',
+  },
+  warning: {
+    card: 'border-amber-200/70 bg-amber-50/40',
+    icon: 'bg-amber-100 text-amber-700',
+    value: 'text-amber-700',
+    bar: 'from-amber-500 to-amber-300',
+  },
+  gold: {
+    card: 'border-brand-primary/15 bg-brand-primary/[0.05]',
+    icon: 'bg-brand-primary/10 text-brand-primary',
+    value: 'text-brand-primary',
+    bar: 'from-brand-primary to-brand-primary/60',
+  },
+  neutral: {
+    card: 'border-border bg-card',
+    icon: 'bg-slate-100 text-slate-500',
+    value: 'text-brand-text',
+    bar: 'from-slate-400 to-slate-300',
+  },
+};
+
+function KpiCard({ label, value, sub, icon: Icon, tone = 'neutral' }: KpiCardProps) {
+  const tones = KPI_TONES[tone];
   return (
-    <div
-      className={cn(
-        'bg-white rounded-sm border p-5 shadow-sm flex flex-col justify-between min-h-[118px]',
-        tone === 'danger' ? 'border-red-100 bg-red-50/30' : tone === 'success' ? 'border-emerald-100' : 'border-slate-100',
-      )}
-    >
+    <div className={cn('relative overflow-hidden rounded-card border p-5 shadow-card flex flex-col justify-between min-h-[120px]', tones.card)}>
+      <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r', tones.bar)} aria-hidden="true" />
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
-        <Icon
-          className={cn(
-            'w-4 h-4',
-            tone === 'danger' ? 'text-red-500' : tone === 'success' ? 'text-emerald-600' : tone === 'brand' ? 'text-[#978C21]' : 'text-slate-300',
-          )}
-        />
+        <p className="text-xs font-semibold text-slate-500">{label}</p>
+        <span className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0', tones.icon)}>
+          <Icon className="w-[18px] h-[18px]" aria-hidden="true" />
+        </span>
       </div>
-      <div className="mt-3">
-        <p
-          className={cn(
-            'text-2xl md:text-3xl font-black tracking-tight leading-none',
-            tone === 'danger' ? 'text-red-600' : tone === 'success' ? 'text-emerald-700' : 'text-brand-text',
-          )}
-        >
-          {value}
-        </p>
-        {sub && <p className="text-[10px] font-semibold text-slate-400 mt-2">{sub}</p>}
+      <div className="mt-2">
+        <p className={cn('text-2xl md:text-[28px] font-bold tracking-tight leading-none tabular-nums', tones.value)}>{value}</p>
+        {sub && <p className="text-xs text-slate-400 mt-1.5">{sub}</p>}
       </div>
     </div>
   );
 }
 
-function SectionHeading({ title, desc }: { title: string; desc?: string }) {
+function SectionHeading({ title, desc, action }: { title: string; desc?: string; action?: React.ReactNode }) {
   return (
     <div className="flex items-end justify-between gap-4 mb-4">
       <div>
-        <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-700">{title}</h2>
-        {desc && <p className="text-[11px] text-slate-400 mt-1">{desc}</p>}
+        <h2 className="text-sm font-bold text-slate-800">{title}</h2>
+        {desc && <p className="text-xs text-slate-400 mt-0.5">{desc}</p>}
       </div>
+      {action}
     </div>
   );
 }
 
 function EmptyState({ icon: Icon, title, note }: { icon: React.ComponentType<{ className?: string }>; title: string; note?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-12 px-6 bg-[#FBFAF8] border border-dashed border-slate-200 rounded-sm">
-      <div className="w-11 h-11 rounded-sm bg-white border border-slate-100 flex items-center justify-center text-slate-300 mb-3">
-        <Icon className="w-5 h-5" />
+    <div className="flex flex-col items-center justify-center text-center py-12 px-6 bg-surface-soft border border-dashed border-border rounded-card">
+      <div className="w-11 h-11 rounded-lg bg-white border border-border flex items-center justify-center text-slate-300 mb-3">
+        <Icon className="w-5 h-5" aria-hidden="true" />
       </div>
-      <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">{title}</p>
-      {note && <p className="text-[10px] text-slate-400 font-medium mt-2 max-w-sm leading-relaxed">{note}</p>}
+      <p className="text-sm font-semibold text-slate-600">{title}</p>
+      {note && <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">{note}</p>}
     </div>
   );
 }
 
 function SkeletonCard() {
   return (
-    <div className="bg-white rounded-sm border border-slate-100 p-5 shadow-sm min-h-[118px] animate-pulse">
+    <div className="bg-card rounded-card border border-border p-5 shadow-card min-h-[120px] animate-pulse">
       <div className="h-3 w-24 bg-slate-100 rounded mb-4" />
       <div className="h-7 w-20 bg-slate-100 rounded" />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Unified date-range control                                         */
+/* ------------------------------------------------------------------ */
+
+interface DateRangeControlProps {
+  period: PeriodKey;
+  onPeriodChange: (p: PeriodKey) => void;
+  customStart: string;
+  customEnd: string;
+  onCustomStart: (v: string) => void;
+  onCustomEnd: (v: string) => void;
+  onApply: () => void;
+  label: string;
+}
+
+function DateRangeControl({
+  period,
+  onPeriodChange,
+  customStart,
+  customEnd,
+  onCustomStart,
+  onCustomEnd,
+  onApply,
+  label,
+}: DateRangeControlProps) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [draftStart, setDraftStart] = useState(customStart);
+  const [draftEnd, setDraftEnd] = useState(customEnd);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setDraftStart(customStart);
+      setDraftEnd(customEnd);
+    }
+  }, [open, customStart, customEnd]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onClick);
+    };
+  }, [open]);
+
+  const quickPeriods: Array<{ key: PeriodKey; label: string; tooltip: string }> = [
+    { key: 'TODAY', label: t('periodToday'), tooltip: t('periodTodayTooltip') },
+    { key: 'WTD', label: t('periodWtd'), tooltip: t('periodWtdTooltip') },
+    { key: 'MTD', label: t('periodMtd'), tooltip: t('periodMtdTooltip') },
+    { key: 'LMTD', label: t('periodLmtd'), tooltip: t('periodLmtdTooltip') },
+    { key: 'YTD', label: t('periodYtd'), tooltip: t('periodYtdTooltip') },
+    { key: 'CUSTOM', label: t('periodCustom'), tooltip: t('periodCustomTooltip') },
+  ];
+
+  const pick = (p: PeriodKey) => {
+    onPeriodChange(p);
+    if (p !== 'CUSTOM') setOpen(false);
+  };
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="inline-flex items-center gap-2 h-10 px-3.5 rounded-control bg-card border border-border shadow-card hover:border-brand-primary/50 text-sm font-semibold text-brand-text transition-colors duration-150"
+      >
+        <CalendarIcon className="w-4 h-4 text-brand-primary" aria-hidden="true" />
+        <span className="text-slate-500 font-medium">{t('dateRange')}:</span>
+        <span className="tabular-nums">{label}</span>
+        <ChevronDown className={cn('w-4 h-4 text-slate-400 transition-transform duration-150', open && 'rotate-180')} aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label={t('dateRange')}
+          className="absolute right-0 z-40 mt-2 w-[320px] bg-card border border-border rounded-card shadow-popover p-3"
+        >
+          <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{t('dateRange')}</p>
+          <div className="grid grid-cols-2 gap-1.5" role="group" aria-label={t('dateRange')}>
+            {quickPeriods.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                title={p.tooltip}
+                aria-label={p.tooltip}
+                onClick={() => pick(p.key)}
+                className={cn(
+                  'px-3 py-2 rounded-control text-sm font-semibold text-left transition-colors duration-150',
+                  period === p.key
+                    ? 'bg-brand-primary text-white'
+                    : 'text-slate-600 hover:bg-surface-soft',
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            title={t('periodAllTimeTooltip')}
+            onClick={() => pick('ALL')}
+            className={cn(
+              'mt-1.5 w-full px-3 py-2 rounded-control text-sm font-semibold text-left border-t border-border transition-colors duration-150',
+              period === 'ALL' ? 'text-brand-primary' : 'text-slate-500 hover:text-brand-primary',
+            )}
+          >
+            {t('periodAllTime')}
+          </button>
+
+          {period === 'CUSTOM' && (
+            <div className="mt-3 space-y-3 border-t border-border pt-3">
+              <div>
+                <label htmlFor="dash-custom-start" className="block text-xs font-semibold text-slate-500 mb-1">{t('startDate')}</label>
+                <input
+                  id="dash-custom-start"
+                  type="date"
+                  value={draftStart}
+                  onChange={(e) => setDraftStart(e.target.value)}
+                  className="input-standard text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="dash-custom-end" className="block text-xs font-semibold text-slate-500 mb-1">{t('endDate')}</label>
+                <input
+                  id="dash-custom-end"
+                  type="date"
+                  value={draftEnd}
+                  onChange={(e) => setDraftEnd(e.target.value)}
+                  className="input-standard text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onCustomStart(draftStart);
+                  onCustomEnd(draftEnd);
+                  onApply();
+                  setOpen(false);
+                }}
+                className="btn-primary w-full"
+              >
+                {t('applyRange')}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -174,17 +419,17 @@ function SkeletonCard() {
 export default function Dashboard() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
+  const { t, language, activityLabel } = useTranslation();
 
   // Lead-create capability (leads.create when the server permission exists,
-  // otherwise the role featurePermissions/menuAccess fallback). Same check the
-  // Add New Lead page itself enforces, so the button never out-runs the route.
+  // otherwise the role featurePermissions/menuAccess fallback).
   const canCreateLead = canAccess('lead_generate', 'create');
 
   const [period, setPeriod] = useState<PeriodKey>('TODAY');
-  const [selectedDate, setSelectedDate] = useState<string>(DEFAULT_TODAY);
-  const [customDates, setCustomDates] = useState({
-    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
-    end: DEFAULT_TODAY,
+  const [customDates, setCustomDates] = useState(() => {
+    const { ymd } = dhakaTodayParts();
+    const firstOfMonth = `${ymd.slice(0, 8)}01`;
+    return { start: firstOfMonth, end: ymd };
   });
 
   const [loading, setLoading] = useState(true);
@@ -192,7 +437,6 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
   // Today/Tomorrow follow-ups + scheduled activities (informational only — see file header).
-  // Sourced from server follow-up queue and server scheduled_activities, never from a full client lead list.
   const [todayFollowUps, setTodayFollowUps] = useState<FollowUpQueueItem[]>([]);
   const [tomorrowFollowUps, setTomorrowFollowUps] = useState<FollowUpQueueItem[]>([]);
   const [todayScheduled, setTodayScheduled] = useState<ScheduledActivity[]>([]);
@@ -204,41 +448,36 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      // Authoritative metrics from GET /api/dashboard (server-side visibility + Asia/Dhaka).
-      // KPI cards, pipeline and follow-up health bind only to this response.
-      const metrics = await dashboardService.getDashboard({
-        period: toQueryPeriod(period),
-        selectedDate: period === 'TODAY' ? selectedDate : undefined,
-        startDate: period === 'CUSTOM' ? customDates.start : undefined,
-        endDate: period === 'CUSTOM' ? customDates.end : undefined,
-      });
+      let query: Parameters<typeof dashboardService.getDashboard>[0] = {};
+      if (period === 'TODAY') {
+        query = { period: 'TODAY' };
+      } else if (period === 'CUSTOM') {
+        query = { period: 'CUSTOM', startDate: customDates.start, endDate: customDates.end };
+      } else if (period === 'ALL') {
+        query = { period: 'ALL' };
+      } else {
+        // WTD / MTD / LMTD / YTD resolve to explicit Dhaka bounds and reuse
+        // the server CUSTOM query. KPI aggregation stays server-side.
+        const range = resolveRange(period);
+        if (range) query = { period: 'CUSTOM', startDate: range.start, endDate: range.end };
+        else query = { period: 'TODAY' };
+      }
+      const metrics = await dashboardService.getDashboard(query);
       setMetrics(metrics);
     } catch (err) {
-      // Prefer an explicit error over silently presenting stale totals as current.
       setMetrics(null);
-      setError('Dashboard synchronization failure. Please try again.');
+      setError(t('dashboardLoadError'));
     } finally {
       setLoading(false);
     }
-  }, [user, period, selectedDate, customDates]);
+  }, [user, period, customDates, t]);
 
-  /**
-   * Daily Execution (Today & Tomorrow) — server-authoritative, performance-safe.
-   *
-   * Follow-ups use the server follow-up queue (GET /api/leads/follow-ups).
-   * Calls & meetings use the server scheduled_activities calendar
-   * (GET /api/scheduled-activities?from=&to=, Asia/Dhaka, visibility-enforced).
-   * The panel never fetches the full lead list.
-   */
   const loadDailyExecution = useCallback(async () => {
     if (!user) return;
     setDailyLoading(true);
     try {
-      // Dhaka calendar date for "today" (Asia/Dhaka is UTC+6, no DST).
-      const dhakaToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
-      const dhakaTodayDate = new Date(dhakaToday + 'T00:00:00.000Z');
-      // Compute tomorrow's YMD in Dhaka by adding one UTC day to dhakaToday's UTC midnight minus 6h offset handling
-      // Simpler: interpret dhakaToday as UTC-midnight and add 1 day, then re-format.
+      // Dhaka calendar date for "today".
+      const dhakaToday = new Date().toLocaleDateString('en-CA', { timeZone: BUSINESS_TZ });
       const tomorrowYmd = (() => {
         const base = new Date(dhakaToday + 'T00:00:00.000Z');
         const next = new Date(base.getTime() + 86_400_000);
@@ -251,7 +490,6 @@ export default function Dashboard() {
         scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 }),
       ]);
       setTodayFollowUps(todayRes.items ?? []);
-      // "Tomorrow" is the first Dhaka day inside the server's `upcoming` bucket.
       const tomorrowStartMs = new Date(upcomingRes.bounds.tomorrowStart).getTime();
       const tomorrowEndMs = tomorrowStartMs + 86_400_000;
       setTomorrowFollowUps(
@@ -261,12 +499,10 @@ export default function Dashboard() {
         }),
       );
 
-      // Split scheduled activities by Dhaka calendar date (Asia/Dhaka).
       const isDhakaDate = (iso: string, ymd: string): boolean => {
         try {
           const d = new Date(iso);
-          const asYmd = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Dhaka' });
-          return asYmd === ymd;
+          return d.toLocaleDateString('en-CA', { timeZone: BUSINESS_TZ }) === ymd;
         } catch {
           return false;
         }
@@ -291,19 +527,27 @@ export default function Dashboard() {
     void loadDailyExecution();
   }, [loadDailyExecution]);
 
-  const formattedDateRange = () => {
-    const now = new Date();
-    if (period === 'TODAY') return new Date(selectedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    if (period === 'THIS MONTH') return `1 ${now.toLocaleDateString('en-GB', { month: 'short' })} - ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-    if (period === 'LAST MONTH') {
-      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
-      return `${lastMonth.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - ${lastDay.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  const formattedDateRange = (): string => {
+    const { ymd } = dhakaTodayParts();
+    if (period === 'TODAY') return fmtYmd(ymd, language);
+    if (period === 'CUSTOM') return `${fmtYmd(customDates.start, language)} – ${fmtYmd(customDates.end, language)}`;
+    if (period === 'ALL') return t('periodAllTime');
+    const range = resolveRange(period);
+    if (range) return `${fmtYmd(range.start, language)} – ${fmtYmd(range.end, language)}`;
+    return fmtYmd(ymd, language);
+  };
+
+  const periodLabel = (): string => {
+    switch (period) {
+      case 'TODAY': return t('periodToday');
+      case 'WTD': return t('periodWtd');
+      case 'MTD': return t('periodMtd');
+      case 'LMTD': return t('periodLmtd');
+      case 'YTD': return t('periodYtd');
+      case 'CUSTOM': return t('periodCustom');
+      case 'ALL': return t('periodAllTime');
+      default: return period;
     }
-    if (period === 'CUSTOM') {
-      return `${new Date(customDates.start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - ${new Date(customDates.end).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-    }
-    return 'All time';
   };
 
   const statusCounts = metrics?.statusCounts ?? {};
@@ -325,113 +569,64 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-6 pb-12 bg-white font-sans">
-      {/* ============ A. Header / Controls ============ */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-[#F9F9F4] p-6 rounded-sm border border-slate-100 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight leading-none">Dashboard</h1>
-          <p className="text-[11px] text-slate-500 mt-2 uppercase tracking-wider">
-            Sales execution overview · server-authoritative · {metrics?.timezone || 'Asia/Dhaka'}
-          </p>
-        </div>
+    <div className="space-y-6 pb-12">
+      {/* ============ A. Header / date control ============ */}
+      <div className="card p-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-brand-text tracking-tight leading-none">{t('dashboardTitle')}</h1>
+            <p className="text-sm text-slate-500 mt-1.5">{t('dashboardSubtitle')}</p>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-sm border border-slate-200">
-            {PERIODS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPeriod(p)}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded transition-all',
-                  period === p ? 'bg-[#978C21] text-white shadow-sm' : 'text-slate-500 hover:text-slate-800',
-                )}
+          <div className="flex flex-wrap items-center gap-3">
+            <DateRangeControl
+              period={period}
+              onPeriodChange={setPeriod}
+              customStart={customDates.start}
+              customEnd={customDates.end}
+              onCustomStart={(v) => setCustomDates((c) => ({ ...c, start: v }))}
+              onCustomEnd={(v) => setCustomDates((c) => ({ ...c, end: v }))}
+              onApply={() => undefined}
+              label={`${periodLabel()} · ${formattedDateRange()}`}
+            />
+
+            {canCreateLead && (
+              <Link
+                to="/leads/new"
+                title={t('addLead')}
+                aria-label={t('addLead')}
+                className="btn-primary h-10"
               >
-                {p}
-              </button>
-            ))}
-          </div>
+                <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span className="hidden sm:inline">{t('addLead')}</span>
+              </Link>
+            )}
 
-          {period === 'TODAY' && (
-            <div className="flex items-center gap-2 bg-white p-1 rounded-sm border border-slate-200 shadow-sm">
-              <span className="text-xs font-medium text-slate-500 pl-1.5">Date:</span>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-white border border-slate-200 text-slate-700 rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-[#978C21]/20"
-              />
-            </div>
-          )}
-
-          {period === 'CUSTOM' && (
-            <div className="flex items-center gap-3 bg-white p-1 rounded-sm border border-slate-200 shadow-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-slate-500 pl-1.5">Start:</span>
-                <input
-                  type="date"
-                  value={customDates.start}
-                  onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                  className="bg-white border border-slate-200 text-slate-700 rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-[#978C21]/20"
-                />
-              </div>
-              <div className="flex items-center gap-1.5 border-l border-slate-100 pl-3">
-                <span className="text-xs font-medium text-slate-500">End:</span>
-                <input
-                  type="date"
-                  value={customDates.end}
-                  onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                  className="bg-white border border-slate-200 text-slate-700 rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-[#978C21]/20"
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm">
-            <CalendarIcon className="w-3.5 h-3.5 text-[#978C21]" />
-            <span className="text-xs font-semibold text-[#978C21]">{formattedDateRange()}</span>
-          </div>
-
-          {canCreateLead && (
-            <Link
-              to="/leads/new"
-              title="Add Lead"
-              aria-label="Add Lead"
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#978C21] text-white text-xs font-semibold shadow-sm hover:bg-[#8a7f1e] focus:outline-none focus:ring-2 focus:ring-[#978C21]/40 transition-colors"
+            <button
+              type="button"
+              onClick={refreshAll}
+              disabled={loading}
+              title={t('refreshDataTooltip')}
+              className="btn-secondary h-10"
             >
-              <Plus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className="hidden sm:inline">Add Lead</span>
-            </Link>
-          )}
-
-          <button
-            type="button"
-            onClick={refreshAll}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-sm text-xs font-semibold text-slate-600 hover:text-[#978C21] hover:border-[#978C21]/40 transition-colors disabled:opacity-50"
-            title="Refresh dashboard data"
-          >
-            <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
-            Refresh
-          </button>
+              <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} aria-hidden="true" />
+              {t('refreshData')}
+            </button>
+          </div>
         </div>
       </div>
 
       {error && (
-        <div className="flex items-center justify-between gap-4 bg-red-50 border border-red-200 rounded-sm px-5 py-4">
+        <div className="flex items-center justify-between gap-4 bg-red-50 border border-red-200 rounded-card px-5 py-4">
           <div className="flex items-center gap-3 text-red-700">
-            <AlertTriangle className="w-5 h-5" />
+            <AlertTriangle className="w-5 h-5" aria-hidden="true" />
             <div>
               <p className="text-sm font-semibold">{error}</p>
-              <p className="text-xs text-red-500 mt-0.5">Could not load server metrics. Your data is unchanged.</p>
+              <p className="text-xs text-red-500 mt-0.5">{t('dashboardLoadErrorNote')}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadDashboardData()}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-sm"
-          >
-            Retry
+          <button type="button" onClick={() => void loadDashboardData()} className="btn-danger">
+            {t('retry')}
           </button>
         </div>
       )}
@@ -449,244 +644,251 @@ export default function Dashboard() {
         <>
           {/* ============ B. Primary KPI row ============ */}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-            <KpiCard label="Total Leads" value={formatCount(totalLeads)} icon={Users} />
-            <KpiCard label="Untouched" value={formatCount(statusCounts.Untouched)} icon={Inbox} tone="brand" />
-            <KpiCard label="Due Today" value={formatCount(followUpCounts.today)} icon={Clock} sub="follow-ups due" />
-            <KpiCard label="Overdue" value={formatCount(followUpCounts.overdue)} icon={AlertTriangle} tone="danger" sub="follow-ups overdue" />
-            <KpiCard label="Converted" value={formatCount(metrics?.converted ?? 0)} icon={CheckCircle} tone="success" />
+            <KpiCard label={t('totalLeads')} value={formatCount(totalLeads)} icon={Users} tone="blue" />
+            <KpiCard label={t('untouched')} value={formatCount(statusCounts.Untouched)} icon={Inbox} tone="gold" />
+            <KpiCard label={t('dueToday')} value={formatCount(followUpCounts.today)} icon={Clock} sub={t('followUpsDue')} tone="warning" />
+            <KpiCard label={t('overdue')} value={formatCount(followUpCounts.overdue)} icon={AlertTriangle} sub={t('followUpsOverdue')} tone="danger" />
+            <KpiCard label={t('converted')} value={formatCount(metrics?.converted ?? 0)} icon={CheckCircle} tone="success" />
           </div>
 
           {/* ============ C. Secondary KPI row ============ */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <KpiCard label="Projected NCP" value={formatMoney(metrics?.projected ?? 0)} icon={TrendingUp} tone="brand" />
-            <KpiCard label="Collected NCP" value={formatMoney(metrics?.collected ?? 0)} icon={Banknote} tone="success" />
-            <KpiCard label="Conversion Rate" value={metrics?.conversionRate || '0.0%'} icon={Percent} />
-            <KpiCard label="Active Leads" value={formatCount(metrics?.activeLeads ?? 0)} icon={Layers} sub={`${formatCount(metrics?.pipelineLocked ?? 0)} pipeline locked`} />
+            <KpiCard label={t('projectedNCP')} value={formatMoney(metrics?.projected ?? 0)} icon={TrendingUp} tone="gold" />
+            <KpiCard label={t('collectedNCP')} value={formatMoney(metrics?.collected ?? 0)} icon={Banknote} tone="success" />
+            <KpiCard label={t('conversionRate')} value={metrics?.conversionRate || '0.0%'} icon={Percent} tone="blue" />
+            <KpiCard
+              label={t('activeLeads')}
+              value={formatCount(metrics?.activeLeads ?? 0)}
+              icon={Layers}
+              sub={t('pipelineLockedSub', { count: formatCount(metrics?.pipelineLocked ?? 0) })}
+              tone="neutral"
+            />
           </div>
 
           {/* ============ D. Sales Pipeline ============ */}
-          <section className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-            <SectionHeading
-              title="Sales Pipeline"
-              desc="Canonical lead stages from current_status values · server-authoritative statusCounts"
-            />
+          <section className="card p-6">
+            <SectionHeading title={t('salesPipeline')} desc={t('salesPipelineDesc')} />
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
               {pipelineStages.map((s, i) => (
-                <div key={s.stage} className="relative bg-[#FBFAF8] border border-slate-100 rounded-sm p-3">
+                <div key={s.stage} className="relative bg-surface-soft border border-border rounded-control p-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 truncate">{s.stage}</span>
+                    <span className="text-[11px] font-semibold text-slate-500 truncate">{s.stage}</span>
                     {i < pipelineStages.length - 1 && (
-                      <ChevronRight className="hidden lg:block w-3.5 h-3.5 text-slate-300 shrink-0" />
+                      <ChevronRight className="hidden lg:block w-3.5 h-3.5 text-slate-300 shrink-0" aria-hidden="true" />
                     )}
                   </div>
-                  <p className="text-2xl font-black text-brand-text mt-2 leading-none">{formatCount(s.count)}</p>
+                  <p className="text-2xl font-bold text-brand-text mt-2 leading-none tabular-nums">{formatCount(s.count)}</p>
                   <div className="h-1.5 bg-slate-200 rounded-full mt-3 overflow-hidden">
-                    <div className="h-full bg-[#978C21]" style={{ width: `${s.pct}%` }} />
+                    <div className="h-full bg-brand-primary" style={{ width: `${s.pct}%` }} />
                   </div>
-                  <p className="text-[10px] font-semibold text-slate-400 mt-2">{s.pct}% of leads</p>
+                  <p className="text-[11px] font-medium text-slate-400 mt-2">
+                    {s.pct}% {t('ofLeads')}
+                  </p>
                 </div>
               ))}
             </div>
           </section>
 
-          {/* ============ E. Daily Execution ============ */}
-          <section className="space-y-4">
+          {/* ============ E. Today & Tomorrow Actions ============ */}
+          <section className="card p-6">
             <SectionHeading
-              title="Daily Execution"
-              desc="Today & Tomorrow activity and the task calendar · follow-ups + scheduled_activities (server-authoritative, Asia/Dhaka)"
+              title={t('dailyExecution')}
+              desc={t('dailyExecutionDesc')}
+              action={
+                <Link
+                  to="/task-calendar"
+                  title={t('openCalendarTooltip')}
+                  className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-primary hover:underline"
+                >
+                  <CalendarIcon className="w-4 h-4" aria-hidden="true" />
+                  {t('openCalendar')}
+                  <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                </Link>
+              }
             />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-              {/* LEFT: Today & Tomorrow */}
-              <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-                <div className="flex items-center gap-2 mb-5">
-                  <CalendarClock className="w-4 h-4 text-[#978C21]" />
-                  <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Today &amp; Tomorrow</h3>
-                </div>
 
-                {dailyLoading ? (
-                  <div className="space-y-3">
-                    <div className="h-12 bg-slate-100 rounded animate-pulse" />
-                    <div className="h-12 bg-slate-100 rounded animate-pulse" />
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {[
-                      { label: 'Today', followUps: todayFollowUps, scheduled: todayScheduled },
-                      { label: 'Tomorrow', followUps: tomorrowFollowUps, scheduled: tomorrowScheduled },
-                    ].map((group) => (
-                      <div key={group.label}>
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{group.label}</p>
-                          <span className="text-[10px] font-bold text-slate-400">{group.followUps.length + group.scheduled.length}</span>
-                        </div>
-                        {group.followUps.length === 0 && group.scheduled.length === 0 ? (
-                          <div className="rounded-sm border border-dashed border-slate-200 px-4 py-4 text-[11px] text-slate-400">
-                            No activities due {group.label.toLowerCase()}.
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {group.followUps.slice(0, 6).map((item) => (
-                              <Link
-                                key={item.id}
-                                to={`/leads/${encodeURIComponent(item.id)}`}
-                                className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
-                              >
-                                <div className="w-8 h-8 rounded-sm bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                                  <History className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#978C21]" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-semibold text-slate-800 truncate">{item.prospectName || item.customerName}</p>
-                                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">
-                                    Follow-up · {formatDhakaDue(item.nextFollowUpAt)}
-                                  </p>
-                                </div>
-                                <span className={cn('px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-wider border shrink-0', getLeadStatusColorClasses(item.currentStatus))}>
-                                  {item.currentStatus}
-                                </span>
-                              </Link>
-                            ))}
-                            {group.scheduled.slice(0, 6).map((sa) => (
-                              <Link
-                                key={sa.id}
-                                to={`/leads/${encodeURIComponent(sa.leadId)}`}
-                                className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
-                              >
-                                <div className={cn('w-8 h-8 rounded-sm border flex items-center justify-center shrink-0', sa.activityType === 'meeting' ? 'bg-amber-50 border-amber-100 text-amber-600' : sa.activityType === 'call' ? 'bg-sky-50 border-sky-100 text-sky-600' : sa.activityType === 'task' ? 'bg-purple-50 border-purple-100 text-purple-600' : 'bg-emerald-50 border-emerald-100 text-emerald-600')}>
-                                  <CalendarIcon className="w-3.5 h-3.5" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-semibold text-slate-800 truncate">{sa.leadCustomerName || sa.title || 'Scheduled activity'}</p>
-                                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">
-                                    {sa.activityType === 'call' ? 'Call' : sa.activityType === 'meeting' ? 'Meeting' : sa.activityType === 'task' ? 'Task' : 'Follow-up'} · {formatDhakaDue(sa.scheduledAt)}
-                                    {sa.title ? ` · ${sa.title}` : ''}
-                                  </p>
-                                </div>
-                                <span className="px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-wider border shrink-0 bg-white border-slate-200 text-slate-500">
-                                  {sa.activityType}
-                                </span>
-                              </Link>
-                            ))}
-                          </div>
-                        )}
+            {dailyLoading ? (
+              <div className="space-y-3">
+                <div className="h-12 bg-slate-100 rounded animate-pulse" />
+                <div className="h-12 bg-slate-100 rounded animate-pulse" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {[
+                  { label: t('today'), followUps: todayFollowUps, scheduled: todayScheduled },
+                  { label: t('tomorrow'), followUps: tomorrowFollowUps, scheduled: tomorrowScheduled },
+                ].map((group) => (
+                  <div key={group.label} className="rounded-control border border-border p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{group.label}</p>
+                      <span className="text-xs font-bold text-slate-400 tabular-nums">{group.followUps.length + group.scheduled.length}</span>
+                    </div>
+                    {group.followUps.length === 0 && group.scheduled.length === 0 ? (
+                      <div className="rounded-control border border-dashed border-border px-4 py-5 text-sm text-slate-400">
+                        {t('noActivitiesDue', { day: group.label })}
                       </div>
-                    ))}
-                    <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-3">
-                      Follow-ups from the server follow-up queue and calls/meetings/tasks from server <span className="font-semibold">scheduled_activities</span> (Asia/Dhaka, visibility-enforced) — no full lead-list fetch runs for this panel.
-                    </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {group.followUps.slice(0, 6).map((item) => (
+                          <Link
+                            key={`fu-${item.id}`}
+                            to={`/leads/${encodeURIComponent(item.id)}`}
+                            className="flex items-center gap-3 px-3 py-2.5 rounded-control border border-border hover:border-brand-primary/40 hover:bg-surface-soft hover:shadow-card transition-all duration-150 group"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
+                              <History className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-slate-800 truncate">{item.prospectName || item.customerName}</p>
+                              <p className="text-[11px] text-slate-400">
+                                {t('activityFollowUp')} · {formatDhakaDue(item.nextFollowUpAt)}
+                              </p>
+                            </div>
+                            <span className={cn('badge border', getLeadStatusColorClasses(item.currentStatus))}>
+                              {item.currentStatus}
+                            </span>
+                          </Link>
+                        ))}
+                        {group.scheduled.slice(0, 6).map((sa) => {
+                          const type = sa.activityType;
+                          const toneCls =
+                            type === 'meeting'
+                              ? 'bg-amber-50 border-amber-100 text-amber-600'
+                              : type === 'call'
+                                ? 'bg-sky-50 border-sky-100 text-sky-600'
+                                : type === 'task'
+                                  ? 'bg-purple-50 border-purple-100 text-purple-600'
+                                  : 'bg-emerald-50 border-emerald-100 text-emerald-600';
+                          return (
+                            <Link
+                              key={`sa-${sa.id}`}
+                              to={`/leads/${encodeURIComponent(sa.leadId)}`}
+                              className="flex items-center gap-3 px-3 py-2.5 rounded-control border border-border hover:border-brand-primary/40 hover:bg-surface-soft hover:shadow-card transition-all duration-150 group"
+                            >
+                              <div className={cn('w-8 h-8 rounded-lg border flex items-center justify-center shrink-0', toneCls)}>
+                                <CalendarIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold text-slate-800 truncate">
+                                  {sa.leadCustomerName || sa.title || t('scheduledActivity')}
+                                </p>
+                                <p className="text-[11px] text-slate-400">
+                                  {activityLabel(type)} · {formatDhakaDue(sa.scheduledAt)}
+                                  {sa.title ? ` · ${sa.title}` : ''}
+                                </p>
+                              </div>
+                              <span className="badge bg-white border border-border text-slate-500">
+                                {activityLabel(type)}
+                              </span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-
-              {/* RIGHT: Calendar */}
-              <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6 overflow-hidden">
-                <div className="flex items-center gap-2 mb-5">
-                  <CalendarIcon className="w-4 h-4 text-[#978C21]" />
-                  <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Calendar</h3>
-                </div>
-                <TaskCalendar embedded={true} />
-              </div>
-            </div>
+            )}
+            <p className="text-xs text-slate-400 mt-4 border-t border-border pt-4">{t('dailyExecutionSourceNote')}</p>
           </section>
 
           {/* ============ F. Follow-up Health ============ */}
           <section className="space-y-4">
-            <SectionHeading title="Follow-up Health" desc="Authoritative follow-up counts from Step 4B / Step 5" />
+            <SectionHeading title={t('followUpHealth')} desc={t('followUpHealthDesc')} />
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
-                { label: 'Overdue', count: followUpCounts.overdue, bucket: 'overdue', tone: 'text-red-600 border-red-200 bg-red-50/40', icon: AlertTriangle },
-                { label: 'Due Today', count: followUpCounts.today, bucket: 'today', tone: 'text-amber-600 border-amber-200 bg-amber-50/40', icon: Clock },
-                { label: 'Upcoming', count: followUpCounts.upcoming, bucket: 'upcoming', tone: 'text-blue-600 border-blue-200 bg-blue-50/40', icon: CalendarClock },
+                { label: t('overdue'), count: followUpCounts.overdue, bucket: 'overdue', tone: 'text-red-600 border-red-200 bg-red-50/40', icon: AlertTriangle },
+                { label: t('dueToday'), count: followUpCounts.today, bucket: 'today', tone: 'text-amber-600 border-amber-200 bg-amber-50/40', icon: Clock },
+                { label: t('upcoming'), count: followUpCounts.upcoming, bucket: 'upcoming', tone: 'text-blue-600 border-blue-200 bg-blue-50/40', icon: CalendarClock },
               ].map((card) => (
                 <Link
                   key={card.bucket}
                   to={`/follow-up?bucket=${card.bucket}`}
-                  className={cn('rounded-sm border p-5 flex items-center justify-between group transition-all hover:shadow-sm', card.tone)}
+                  className={cn('rounded-card border p-5 flex items-center justify-between group transition-all duration-150 hover:shadow-card', card.tone)}
                 >
                   <div className="flex items-center gap-4">
-                    <card.icon className="w-6 h-6" />
+                    <card.icon className="w-6 h-6" aria-hidden="true" />
                     <div>
-                      <p className="text-[10px] font-black uppercase tracking-widest">{card.label}</p>
-                      <p className="text-3xl font-black leading-none mt-1">{formatCount(card.count)}</p>
+                      <p className="text-xs font-bold uppercase tracking-wider">{card.label}</p>
+                      <p className="text-3xl font-bold leading-none mt-1 tabular-nums">{formatCount(card.count)}</p>
                     </div>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider opacity-70 group-hover:opacity-100">
-                    Open <ChevronRight className="w-3.5 h-3.5" />
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold opacity-70 group-hover:opacity-100">
+                    {t('openQueue')} <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
                   </span>
                 </Link>
               ))}
             </div>
             <div className="flex justify-end">
-              <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-                <History className="w-3.5 h-3.5" /> Open full follow-up queue <ArrowRight className="w-3.5 h-3.5" />
+              <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-primary hover:underline">
+                <History className="w-3.5 h-3.5" aria-hidden="true" />
+                {t('openFullFollowUpQueue')} <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
               </Link>
             </div>
           </section>
 
           {/* ============ G. Needs Attention ============ */}
-          <section className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-            <SectionHeading
-              title="Needs Attention"
-              desc="Derived only from authoritative fields already available"
-            />
+          <section className="card p-6">
+            <SectionHeading title={t('needsAttention')} desc={t('needsAttentionDesc')} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Link
                 to="/leads"
-                className="rounded-sm border border-slate-100 p-5 hover:border-[#978C21]/40 hover:shadow-sm transition-all group flex items-center justify-between"
+                className="rounded-card border border-border p-5 hover:border-brand-primary/40 hover:shadow-card transition-all duration-150 group flex items-center justify-between"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-sm bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
-                    <Inbox className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-lg bg-brand-blue/10 border border-brand-blue/15 flex items-center justify-center text-brand-blue">
+                    <Inbox className="w-5 h-5" aria-hidden="true" />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-slate-800">Untouched leads</p>
-                    <p className="text-[11px] text-slate-400">Leads with no engagement yet</p>
+                    <p className="text-sm font-semibold text-slate-800">{t('untouchedLeads')}</p>
+                    <p className="text-xs text-slate-400">{t('untouchedLeadsDesc')}</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-2xl font-black text-brand-text">{formatCount(statusCounts.Untouched)}</p>
-                  <span className="text-[10px] font-bold text-slate-400 group-hover:text-[#978C21]">Open lead tracking</span>
+                  <p className="text-2xl font-bold text-brand-text tabular-nums">{formatCount(statusCounts.Untouched)}</p>
+                  <span className="text-xs font-semibold text-slate-400 group-hover:text-brand-primary">{t('openLeadTracking')}</span>
                 </div>
               </Link>
               <Link
                 to="/follow-up?bucket=overdue"
-                className="rounded-sm border border-slate-100 p-5 hover:border-[#978C21]/40 hover:shadow-sm transition-all group flex items-center justify-between"
+                className="rounded-card border border-border p-5 hover:border-brand-primary/40 hover:shadow-card transition-all duration-150 group flex items-center justify-between"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-sm bg-red-50 border border-red-100 flex items-center justify-center text-red-500">
-                    <AlertTriangle className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-lg bg-red-50 border border-red-100 flex items-center justify-center text-red-500">
+                    <AlertTriangle className="w-5 h-5" aria-hidden="true" />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-slate-800">Overdue follow-ups</p>
-                    <p className="text-[11px] text-slate-400">Follow-ups past their due date</p>
+                    <p className="text-sm font-semibold text-slate-800">{t('overdueFollowUps')}</p>
+                    <p className="text-xs text-slate-400">{t('overdueFollowUpsDesc')}</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-2xl font-black text-red-600">{formatCount(followUpCounts.overdue)}</p>
-                  <span className="text-[10px] font-bold text-slate-400 group-hover:text-[#978C21]">Open overdue queue</span>
+                  <p className="text-2xl font-bold text-red-600 tabular-nums">{formatCount(followUpCounts.overdue)}</p>
+                  <span className="text-xs font-semibold text-slate-400 group-hover:text-brand-primary">{t('openOverdueQueue')}</span>
                 </div>
               </Link>
             </div>
-            <p className="flex items-center gap-2 text-[11px] text-slate-400 mt-4 border-t border-slate-100 pt-4">
-              <Info className="w-3.5 h-3.5 shrink-0" />
-              Additional attention rules coming in a later phase.
+            <p className="flex items-center gap-2 text-xs text-slate-400 mt-4 border-t border-border pt-4">
+              <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              {t('attentionRulesLater')}
             </p>
           </section>
 
           {/* ============ H. Trend ============ */}
-          <section className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-            <SectionHeading title="Trend" desc="Historical lead volume over time" />
+          <section className="card p-6">
+            <SectionHeading title={t('trend')} desc={t('trendDesc')} />
             {(metrics?.trendData ?? []).length === 0 ? (
               <EmptyState
                 icon={TrendingUp}
-                title="No trend data available"
-                note="Historical time-series is not published by the server yet. A real trend endpoint will replace this empty state in a later phase."
+                title={t('noTrendData')}
+                note={t('noTrendDataNote')}
               />
             ) : (
               <div className="space-y-2">
                 {(metrics?.trendData ?? []).map((point) => (
-                  <div key={point.date} className="flex items-center justify-between border-b border-slate-50 py-1.5">
-                    <span className="text-xs text-slate-500">{point.date}</span>
-                    <span className="text-sm font-bold text-brand-text">{formatCount(point.value)}</span>
+                  <div key={point.date} className="flex items-center justify-between border-b border-border py-1.5">
+                    <span className="text-sm text-slate-500">{point.date}</span>
+                    <span className="text-sm font-bold text-brand-text tabular-nums">{formatCount(point.value)}</span>
                   </div>
                 ))}
               </div>
@@ -694,32 +896,32 @@ export default function Dashboard() {
           </section>
 
           {/* ============ I. Team Performance ============ */}
-          <section className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-            <SectionHeading title="Team Performance" desc="Team-level execution metrics" />
+          <section className="card p-6">
+            <SectionHeading title={t('teamPerformance')} desc={t('teamPerformanceDesc')} />
             {(metrics?.teamStats ?? []).length === 0 ? (
               <EmptyState
                 icon={Users}
-                title="Team performance unavailable"
-                note="Canonical team metrics are not published yet. Area text is not a team identity, so no team breakdown is shown until real team/hierarchy joins land."
+                title={t('teamPerformanceUnavailable')}
+                note={t('teamPerformanceNote')}
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-[#FBFAF8] text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
+                <table className="table-base">
+                  <thead>
                     <tr>
-                      <th className="px-4 py-3">Team</th>
-                      <th className="px-4 py-3 text-center">Assigned</th>
-                      <th className="px-4 py-3 text-center">Collected</th>
-                      <th className="px-4 py-3 text-center">Projected</th>
+                      <th>{t('team')}</th>
+                      <th className="text-center">{t('assigned')}</th>
+                      <th className="text-center">{t('collected')}</th>
+                      <th className="text-center">{t('projected')}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
+                  <tbody>
                     {(metrics?.teamStats ?? []).map((row) => (
                       <tr key={row.team}>
-                        <td className="px-4 py-3 font-semibold text-slate-700">{row.team}</td>
-                        <td className="px-4 py-3 text-center text-slate-500">{row.assigned}</td>
-                        <td className="px-4 py-3 text-center text-slate-500">{row.collected}</td>
-                        <td className="px-4 py-3 text-center text-slate-500">{row.projected}</td>
+                        <td className="font-semibold text-slate-700">{row.team}</td>
+                        <td className="text-center text-slate-500 tabular-nums">{row.assigned}</td>
+                        <td className="text-center text-slate-500 tabular-nums">{row.collected}</td>
+                        <td className="text-center text-slate-500 tabular-nums">{row.projected}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -729,13 +931,10 @@ export default function Dashboard() {
           </section>
 
           {/* ============ J. Lead Status Distribution ============ */}
-          <section className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
-            <SectionHeading
-              title="Lead Status Distribution"
-              desc="Distribution of visible leads by current_status (server-authoritative)"
-            />
+          <section className="card p-6">
+            <SectionHeading title={t('leadStatusDistribution')} desc={t('leadStatusDistributionDesc')} />
             {distribution.length === 0 ? (
-              <EmptyState icon={Layers} title="No status distribution available" />
+              <EmptyState icon={Layers} title={t('noStatusDistribution')} />
             ) : (
               <div className="space-y-3">
                 {distribution.map((row) => {
@@ -743,21 +942,29 @@ export default function Dashboard() {
                   const pct = totalLeads > 0 ? Math.round((value / totalLeads) * 100) : 0;
                   return (
                     <div key={row.name} className="flex items-center gap-4">
-                      <span className="w-36 shrink-0 text-xs font-semibold text-slate-600 truncate">{row.name}</span>
-                      <div className="flex-1 h-4 bg-slate-100 rounded-sm overflow-hidden">
+                      <span className="w-36 shrink-0 text-sm font-semibold text-slate-600 truncate">{row.name}</span>
+                      <div className="flex-1 h-4 bg-slate-100 rounded-control overflow-hidden">
                         <div
-                          className="h-full rounded-sm"
+                          className="h-full rounded-control"
                           style={{ width: `${Math.max(2, (value / distributionMax) * 100)}%`, backgroundColor: row.color || '#978C21' }}
                         />
                       </div>
-                      <span className="w-20 shrink-0 text-right text-xs font-bold text-slate-500">{formatCount(value)}</span>
-                      <span className="w-12 shrink-0 text-right text-[10px] font-semibold text-slate-400">{pct}%</span>
+                      <span className="w-20 shrink-0 text-right text-sm font-bold text-slate-500 tabular-nums">{formatCount(value)}</span>
+                      <span className="w-12 shrink-0 text-right text-xs font-semibold text-slate-400 tabular-nums">{pct}%</span>
                     </div>
                   );
                 })}
               </div>
             )}
           </section>
+
+          {/* ============ K. Task Calendar — final section ============ */}
+          {canAccess('dashboard', 'view_task_calendar') && (
+            <section className="card p-6 overflow-hidden">
+              <SectionHeading title={t('taskCalendarTitle')} desc={t('taskCalendarSubtitle')} />
+              <TaskCalendar embedded={true} />
+            </section>
+          )}
         </>
       )}
     </div>

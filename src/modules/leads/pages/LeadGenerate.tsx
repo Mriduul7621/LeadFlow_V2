@@ -12,7 +12,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useTranslation } from '../../shared/utils/translations';
+import { useTranslation, type TranslationKey } from '../../shared/utils/translations';
 import { cn } from '../../../lib/utils';
 import { motion } from 'framer-motion';
 import { leadService } from '../services/leadService';
@@ -33,19 +33,22 @@ const ALWAYS_VISIBLE_FIELDS = new Set(['prospectName', 'mobile']);
  * Builder configuration - a field's "Required" toggle in Settings >
  * Form Builder directly controls whether Zod enforces it here.
  */
-function buildLeadSchema(fieldConfigMap: Record<string, FormField>) {
+function buildLeadSchema(
+  fieldConfigMap: Record<string, FormField>,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+) {
   const isMandatory = (key: string, fallback: boolean) =>
     fieldConfigMap[key] ? fieldConfigMap[key].isMandatory : fallback;
 
-  const req = (key: string, fallback: boolean, message = 'Required') =>
+  const req = (key: string, fallback: boolean, message = t('required')) =>
     isMandatory(key, fallback) ? z.string().min(1, message) : z.string().optional().default('');
 
   return z.object({
-    prospectName: z.string().min(3, 'Required'),
+    prospectName: z.string().min(3, t('required')),
     mobile: z.string()
-      .length(11, 'Mobile number must be exactly 11 digits')
-      .refine(val => /^\d+$/.test(val), 'Mobile number must contain only numbers')
-      .refine(val => val.startsWith('01'), 'Mobile number must start with 01'),
+      .length(11, t('mobileExactly11'))
+      .refine(val => /^\d+$/.test(val), t('mobileOnlyNumbers'))
+      .refine(val => val.startsWith('01'), t('mobileStartsWith01')),
     profession: req('profession', true),
     occupation: req('occupation', false),
     priority: req('priority', false),
@@ -68,7 +71,7 @@ function buildLeadSchema(fieldConfigMap: Record<string, FormField>) {
       if (!data.noOfChildren || data.noOfChildren.trim() === '') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Number of children is required',
+          message: t('noOfChildrenRequired'),
           path: ['noOfChildren'],
         });
       }
@@ -89,13 +92,13 @@ export default function LeadGenerate() {
         </div>
         <div className="space-y-2">
           <span className="text-sm font-medium text-[#978C21]">{t("accessRestricted")}</span>
-          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
+          <h2 className="text-xl font-bold text-slate-900">{t('accessDeniedTitle')}</h2>
           <p className="text-xs text-slate-500 leading-relaxed font-sans">
             {t('accessDeniedMsg')}
           </p>
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature lead_generate.create Required
+          {t('securityLevelRequired')}
         </div>
       </div>
     );
@@ -115,7 +118,7 @@ export default function LeadGenerate() {
     if (ALWAYS_VISIBLE_FIELDS.has(key)) return true;
     return fieldConfigMap[key] ? fieldConfigMap[key].isVisible : true;
   };
-  const leadSchema = useMemo(() => buildLeadSchema(fieldConfigMap), [fieldConfigMap]);
+  const leadSchema = useMemo(() => buildLeadSchema(fieldConfigMap, t), [fieldConfigMap, language, t]);
 
   const { register, handleSubmit, watch, reset, setValue, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(leadSchema),
@@ -212,7 +215,7 @@ export default function LeadGenerate() {
             <Zap className="w-8 h-8 fill-[#978C21]" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Add New Lead</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('leadFormTitle')}</h1>
             <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-3 italic">{t("leadFormSubtitle")}</p>
           </div>
         </div>
@@ -295,7 +298,7 @@ export default function LeadGenerate() {
                   {...register('priority')}
                   className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
                 >
-                  <option value="">Select Priority</option>
+                  <option value="">{t("selectPriority")}</option>
                   {options.Priority?.map((p: string) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 {errors.priority && <p className="text-xs text-red-500">{errors.priority.message as string}</p>}
@@ -324,7 +327,7 @@ export default function LeadGenerate() {
                   min="0"
                   {...register('noOfChildren')}
                   className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
-                  placeholder="Enter number of children"
+                  placeholder={t('childrenCountPlaceholder')}
                 />
                 {errors.noOfChildren && <p className="text-xs text-red-500">{errors.noOfChildren.message}</p>}
               </div>
@@ -506,7 +509,7 @@ export default function LeadGenerate() {
                       {...register(`customFields.${field.fieldKey}` as any)}
                       className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
                     >
-                      <option value="">Select</option>
+                      <option value="">{t('select')}</option>
                       {(options[field.metadataTypeKey || ''] || []).map((v: string) => <option key={v} value={v}>{v}</option>)}
                     </select>
                   ) : field.fieldType === 'textarea' ? (
@@ -522,8 +525,8 @@ export default function LeadGenerate() {
                       className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
                     >
                       <option value="">-</option>
-                      <option value="true">Yes</option>
-                      <option value="false">No</option>
+                      <option value="true">{t('yes')}</option>
+                      <option value="false">{t('no')}</option>
                     </select>
                   ) : (
                     <input
@@ -542,7 +545,7 @@ export default function LeadGenerate() {
         <div className="flex items-center justify-end gap-6 mt-16 group">
           <div className="flex items-center gap-2 mr-auto italic opacity-40">
              <ShieldCheck className="w-4 h-4 text-emerald-500" />
-             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your data is securely saved</span>
+             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{t('dataSecurelySaved')}</span>
           </div>
           <button 
             type="submit" 
@@ -551,7 +554,7 @@ export default function LeadGenerate() {
           >
             {isSubmitting ? t('loading') : (
               <>
-                Generate Lead
+                {t('generateLead')}
                 <ArrowRight className="w-5 h-5 text-[#978C21] group-hover:translate-x-2 transition-transform" />
               </>
             )}

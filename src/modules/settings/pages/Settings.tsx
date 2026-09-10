@@ -35,6 +35,7 @@ import { databaseStatusService } from '../../../services/syncService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
+import { useTranslation } from '../../shared/utils/translations';
 
 const STATUS_COLOR_CHOICES = ['slate', 'blue', 'amber', 'orange', 'teal', 'indigo', 'purple', 'violet', 'yellow', 'green', 'red'];
 const STATUS_COLOR_HEX: Record<string, string> = {
@@ -45,6 +46,7 @@ const STATUS_COLOR_HEX: Record<string, string> = {
 
 export default function Settings() {
   const { user, logout, login, isOfflineMode } = useAuthStore();
+  const { t } = useTranslation();
   const { canAccess } = usePermissions();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>('overview');
@@ -83,10 +85,10 @@ export default function Settings() {
         const data = await res.json();
         setDbStatus(data);
       } else {
-        setDbStatus({ connected: false, message: 'Endpoint returned an error status.' });
+        setDbStatus({ connected: false, message: t('dbConnectionFailed') });
       }
     } catch (e) {
-      setDbStatus({ connected: false, message: 'Could not contact backend system status service.' });
+      setDbStatus({ connected: false, message: t('syncFailedGeneric') });
     } finally {
       setDbChecking(false);
     }
@@ -105,9 +107,9 @@ export default function Settings() {
       const updatedUser = { ...user, name: newName, avatarUrl: avatarUrl };
       await userService.updateUser(user.id, updatedUser);
       login(updatedUser, useAuthStore.getState().token || undefined, isOfflineMode);
-      toast.success('Identity synchronized across network');
+      toast.success(t('identitySynced'));
     } catch (err) {
-      toast.error('Network synchronization failure');
+      toast.error(t('networkSyncFailure'));
     } finally {
       setLoading(false);
     }
@@ -116,15 +118,15 @@ export default function Settings() {
   const handleUpdatePassword = async () => {
     if (!user) return;
     if (!currentPassword || !newPassword || !confirmPassword) {
-      toast.error('All password fields are required');
+      toast.error(t('allPasswordFieldsRequired'));
       return;
     }
     if (newPassword.length < 5) {
-      toast.error('New password must be at least 5 characters');
+      toast.error(t('newPasswordMin5'));
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error('New passwords do not match');
+      toast.error(t('newPasswordsMismatch'));
       return;
     }
 
@@ -142,17 +144,17 @@ export default function Settings() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        toast.error(body.error || 'Current password is incorrect');
+        toast.error(body.error || t('currentPasswordIncorrect'));
         return;
       }
 
-      toast.success('Security password updated successfully');
+      toast.success(t('passwordUpdated'));
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err) {
       console.error(err);
-      toast.error('Failed to update system security keys');
+      toast.error(t('passwordUpdateFailed'));
     } finally {
       setPasswordLoading(false);
     }
@@ -194,7 +196,7 @@ export default function Settings() {
 
   const handleAddType = async () => {
     if (!newTypeForm.label.trim()) {
-      toast.error('Please enter a name for the new metadata type');
+      toast.error(t('enterMetadataTypeName'));
       return;
     }
     try {
@@ -203,27 +205,27 @@ export default function Settings() {
         newTypeForm.label.trim(),
         newTypeForm.description.trim()
       );
-      toast.success(`New metadata type "${newTypeForm.label}" created`);
+      toast.success(t('metadataTypeCreated', { name: newTypeForm.label }));
       setNewTypeForm({ label: '', description: '' });
       setIsAddingType(false);
       loadOptions();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to create metadata type');
+      toast.error(err.message || t('metadataTypeCreateFailed'));
     }
   };
 
   const handleDeleteType = async (type: MetadataType) => {
     if (type.isSystem) {
-      toast.error('System metadata types cannot be deleted.');
+      toast.error(t('systemTypeCannotDelete'));
       return;
     }
-    if (!confirm(`Delete the "${type.label}" metadata type and all of its values? This cannot be undone.`)) return;
+    if (!confirm(t('confirmDeleteMetadataType', { name: type.label }))) return;
     try {
       await metadataService.deleteType(type.key);
-      toast.success(`"${type.label}" removed`);
+      toast.success(t('metadataTypeRemoved', { name: type.label }));
       loadOptions();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete metadata type');
+      toast.error(err.message || t('metadataTypeDeleteFailed'));
     }
   };
 
@@ -232,7 +234,7 @@ export default function Settings() {
       await metadataService.toggleActive(option);
       loadOptions();
     } catch {
-      toast.error('Failed to update status');
+      toast.error(t('statusUpdateFailed'));
     }
   };
 
@@ -246,7 +248,7 @@ export default function Settings() {
       await metadataService.reorder(type, reordered.map(o => o.id!).filter(Boolean));
       loadOptions();
     } catch {
-      toast.error('Failed to reorder');
+      toast.error(t('reorderFailed'));
     }
   };
 
@@ -255,7 +257,7 @@ export default function Settings() {
       await metadataService.updateValue({ ...option, meta: { ...(option.meta || {}), color } });
       loadOptions();
     } catch {
-      toast.error('Failed to update color');
+      toast.error(t('colorUpdateFailed'));
     }
   };
 
@@ -277,11 +279,11 @@ export default function Settings() {
 
   const handleAddField = async () => {
     if (!newFieldForm.label.trim()) {
-      toast.error('Please enter a field label');
+      toast.error(t('enterFieldLabel'));
       return;
     }
     if (newFieldForm.fieldType === 'dropdown' && !newFieldForm.metadataTypeKey) {
-      toast.error('Please select where this dropdown gets its values from');
+      toast.error(t('selectDropdownSource'));
       return;
     }
     try {
@@ -295,23 +297,23 @@ export default function Settings() {
         isVisible: true,
         metadataTypeKey: newFieldForm.fieldType === 'dropdown' ? newFieldForm.metadataTypeKey : null,
       });
-      toast.success(`New field "${newFieldForm.label}" added to the Lead form`);
+      toast.success(t('fieldAdded', { name: newFieldForm.label }));
       setNewFieldForm({ label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false });
       setIsAddingField(false);
       loadFormFields();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to create field');
+      toast.error(err.message || t('fieldCreateFailed'));
     }
   };
 
   const handleDeleteField = async (field: FormField) => {
-    if (!confirm(`Remove the "${field.label}" field from the Lead form?`)) return;
+    if (!confirm(t('confirmRemoveField', { name: field.label }))) return;
     try {
       await formBuilderService.deleteField(field.id);
-      toast.success('Field removed');
+      toast.success(t('fieldRemoved'));
       loadFormFields();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete field');
+      toast.error(err.message || t('fieldDeleteFailed'));
     }
   };
 
@@ -320,7 +322,7 @@ export default function Settings() {
       await formBuilderService.saveField({ ...field, isMandatory: !field.isMandatory });
       loadFormFields();
     } catch {
-      toast.error('Failed to update field');
+      toast.error(t('fieldUpdateFailed'));
     }
   };
 
@@ -329,7 +331,7 @@ export default function Settings() {
       await formBuilderService.saveField({ ...field, isVisible: !field.isVisible });
       loadFormFields();
     } catch {
-      toast.error('Failed to update field');
+      toast.error(t('fieldUpdateFailed'));
     }
   };
 
@@ -343,7 +345,7 @@ export default function Settings() {
       await formBuilderService.reorder(reordered.map(f => f.id));
       loadFormFields();
     } catch {
-      toast.error('Failed to reorder fields');
+      toast.error(t('reorderFieldsFailed'));
     }
   };
 
@@ -379,7 +381,7 @@ export default function Settings() {
       await workflowService.saveRule({ ...existing, status, allowedNextStatuses: updated });
       loadWorkflow();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update workflow rule');
+      toast.error(err.message || t('workflowRuleUpdateFailed'));
     }
   };
 
@@ -387,10 +389,10 @@ export default function Settings() {
     const existing = getRuleForStatus(status);
     try {
       await workflowService.saveRule({ ...existing, status, allowedNextStatuses: null });
-      toast.success(`"${status}" can now move to any status`);
+      toast.success(t('statusUnrestricted', { status }));
       loadWorkflow();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update workflow rule');
+      toast.error(err.message || t('workflowRuleUpdateFailed'));
     }
   };
 
@@ -400,7 +402,7 @@ export default function Settings() {
       await workflowService.saveRule({ ...existing, status, [field]: !existing?.[field] });
       loadWorkflow();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update workflow rule');
+      toast.error(err.message || t('workflowRuleUpdateFailed'));
     }
   };
 
@@ -408,43 +410,43 @@ export default function Settings() {
     if (!editingOption.value) return;
     try {
       await metadataService.addValue(editingOption.type, editingOption.value);
-      toast.success('Strategy parameter added successfully');
+      toast.success(t('paramAdded'));
       setEditingOption({ ...editingOption, value: '' });
       loadOptions();
     } catch (err) {
-      toast.error('Failed to update system parameters');
+      toast.error(t('paramUpdateFailed'));
     }
   };
 
   const handleDeleteOption = async (option: DropdownOption) => {
-    if (!confirm('Are you sure you want to decommission this strategic parameter?')) return;
+    if (!confirm(t('confirmDecommissionParam'))) return;
     try {
       await metadataService.deleteValue(option.type, option.value);
-      toast.success('Matrix parameter decommissioned');
+      toast.success(t('paramDecommissioned'));
       loadOptions();
     } catch (err) {
-      toast.error('Protocol failure during decommission');
+      toast.error(t('decommissionFailed'));
     }
   };
 
   const handleClearData = async () => {
-    if (!confirm('CRITICAL: This will purge all lead intelligence from the database. This action is irreversible. Proceed?')) return;
+    if (!confirm(t('confirmClearAllData'))) return;
     try {
       await leadService.clearAllLeads();
-      toast.success('Lead intelligence matrix purged successfully');
+      toast.success(t('clearDataSuccess'));
     } catch (err) {
-      toast.error('Database purge failed');
+      toast.error(t('clearDataFailed'));
     }
   };
 
   const userRoleNormalized = (user?.role || '').toUpperCase();
 
   const sections = [
-    { id: 'profile', label: 'Identity Settings', icon: Users, desc: 'Manage your profile and display name', allowed: canAccess('settings_control', 'view_profile') },
-    { id: 'security', label: 'Security & Access', icon: Key, desc: 'Update passwords and verification', allowed: canAccess('settings_control', 'view_security') },
-    { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Configure real-time lead alerts', allowed: canAccess('settings_control', 'view_notifications') },
-    { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Customize dashboard layout and theme', allowed: canAccess('settings_control', 'view_system') },
-    { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Integration endpoints and health', allowed: canAccess('settings_control', 'view_sync') },
+    { id: 'profile', label: t('identitySettings'), icon: Users, desc: t('identitySettingsDesc'), allowed: canAccess('settings_control', 'view_profile') },
+    { id: 'security', label: t('securityAccess'), icon: Key, desc: t('securityAccessDesc'), allowed: canAccess('settings_control', 'view_security') },
+    { id: 'notifications', label: t('pushIntelligence'), icon: Bell, desc: t('pushIntelligenceDesc'), allowed: canAccess('settings_control', 'view_notifications') },
+    { id: 'system', label: t('systemConfiguration'), icon: SettingsIcon, desc: t('systemConfigDesc'), allowed: canAccess('settings_control', 'view_system') },
+    { id: 'sync', label: t('networkSync'), icon: Globe, desc: t('networkSyncDesc'), allowed: canAccess('settings_control', 'view_sync') },
   ].filter(section => section.allowed);
 
   return (
@@ -455,8 +457,8 @@ export default function Settings() {
             <SettingsIcon className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800">Settings</h1>
-            <p className="text-sm text-slate-500 mt-1">Manage your profile, data and system preferences</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800">{t('settingsTitle')}</h1>
+            <p className="text-sm text-slate-500 mt-1">{t('settingsSubtitle')}</p>
           </div>
         </div>
 
@@ -468,7 +470,7 @@ export default function Settings() {
               activeTab === 'overview' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
             )}
           >
-            Overview
+            {t('overview')}
           </button>
           {canAccess('admin_settings', 'configure_global_metadata') && (
             <button 
@@ -478,7 +480,7 @@ export default function Settings() {
                 activeTab === 'dropdowns' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
-              Strategy Parameters
+              {t('strategyParameters')}
             </button>
           )}
           {canAccess('admin_settings', 'configure_global_metadata') && (
@@ -489,7 +491,7 @@ export default function Settings() {
                 activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
-              Form Builder
+              {t('formBuilder')}
             </button>
           )}
           {canAccess('admin_settings', 'configure_global_metadata') && (
@@ -500,7 +502,7 @@ export default function Settings() {
                 activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
-              Workflow
+              {t('workflow')}
             </button>
           )}
         </div>
@@ -529,15 +531,15 @@ export default function Settings() {
                 
                 <div className="mt-8 pt-8 border-t border-slate-50 space-y-4">
                   <div className="flex items-center justify-center gap-3">
-                    <div className="px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-sm text-xs font-medium border border-emerald-200 rounded-full">Active</div>
-                    <span className="text-sm text-slate-500">ID: {user?.employeeId}</span>
+                    <div className="px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-sm text-xs font-medium border border-emerald-200 rounded-full">{t('active')}</div>
+                    <span className="text-sm text-slate-500">{t('idLabel')}: {user?.employeeId}</span>
                   </div>
                   
                   <button 
                     onClick={handleLogout}
                     className="w-full py-4 text-red-500 border border-red-100 hover:bg-red-50 rounded-sm font-black text-[10px] uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-2"
                   >
-                    Terminate Session
+                    {t('terminateSession')}
                   </button>
                 </div>
               </div>
@@ -545,9 +547,9 @@ export default function Settings() {
               <div className="bg-[#3C3C3C] p-8 rounded-sm shadow-xl italic">
                 <div className="flex items-center gap-3 mb-4">
                   <ShieldCheck className="w-5 h-5 text-[#978C21]" />
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">System Info</h4>
+                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">{t('systemInfo')}</h4>
                 </div>
-                <p className="text-[11px] font-bold leading-relaxed text-slate-400 uppercase tracking-tight">Terminal verified as Shanta Lead Console v2.0 compliant. Secure authentication active.</p>
+                <p className="text-[11px] font-bold leading-relaxed text-slate-400 uppercase tracking-tight">{t('systemInfoDesc')}</p>
               </div>
             </div>
 
@@ -581,11 +583,14 @@ export default function Settings() {
                               <Database className="w-5 h-5" />
                            </div>
                            <div>
-                              <h4 className="font-semibold text-red-600">System Tools</h4>
-                              <p className="text-[10px] text-red-400 font-bold uppercase mt-1 tracking-tight italic">Advanced system operations for administrators.</p>
+                              <h4 className="font-semibold text-red-600">{t('systemTools')}</h4>
+                              <p className="text-[10px] text-red-400 font-bold uppercase mt-1 tracking-tight italic">{t('systemToolsDesc')}</p>
                            </div>
                         </div>
-                        <button className="text-sm font-medium text-red-600 hover:underline" onClick={handleClearData}>Clear All Data</button>
+                        <div className="flex items-center gap-4">
+                          <button className="text-sm font-medium text-[#978C21] hover:underline" onClick={() => { setActiveSection('sync'); }}>{t('checkConnection')}</button>
+                          <button className="text-sm font-medium text-red-600 hover:underline" onClick={handleClearData}>{t('clearAllData')}</button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -601,13 +606,13 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-bold text-xl text-slate-800">Update Profile</h3>
+                      <h3 className="font-bold text-xl text-slate-800">{t('updateProfile')}</h3>
                     </div>
                   </div>
 
                   <div className="space-y-8">
                     <div className="space-y-3">
-                      <label className="text-sm font-medium text-slate-600">Display Name</label>
+                      <label className="text-sm font-medium text-slate-600">{t('displayName')}</label>
                       <input 
                         type="text"
                         value={newName}
@@ -617,13 +622,13 @@ export default function Settings() {
                     </div>
 
                     <div className="space-y-3">
-                      <label className="text-sm font-medium text-slate-600">Identity Avatar Profile</label>
+                      <label className="text-sm font-medium text-slate-600">{t('identityAvatarProfile')}</label>
                       
                       <div className="flex flex-col sm:flex-row items-center gap-8 p-6 bg-[#FBFAF8] rounded-sm border border-slate-100">
                         {/* Avatar Preview */}
                         <div className="w-20 h-20 rounded-sm bg-slate-900 flex items-center justify-center text-white text-2xl font-black border border-slate-800 shadow-md overflow-hidden shrink-0">
                           {avatarUrl ? (
-                            <img src={avatarUrl} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            <img src={avatarUrl} alt={t('preview')} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             newName.charAt(0) || 'U'
                           )}
@@ -632,12 +637,12 @@ export default function Settings() {
                         {/* Controls */}
                         <div className="flex-1 space-y-4 w-full text-left">
                           <p className="text-[11px] text-slate-500 leading-normal uppercase tracking-tight font-bold">
-                            Select an identity preset below, or upload a custom image (max 1.5MB JPEG/PNG) to synchronize across the network.
+                            {t('avatarHint')}
                           </p>
                           
                           <div className="flex flex-wrap gap-3">
                             <label className="px-4 py-3 bg-slate-900 hover:bg-black text-[#FBFAF8] text-[9px] font-black uppercase tracking-widest rounded-sm transition-all cursor-pointer shadow-md inline-block">
-                              Upload Custom Image
+                              {t('uploadCustomImage')}
                               <input 
                                 type="file" 
                                 accept="image/*" 
@@ -646,14 +651,14 @@ export default function Settings() {
                                   const file = e.target.files?.[0];
                                   if (file) {
                                     if (file.size > 1.5 * 1024 * 1024) {
-                                      toast.error('Asset limits exceeded: Maximum 1.5MB allowed');
+                                      toast.error(t('assetLimitExceeded'));
                                       return;
                                     }
                                     const reader = new FileReader();
                                     reader.onload = () => {
                                       if (typeof reader.result === 'string') {
                                         setAvatarUrl(reader.result);
-                                        toast.success('Identity asset uploaded successfully');
+                                        toast.success(t('assetUploaded'));
                                       }
                                     };
                                     reader.readAsDataURL(file);
@@ -667,17 +672,17 @@ export default function Settings() {
                                 type="button"
                                 onClick={() => {
                                   setAvatarUrl('');
-                                  toast.success('Avatar cleared. Defaulting to standard initial vector.');
+                                  toast.success(t('avatarCleared'));
                                 }}
                                 className="px-4 py-3 border border-red-200 hover:bg-red-50 text-red-600 text-[9px] font-black uppercase tracking-widest rounded-sm transition-all"
                               >
-                                Purge Avatar
+                                {t('purgeAvatar')}
                               </button>
                             )}
                           </div>
 
                           <div className="space-y-2 pt-3 border-t border-slate-100">
-                            <p className="text-xs font-medium text-slate-500">Quick Presets</p>
+                            <p className="text-xs font-medium text-slate-500">{t('quickPresets')}</p>
                             <div className="flex flex-wrap gap-2.5">
                               {[
                                 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
@@ -691,7 +696,7 @@ export default function Settings() {
                                   type="button"
                                   onClick={() => {
                                     setAvatarUrl(preset);
-                                    toast.success(`Identity preset ${index + 1} chosen`);
+                                    toast.success(t('presetChosen', { n: String(index + 1) }));
                                   }}
                                   className={`w-9 h-9 rounded-sm border overflow-hidden transition-all relative ${avatarUrl === preset ? 'ring-2 ring-[#978C21] border-[#978C21] scale-105' : 'border-slate-200 hover:border-slate-400'}`}
                                 >
@@ -710,7 +715,7 @@ export default function Settings() {
                       disabled={loading}
                       className="w-full py-5 bg-slate-900 hover:bg-black text-white text-[11px] font-black uppercase tracking-[0.4em] transition-all rounded-sm flex items-center justify-center gap-4 italic disabled:opacity-50 shadow-xl"
                     >
-                      {loading ? 'SYNCHRONIZING...' : 'Persist Intelligence'}
+                      {loading ? t('executingSync') : t('persistIntelligence')}
                     </button>
                   </div>
                 </motion.div>
@@ -730,41 +735,41 @@ export default function Settings() {
                       }} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-bold text-xl text-slate-800">Security & Access Protocol</h3>
+                      <h3 className="font-bold text-xl text-slate-800">{t('securityAccessProtocol')}</h3>
                     </div>
                   </div>
 
                   <div className="space-y-4">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">Previous Password *</label>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">{t('previousPassword')} *</label>
                       <input 
                         type="password"
                         value={currentPassword}
                         onChange={(e) => setCurrentPassword(e.target.value)}
                         className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] outline-none"
-                        placeholder="ENTER PREVIOUS PASSWORD"
+                        placeholder={t('enterPreviousPassword').toUpperCase()}
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">New Password *</label>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">{t('newPasswordLabel')} *</label>
                       <input 
                         type="password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] outline-none"
-                        placeholder="ENTER NEW PASSWORD"
+                        placeholder={t('enterNewPassword').toUpperCase()}
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">Confirm New Password *</label>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic">{t('confirmNewPasswordLabel')} *</label>
                       <input 
                         type="password"
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] outline-none"
-                        placeholder="REPEAT NEW PASSWORD"
+                        placeholder={t('repeatNewPassword').toUpperCase()}
                       />
                     </div>
                     
@@ -773,7 +778,7 @@ export default function Settings() {
                       disabled={passwordLoading}
                       className="w-full py-5 bg-[#978C21] hover:bg-[#867B1E] text-white text-[11px] font-black uppercase tracking-[0.4em] transition-all rounded-sm flex items-center justify-center gap-4 italic disabled:opacity-50 mt-4 shadow-xl"
                     >
-                      {passwordLoading ? 'UPDATING ENCRYPTION...' : 'Update Password Protocol'}
+                      {passwordLoading ? t('updatingEncryption') : t('updatePasswordProtocol')}
                     </button>
                   </div>
                 </motion.div>
@@ -788,69 +793,59 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-bold text-xl text-slate-800">Network Integration & Sync</h3>
+                      <h3 className="font-bold text-xl text-slate-800">{t('networkIntegrationSync')}</h3>
                     </div>
                   </div>
 
                   <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-8">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 border-b border-slate-200/50 pb-6">
                       <div>
-                        <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Operational Database Mode</h4>
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">{t('operationalDatabaseMode')}</h4>
                         <p className="text-[14px] font-black uppercase tracking-tight mt-2 flex items-center gap-2">
                           <span className={cn("w-2.5 h-2.5 rounded-full inline-block animate-pulse", isOfflineMode ? "bg-amber-500" : "bg-emerald-500")} />
-                          {isOfflineMode ? "Local Storage Mode (Offline)" : "Cloud Database Mode (Live)"}
+                          {isOfflineMode ? t('localStorageMode') : t('cloudDatabaseMode')}
                         </p>
                       </div>
                       <button
                         onClick={() => {
                           const targetState = !isOfflineMode;
                           useAuthStore.getState().setOfflineMode(targetState);
-                           toast.success(targetState ? "Offline Mode Enabled: Data saved locally." : "Online Mode Enabled: Live Supabase PostgreSQL connection.");
+                           toast.success(targetState ? t('offlineModeEnabled') : t('onlineModeEnabled'));
                         }}
                         className={cn(
                           "px-6 py-3 text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-md border",
                           isOfflineMode ? "bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100" : "bg-amber-50 border-amber-200 text-amber-600 hover:bg-amber-100"
                         )}
                       >
-                        {isOfflineMode ? "Enable Cloud / Go Live" : "Disconnect / Work Offline"}
+                        {isOfflineMode ? t('enableCloud') : t('disconnectOffline')}
                       </button>
                     </div>
 
-                    {/* Supabase Live Live Signal Tracker */}
+                    {/* Database connection signal tracker */}
                     <div className="border-b border-slate-200/50 pb-6 space-y-4">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Supabase Connection Signal</h4>
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">{t('databaseConnectionSignal')}</h4>
                         <button 
                           onClick={checkDbStatus}
                           disabled={dbChecking}
                           className="text-[9px] font-black uppercase tracking-widest text-[#978C21] hover:underline"
                         >
-                          {dbChecking ? "CHANNELS BUSY..." : "PING DATABASE SIGNAL"}
+                          {dbChecking ? t('executingSync') : t('pingDatabase')}
                         </button>
                       </div>
 
                       {dbChecking ? (
                         <div className="p-4 bg-slate-50 rounded-sm border border-slate-100 flex items-center justify-center gap-3">
                           <span className="w-2.5 h-2.5 rounded-full inline-block bg-slate-400 animate-pulse" />
-                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">PROBING SUPABASE CLOUD POSTGRESQL SIGNAL...</p>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{t('probingDatabase')}</p>
                         </div>
                       ) : dbStatus?.connected ? (
                         <div className="p-5 bg-emerald-50/50 rounded-sm border border-emerald-100 space-y-3">
                           <div className="flex items-center gap-3">
                             <Radio className="w-5 h-5 text-emerald-600 animate-pulse" />
                             <div>
-                              <p className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">EXCELLENT SIGNAL (CLOUD ONLINE)</p>
+                              <p className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">{t('excellentSignal')}</p>
                               <p className="text-[10px] text-emerald-500 font-bold uppercase mt-0.5">{dbStatus.message}</p>
-                            </div>
-                          </div>
-                          <div className="pt-3 border-t border-emerald-100/50 grid grid-cols-2 gap-4 text-[9px] uppercase font-bold text-slate-500">
-                            <div>
-                              <span className="block text-slate-400">DATABASE SERVICE</span>
-                              <span className="text-slate-800 font-black">Supabase PostgreSQL</span>
-                            </div>
-                            <div>
-                              <span className="block text-slate-400">SECURITY HANDSHAKE</span>
-                              <span className="text-slate-800 font-black">SSL Encrypted / Verified</span>
                             </div>
                           </div>
                         </div>
@@ -859,42 +854,20 @@ export default function Settings() {
                           <div className="flex items-start gap-3">
                             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                             <div>
-                              <p className="text-[11px] font-black text-amber-700 uppercase tracking-widest">NO SIGNAL / DEV MOCK FALLBACK</p>
+                              <p className="text-[11px] font-black text-amber-700 uppercase tracking-widest">{t('noSignalFallback')}</p>
                               <p className="text-[10px] text-amber-600 font-bold uppercase mt-1 leading-relaxed">
-                                {dbStatus?.message || "No connection established because DATABASE_URL is not set as an Environment Secret yet."}
+                                {dbStatus?.message || t('noConnectionMessage')}
                               </p>
                             </div>
-                          </div>
-
-                          <div className="p-4 bg-slate-900 text-slate-100 rounded-sm font-mono text-[9px] uppercase space-y-3 leading-relaxed tracking-wider">
-                            <p className="text-[#978C21] font-bold">⚠️ REQUIRED SYNC ACTION STEPS:</p>
-                            <p>
-                              1. CLICK <span className="text-amber-400 font-black">⚙️ SETTINGS</span> (TOP-RIGHT IN GOOGLE AI STUDIO CHAT BAR/TOOLBAR).
-                            </p>
-                            <p>
-                              2. IN THE "SECRETS" / "ENVIRONMENT VARIABLES" SECTION, ADD A NEW KEY:
-                              <br />
-                              <strong className="text-white text-[11px] bg-slate-800 px-1 py-0.5 rounded">DATABASE_URL</strong>
-                            </p>
-                            <p className="normal-case">
-                              3. PASTE YOUR SUPABASE PostgreSQL CONNECTION STRING. BIG RECOMMENDATION: USE THE TRANSACTION POOLER URL. EXAMPLE FORMAT:
-                              <br />
-                              <span className="text-emerald-400 text-[10px] font-black break-all">
-                                postgres://postgres.wfpoqwmxpsvayhjyzdjx:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require
-                              </span>
-                            </p>
-                            <p>
-                              👉 <span className="text-amber-400 font-bold">REPLACE [YOUR-PASSWORD]</span> WITH YOUR SUPABASE DB USER PASSWORD.
-                            </p>
                           </div>
                         </div>
                       )}
                     </div>
 
                     <div className="space-y-4">
-                      <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Database Synchronization Sync</h4>
+                      <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">{t('databaseSynchronization')}</h4>
                       <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-                        Manually upload any locally registered lead profiles, user credentials, and status logs on this device/browser into the secure cloud Supabase PostgreSQL database.
+                        {t('syncSectionDesc')}
                       </p>
                       <button
                         onClick={async () => {
@@ -902,12 +875,12 @@ export default function Settings() {
                           try {
                             const result = await databaseStatusService.checkDatabaseStatus();
                             if (result && result.connected) {
-                              toast.success("Connected to the cloud database. All data is persisted directly to PostgreSQL.");
+                              toast.success(t('syncConnectedOk'));
                             } else {
-                              toast.error(result?.message || "Database connection failed. Changes cannot be persisted right now.");
+                              toast.error(result?.message || t('dbConnectionFailed'));
                             }
                           } catch (err) {
-                            toast.error("Failed to run sync. Check your cloud connection.");
+                            toast.error(t('syncFailedGeneric'));
                           } finally {
                             setLoading(false);
                           }
@@ -916,7 +889,7 @@ export default function Settings() {
                         className="w-full flex items-center justify-center gap-3 bg-slate-900 hover:bg-black text-[#FBFAF8] text-[10px] font-black uppercase tracking-widest py-4 rounded shadow-md transition-all active:scale-[0.99] group cursor-pointer disabled:opacity-50"
                       >
                         <Globe className="w-4 h-4 text-[#978C21] transition-transform group-hover:rotate-12" />
-                        {loading ? "EXECUTING SYNC..." : "Run Cloud Synchronization Protocol"}
+                        {loading ? t('executingSync') : t('runCloudSync')}
                       </button>
                     </div>
                   </div>
@@ -932,28 +905,28 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-bold text-xl text-slate-800">Push Intelligence & Alerts</h3>
+                      <h3 className="font-bold text-xl text-slate-800">{t('pushIntelligenceAlerts')}</h3>
                     </div>
                   </div>
 
                   <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
-                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Custom System Alerts Configuration</h4>
+                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">{t('customAlertsConfig')}</h4>
                     <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-                      Configure lead assign routing, next follow-up call, and team supervisor notifications thresholds:
+                      {t('alertsConfigDesc')}
                     </p>
 
                     <div className="space-y-4 pt-4 border-t border-slate-150">
                       {[
-                        { label: 'Push Real-Time Assignments Alerts', desc: 'Notify assignee immediately', enabled: true },
-                        { label: 'Upline Team Tracking Emails to Managers', desc: 'Propagate assignment notifications up hierarchy', enabled: true },
-                        { label: 'Tomorrow Call Reminders', desc: 'Display alerts for calls scheduled next calendar day', enabled: true },
+                        { label: t('notifAssignments'), desc: t('notifAssignmentsDesc'), enabled: true },
+                        { label: t('notifManagers'), desc: t('notifManagersDesc'), enabled: true },
+                        { label: t('notifTomorrow'), desc: t('notifTomorrowDesc'), enabled: true },
                       ].map((n, i) => (
                         <div key={i} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-sm">
                           <div>
                             <p className="text-[11px] font-black text-slate-700 uppercase">{n.label}</p>
                             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">{n.desc}</p>
                           </div>
-                          <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-150">Active</span>
+                          <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-150">{t('active')}</span>
                         </div>
                       ))}
                     </div>
@@ -970,33 +943,33 @@ export default function Settings() {
                       <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
                         <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
                       </button>
-                      <h3 className="font-bold text-xl text-slate-800">System Configuration</h3>
+                      <h3 className="font-bold text-xl text-slate-800">{t('systemConfiguration')}</h3>
                     </div>
                   </div>
 
                   <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
                     <div>
-                      <h4 className="text-[11px] font-black uppercase tracking-widest text-[#978C21]">Interface & Dashboard Customization</h4>
+                      <h4 className="text-[11px] font-black uppercase tracking-widest text-[#978C21]">{t('interfaceCustomization')}</h4>
                       <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed mt-2">
-                        Customize visual layouts and telemetry parameters:
+                        {t('interfaceCustomizationDesc')}
                       </p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-150">
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-400 uppercase">Default Visualization Period</label>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">{t('defaultVizPeriod')}</label>
                         <select className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none" defaultValue="TODAY">
-                          <option value="TODAY">Today Only</option>
-                          <option value="THIS MONTH">Current Month</option>
-                          <option value="LAST MONTH">Last Month</option>
+                          <option value="TODAY">{t('todayOnly')}</option>
+                          <option value="THIS MONTH">{t('currentMonth')}</option>
+                          <option value="LAST MONTH">{t('lastMonth')}</option>
                         </select>
                       </div>
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-400 uppercase">Interactive Animations Rate</label>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">{t('animationsRate')}</label>
                         <select className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none" defaultValue="NORMAL">
-                          <option value="NORMAL">Standard Dynamic (300ms)</option>
-                          <option value="FAST">High Performance (100ms)</option>
-                          <option value="REDUCED">None / Static Mode</option>
+                          <option value="NORMAL">{t('animStandard')}</option>
+                          <option value="FAST">{t('animFast')}</option>
+                          <option value="REDUCED">{t('animReduced')}</option>
                         </select>
                       </div>
                     </div>
@@ -1009,10 +982,10 @@ export default function Settings() {
                   className="bg-white p-20 rounded-sm border border-slate-100 shadow-sm text-center italic"
                 >
                   <button onClick={() => setActiveSection('overview')} className="mb-10 text-[10px] font-black text-[#978C21] uppercase tracking-widest flex items-center gap-2 mx-auto">
-                    <ArrowRight className="w-4 h-4 rotate-180" /> Return to Command
+                    <ArrowRight className="w-4 h-4 rotate-180" /> {t('returnToCommand')}
                   </button>
-                  <h3 className="text-2xl font-black uppercase tracking-tighter text-slate-200 serif">Protocol Offline</h3>
-                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] mt-4">Module Clearance Level 4 Required</p>
+                  <h3 className="text-2xl font-black uppercase tracking-tighter text-slate-200 serif">{t('protocolOffline')}</h3>
+                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] mt-4">{t('moduleClearanceRequired')}</p>
                 </motion.div>
               )}
             </div>
@@ -1027,7 +1000,7 @@ export default function Settings() {
           >
             <div className="p-10 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div className="space-y-4 flex-1 max-w-md">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Parameter Category</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('parameterCategory')}</label>
                 <select 
                   value={editingOption.type}
                   onChange={(e) => setEditingOption({ ...editingOption, type: e.target.value })}
@@ -1039,13 +1012,13 @@ export default function Settings() {
                 </select>
               </div>
               <div className="space-y-4 flex-1 max-w-md">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Matrix Property</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('newMatrixProperty')}</label>
                 <div className="flex gap-2">
                   <input 
                     type="text"
                     value={editingOption.value}
                     onChange={(e) => setEditingOption({ ...editingOption, value: e.target.value })}
-                    placeholder="ENTER VALUE..."
+                    placeholder={t('enterValue').toUpperCase()}
                     className="flex-1 bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
                   />
                   <button 
@@ -1053,7 +1026,7 @@ export default function Settings() {
                     className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
                   >
                     <Plus className="w-4 h-4" />
-                    Inject
+                    {t('inject')}
                   </button>
                 </div>
               </div>
@@ -1064,7 +1037,7 @@ export default function Settings() {
                   className="border border-[#978C21]/30 text-[#978C21] px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-[#978C21]/5 transition-all flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
-                  New Field Type
+                  {t('newFieldType')}
                 </button>
               </div>
             </div>
@@ -1072,22 +1045,22 @@ export default function Settings() {
             {isAddingType && (
               <div className="px-10 py-6 border-b border-slate-50 bg-white flex flex-col md:flex-row items-end gap-4">
                 <div className="flex-1 space-y-2 w-full">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Type Name</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('newTypeName')}</label>
                   <input
                     type="text"
                     value={newTypeForm.label}
                     onChange={(e) => setNewTypeForm({ ...newTypeForm, label: e.target.value })}
-                    placeholder="e.g. Industry, Referral Channel..."
+                    placeholder={t('newTypeNamePlaceholder')}
                     className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
                   />
                 </div>
                 <div className="flex-1 space-y-2 w-full">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Description (optional)</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('descriptionOptional')}</label>
                   <input
                     type="text"
                     value={newTypeForm.description}
                     onChange={(e) => setNewTypeForm({ ...newTypeForm, description: e.target.value })}
-                    placeholder="What is this field for?"
+                    placeholder={t('descriptionPlaceholder')}
                     className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
                   />
                 </div>
@@ -1095,7 +1068,7 @@ export default function Settings() {
                   onClick={handleAddType}
                   className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg whitespace-nowrap"
                 >
-                  Create Type
+                  {t('createType')}
                 </button>
               </div>
             )}
@@ -1112,15 +1085,15 @@ export default function Settings() {
                         <div className="flex items-center gap-2">
                           <h5 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] italic">{t.label}</h5>
                           {t.isSystem && (
-                            <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">System</span>
+                            <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">{t('system')}</span>
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-slate-500">{values.length} Entries</span>
+                          <span className="text-sm text-slate-500">{t('entriesCount', { count: String(values.length) })}</span>
                           {!t.isSystem && (
                             <button
                               onClick={() => handleDeleteType(t)}
-                              title="Delete this metadata type"
+                              title={t('deleteThisType')}
                               className="text-slate-300 hover:text-red-500 transition-all"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1144,7 +1117,7 @@ export default function Settings() {
                                   onChange={(e) => handleSetStatusColor(option, e.target.value)}
                                   style={{ backgroundColor: STATUS_COLOR_HEX[option.meta?.color || 'slate'] }}
                                   className="w-5 h-5 rounded-full border-0 text-[0px] shrink-0 cursor-pointer appearance-none"
-                                  title="Status color"
+                                  title={t('statusColor')}
                                 >
                                   {STATUS_COLOR_CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
@@ -1158,7 +1131,7 @@ export default function Settings() {
                               <button onClick={() => handleMove(t.key, i, 1)} disabled={i === values.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
                                 <ArrowDown className="w-3.5 h-3.5" />
                               </button>
-                              <button onClick={() => handleToggleActive(option)} title={option.status === 'Active' ? 'Deactivate' : 'Activate'} className="p-1 text-slate-300 hover:text-[#978C21]">
+                              <button onClick={() => handleToggleActive(option)} title={option.status === 'Active' ? t('deactivate') : t('activate')} className="p-1 text-slate-300 hover:text-[#978C21]">
                                 <Power className="w-3.5 h-3.5" />
                               </button>
                               <button 
@@ -1171,7 +1144,7 @@ export default function Settings() {
                           </div>
                         ))}
                         {values.length === 0 && (
-                          <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-4 text-center">No values yet</p>
+                          <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-4 text-center">{t('noValuesYet')}</p>
                         )}
                       </div>
                     </div>
@@ -1190,9 +1163,9 @@ export default function Settings() {
           >
             <div className="p-10 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div>
-                <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Generate Form Fields</h5>
+                <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">{t('leadGenerateFormFields')}</h5>
                 <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
-                  Control which fields appear on the Lead Generate form, whether they're required, and their order.
+                  {t('formFieldsDesc')}
                 </p>
               </div>
               <button
@@ -1200,52 +1173,52 @@ export default function Settings() {
                 className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
-                New Field
+                {t('newField')}
               </button>
             </div>
 
             {isAddingField && (
               <div className="px-10 py-6 border-b border-slate-50 bg-white grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Field Label</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('fieldLabel')}</label>
                   <input
                     type="text"
                     value={newFieldForm.label}
                     onChange={(e) => setNewFieldForm({ ...newFieldForm, label: e.target.value })}
-                    placeholder="e.g. Reference Name"
+                    placeholder={t('fieldLabelPlaceholder')}
                     className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Field Type</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('fieldType')}</label>
                   <select
                     value={newFieldForm.fieldType}
                     onChange={(e) => setNewFieldForm({ ...newFieldForm, fieldType: e.target.value as FormFieldType })}
                     className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
                   >
-                    <option value="text">Text</option>
-                    <option value="number">Number</option>
-                    <option value="dropdown">Dropdown</option>
-                    <option value="date">Date</option>
-                    <option value="textarea">Long Text</option>
-                    <option value="checkbox">Checkbox</option>
+                    <option value="text">{t('text')}</option>
+                    <option value="number">{t('number')}</option>
+                    <option value="dropdown">{t('dropdown')}</option>
+                    <option value="date">{t('date')}</option>
+                    <option value="textarea">{t('longText')}</option>
+                    <option value="checkbox">{t('checkbox')}</option>
                   </select>
                 </div>
                 {newFieldForm.fieldType === 'dropdown' && (
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Values From</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('valuesFrom')}</label>
                     <select
                       value={newFieldForm.metadataTypeKey}
                       onChange={(e) => setNewFieldForm({ ...newFieldForm, metadataTypeKey: e.target.value })}
                       className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
                     >
-                      <option value="">Select a metadata type...</option>
+                      <option value="">{t('selectMetadataType')}</option>
                       {metadataTypes.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
                     </select>
                   </div>
                 )}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Mandatory?</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{t('mandatory')}?</label>
                   <button
                     onClick={() => setNewFieldForm({ ...newFieldForm, isMandatory: !newFieldForm.isMandatory })}
                     className={cn(
@@ -1253,14 +1226,14 @@ export default function Settings() {
                       newFieldForm.isMandatory ? "bg-[#978C21] text-white border-[#978C21]" : "bg-white text-slate-400 border-slate-200"
                     )}
                   >
-                    {newFieldForm.isMandatory ? 'Required' : 'Optional'}
+                    {newFieldForm.isMandatory ? t('required') : t('optional')}
                   </button>
                 </div>
                 <button
                   onClick={handleAddField}
                   className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg"
                 >
-                  Create Field
+                  {t('createField')}
                 </button>
               </div>
             )}
@@ -1287,7 +1260,7 @@ export default function Settings() {
                             <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight truncate">{field.label}</span>
                             <span className="text-[8px] font-black text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">{field.fieldType}</span>
                             {field.isSystem && (
-                              <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">System</span>
+                              <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">{t('system')}</span>
                             )}
                           </div>
                           <div className="flex items-center gap-3 shrink-0">
@@ -1298,7 +1271,7 @@ export default function Settings() {
                                 field.isMandatory ? "bg-red-50 text-red-600 border-red-100" : "bg-white text-slate-400 border-slate-200"
                               )}
                             >
-                              {field.isMandatory ? 'Required' : 'Optional'}
+                              {field.isMandatory ? t('required') : t('optional')}
                             </button>
                             <button onClick={() => handleMoveField(section, i, -1)} disabled={i === 0} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
                               <ArrowUp className="w-3.5 h-3.5" />
@@ -1306,7 +1279,7 @@ export default function Settings() {
                             <button onClick={() => handleMoveField(section, i, 1)} disabled={i === fields.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
                               <ArrowDown className="w-3.5 h-3.5" />
                             </button>
-                            <button onClick={() => handleToggleFieldVisible(field)} title={field.isVisible ? 'Hide field' : 'Show field'} className="p-1 text-slate-300 hover:text-[#978C21]">
+                            <button onClick={() => handleToggleFieldVisible(field)} title={field.isVisible ? t('hideField') : t('showField')} className="p-1 text-slate-300 hover:text-[#978C21]">
                               <Power className="w-3.5 h-3.5" />
                             </button>
                             {!field.isSystem && (
@@ -1332,10 +1305,9 @@ export default function Settings() {
             className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
           >
             <div className="p-10 border-b border-slate-50 bg-[#FBFAF8]">
-              <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Status Pipeline & Workflow Rules</h5>
+              <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">{t('workflowTitle')}</h5>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
-                For each status, control which statuses a lead can move to next, and what information is required to enter that status.
-                By default every status can move to any other status.
+                {t('workflowDesc')}
               </p>
             </div>
 
@@ -1350,30 +1322,30 @@ export default function Settings() {
                       <div className="flex items-center gap-4 flex-wrap">
                         <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
                           <input type="checkbox" checked={!!rule?.requiresLossReason} onChange={() => handleToggleRequirement(status, 'requiresLossReason')} />
-                          Requires Loss Reason
+                          {t('requiresLossReason')}
                         </label>
                         <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
                           <input type="checkbox" checked={!!rule?.requiresMeetingType} onChange={() => handleToggleRequirement(status, 'requiresMeetingType')} />
-                          Requires Meeting Type
+                          {t('requiresMeetingType')}
                         </label>
                         <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
                           <input type="checkbox" checked={!!rule?.requiresFollowUpType} onChange={() => handleToggleRequirement(status, 'requiresFollowUpType')} />
-                          Requires Follow-up Type
+                          {t('requiresFollowUpType')}
                         </label>
                         <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
                           <input type="checkbox" checked={!!rule?.requiresNote} onChange={() => handleToggleRequirement(status, 'requiresNote')} />
-                          Requires Note
+                          {t('requiresNote')}
                         </label>
                       </div>
                     </div>
                     <div className="p-6">
                       <div className="flex items-center justify-between mb-3">
                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                          Can move to {isRestricted ? `(${rule!.allowedNextStatuses!.length} allowed)` : '(any status - unrestricted)'}
+                          {t('canMoveTo', { target: isRestricted ? `(${rule!.allowedNextStatuses!.length})` : t('anyStatusUnrestricted') })}
                         </p>
                         {isRestricted && (
                           <button onClick={() => handleResetToUnrestricted(status)} className="text-[9px] font-black text-[#978C21] uppercase tracking-widest hover:underline">
-                            Reset to Unrestricted
+                            {t('resetToUnrestricted')}
                           </button>
                         )}
                       </div>
@@ -1400,7 +1372,7 @@ export default function Settings() {
               })}
               {allStatuses.length === 0 && (
                 <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-8 text-center">
-                  No lead statuses found. Add some under Strategy Parameters first.
+                  {t('noStatusesFound')}
                 </p>
               )}
             </div>

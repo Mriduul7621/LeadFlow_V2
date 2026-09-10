@@ -30,9 +30,11 @@ import { userService } from '../../users/services/userService';
 import { settingsService } from '../../../services/settingsService';
 import { toast } from 'sonner';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
+import { useTranslation } from '../../shared/utils/translations';
 
 export default function AllLeads() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const { canAccess, userRole } = usePermissions();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -70,11 +72,11 @@ export default function AllLeads() {
 
   const handleBulkAssign = async () => {
     if (!selectedLeadIds.length) {
-      toast.error('No leads selected');
+      toast.error(t('noLeadsSelected'));
       return;
     }
     if (!bulkAssigneeId) {
-      toast.error('Please choose a bulk assignee or Unassign option');
+      toast.error(t('chooseBulkAssignee'));
       return;
     }
     setBulkAssigning(true);
@@ -85,12 +87,12 @@ export default function AllLeads() {
           leadService.updateLead(leadId, { assignedTo: targetAssignee }, user?.name || 'Admin')
         )
       );
-      toast.success(`Successfully assigned ${selectedLeadIds.length} leads in batch!`);
+      toast.success(t('batchAssignSuccess', { count: String(selectedLeadIds.length) }));
       setSelectedLeadIds([]);
       setBulkAssigneeId('');
       loadData();
     } catch (err) {
-      toast.error('Bulk assignment failed');
+      toast.error(t('bulkAssignmentFailed'));
     } finally {
       setBulkAssigning(false);
     }
@@ -116,7 +118,7 @@ export default function AllLeads() {
       const campaigns = await settingsService.getOptionsByType('Campaign');
       setCampaignOptions(campaigns);
     } catch (err) {
-      toast.error('Initialization matrix sync failure');
+      toast.error(t('initMatrixSyncFailure'));
     } finally {
       setLoading(false);
     }
@@ -140,32 +142,32 @@ export default function AllLeads() {
   // Handle single lead deletion
   const handleDeleteIndividualLead = async (leadId: string) => {
     if (!canAccess('all_leads', 'delete_destroy_leads')) {
-      toast.error('Access Denied: Your Clearance Level cannot delete leads.');
+      toast.error(t('accessDeniedDeleteLeads'));
       return;
     }
-    if (!window.confirm('Are you strictly sure you want to permanently delete this lead?')) return;
+    if (!window.confirm(t('confirmDeleteLeadPermanent'))) return;
     try {
       await leadService.deleteLead(leadId);
-      toast.success('Lead permanently removed from tracking');
+      toast.success(t('leadPermanentlyRemoved'));
       setLeads(prev => prev.filter(l => l.id !== leadId));
       if (selectedLead?.id === leadId) setSelectedLead(null);
     } catch (err) {
-      toast.error('Deletion failure');
+      toast.error(t('deletionFailure'));
     }
   };
 
   // Handle campaign-wise deletion
   const handlePurgeCampaignLeads = async () => {
     if (!canAccess('all_leads', 'delete_destroy_leads')) {
-      toast.error('Access Denied: Your Clearance Level cannot delete campaigns.');
+      toast.error(t('accessDeniedDeleteCampaigns'));
       return;
     }
     if (!targetCampaignToDelete) {
-      toast.error('Please select a campaign to purge first');
+      toast.error(t('purgeCampaignFirst'));
       return;
     }
     if (!deleteConfirmPassword) {
-      toast.error('Please enter your login password to confirm deletion');
+      toast.error(t('enterPasswordToConfirm'));
       return;
     }
 
@@ -177,18 +179,18 @@ export default function AllLeads() {
       });
 
       if (!verifyRes.ok) {
-        toast.error('Deletion aborted: Incorrect password provided');
+        toast.error(t('incorrectPassword'));
         return;
       }
 
       await leadService.deleteLeadsByCampaign(targetCampaignToDelete);
-      toast.success(`Successfully purged all leads associated with campaign "${targetCampaignToDelete}"`);
+      toast.success(t('campaignPurged', { campaign: targetCampaignToDelete }));
       setLeads(prev => prev.filter(l => l.campaignName !== targetCampaignToDelete));
       setIsConfirmDeleteCampOpen(false);
       setTargetCampaignToDelete('');
       setDeleteConfirmPassword('');
     } catch (err) {
-      toast.error('Campaign mass purge failed');
+      toast.error(t('campaignPurgeFailed'));
     }
   };
 
@@ -199,14 +201,14 @@ export default function AllLeads() {
           <AlertTriangle className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Clearance Protocol Warning</span>
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">Access Denied</h2>
+          <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">{t('clearanceProtocolWarning')}</span>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">{t('accessDeniedTitle')}</h2>
           <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-            Your current clearance level <span className="text-red-650 font-black">"{userRole || 'RESTRICTED'}"</span> does not have structural privileges to view the Administrative Lead Archive Ledger.
+            {t('clearanceLevel')} <span className="text-red-650 font-black">"{userRole || 'RESTRICTED'}"</span> {t('archiveAccessDeniedDesc')}
           </p>
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature all_leads.view_global_directory Required
+          {t('securityLevelRequired')}: all_leads.view_global_directory
         </div>
       </div>
     );
@@ -216,11 +218,11 @@ export default function AllLeads() {
   const handleUpdateLeadDetails = async () => {
     if (!selectedLead) return;
     if (!editName.trim()) {
-      toast.error('Prospect Name is a mandatory field');
+      toast.error(t('prospectNameMandatory'));
       return;
     }
     if (!editPhone.trim()) {
-      toast.error('Mobile Number is a mandatory field');
+      toast.error(t('mobileMandatory'));
       return;
     }
 
@@ -238,27 +240,27 @@ export default function AllLeads() {
       };
 
       await leadService.updateLead(selectedLead.id, updatePayload, user?.name || 'Administrator');
-      toast.success('Lead demographics and routing updated successfully!');
+      toast.success(t('leadDemographicsUpdated'));
       setSelectedLead(null);
       loadData();
     } catch (err) {
-      toast.error('Update save aborted');
+      toast.error(t('updateSaveAborted'));
     }
   };
 
   // Handle inline quick-assign dropdown saving
   const handleSaveInlineAssignment = async (leadId: string) => {
     if (!inlineAssigneeId) {
-      toast.error('Select an assignee or clear');
+      toast.error(t('selectAssigneeOrClear'));
       return;
     }
     try {
       await leadService.updateLead(leadId, { assignedTo: inlineAssigneeId }, user?.name || 'Admin');
-      toast.success(`Lead successfully routed to assignee ID ${inlineAssigneeId}`);
+      toast.success(t('leadRoutedTo', { id: inlineAssigneeId }));
       setInlineAssignmentLeadId(null);
       loadData();
     } catch (err) {
-      toast.error('Inline assignment failed');
+      toast.error(t('inlineAssignmentFailed'));
     }
   };
 
@@ -292,16 +294,16 @@ export default function AllLeads() {
       {/* Title & Top Meta Row */}
       <div className="border-b border-slate-100 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">System Management Console</span>
-           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">Uploaded Leads Master Archive</h1>
-           <p className="text-xs text-slate-500 mt-1">Full administrative monitoring, campaign mass purges, inline assignments and interaction audit telemetry logs.</p>
+           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">{t('systemManagementConsole')}</span>
+           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">{t('allLeadsTitle')}</h1>
+           <p className="text-xs text-slate-500 mt-1">{t('allLeadsSubtitle')}</p>
         </div>
         <div className="flex gap-3">
           <button 
              onClick={loadData}
              className="px-5 py-3 border border-slate-200 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-700 bg-white shadow-sm rounded-sm transition-all flex items-center gap-2"
           >
-             🔄 Reload Data
+             🔄 {t('reloadData')}
           </button>
         </div>
       </div>
@@ -312,36 +314,36 @@ export default function AllLeads() {
             <div className="absolute top-0 right-0 p-4 opacity-5 text-slate-900 group-hover:scale-110 transition-transform">
                <Database className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Archived Records</p>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">{t('archivedRecords')}</p>
             <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{totalLeadsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">uploaded entities cataloged</span>
+            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">{t('uploadedEntitiesCataloged')}</span>
          </div>
 
          <div className="p-6 bg-amber-50/50 border border-amber-100 rounded-sm shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-amber-500">
                <Inbox className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest italic">Pending Assignment</p>
+            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest italic">{t('pendingAssignment')}</p>
             <p className="text-3xl font-black text-amber-800 italic tracking-tighter leading-none mt-2">{unassignedLeadsCount}</p>
-            <span className="text-[9px] text-amber-600 font-bold mt-2 block lowercase italic">requires operator routing</span>
+            <span className="text-[9px] text-amber-600 font-bold mt-2 block lowercase italic">{t('requiresOperatorRouting')}</span>
          </div>
 
          <div className="p-6 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-[#978C21]">
                <Sliders className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest italic">Live Campaign Channels</p>
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest italic">{t('liveCampaignChannels')}</p>
             <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{uniqueCampaignsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">active generation funnels</span>
+            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">{t('activeGenerationFunnels')}</span>
          </div>
 
          <div className="p-6 bg-emerald-50/50 border border-emerald-100 rounded-sm shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-emerald-500">
                <TrendingUp className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest italic">Converted Acquisitions</p>
+            <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest italic">{t('convertedAcquisitions')}</p>
             <p className="text-3xl font-black text-emerald-900 italic tracking-tighter leading-none mt-2">{conversionRateCount}</p>
-            <span className="text-[9px] text-emerald-600 font-bold mt-2 block lowercase italic">converted pipeline targets</span>
+            <span className="text-[9px] text-emerald-600 font-bold mt-2 block lowercase italic">{t('convertedPipelineTargets')}</span>
          </div>
       </div>
 
@@ -352,10 +354,10 @@ export default function AllLeads() {
             <div className="space-y-1 max-w-2xl">
                <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-ping" />
-                  <p className="text-[10px] font-black text-red-700 uppercase tracking-widest italic">Camp Wise Lead Cleanup</p>
+                  <p className="text-[10px] font-black text-red-700 uppercase tracking-widest italic">{t('campWiseCleanup')}</p>
                </div>
-               <h3 className="text-[13px] font-black text-slate-950 uppercase tracking-tight italic">Erase Uploaded Leads By Campaign Name</h3>
-               <p className="text-xs text-slate-500">Permanently delete all leads associated with a selected campaign in one click. WARNING: This operation is irreversible and removes data permanently from secondary caches.</p>
+               <h3 className="text-[13px] font-black text-slate-950 uppercase tracking-tight italic">{t('eraseLeadsByCampaign')}</h3>
+               <p className="text-xs text-slate-500">{t('eraseLeadsByCampaignDesc')}</p>
             </div>
             <div className="flex items-center gap-3">
                <select
@@ -363,7 +365,7 @@ export default function AllLeads() {
                  onChange={(e) => setTargetCampaignToDelete(e.target.value)}
                  className="bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider px-4 py-3 rounded-sm focus:ring-1 focus:ring-red-500 outline-none"
                >
-                  <option value="">-- CHOOSE TARGET CAMPAIGN --</option>
+                  <option value="">-- {t('chooseTargetCampaign')} --</option>
                   {Array.from(new Set(leads.map(l => l.campaignName).filter(Boolean))).map(camp => (
                      <option key={String(camp)} value={String(camp)}>{String(camp).toUpperCase()}</option>
                   ))}
@@ -372,7 +374,7 @@ export default function AllLeads() {
                  type="button"
                  onClick={() => {
                    if (!targetCampaignToDelete) {
-                     toast.error('Please pick a campaign first');
+                     toast.error(t('pickCampaignFirst'));
                      return;
                    }
                    setIsConfirmDeleteCampOpen(true);
@@ -380,7 +382,7 @@ export default function AllLeads() {
                  className="px-5 py-3.5 bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-md flex items-center gap-2"
                >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Erase Lead
+                  {t('eraseLead')}
                </button>
             </div>
          </div>
@@ -402,14 +404,14 @@ export default function AllLeads() {
                <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                <input 
                  type="text"
-                 placeholder="Search by candidate name, mobile, active assignee, or campaign name..."
+                 placeholder={t('searchAllLeads')}
                  value={searchQuery}
                  onChange={(e) => setSearchQuery(e.target.value)}
                  className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200/85 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] rounded-sm placeholder:opacity-50 outline-none"
                />
             </div>
             <div className="text-[10px] text-slate-400 font-extrabold uppercase italic tracking-widest">
-               Displaying {filteredLeads.length} of {leads.length} Records
+               {t('displayingRecords', { shown: String(filteredLeads.length), total: String(leads.length) })}
             </div>
          </div>
 
@@ -421,8 +423,8 @@ export default function AllLeads() {
                      {selectedLeadIds.length}
                   </span>
                   <div>
-                     <p className="text-[11px] font-black uppercase tracking-widest text-slate-900 italic">Bulk Routing Workflow</p>
-                     <p className="text-[10px] text-slate-500 font-medium">Select a system team handler to propagate immediate assignments to all selected lead registries.</p>
+                     <p className="text-[11px] font-black uppercase tracking-widest text-slate-900 italic">{t('bulkRoutingWorkflow')}</p>
+                     <p className="text-[10px] text-slate-500 font-medium">{t('bulkRoutingDesc')}</p>
                   </div>
                </div>
                <div className="flex items-center gap-3">
@@ -431,8 +433,8 @@ export default function AllLeads() {
                     onChange={(e) => setBulkAssigneeId(e.target.value)}
                     className="bg-white border border-slate-200 text-[10px] font-black uppercase py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21] cursor-pointer"
                   >
-                     <option value="">-- SELECT RE-ROUTE HANDLER --</option>
-                     <option value="unassign">-- MARK AS UNASSIGNED --</option>
+                     <option value="">-- {t('selectRerouteHandler')} --</option>
+                     <option value="unassign">-- {t('markUnassigned')} --</option>
                      {allUsers.map(u => (
                         <option key={u.employeeId} value={u.employeeId}>
                            {u.role}: {u.name} (ID: {u.employeeId})
@@ -444,13 +446,13 @@ export default function AllLeads() {
                     disabled={bulkAssigning}
                     className="bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-[0.15em] px-5 py-2.5 rounded-sm transition-all disabled:opacity-50 cursor-pointer shadow-md"
                   >
-                     {bulkAssigning ? 'Synchronizing edits...' : 'Assign Selection'}
+                     {bulkAssigning ? t('synchronizingEdits') : t('assignSelection')}
                   </button>
                   <button
                     onClick={() => setSelectedLeadIds([])}
                     className="text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-widest px-2 cursor-pointer border-l border-slate-200 pl-4 py-1"
                   >
-                     Cancel Selection
+                     {t('cancelSelection')}
                   </button>
                </div>
             </div>
@@ -475,26 +477,26 @@ export default function AllLeads() {
                           className="cursor-pointer accent-[#978C21] h-3.5 w-3.5 rounded border-slate-300 focus:ring-0"
                         />
                      </th>
-                     <th className="p-4 px-6 text-slate-900">Demographic Name</th>
-                     <th className="p-4 px-6 text-slate-900">Mobile Connection</th>
-                     <th className="p-4 px-6 text-slate-900">Campaign</th>
-                     <th className="p-4 px-6 text-slate-[#978C21]">Assignee ID / Status (Tab)</th>
-                     <th className="p-4 px-6 text-slate-900">Current Status</th>
-                     <th className="p-4 px-6 text-slate-900">Upload Date</th>
-                     <th className="p-4 px-6 text-center text-slate-900">Control Actions</th>
+                     <th className="p-4 px-6 text-slate-900">{t('demographicName')}</th>
+                     <th className="p-4 px-6 text-slate-900">{t('mobileConnection')}</th>
+                     <th className="p-4 px-6 text-slate-900">{t('campaign')}</th>
+                     <th className="p-4 px-6 text-slate-[#978C21]">{t('assigneeStatus')}</th>
+                     <th className="p-4 px-6 text-slate-900">{t('currentStatus')}</th>
+                     <th className="p-4 px-6 text-slate-900">{t('uploadDate')}</th>
+                     <th className="p-4 px-6 text-center text-slate-900">{t('controlActions')}</th>
                   </tr>
                </thead>
                <tbody className="divide-y divide-slate-50 text-[11px] text-slate-700 font-medium">
                   {loading ? (
                      <tr>
                         <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
-                           🔄 Cataloging operational records data...
+                           🔄 {t('catalogingRecords')}
                         </td>
                      </tr>
                   ) : filteredLeads.length === 0 ? (
                      <tr>
                         <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
-                           📭 No matching lead registers discovered
+                           📭 {t('noMatchingLeads')}
                         </td>
                      </tr>
                   ) : (
@@ -521,13 +523,13 @@ export default function AllLeads() {
                            {/* Demographics Name */}
                            <td className="p-4 px-6 text-slate-950 font-black uppercase tracking-tight select-all">
                               <div className="flex items-center gap-2">
-                                 <span>{lead.prospectName || 'Anonymous Candidate'}</span>
+                                 <span>{lead.prospectName || t('anonymousCandidate')}</span>
                                  <button
                                     onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
-                                    title="View full timeline"
+                                    title={t('viewFullTimeline')}
                                     className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0"
                                  >
-                                    Timeline
+                                    {t('timeline')}
                                  </button>
                               </div>
                               {lead.email && <div className="text-[9px] text-slate-400 font-normal lowercase tracking-normal mt-0.5">{lead.email}</div>}
@@ -552,7 +554,7 @@ export default function AllLeads() {
                                       onChange={(e) => setInlineAssigneeId(e.target.value)}
                                       className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                                     >
-                                       <option value="">-- UNASSIGNED --</option>
+                                       <option value="">-- {t('unassignedLabel')} --</option>
                                        {allUsers.map(u => (
                                           <option key={u.employeeId} value={u.employeeId}>
                                              {u.role}: {u.name} (ID: {u.employeeId})
@@ -562,7 +564,7 @@ export default function AllLeads() {
                                     <button
                                       onClick={() => handleSaveInlineAssignment(lead.id)}
                                       className="p-1.5 bg-[#978C21] text-white rounded hover:opacity-95 text-[9px] font-bold"
-                                      title="Confirm Route"
+                                      title={t('confirm')}
                                     >
                                        ✓
                                     </button>
@@ -581,7 +583,7 @@ export default function AllLeads() {
                                        </span>
                                     ) : (
                                        <span className="font-black uppercase italic tracking-widest text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded text-[9px]">
-                                          ● UNASSIGNED
+                                          ● {t('unassignedLabel')}
                                        </span>
                                     )}
                                     <button 
@@ -591,7 +593,7 @@ export default function AllLeads() {
                                       }}
                                       className="opacity-0 group-hover:opacity-100 text-[9px] font-black px-1.5 py-0.5 uppercase tracking-widest italic hover:text-[#978C21] text-slate-400 bg-slate-50 transition-opacity ml-2"
                                     >
-                                       Change
+                                       {t('change')}
                                     </button>
                                  </div>
                               )}
@@ -606,7 +608,7 @@ export default function AllLeads() {
 
                            {/* Upload timestamp */}
                            <td className="p-4 px-6 font-mono text-slate-400 text-[10px]">
-                              {lead.timestamp ? new Date(lead.timestamp).toLocaleDateString('en-GB') : 'N/A'}
+                              {lead.timestamp ? new Date(lead.timestamp).toLocaleDateString('en-GB') : t('na')}
                            </td>
 
                            {/* Row Controls */}
@@ -615,14 +617,14 @@ export default function AllLeads() {
                                  <button
                                    onClick={() => setSelectedLead(lead)}
                                    className="p-2 border border-slate-100 hover:border-slate-200 text-slate-600 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-sm transition-all bg-white"
-                                   title="Inspect Data & Event Stream"
+                                   title={t('inspectDataStream')}
                                  >
                                     <Edit3 className="w-3.5 h-3.5" />
                                  </button>
                                  <button
                                    onClick={() => handleDeleteIndividualLead(lead.id)}
                                    className="p-2 border border-slate-100 hover:border-red-200 text-slate-600 hover:text-red-500 hover:bg-red-50 rounded-sm shadow-sm transition-all bg-white"
-                                   title="Secure Delete"
+                                   title={t('secureDelete')}
                                  >
                                     <Trash2 className="w-3.5 h-3.5" />
                                  </button>
@@ -645,21 +647,21 @@ export default function AllLeads() {
                      <AlertTriangle className="w-6 h-6" />
                   </div>
                   <div className="flex-1">
-                     <h3 className="text-[14px] font-black text-slate-950 uppercase tracking-tight italic">Irreversible Deletion Safeguard</h3>
+                     <h3 className="text-[14px] font-black text-slate-950 uppercase tracking-tight italic">{t('irreversibleDeletionSafeguard')}</h3>
                      <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-                        Are you absolutely certain you want to purge and eradicate all leads associated with the campaign 
+                        {t('confirmCampaignPurge', { campaign: targetCampaignToDelete })}
                         <span className="font-extrabold text-red-600 uppercase mx-1">"{targetCampaignToDelete}"</span>? 
-                        Any associated pipeline histories, operational updates, and logs will be lost permanently.
+                        
                      </p>
                      
                      <div className="mt-4 space-y-1.5">
-                        <label className="text-[9px] font-black text-[#978C21] uppercase tracking-widest italic">Confirm with Login Password *</label>
+                        <label className="text-[9px] font-black text-[#978C21] uppercase tracking-widest italic">{t('confirmWithPassword')} *</label>
                         <input 
                           type="password"
                           value={deleteConfirmPassword}
                           onChange={(e) => setDeleteConfirmPassword(e.target.value)}
                           className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-tight focus:ring-1 focus:ring-[#978C21] focus:border-[#978C21] outline-none animate-none"
-                          placeholder="ENTER YOUR PASSWORD"
+                          placeholder={t('enterYourPassword').toUpperCase()}
                         />
                      </div>
                   </div>
@@ -672,13 +674,13 @@ export default function AllLeads() {
                     }}
                     className="px-5 py-3 border border-slate-200 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-500 rounded-sm transition-all"
                   >
-                     Abort Operations
+                     {t('abortOperations')}
                   </button>
                   <button
                     onClick={handlePurgeCampaignLeads}
                     className="px-5 py-3 bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-md"
                   >
-                     Proceed with Complete Purge
+                     {t('proceedCompletePurge')}
                   </button>
                </div>
             </div>
@@ -693,8 +695,8 @@ export default function AllLeads() {
                {/* Modal Header */}
                <div className="p-8 border-b border-slate-50 flex items-center justify-between bg-slate-50/50 select-none">
                   <div>
-                     <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Admin Registry Oversight</span>
-                     <h3 className="text-lg font-black text-brand-text truncate uppercase italic tracking-tight">{editName || 'Dynamic Inspector'}</h3>
+                     <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">{t('adminRegistryOversight')}</span>
+                     <h3 className="text-lg font-black text-brand-text truncate uppercase italic tracking-tight">{editName || t('dynamicInspector')}</h3>
                   </div>
                   <button 
                     onClick={() => setSelectedLead(null)}
@@ -709,25 +711,25 @@ export default function AllLeads() {
                   {/* Row Basic status display */}
                   <div className="grid grid-cols-2 gap-4 bg-[#FBFAF8] border border-slate-100 p-5 rounded-sm">
                      <div>
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Archived Current Status</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">{t('archivedCurrentStatus')}</p>
                         <span className="inline-block mt-2 px-2.5 py-1 bg-slate-900 text-white font-extrabold uppercase tracking-widest text-[8px] italic leading-none rounded-sm">
                            {selectedLead.currentStatus}
                         </span>
                      </div>
                      <div>
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Active Campaign Funnel</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">{t('activeCampaignFunnel')}</p>
                         <span className="inline-block mt-2 text-[10px] font-black uppercase text-indigo-900 italic leading-none">
-                           {selectedLead.campaignName || 'unassociated'}
+                           {selectedLead.campaignName || t('noCampaign')}
                         </span>
                      </div>
                   </div>
 
                   {/* Core Editor inputs */}
                   <div className="space-y-4">
-                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Modify Demographics Registry</p>
+                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">{t('modifyDemographicsRegistry')}</p>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Prospect Full Name *</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('prospectFullName')} *</p>
                            <input 
                              type="text"
                              value={editName}
@@ -736,7 +738,7 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Mobile Connect *</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('mobileConnect')} *</p>
                            <input 
                              type="text"
                              value={editPhone}
@@ -745,7 +747,7 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Primary Email</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('primaryEmail')}</p>
                            <input 
                              type="email"
                              value={editEmail}
@@ -754,7 +756,7 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Designated Product Option</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('designatedProduct')}</p>
                            <input 
                              type="text"
                              value={editProduct}
@@ -763,20 +765,20 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Campaign Match</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('campaignMatch')}</p>
                            <select 
                              value={editCampaign}
                              onChange={(e) => setEditCampaign(e.target.value)}
                              className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-2.5 text-[11px] font-black uppercase outline-none focus:ring-1 focus:ring-[#978C21]"
                            >
-                              <option value="">-- NO CAMPAIGN --</option>
+                              <option value="">-- {t('noCampaign')} --</option>
                               {campaignOptions.map(c => (
                                  <option key={c} value={c}>{c}</option>
                               ))}
                            </select>
                         </div>
                         <div className="space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Professional Category</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('professionalCategory')}</p>
                            <input 
                              type="text"
                              value={editProfession}
@@ -785,7 +787,7 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="col-span-1 md:col-span-2 space-y-1">
-                           <p className="text-[9px] font-black text-slate-400 uppercase italic">Active Regional Location (Area)</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('activeRegionalLocation')}</p>
                            <input 
                              type="text"
                              value={editArea}
@@ -794,7 +796,7 @@ export default function AllLeads() {
                            />
                         </div>
                         <div className="col-span-1 md:col-span-2 space-y-1">
-                           <span className="text-[9px] font-black text-slate-400 uppercase italic">Lead Origin (Source)</span>
+                           <span className="text-[9px] font-black text-slate-400 uppercase italic">{t('leadOrigin')}</span>
                            <input 
                              type="text"
                              value={editSource}
@@ -809,15 +811,15 @@ export default function AllLeads() {
                   <div className="p-5 bg-indigo-50/30 border border-indigo-100 rounded-sm space-y-3">
                      <p className="text-[10px] font-black text-slate-900 uppercase tracking-widest italic leading-none flex items-center gap-2">
                         <UserCheck className="w-4 h-4 text-[#978C21]" />
-                        Assignee Router Control
+                        {t('assigneeRouterControl')}
                      </p>
-                     <p className="text-[11px] text-slate-500">Route or transfer matching ownership. Assigning to any RM propagates instant alerts to their interface feed.</p>
+                     <p className="text-[11px] text-slate-500">{t('assigneeRouterDesc')}</p>
                      <select
                        value={editAssignee} disabled={!canAccess('all_leads', 'reassign_global_leads')}
                        onChange={(e) => setEditAssignee(e.target.value)}
                        className="w-full bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider p-3 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                      >
-                        <option value="">-- UNASSIGNED (BLANK) --</option>
+                        <option value="">-- {t('unassignedBlank')} --</option>
                         {allUsers.map((u) => (
                            <option key={u.employeeId} value={u.employeeId}>
                               {u.role.toUpperCase()}: {u.name} (Employee ID: {u.employeeId})
@@ -828,7 +830,7 @@ export default function AllLeads() {
 
                   {/* Operational Timeline Interaction Log History (Demanded Log Download requirement) */}
                   <div className="space-y-4">
-                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Interaction Lifecycle History Logs</p>
+                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">{t('interactionLifecycleLogs')}</p>
                      {selectedLead.statusHistory && selectedLead.statusHistory.length > 0 ? (
                         <div className="space-y-3 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
                            {selectedLead.statusHistory.slice().reverse().map((audit, aIdx) => (
@@ -837,17 +839,17 @@ export default function AllLeads() {
                                     <span className="font-bold text-[#978C21] uppercase tracking-wider">{audit.status}</span>
                                     <span className="text-[9px] text-slate-400 font-medium font-mono">{new Date(audit.date).toLocaleString()}</span>
                                  </div>
-                                 <p className="text-slate-700 italic px-1 font-semibold">"{audit.remarks || 'No interaction remarks provided'}"</p>
+                                 <p className="text-slate-700 italic px-1 font-semibold">"{audit.remarks || t('noInteractionRemarks')}"</p>
                                  <div className="flex justify-between items-center text-[9px] text-slate-400 pt-1.5 border-t border-slate-100/50">
-                                    <span>Log Writer: {audit.updatedBy || 'N/A'}</span>
-                                    {audit.nextFollowUpDate && <span className="text-emerald-600 font-bold">Follow up set: {new Date(audit.nextFollowUpDate).toLocaleDateString()}</span>}
+                                    <span>{t('logWriter')}: {audit.updatedBy || t('na')}</span>
+                                    {audit.nextFollowUpDate && <span className="text-emerald-600 font-bold">{t('followUpSet')}: {new Date(audit.nextFollowUpDate).toLocaleDateString()}</span>}
                                  </div>
                               </div>
                            ))}
                         </div>
                      ) : (
                         <div className="p-8 text-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic border border-dashed border-slate-100">
-                           No actions executed on this lead yet.
+                           {t('noActionsExecuted')}
                         </div>
                      )}
                   </div>
@@ -858,10 +860,10 @@ export default function AllLeads() {
                   <button
                     onClick={() => {
                       if (!canAccess('all_leads', 'export_raw_xlsx')) {
-                         toast.error("Access Denied: Your Clearance Level does not possess credentials to export logs.");
+                         toast.error(t('exportLogsDenied'));
                          return;
                       }
-                      if (window.confirm("Ensure any modification will overwrite values. Select OK to export back to CSV.")) {
+                      if (window.confirm(t('confirmOverwriteExport'))) {
                          // Simple log downloader for this lead specifically
                          const headers = ['Action Date', 'Target Status', 'Log Operator', 'Interaction Remarks', 'Planned Date'];
                          const rows = (selectedLead.statusHistory || []).map(hist => [
@@ -881,18 +883,18 @@ export default function AllLeads() {
                          document.body.appendChild(link);
                          link.click();
                          document.body.removeChild(link);
-                         toast.success('Lead audit telemetry exported successfully');
+                         toast.success(t('auditExportedSuccess'));
                       }
                     }}
                     className="flex-1 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-black uppercase tracking-widest text-[10px] py-4 rounded-sm transition-all shadow-sm flex items-center justify-center gap-2"
                   >
-                     📥 Export Logs
+                     📥 {t('exportLogs')}
                   </button>
                   <button
                     onClick={handleUpdateLeadDetails}
                     className="flex-1 bg-slate-900 hover:bg-black text-white font-black uppercase tracking-widest text-[10px] py-4 rounded-sm transition-all shadow-xl"
                   >
-                     Save Modifications
+                     {t('saveModifications')}
                   </button>
                </div>
             </div>

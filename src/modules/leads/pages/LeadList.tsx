@@ -27,6 +27,7 @@ import { leadService } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import { userService } from '../../users/services/userService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
+import { useTranslation } from '../../shared/utils/translations';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
@@ -50,6 +51,7 @@ const formatToDateTimeLocal = (dateStr?: string) => {
 
 export default function LeadList() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -143,7 +145,7 @@ export default function LeadList() {
       
       setLeads(allLeads);
     } catch (err) {
-      toast.error('Failed to sync lead intelligence');
+      toast.error(t('leadSyncFailed'));
     } finally {
       setLoading(false);
     }
@@ -162,16 +164,16 @@ export default function LeadList() {
   };
 
   const handleDeleteLead = async (leadId: string) => {
-    if (!window.confirm('Are you sure you want to permanently delete this lead?')) return;
+    if (!window.confirm(t('confirmDeleteLead'))) return;
     try {
       await leadService.deleteLead(leadId);
-      toast.success('Lead has been deleted successfully');
+      toast.success(t('leadDeletedSuccess'));
       // The server confirmed the soft delete; remove the row locally
       // instead of refetching the entire lead list.
       setLeads(prev => prev.filter(l => l.id !== leadId));
       setAdvancedFilteredLeads(prev => prev.filter(l => l.id !== leadId));
     } catch (err) {
-      toast.error('Failed to delete the lead');
+      toast.error(t('leadDeleteFailed'));
     }
   };
 
@@ -205,28 +207,28 @@ export default function LeadList() {
   const handleSaveLeadUpdate = async () => {
     if (!selectedLead) return;
     if (!formStatus) {
-      toast.error('Please select a target status');
+      toast.error(t('selectTargetStatus'));
       return;
     }
     if (!formRemarks.trim()) {
-      toast.error('Remarks are mandatory to fill when editing status!');
+      toast.error(t('remarksMandatory'));
       return;
     }
 
     if (formStatus === 'No Response' && !formNextCallDate) {
-      toast.error('Next Call Date is mandatory for No Response status!');
+      toast.error(t('nextCallDateMandatory'));
       return;
     }
     if (formStatus === 'Meeting Fixed' && !formMeetingDate) {
-      toast.error('Meeting Date is mandatory for Meeting Fixed status!');
+      toast.error(t('meetingDateMandatory'));
       return;
     }
     if ((formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && !formNextFollowUpDate) {
-      toast.error(`Next Follow-up Date is mandatory for ${formStatus} status!`);
+      toast.error(t('nextFollowUpDateMandatory', { status: formStatus }));
       return;
     }
     if (formStatus === 'Meeting Completed' && !formSubStatus) {
-      toast.error('Please select a sub-status (Pipeline Locked or Not Interested) for Meeting Completed!');
+      toast.error(t('subStatusMandatory'));
       return;
     }
 
@@ -235,36 +237,36 @@ export default function LeadList() {
 
     if (isPipelineLocked) {
       if (!formProductName) {
-        toast.error('Product Name is mandatory for Pipeline Locked status!');
+        toast.error(t('productMandatoryPipelineLocked'));
         return;
       }
       if (!formSumAssured || formSumAssured <= 0) {
-        toast.error('Sum Assured is mandatory and must be greater than zero for Pipeline Locked!');
+        toast.error(t('sumAssuredMandatoryPipelineLocked'));
         return;
       }
       if (!formProjectedNCP || formProjectedNCP <= 0) {
-        toast.error('Projected NCP is mandatory and must be greater than zero for Pipeline Locked!');
+        toast.error(t('projectedNcpMandatoryPipelineLocked'));
         return;
       }
     }
 
     if (isConverted) {
       if (!formProductName) {
-        toast.error('Product Name is mandatory for Converted status!');
+        toast.error(t('productMandatoryConverted'));
         return;
       }
       if (!formSumAssured || formSumAssured <= 0) {
-        toast.error('Sum Assured is mandatory and must be greater than zero for Converted!');
+        toast.error(t('sumAssuredMandatoryConverted'));
         return;
       }
       if (!formCollectedNCP || formCollectedNCP <= 0) {
-        toast.error('Collected NCP is mandatory and must be greater than zero for Converted!');
+        toast.error(t('collectedNcpMandatoryConverted'));
         return;
       }
     }
 
     try {
-      const updaterName = user ? `${user.name} (${user.employeeId})` : 'System';
+      const updaterName = user ? `${user.name} (${user.employeeId})` : t('systemUser');
       const finalStatus: LeadStatus = formStatus === 'Meeting Completed' ? (formSubStatus as LeadStatus) : formStatus;
 
       const updated = await leadService.updateLeadStatus(
@@ -280,7 +282,7 @@ export default function LeadList() {
         (isPipelineLocked || isConverted) ? formProductName : undefined,
         isPipelineLocked ? formProjectedNCP : undefined
       );
-      toast.success('Lead status and remarks logged successfully!');
+      toast.success(t('statusLoggedSuccess'));
 
       // The follow-up response carries the authoritative updated lead —
       // patch the list in place instead of refetching the full lead list.
@@ -291,19 +293,19 @@ export default function LeadList() {
       setSelectedLead(null);
       setFormRemarks(''); // clear comments textarea
     } catch (err) {
-      toast.error('Failed to update lead status');
+      toast.error(t('statusUpdateFailed'));
     }
   };
 
   const handleUpdateStatus = async (leadId: string, status: LeadStatus, ncp?: number) => {
     try {
       const updated = await leadService.updateLeadStatus(leadId, status, ncp, 'Initial assignment tracking');
-      toast.success('Lead intelligence updated');
+      toast.success(t('leadIntelligenceSynced'));
       if (updated) applyLeadUpdate(updated);
       else loadLeads();
       setSelectedLead(null);
     } catch (err) {
-      toast.error('Failed to update lead status');
+      toast.error(t('statusUpdateFailed'));
     }
   };
 
@@ -355,7 +357,7 @@ export default function LeadList() {
 
   const handleExport = () => {
     if (leads.length === 0) {
-      toast.error("No lead data available to export.");
+      toast.error(t('noLeadDataToExport'));
       return;
     }
 
@@ -440,11 +442,11 @@ export default function LeadList() {
     link.click();
     document.body.removeChild(link);
 
-    toast.success("Intelligence CSV Report downloaded successfully with historical change audits!");
+    toast.success(t('intelligenceExportSuccess'));
   };
 
   const handleCall = (name: string) => {
-    toast(`Initiating secure call to ${name}...`, {
+    toast(t('initiatingCall', { name }), {
       icon: <Phone className="w-4 h-4 text-brand-blue" />
     });
   };
@@ -454,7 +456,7 @@ export default function LeadList() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <RefreshCw className="w-8 h-8 text-primary animate-spin" />
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Loading leads...</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{t('syncingData')}</p>
         </div>
       </div>
     );
@@ -464,8 +466,8 @@ export default function LeadList() {
     <div className="space-y-6 pb-20 bg-white min-h-screen">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-1">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Tracking</h1>
-          <p className="text-sm text-slate-500 mt-1">View and manage your leads pipeline</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">{t('leadTrackingTitle')}</h1>
+          <p className="text-sm text-slate-500 mt-1">{t('leadTrackingSubtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           <button 
@@ -479,14 +481,14 @@ export default function LeadList() {
             className="flex items-center gap-2 px-4 py-2 border border-slate-100 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm group cursor-pointer"
           >
             <Filter className="w-3.5 h-3.5 text-slate-400 group-hover:text-primary" />
-            Segment Matrix
+            {t('segmentMatrix')}
           </button>
           <button 
             onClick={handleExport}
             className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-md"
           >
             <Download className="w-3.5 h-3.5 text-[#978C21]" />
-            Export Intelligence
+            {t('exportIntelligence')}
           </button>
         </div>
       </div>
@@ -504,7 +506,7 @@ export default function LeadList() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
               type="text" 
-              placeholder="Search Intelligence Matrix..." 
+              placeholder={t('searchIntelligenceMatrix')} 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-12 pr-4 py-3 bg-white border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] outline-none transition-all shadow-sm italic placeholder:text-slate-300"
@@ -512,15 +514,15 @@ export default function LeadList() {
           </div>
           <div className="flex items-center gap-4">
              <div className="h-10 w-px bg-slate-200 hidden md:block" />
-            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sort by</label>
+            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">{t('sortBy')}</label>
             <select 
               value={sortLogic}
               onChange={(e) => setSortLogic(e.target.value as any)}
               className="bg-white border border-slate-100 rounded-sm px-4 py-2.5 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 outline-none shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
             >
-              <option value="Recency">Recency</option>
-              <option value="Economic Potential">Economic Potential</option>
-              <option value="Priority Status">Priority Status</option>
+              <option value="Recency">{t('sortRecency')}</option>
+              <option value="Economic Potential">{t('sortEconomicPotential')}</option>
+              <option value="Priority Status">{t('sortPriorityStatus')}</option>
             </select>
           </div>
         </div>
@@ -529,12 +531,12 @@ export default function LeadList() {
           <table className="w-full text-left">
             <thead>
               <tr className="bg-[#3C3C3C] text-white italic">
-                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Financial</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Details</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Status</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Remarks</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
+                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">{t('prospect')}</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">{t('financial')}</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">{t('details')}</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">{t('status')}</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">{t('remarks')}</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">{t('actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 italic">
@@ -554,29 +556,29 @@ export default function LeadList() {
                       </div>
                       <div>
                         <div className="font-black text-brand-text text-[13px] group-hover:text-[#978C21] transition-colors tracking-tight uppercase italic flex items-center gap-2">
-                           {lead.prospectName || 'Unknown Prospect'}
+                           {lead.prospectName || t('unknownProspect')}
                            {(lead.collectedNCP || 0) > 100000 && <span className="w-2 h-2 rounded-full bg-[#978C21]" />}
                            <button
                               onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
-                              title="View full timeline"
+                              title={t('viewFullTimeline')}
                               className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0 normal-case not-italic"
                            >
-                              Timeline
+                              {t('timeline')}
                            </button>
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold flex items-center gap-1 uppercase tracking-tight mt-1 opacity-60">
-                          <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || 'No Mobile'} • {lead.area || 'No Area'}
+                          <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || t('noMobile')} • {lead.area || t('noArea')}
                         </p>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-6 border-l border-slate-50/50">
-                    <p className="text-[12px] font-black text-brand-text italic uppercase group-hover:text-primary transition-colors">{lead.productName || 'N/A'}</p>
-                    <p className="text-[10px] font-black text-[#10B981] tracking-tighter mt-1 whitespace-nowrap">৳ {(lead.collectedNCP || 0).toLocaleString()} <span className="text-[8px] font-bold text-slate-300 uppercase tracking-widest ml-1">NCP Collected</span></p>
+                    <p className="text-[12px] font-black text-brand-text italic uppercase group-hover:text-primary transition-colors">{lead.productName || t('na')}</p>
+                    <p className="text-[10px] font-black text-[#10B981] tracking-tighter mt-1 whitespace-nowrap">৳ {(lead.collectedNCP || 0).toLocaleString()} <span className="text-[8px] font-bold text-slate-300 uppercase tracking-widest ml-1">{t('ncpCollected')}</span></p>
                   </td>
                   <td className="px-6 py-6 border-l border-slate-50/50">
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tight italic">{lead.campaignName || 'N/A'}</p>
-                    <p className="text-[9px] text-slate-300 font-black uppercase tracking-widest mt-1">{lead.source || 'N/A'}</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tight italic">{lead.campaignName || t('na')}</p>
+                    <p className="text-[9px] text-slate-300 font-black uppercase tracking-widest mt-1">{lead.source || t('na')}</p>
                   </td>
                   <td className="px-6 py-6 border-l border-slate-50/50">
                     <span className={cn(
@@ -591,7 +593,7 @@ export default function LeadList() {
                       const latestHistory = lead.statusHistory && lead.statusHistory.length > 0 
                         ? lead.statusHistory[lead.statusHistory.length - 1] 
                         : null;
-                      const latestRemark = latestHistory ? latestHistory.remarks : "No remarks logged";
+                      const latestRemark = latestHistory ? latestHistory.remarks : t('noRemarksLogged');
                       return (
                         <p className="text-[11px] font-medium text-slate-500 italic truncate" title={latestRemark}>
                           {latestRemark}
@@ -604,21 +606,21 @@ export default function LeadList() {
                        <button 
                          onClick={(e) => { e.stopPropagation(); setSelectedLead(lead); }}
                          className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Edit Status & Logs"
+                         title={t('editStatusLogs')}
                        >
                         <Edit2 className="w-3.5 h-3.5" />
                        </button>
                        <button 
                          onClick={(e) => { e.stopPropagation(); handleCall(lead.prospectName || 'Prospect'); }}
                          className="p-2 border border-slate-100 hover:border-blue-300 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Call Prospect"
+                         title={t('callProspect')}
                        >
                         <Phone className="w-3.5 h-3.5" />
                        </button>
                        <button 
                          onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
                          className="p-2 border border-slate-100 hover:border-red-300 text-slate-400 hover:text-red-550 hover:bg-red-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Delete Lead"
+                         title={t('deleteLead')}
                        >
                         <Trash2 className="w-3.5 h-3.5" />
                        </button>
@@ -632,7 +634,7 @@ export default function LeadList() {
                        <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center">
                           <Search className="w-6 h-6 text-slate-200" />
                        </div>
-                       <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] italic">No lead entities found matching criteria</p>
+                       <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] italic">{t('noLeadsFound')}</p>
                     </div>
                   </td>
                 </tr>
@@ -643,7 +645,7 @@ export default function LeadList() {
       </div>
 
       <div className="px-4 py-8 flex flex-col md:flex-row items-center justify-between gap-6 opacity-30 mt-4 mx-1 italic">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none underline decoration-slate-200 underline-offset-4">Showing {filteredLeads.length} Matrix Entities</p>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none underline decoration-slate-200 underline-offset-4">{t('showingEntities', { count: String(filteredLeads.length) })}</p>
         <div className="flex items-center gap-2">
           <button className="p-3 hover:bg-slate-50 rounded-sm disabled:opacity-20 transition-all border border-transparent hover:border-slate-100">
             <ChevronLeft className="w-4 h-4 text-slate-400" />
@@ -691,7 +693,7 @@ export default function LeadList() {
                    </div>
                    <div>
                      <h3 className="text-white text-xl font-black italic uppercase tracking-tight">{selectedLead.prospectName || 'Unknown Prospect'}</h3>
-                     <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Lead Identity Matrix • {selectedLead.id}</p>
+                     <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">{t('leadIdentityMatrix')} • {selectedLead.id}</p>
                    </div>
                 </div>
                 <button 
@@ -705,23 +707,23 @@ export default function LeadList() {
               <div className="p-8 md:p-10 space-y-8 overflow-y-auto flex-1">
                 <div className="grid grid-cols-2 gap-10">
                   <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Contact Primary</p>
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{t('contactPrimary')}</p>
                     <div className="flex items-center gap-2">
-                       <p className="text-lg font-black text-brand-text italic underline decoration-brand-blue decoration-2 underline-offset-4 mr-1">{selectedLead.mobile || 'N/A'}</p>
+                       <p className="text-lg font-black text-brand-text italic underline decoration-brand-blue decoration-2 underline-offset-4 mr-1">{selectedLead.mobile || t('na')}</p>
                        {selectedLead.mobile && (
                           <button
                             onClick={() => handleCall(selectedLead.prospectName || 'Prospect')}
-                            title="Call Now"
+                            title={t('callNow')}
                             className="p-1.5 bg-[#978C21] text-white hover:bg-opacity-90 rounded-full transition-all flex items-center justify-center cursor-pointer shadow-sm active:scale-95"
                           >
                              <Phone className="w-3.5 h-3.5" />
                           </button>
                        )}
                     </div>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">{selectedLead.area || 'N/A'}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">{selectedLead.area || t('na')}</p>
                   </div>
                   <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Status</p>
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{t('status')}</p>
                     <div className="flex">
                       <span className={cn(
                         "px-4 py-1.5 rounded-sm text-[10px] font-black uppercase tracking-widest border",
@@ -735,21 +737,21 @@ export default function LeadList() {
 
                 <div className="grid grid-cols-3 gap-8 p-8 bg-[#FBFAF8] rounded-sm border border-slate-100">
                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Collected NCP</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">{t('collectedNCP')}</p>
                       <p className="text-lg font-black text-[#10B981] italic tracking-tighter leading-none">৳ {(selectedLead.collectedNCP || 0).toLocaleString()}</p>
                    </div>
                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Family Profile</p>
-                      <p className="text-[11px] font-black text-slate-600 uppercase italic leading-none">{selectedLead.maritalStatus || 'N/A'} • {selectedLead.familyMember || '0'} Person</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">{t('familyProfile')}</p>
+                      <p className="text-[11px] font-black text-slate-600 uppercase italic leading-none">{selectedLead.maritalStatus || t('na')} • {selectedLead.familyMember || '0'} {t('person')}</p>
                    </div>
                    <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Institutional Lead</p>
-                      <p className="text-[11px] font-black text-[#978C21] uppercase italic leading-none">{selectedLead.assignedTo || 'N/A'}</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">{t('institutionalLead')}</p>
+                      <p className="text-[11px] font-black text-[#978C21] uppercase italic leading-none">{selectedLead.assignedTo || t('na')}</p>
                    </div>
                 </div>
 
                 <div className="space-y-4">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Operational Pipeline Update</p>
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">{t('operationalPipelineUpdate')}</p>
 
                    {/* Last Logged follow up status & remarks (Requirement 3) */}
                    {selectedLead.statusHistory && selectedLead.statusHistory.length > 0 ? (
@@ -757,25 +759,25 @@ export default function LeadList() {
                          const last = selectedLead.statusHistory[selectedLead.statusHistory.length - 1];
                          return (
                             <div className="p-4 bg-amber-50/75 border border-amber-100 rounded-lg space-y-2 text-[12px]">
-                               <p className="text-[9px] font-black uppercase tracking-widest text-[#978C21] italic">Last Engaged Activity:</p>
+                               <p className="text-[9px] font-black uppercase tracking-widest text-[#978C21] italic">{t('lastEngagedActivity')}:</p>
                                <div className="grid grid-cols-2 gap-4">
                                   <div>
-                                     <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Status</p>
+                                     <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">{t('status')}</p>
                                      <span className="font-bold text-slate-850 px-2 py-0.5 bg-amber-100 text-[#978C21] rounded text-[10px] uppercase tracking-wider font-extrabold">{last.status}</span>
                                   </div>
                                   {last.nextFollowUpDate && (
                                      <div>
-                                        <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Next Follow-up</p>
+                                        <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">{t('nextFollowUp')}</p>
                                         <span className="font-extrabold text-slate-700">{new Date(last.nextFollowUpDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                                      </div>
                                   )}
                                </div>
                                <div>
-                                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Remarks</p>
+                                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">{t('remarks')}</p>
                                   <p className="font-semibold text-slate-800 italic bg-white/60 p-2 rounded border border-slate-100">"{last.remarks}"</p>
                                </div>
                                <div className="flex justify-between items-center text-[9px] text-slate-400 pt-1.5 border-t border-amber-100/50">
-                                  <span>Log Creator: {last.updatedBy || 'N/A'}</span>
+                                  <span>{t('logCreator')}: {last.updatedBy || t('na')}</span>
                                   <span>{new Date(last.date).toLocaleString()}</span>
                                </div>
                             </div>
@@ -783,14 +785,14 @@ export default function LeadList() {
                       })()
                    ) : (
                       <div className="p-4 bg-slate-50 border border-slate-100 rounded-lg text-[11px] text-slate-400 italic">
-                         No previous operational engagement history has been logged yet.
+                         {t('noEngagementHistory')}
                       </div>
                    )}
 
                    {/* Editable Form Inputs */}
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                       <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Status <span className="text-red-500">*</span></p>
+                         <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('targetStatus')} <span className="text-red-500">*</span></p>
                          <select 
                            value={formStatus}
                            onChange={(e) => {
@@ -803,7 +805,7 @@ export default function LeadList() {
                            }}
                            className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
                          >
-                            <option value="">-- SELECT STATUS --</option>
+                            <option value="">{t('selectStatusPlaceholder')}</option>
                             {statusOptions.map(opt => (
                               <option key={opt} value={opt}>{opt}</option>
                             ))}
@@ -813,7 +815,7 @@ export default function LeadList() {
                       {/* Conditional Field: No Response -> Next Call Date */}
                       {formStatus === 'No Response' && (
                          <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Next Call Date & Time <span className="text-red-500">*</span></p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('nextCallDateTime')} <span className="text-red-500">*</span></p>
                             <input 
                               type="datetime-local"
                               value={formNextCallDate ? formatToDateTimeLocal(formNextCallDate) : ''}
@@ -826,7 +828,7 @@ export default function LeadList() {
                       {/* Conditional Field: Meeting Fixed -> Meeting Date */}
                       {formStatus === 'Meeting Fixed' && (
                          <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Date & Time <span className="text-red-500">*</span></p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('meetingDateTime')} <span className="text-red-500">*</span></p>
                             <input 
                               type="datetime-local"
                               value={formMeetingDate ? formatToDateTimeLocal(formMeetingDate) : ''}
@@ -839,7 +841,7 @@ export default function LeadList() {
                       {/* Conditional Field: Follow-up Set, Interested or Busy -> Next Follow-up Date */}
                       {(formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && (
                          <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Follow-Up Date & Time <span className="text-red-500">*</span></p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('targetFollowUpDateTime')} <span className="text-red-500">*</span></p>
                             <input 
                               type="datetime-local"
                               value={formNextFollowUpDate ? formatToDateTimeLocal(formNextFollowUpDate) : ''}
@@ -852,13 +854,13 @@ export default function LeadList() {
                       {/* Conditional Field: Meeting Completed -> sub-status dropdown */}
                       {formStatus === 'Meeting Completed' && (
                          <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Result (Sub-Status) <span className="text-red-500">*</span></p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('meetingResult')} <span className="text-red-500">*</span></p>
                             <select 
                               value={formSubStatus}
                               onChange={(e) => setFormSubStatus(e.target.value as any)}
                               className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] outline-none"
                             >
-                               <option value="">-- SELECT RESULT --</option>
+                               <option value="">{t('selectResultPlaceholder')}</option>
                                <option value="Pipeline Locked">Pipeline Locked</option>
                                <option value="Not Interested">Not Interested</option>
                             </select>
@@ -869,33 +871,33 @@ export default function LeadList() {
                       {(formStatus === 'Pipeline Locked' || (formStatus === 'Meeting Completed' && formSubStatus === 'Pipeline Locked')) && (
                          <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-[#978C21] pl-3 py-1 bg-slate-50/50 rounded-r-md">
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('productName')} <span className="text-red-500">*</span></p>
                                <select 
                                  value={formProductName}
                                  onChange={(e) => setFormProductName(e.target.value)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
                                >
-                                  <option value="">-- SELECT PRODUCT --</option>
+                                  <option value="">{t('selectProductPlaceholder')}</option>
                                   {productOptions.map(p => (
                                      <option key={p} value={p}>{p}</option>
                                   ))}
                                </select>
                             </div>
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('sumAssured')} (৳) <span className="text-red-500">*</span></p>
                                <input 
                                  type="number"
-                                 placeholder="Sum Assured..."
+                                 placeholder={t('sumAssuredPlaceholder')}
                                  value={formSumAssured || ''}
                                  onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
                                />
                             </div>
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('projectedNCP')} (৳) <span className="text-red-500">*</span></p>
                                <input 
                                  type="number"
-                                 placeholder="Projected NCP..."
+                                 placeholder={t('projectedNCPPlaceholder')}
                                  value={formProjectedNCP || ''}
                                  onChange={(e) => setFormProjectedNCP(parseFloat(e.target.value) || 0)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
@@ -908,33 +910,33 @@ export default function LeadList() {
                       {formStatus === 'Converted' && (
                          <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-emerald-500 pl-3 py-1 bg-slate-50/50 rounded-r-md">
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('productName')} <span className="text-red-500">*</span></p>
                                <select 
                                  value={formProductName}
                                  onChange={(e) => setFormProductName(e.target.value)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
                                >
-                                  <option value="">-- SELECT PRODUCT --</option>
+                                  <option value="">{t('selectProductPlaceholder')}</option>
                                   {productOptions.map(p => (
                                      <option key={p} value={p}>{p}</option>
                                   ))}
                                </select>
                             </div>
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('sumAssured')} (৳) <span className="text-red-500">*</span></p>
                                <input 
                                  type="number"
-                                 placeholder="Sum Assured..."
+                                 placeholder={t('sumAssuredPlaceholder')}
                                  value={formSumAssured || ''}
                                  onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
                                />
                             </div>
                             <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Collected NCP (৳) <span className="text-red-400">*</span></p>
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('collectedNCP')} (৳) <span className="text-red-400">*</span></p>
                                <input 
                                  type="number"
-                                 placeholder="Collected NCP..."
+                                 placeholder={t('collectedNCPPlaceholder')}
                                  value={formCollectedNCP || ''}
                                  onChange={(e) => setFormCollectedNCP(parseFloat(e.target.value) || 0)}
                                  className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
@@ -945,9 +947,9 @@ export default function LeadList() {
 
                       {/* Operational Remarks */}
                       <div className="col-span-2 space-y-1">
-                         <p className="text-[9px] font-black text-slate-400 uppercase italic">Operational Remarks <span className="text-red-500">*</span></p>
+                         <p className="text-[9px] font-black text-slate-400 uppercase italic">{t('operationalRemarks')} <span className="text-red-500">*</span></p>
                          <textarea
-                           placeholder="Describe client response, expectations, or next steps in detail (Mandatory)..."
+                           placeholder={t('remarksPlaceholder')}
                            value={formRemarks}
                            onChange={(e) => setFormRemarks(e.target.value)}
                            rows={3}
@@ -962,20 +964,20 @@ export default function LeadList() {
                      className="hidden"
                    >
                      <CheckCircle className="w-4 h-4 text-[#978C21]" />
-                     Save & Update Status
+                     {t('saveUpdateStatus')}
                    </button>
 
                    {/* RM Delegation Action Matrix */}
                    {user?.role === UserRole.RM && (
                       <div className="p-4 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm space-y-3 mt-4">
-                         <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest italic leading-none">📋 Delegate to Relationship Officer (RO)</p>
+                         <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest italic leading-none">📋 {t('delegateToRo')}</p>
                          <div className="flex gap-3">
                             <select
                               value={selectedRO}
                               onChange={(e) => setSelectedRO(e.target.value)}
                               className="flex-1 bg-white border border-slate-100 rounded-sm px-3 py-2 text-[11px] font-black uppercase tracking-wider outline-none focus:ring-1 focus:ring-[#978C21]"
                             >
-                               <option value="">-- CHOOSE RO --</option>
+                               <option value="">{t('chooseRoPlaceholder')}</option>
                                {allUsers
                                  .filter(u => u.role === UserRole.RO && u.status === 'Active')
                                  .map(u => (
@@ -988,23 +990,23 @@ export default function LeadList() {
                             <button
                               onClick={async () => {
                                 if (!selectedRO) {
-                                  toast.error('Please choose a valid RO first');
+                                  toast.error(t('chooseValidRo'));
                                   return;
                                 }
                                 try {
                                    await leadService.updateLead(selectedLead.id, { 
                                      assignedTo: selectedRO 
                                    }, user.name);
-                                   toast.success(`Successfully delegated lead directly to RO: ${selectedRO}`);
+                                   toast.success(t('delegatedToRo', { ro: selectedRO }));
                                    setSelectedLead(prev => prev ? { ...prev, assignedTo: selectedRO } : null);
                                    loadLeads();
                                 } catch (err) {
-                                   toast.error('Re-assignment failure');
+                                   toast.error(t('reassignmentFailure'));
                                 }
                               }}
                               className="px-4 py-2 bg-[#978C21] text-white text-[10px] font-black uppercase tracking-widest rounded-sm transition-all hover:bg-opacity-90 font-black whitespace-nowrap"
                             >
-                               Assign RO
+                               {t('assignRo')}
                             </button>
                          </div>
                       </div>
@@ -1014,7 +1016,7 @@ export default function LeadList() {
                 {/* Historical Timeline Audit Log */}
                 {selectedLead.statusHistory && selectedLead.statusHistory.length > 0 && (
                    <div className="space-y-4 pt-4 border-t border-slate-100">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Full Change & Interaction Audit Log</p>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">{t('fullAuditLog')}</p>
                       <div className="space-y-3 max-h-40 overflow-y-auto pr-2 scrollbar-thin">
                          {selectedLead.statusHistory.slice().reverse().map((hist, hIdx) => (
                             <div key={hIdx} className="p-3.5 bg-slate-50 border border-slate-100 rounded-lg text-[11px] space-y-1">
@@ -1024,9 +1026,9 @@ export default function LeadList() {
                                </div>
                                <p className="text-slate-700 italic font-medium">"{hist.remarks}"</p>
                                {hist.nextFollowUpDate && (
-                                  <p className="text-[9px] text-indigo-600 font-bold">Planned Callback: {new Date(hist.nextFollowUpDate).toLocaleDateString()}</p>
+                                  <p className="text-[9px] text-indigo-600 font-bold">{t('plannedCallback')}: {new Date(hist.nextFollowUpDate).toLocaleDateString()}</p>
                                 )}
-                               <p className="text-[9px] text-slate-400 text-right">Modified By: {hist.updatedBy || 'N/A'}</p>
+                               <p className="text-[9px] text-slate-400 text-right">{t('modifiedBy')}: {hist.updatedBy || t('na')}</p>
                             </div>
                          ))}
                       </div>
@@ -1034,23 +1036,23 @@ export default function LeadList() {
                 )}
 
                 <div className="space-y-4 pt-4">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Engagement Intelligence</p>
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">{t('engagementIntelligence')}</p>
                    <div className="grid grid-cols-2 gap-6 pt-2">
                       <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Source Entity</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.source || 'N/A'}</p>
+                         <p className="text-[9px] font-black text-slate-300 uppercase italic">{t('sourceEntity')}</p>
+                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.source || t('na')}</p>
                       </div>
                       <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Active Campaign</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.campaignName || 'N/A'}</p>
+                         <p className="text-[9px] font-black text-slate-300 uppercase italic">{t('activeCampaign')}</p>
+                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.campaignName || t('na')}</p>
                       </div>
                       <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Target Product</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.productName || 'N/A'}</p>
+                         <p className="text-[9px] font-black text-slate-300 uppercase italic">{t('targetProduct')}</p>
+                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.productName || t('na')}</p>
                       </div>
                       <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Profession Matrix</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.profession || 'N/A'}</p>
+                         <p className="text-[9px] font-black text-slate-300 uppercase italic">{t('professionMatrix')}</p>
+                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.profession || t('na')}</p>
                       </div>
                    </div>
                 </div>
@@ -1062,7 +1064,7 @@ export default function LeadList() {
                   className="w-full bg-slate-900 hover:bg-black text-white px-6 py-4 text-[11px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl flex items-center justify-center gap-3 cursor-pointer"
                 >
                    <CheckCircle className="w-4 h-4 text-[#978C21]" />
-                   Save & Update Status
+                   {t('saveUpdateStatus')}
                 </button>
               </div>
             </motion.div>

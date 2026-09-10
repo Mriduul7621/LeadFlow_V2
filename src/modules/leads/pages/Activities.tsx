@@ -8,14 +8,21 @@ import { leadService } from '../services/leadService';
 import { Lead } from '../../shared/types';
 import { buildActivities, groupByCategory, ActivityCategory, Activity } from '../utils/activityEngine';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import { useTranslation, type TranslationKey } from '../../shared/utils/translations';
 
-const CATEGORY_CONFIG: Record<ActivityCategory, { label: string; icon: any; color: string }> = {
-  Today: { label: 'Today', icon: Calendar, color: 'text-[#978C21] bg-[#978C21]/10' },
-  Tomorrow: { label: 'Tomorrow', icon: Clock, color: 'text-blue-600 bg-blue-50' },
-  Upcoming: { label: 'Upcoming', icon: Clock, color: 'text-slate-500 bg-slate-100' },
-  Overdue: { label: 'Overdue', icon: AlertTriangle, color: 'text-amber-600 bg-amber-50' },
-  Missed: { label: 'Missed', icon: AlertTriangle, color: 'text-red-600 bg-red-50' },
-  Completed: { label: 'Completed', icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' },
+const CATEGORY_CONFIG: Record<ActivityCategory, { labelKey: TranslationKey; icon: any; color: string }> = {
+  Today: { labelKey: 'categoryToday', icon: Calendar, color: 'text-[#978C21] bg-[#978C21]/10' },
+  Tomorrow: { labelKey: 'categoryTomorrow', icon: Clock, color: 'text-blue-600 bg-blue-50' },
+  Upcoming: { labelKey: 'categoryUpcoming', icon: Clock, color: 'text-slate-500 bg-slate-100' },
+  Overdue: { labelKey: 'categoryOverdue', icon: AlertTriangle, color: 'text-amber-600 bg-amber-50' },
+  Missed: { labelKey: 'categoryMissed', icon: AlertTriangle, color: 'text-red-600 bg-red-50' },
+  Completed: { labelKey: 'categoryCompleted', icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' },
+};
+
+const TYPE_LABELS: Record<Activity['type'], TranslationKey> = {
+  'Follow-up': 'typeFollowUp',
+  'Call': 'typeCall',
+  'Meeting': 'typeMeeting',
 };
 
 const TYPE_ICON: Record<Activity['type'], any> = {
@@ -26,6 +33,7 @@ const TYPE_ICON: Record<Activity['type'], any> = {
 
 export default function Activities() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,9 +59,9 @@ export default function Activities() {
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
       <div>
-        <h1 className="text-xl font-bold text-slate-800">Activities</h1>
+        <h1 className="text-xl font-bold text-slate-800">{t('activitiesTitle')}</h1>
         <p className="text-[11px] text-slate-400 uppercase tracking-widest mt-1">
-          Every pending follow-up, call, and meeting across your visible leads, organized by urgency.
+          {t('activitiesSubtitle')}
         </p>
       </div>
 
@@ -74,7 +82,7 @@ export default function Activities() {
               <div className={cn("w-8 h-8 rounded-sm flex items-center justify-center mb-3", config.color)}>
                 <Icon className="w-4 h-4" />
               </div>
-              <p className="text-xs font-medium text-slate-500">{config.label}</p>
+              <p className="text-xs font-medium text-slate-500">{t(config.labelKey)}</p>
               <p className="text-[22px] font-black text-brand-text">{count}</p>
             </button>
           );
@@ -83,13 +91,13 @@ export default function Activities() {
 
       <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-50 bg-[#FBFAF8]">
-          <h3 className="text-sm font-semibold text-slate-700">{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
+          <h3 className="text-sm font-semibold text-slate-700">{t(CATEGORY_CONFIG[activeCategory].labelKey)} ({grouped[activeCategory].length})</h3>
         </div>
         <div className="divide-y divide-slate-50">
           {loading ? (
-            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">Loading activities...</div>
+            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">{t('loadingActivities')}</div>
           ) : grouped[activeCategory].length === 0 ? (
-            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">Nothing here</div>
+            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">{t('nothingHere')}</div>
           ) : (
             grouped[activeCategory].map(activity => {
               const TypeIcon = TYPE_ICON[activity.type];
@@ -107,7 +115,7 @@ export default function Activities() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-800 truncate">{activity.prospectName}</p>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-widest">{activity.type} &middot; {new Date(activity.dueDate).toLocaleDateString()}</p>
+                      <p className="text-[10px] text-slate-400 uppercase tracking-widest">{t(TYPE_LABELS[activity.type])} &middot; {new Date(activity.dueDate).toLocaleDateString()}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">

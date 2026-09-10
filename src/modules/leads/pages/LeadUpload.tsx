@@ -20,6 +20,7 @@ import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useTranslation } from '../../shared/utils/translations';
 import { REAL_SHEET_HEADERS, mapRowForPreview, formatDateForDisplay, type PreviewRow } from '../utils/leadUploadMapping';
 
 /** Display formatting for preview cells (never mutates the submitted data). */
@@ -33,6 +34,7 @@ function displayCell(cell: any): string {
 
 export default function LeadUpload() {
   const { canAccess, userRole } = usePermissions();
+  const { t } = useTranslation();
 
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -51,14 +53,14 @@ export default function LeadUpload() {
           <AlertCircle className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <span className="text-sm font-medium text-[#978C21]">Access Restricted</span>
-          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
+          <span className="text-sm font-medium text-[#978C21]">{t('uploadClearanceWarning')}</span>
+          <h2 className="text-xl font-bold text-slate-900">{t('accessDeniedTitle')}</h2>
           <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-            Your current clearance level <span className="text-red-550 font-black">"{userRole || 'RESTRICTED'}"</span> does not possess active credentials to upload raw lead sheets or configure campaign lists.
+            {t('uploadAccessDeniedDesc')}
           </p>
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature lead_upl_gen.upload_raw_csv_xlsx Required
+          {t('uploadSecurityLevelRequired')}
         </div>
       </div>
     );
@@ -97,9 +99,9 @@ export default function LeadUpload() {
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Leads Template');
       worksheet['!cols'] = REAL_SHEET_HEADERS.map(() => ({ wch: 18 }));
       XLSX.writeFile(workbook, 'Shanta_Life_Leads_Upload_Template.xlsx');
-      toast.success('Correct format template downloaded! Fill and upload this sheet.');
+      toast.success(t('templateDownloadSuccess'));
     } catch (err) {
-      toast.error('Failed to generate download spreadsheet template.');
+      toast.error(t('templateDownloadFailed'));
     }
   };
 
@@ -141,7 +143,7 @@ export default function LeadUpload() {
       setServerPreview(result);
     } catch (err: any) {
       setServerPreview(null);
-      toast.error(err?.message || 'Preview validation failed. Check your connection and permissions.');
+      toast.error(err?.message || t('previewValidationFailed'));
     } finally {
       setValidating(false);
     }
@@ -176,21 +178,21 @@ export default function LeadUpload() {
           setPreviewData(data.slice(0, 7)); // Preview header + 6 rows
           setImportResult(null);
           setMappedRows(rows.map((row: any, i: number) => mapRowForPreview(row, i)).filter(r => r.hasAnyValue));
-          toast.success('Data imported successfully');
+          toast.success(t('dataImportedSuccess'));
           if (rows.length > 0) {
             void runServerValidation(rows);
           } else {
             setServerPreview(null);
           }
         } catch (err) {
-          toast.error('Failed to parse file. Check integrity.');
+          toast.error(t('parseFailed'));
         } finally {
           setProcessing(false);
         }
       };
       reader.readAsBinaryString(file);
     } else {
-      toast.error('Invalid protocol. Please inject Excel or CSV format.');
+      toast.error(t('invalidProtocol'));
     }
   };
 
@@ -208,13 +210,13 @@ export default function LeadUpload() {
       setServerPreview(null);
 
       if (result.failed > 0) {
-        toast.warning(`${result.inserted} inserted, ${result.updated} updated, ${result.failed} failed of ${result.total} row(s). See the report below.`);
+        toast.warning(t('importSummary', { inserted: String(result.inserted), updated: String(result.updated), failed: String(result.failed), total: String(result.total) }));
       } else {
-        toast.success(`Successfully imported ${result.inserted} new and ${result.updated} updated lead(s).`);
+        toast.success(t('importSuccessSummary', { inserted: String(result.inserted), updated: String(result.updated) }));
         resetFileState();
       }
     } catch (err: any) {
-      toast.error(err?.message || 'Import failed. Nothing was saved.');
+      toast.error(err?.message || t('importFailedNothingSaved'));
     } finally {
       setProcessing(false);
     }
@@ -247,8 +249,8 @@ export default function LeadUpload() {
             <Database className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Bulk Lead Upload</h1>
-            <p className="text-sm text-slate-500 mt-2">Upload leads from Excel files</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('bulkUploadTitle')}</h1>
+            <p className="text-sm text-slate-500 mt-2">{t('bulkUploadSubtitle')}</p>
           </div>
         </div>
         <button
@@ -256,7 +258,7 @@ export default function LeadUpload() {
           className="flex items-center gap-3 px-6 py-3 bg-[#978C21]/10 hover:bg-[#978C21]/20 border border-[#978C21]/30 text-[#978C21] text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm active:scale-95 group animate-bounce-slow"
         >
           <Download className="w-4 h-4 text-[#978C21] transition-transform group-hover:translate-y-0.5" />
-          Download Sample Format
+          {t('downloadSampleFormat')}
         </button>
       </div>
 
@@ -300,17 +302,17 @@ export default function LeadUpload() {
                            onClick={(e) => { e.stopPropagation(); resetFileState(); }}
                            className="text-red-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 mx-auto hover:bg-red-50 px-4 py-2 rounded-sm mt-8 z-20 transition-all border border-transparent hover:border-red-100"
                         >
-                        <X className="w-4 h-4" /> Remove Entity
+                        <X className="w-4 h-4" /> {t('removeEntity')}
                         </button>
                      </motion.div>
                   ) : (
                      <div className="space-y-4">
-                        <p className="text-3xl font-black text-brand-text tracking-tighter italic serif uppercase">Drop Logic File Here</p>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic leading-relaxed">System awaiting bulk intelligence payload</p>
+                        <p className="text-3xl font-black text-brand-text tracking-tighter italic serif uppercase">{t('dropLogicFile')}</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic leading-relaxed">{t('dropLogicFileHint')}</p>
                         <div className="pt-10">
                            <div className="inline-flex items-center gap-3 px-6 py-3 bg-white border border-slate-100 shadow-sm rounded-sm">
                               <Plus className="w-4 h-4 text-[#978C21]" />
-                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Select Local Source</span>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">{t('selectLocalSource')}</span>
                            </div>
                         </div>
                      </div>
@@ -328,7 +330,7 @@ export default function LeadUpload() {
                     <div className="flex items-center gap-4">
                       <ShieldCheck className={cn('w-8 h-8', attentionRows.length > 0 ? 'text-amber-500' : 'text-emerald-500')} />
                       <div>
-                        <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Data Integrity Assessment</h3>
+                        <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">{t('dataIntegrityAssessment')}</h3>
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 italic">
                           {validating ? 'Validating against database…' : 'Pre-commit validation (read-only)'}
                         </p>
@@ -342,10 +344,10 @@ export default function LeadUpload() {
                   {/* Validation summary */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                      {[
-                        { label: 'Total Rows', val: mappedRows.length, tone: 'text-slate-700' },
-                        { label: 'Local Issues', val: localIssueRows.length, tone: localIssueRows.length ? 'text-red-500' : 'text-emerald-600' },
-                        { label: 'Would Insert', val: serverPreview ? serverPreview.inserted : '—', tone: 'text-emerald-600' },
-                        { label: 'Would Update', val: serverPreview ? serverPreview.updated : '—', tone: 'text-blue-600' },
+                        { label: 'totalRows', val: mappedRows.length, tone: 'text-slate-700' },
+                        { label: 'localIssues', val: localIssueRows.length, tone: localIssueRows.length ? 'text-red-500' : 'text-emerald-600' },
+                        { label: 'wouldInsert', val: serverPreview ? serverPreview.inserted : '—', tone: 'text-emerald-600' },
+                        { label: 'wouldUpdate', val: serverPreview ? serverPreview.updated : '—', tone: 'text-blue-600' },
                      ].map((item, i) => (
                         <div key={i} className="border border-slate-100 rounded-sm p-4 bg-[#FBFAF8]">
                            <p className={cn('text-xl font-black', item.tone)}>{item.val}</p>
@@ -363,22 +365,22 @@ export default function LeadUpload() {
                      </div>
                   )}
 
-                  {/* Rows needing attention */}
+                  {/* {t('rowsNeedingAttention')} */}
                   {attentionRows.length > 0 && (
                      <div className="space-y-4">
                         <div className="flex items-center gap-3">
                            <ListChecks className="w-5 h-5 text-amber-500" />
-                           <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Rows needing attention</h4>
+                           <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">{t('rowsNeedingAttention')}</h4>
                         </div>
                         <div className="overflow-x-auto border border-slate-100 rounded-sm max-h-64 overflow-y-auto">
                            <table className="w-full text-left">
                               <thead>
                                  <tr className="bg-[#3C3C3C] text-white text-[9px] font-black uppercase tracking-widest">
-                                    <th className="px-4 py-3">Sheet Row</th>
-                                    <th className="px-4 py-3">Name</th>
-                                    <th className="px-4 py-3">Phone</th>
-                                    <th className="px-4 py-3">Assigned To</th>
-                                    <th className="px-4 py-3">Issues</th>
+                                    <th className="px-4 py-3">{t('sheetRow')}</th>
+                                    <th className="px-4 py-3">{t('name')}</th>
+                                    <th className="px-4 py-3">{t('phone')}</th>
+                                    <th className="px-4 py-3">{t('assignedTo')}</th>
+                                    <th className="px-4 py-3">{t('issues')}</th>
                                  </tr>
                               </thead>
                               <tbody>
@@ -431,7 +433,7 @@ export default function LeadUpload() {
                   <div className="flex items-center gap-6 bg-[#978C21]/5 p-6 rounded-sm border border-[#978C21]/10">
                     <Info className="w-6 h-6 text-[#978C21] shrink-0" />
                     <p className="text-[11px] font-black text-brand-text leading-relaxed italic uppercase tracking-tight">
-                      <strong>Assignment Logic:</strong> "Assigned To" must match an active employee ID (e.g. Monsoor_CTG) — otherwise the row is rejected. Blank leaves the lead unassigned. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
+                      <strong>{t('assignmentLogic')}:</strong> "Assigned To" must match an active employee ID (e.g. Monsoor_CTG) — otherwise the row is rejected. Blank leaves the lead unassigned. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
                     </p>
                   </div>
 
@@ -440,15 +442,15 @@ export default function LeadUpload() {
                      <div className={cn('border p-6 rounded-sm space-y-4', importResult.failed > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50')}>
                         <div className="flex items-center gap-3">
                            {importResult.failed > 0 ? <AlertTriangle className="w-5 h-5 text-amber-600" /> : <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
-                           <h4 className="text-[12px] font-black uppercase tracking-widest text-slate-700">Import report</h4>
+                           <h4 className="text-[12px] font-black uppercase tracking-widest text-slate-700">{t('importReport')}</h4>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                            {[
-                              { label: 'Inserted', val: importResult.inserted },
-                              { label: 'Updated', val: importResult.updated },
-                              { label: 'Skipped Duplicates', val: importResult.skipped },
-                              { label: 'Failed', val: importResult.failed },
-                              { label: 'Total', val: importResult.total },
+                              { label: 'inserted', val: importResult.inserted },
+                              { label: 'updated', val: importResult.updated },
+                              { label: 'skippedDuplicates', val: importResult.skipped },
+                              { label: 'failed', val: importResult.failed },
+                              { label: 'total', val: importResult.total },
                            ].map((item, i) => (
                               <div key={i} className="bg-white border border-slate-100 rounded-sm p-3">
                                  <p className="text-lg font-black text-slate-800">{item.val}</p>
@@ -490,15 +492,15 @@ export default function LeadUpload() {
                   <div className="w-10 h-10 rounded-sm bg-slate-50 flex items-center justify-center text-slate-400 group-hover:text-amber-500 transition-colors">
                      <AlertCircle className="w-6 h-6" />
                   </div>
-                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">Injection Constraints</h4>
+                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">{t('injectionConstraints')}</h4>
                </div>
                 <ul className="space-y-6">
                   {[
-                     { label: 'Protocols', val: 'XLSX, XLS, CSV' },
-                     { label: 'Max Payload', val: '5,000 Entities' },
-                     { label: 'Mandatory', val: 'Name, Phone' },
-                     { label: 'Assigned To', val: 'Active Employee ID' },
-                     { label: 'Statuses', val: 'Configured Options' }
+                     { label: 'protocols', val: 'XLSX, XLS, CSV' },
+                     { label: 'maxPayload', val: '5,000 Entities' },
+                     { label: 'mandatory', val: 'Name, Phone' },
+                     { label: t('assignedTo'), val: 'Active Employee ID' },
+                     { label: 'statuses', val: 'Configured Options' }
                   ].map((item, i) => (
                      <li key={i} className="flex justify-between items-end border-b border-slate-50 pb-2">
                         <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{item.label}</span>
@@ -512,10 +514,10 @@ export default function LeadUpload() {
                <div className="relative z-10">
                   <div className="flex items-center gap-4 mb-8">
                      <ShieldCheck className="w-6 h-6 text-[#978C21]" />
-                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Snapshot Integrity</h4>
+                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">{t('snapshotIntegrity')}</h4>
                   </div>
                   <p className="text-[11px] font-black text-slate-400 leading-relaxed italic uppercase tracking-tighter">
-                     Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
+                     {t('snapshotIntegrityDesc')}
                   </p>
                </div>
                <BarChart3 className="absolute -bottom-6 -right-6 w-32 h-32 text-white/5 rotate-12" />
@@ -523,11 +525,11 @@ export default function LeadUpload() {
 
             <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm">
                <div className="flex items-center justify-between mb-6">
-                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Database Sync</span>
+                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{t('databaseSync')}</span>
                   <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
                </div>
                <p className="text-[11px] font-black text-slate-500 leading-relaxed italic uppercase tracking-tight">
-                  Rows commit directly to PostgreSQL in a single transaction. Nothing is reported as saved unless the database confirmed it.
+                  {t('databaseSyncDesc')}
                </p>
             </div>
          </div>

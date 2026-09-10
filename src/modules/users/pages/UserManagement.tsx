@@ -28,6 +28,7 @@ import { adminService } from '../../admin/services/adminService';
 import { orgService, Department, HierarchyConfig, ReportingOption } from '../../hierarchy/services/orgService';
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission, User } from '../../shared/types';
+import { useTranslation } from '../../shared/utils/translations';
 
 
 /* ------------------------------------------------------------------ */
@@ -137,6 +138,7 @@ type TabKey = 'employees' | 'departments' | 'roles' | 'hierarchy';
 
 export default function UserManagement() {
   const { user: currentUser } = useAuthStore();
+  const { t } = useTranslation();
 
   // ---- Global loading & data ----
   const [loading, setLoading] = useState(true);
@@ -204,7 +206,7 @@ export default function UserManagement() {
       setDepartments(depts);
       setRoles(accessRoles);
     } catch (err) {
-      toast.error('Could not load data. Please check your connection.');
+      toast.error(t('couldNotLoadData'));
     } finally {
       setLoading(false);
     }
@@ -248,16 +250,16 @@ export default function UserManagement() {
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.name.trim() || !userForm.employeeId.trim() || !userForm.email.trim()) {
-      toast.error('Please fill in Name, Employee ID and Email.');
+      toast.error(t('fillNameEmpIdEmail'));
       return;
     }
     const formRoleLevel = (roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel ?? 0;
     if (formRoleLevel > 1 && formRoleLevel < 99 && !userForm.managerId) {
-      toast.error('Please select a reporting manager (one level up, same department).');
+      toast.error(t('selectReportingManager'));
       return;
     }
     if (formRoleLevel === 1 && userForm.managerId) {
-      toast.error('A Level-1 (CEO) employee cannot have a reporting manager.');
+      toast.error(t('level1NoManager'));
       return;
     }
 
@@ -267,7 +269,7 @@ export default function UserManagement() {
       (!editingUser || u.id !== editingUser.id)
     );
     if (isDuplicate) {
-      toast.error(`Employee ID "${cleanEmpId}" already exists.`);
+      toast.error(t('employeeIdExists', { id: cleanEmpId }));
       return;
     }
 
@@ -300,27 +302,27 @@ export default function UserManagement() {
 
       if (editingUser) {
         await userService.updateUser(uid, payload as any);
-        toast.success(`${payload.name}'s profile has been updated.`);
+        toast.success(t('profileUpdated'));
       } else {
         await userService.createUser(payload);
-        toast.success(`${payload.name} has been added. Temporary password: "${payload.password}"`);
+        toast.success(t('addedTempPassword', { name: payload.name, password: String(payload.password) }));
       }
 
       setIsUserModalOpen(false);
       await loadData();
     } catch (err) {
-      toast.error('Could not save. Please check your database connection.');
+      toast.error(t('couldNotSave'));
     }
   };
 
   const handleDeleteUser = async (id: string, name: string) => {
-    if (confirm(`Are you sure you want to delete ${name}?`)) {
+    if (confirm(t('confirmDeleteUser', { name }))) {
       try {
         await userService.deleteUser(id);
-        toast.success(`${name} has been removed.`);
+        toast.success(t('userRemoved', { name }));
         await loadData();
       } catch (e) {
-        toast.error('Could not delete. Please try again.');
+        toast.error(t('couldNotDelete'));
       }
     }
   };
@@ -360,27 +362,27 @@ export default function UserManagement() {
   /* ================================================================== */
   const handleSaveDept = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!deptFormName.trim()) { toast.error('Department name cannot be empty.'); return; }
+    if (!deptFormName.trim()) { toast.error(t('deptNameEmpty')); return; }
     try {
       const id = editingDeptId || `dept_${Date.now()}`;
       await orgService.saveDepartment({ id, name: deptFormName.trim(), createdDate: new Date().toISOString() });
-      toast.success(editingDeptId ? 'Department updated.' : 'Department added.');
+      toast.success(editingDeptId ? t('deptUpdated') : t('deptAdded'));
       setDeptFormName('');
       setEditingDeptId(null);
       await loadData();
     } catch (e) {
-      toast.error('Could not save department.');
+      toast.error(t('couldNotSaveDept'));
     }
   };
 
   const handleDeleteDept = async (id: string) => {
-    if (confirm('Are you sure you want to delete this department?')) {
+    if (confirm(t('confirmDeleteDepartment'))) {
       try {
         await orgService.deleteDepartment(id);
-        toast.success('Department deleted.');
+        toast.success(t('deptDeleted'));
         await loadData();
       } catch (e) {
-        toast.error('Could not delete department.');
+        toast.error(t('couldNotDeleteDept'));
       }
     }
   };
@@ -411,9 +413,9 @@ export default function UserManagement() {
   };
 
   const handleSaveRole = async () => {
-    if (!roleFormName.trim()) { toast.error('Role name is required.'); return; }
+    if (!roleFormName.trim()) { toast.error(t('roleNameRequired')); return; }
     const slug = roleFormSlug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-    if (!slug) { toast.error('A valid role ID is required (lowercase letters/numbers).'); return; }
+    if (!slug) { toast.error(t('validRoleIdRequired')); return; }
 
     try {
       const isAdm = slug === 'admin' || slug === 'superadmin';
@@ -451,24 +453,24 @@ export default function UserManagement() {
       };
 
       await adminService.saveRole(payload);
-      toast.success('Role saved successfully.');
+      toast.success(t('roleSaved'));
       setShowRoleForm(false);
       await loadData();
     } catch (err) {
-      toast.error('Could not save role. Please try again.');
+      toast.error(t('couldNotSaveRole'));
     }
   };
 
   const handleDeleteRole = async (slug: string) => {
-    if (slug.toUpperCase() === 'ADMIN') { toast.error('Admin role cannot be deleted.'); return; }
-    if (confirm(`Delete role "${slug}"?`)) {
+    if (slug.toUpperCase() === 'ADMIN') { toast.error(t('adminRoleCannotDelete')); return; }
+    if (confirm(t('confirmDeleteRole', { slug }))) {
       try {
         await adminService.deleteRole(slug);
-        toast.success('Role deleted.');
+        toast.success(t('roleDeleted'));
         setSelectedRole(null);
         await loadData();
       } catch (e) {
-        toast.error('Could not delete role.');
+        toast.error(t('couldNotDeleteRole'));
       }
     }
   };
@@ -487,7 +489,7 @@ export default function UserManagement() {
       for (const role of config.unassignedRoles) assignments[role.roleId] = 0; // 0 = not in ladder
       setLadderAssignments(assignments);
     } catch {
-      toast.error('Could not load the hierarchy configuration.');
+      toast.error(t('couldNotLoadHierarchy'));
     }
   };
 
@@ -507,20 +509,20 @@ export default function UserManagement() {
       assignments.push({ roleId, level: Number(ladderAssignments[roleId] ?? 0) });
     }
     if (!assignments.some(a => a.level > 0)) {
-      toast.error('Place at least one role in the ladder before saving.');
+      toast.error(t('placeRoleInLadder'));
       return;
     }
     if (!assignments.some(a => a.level === 1)) {
-      toast.error('Level 1 (CEO) is required — the ladder starts at the top.');
+      toast.error(t('level1Required'));
       return;
     }
     setSavingLadder(true);
     try {
       const config = await orgService.saveHierarchyConfig(assignments);
       setHierConfig(config);
-      toast.success('Company ladder saved.');
+      toast.success(t('ladderSaved'));
     } catch (e: any) {
-      toast.error(e?.message || 'Could not save the ladder.');
+      toast.error(e?.message || t('couldNotSaveLadder'));
     } finally {
       setSavingLadder(false);
     }
@@ -542,10 +544,10 @@ export default function UserManagement() {
   /*  TABS CONFIG                                                        */
   /* ================================================================== */
   const tabs: { key: TabKey; label: string; icon: React.ReactNode; count?: number }[] = [
-    { key: 'employees', label: 'Employees', icon: <Users className="w-4 h-4" />, count: users.length },
-    { key: 'departments', label: 'Departments', icon: <Building className="w-4 h-4" />, count: departments.length },
-    { key: 'roles', label: 'Roles & Access', icon: <Shield className="w-4 h-4" />, count: roles.length },
-    { key: 'hierarchy', label: 'Hierarchy', icon: <Layers className="w-4 h-4" />, count: hierConfig?.levels.length ?? 0 },
+    { key: 'employees', label: t('employees'), icon: <Users className="w-4 h-4" />, count: users.length },
+    { key: 'departments', label: t('departments'), icon: <Building className="w-4 h-4" />, count: departments.length },
+    { key: 'roles', label: t('rolesAccess'), icon: <Shield className="w-4 h-4" />, count: roles.length },
+    { key: 'hierarchy', label: t('hierarchy'), icon: <Layers className="w-4 h-4" />, count: hierConfig?.levels.length ?? 0 },
   ];
 
   /* ================================================================== */
@@ -556,7 +558,7 @@ export default function UserManagement() {
       <div className="flex items-center justify-center h-64">
         <div className="text-center space-y-3">
           <div className="w-8 h-8 border-2 border-t-[#978C21] border-slate-200 rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-slate-400">Loading data...</p>
+          <p className="text-sm text-slate-400">{t('loadingData')}</p>
         </div>
       </div>
     );
@@ -567,15 +569,15 @@ export default function UserManagement() {
       {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">User Management</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage employees, departments, roles and organizational hierarchy.</p>
+          <h1 className="text-2xl font-bold text-slate-900">{t('userManagementTitle')}</h1>
+          <p className="text-sm text-slate-500 mt-1">{t('userManagementSubtitle')}</p>
         </div>
         {activeTab === 'employees' && (
           <button
             onClick={openCreateUser}
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-semibold rounded-lg transition-colors shadow-sm"
           >
-            <UserPlus className="w-4 h-4" /> Add Employee
+            <UserPlus className="w-4 h-4" /> {t('addEmployee')}
           </button>
         )}
       </div>
@@ -620,7 +622,7 @@ export default function UserManagement() {
                 type="text"
                 value={userQuery}
                 onChange={e => setUserQuery(e.target.value)}
-                placeholder="Search by name, ID, email..."
+                placeholder={t('searchByNameIdEmail')}
                 className="flex-1 bg-transparent outline-none text-sm text-slate-700 placeholder:text-slate-400"
               />
             </div>
@@ -629,7 +631,7 @@ export default function UserManagement() {
               onChange={e => setFilterDeptId(e.target.value)}
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
             >
-              <option value="">All Departments</option>
+              <option value="">{t('allDepartments')}</option>
               {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
             <select
@@ -637,7 +639,7 @@ export default function UserManagement() {
               onChange={e => setFilterRole(e.target.value)}
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
             >
-              <option value="">All Roles</option>
+              <option value="">{t('allRoles')}</option>
               {roles.map(r => <option key={r.roleId} value={r.roleId}>{r.roleName}</option>)}
             </select>
           </div>
@@ -648,18 +650,18 @@ export default function UserManagement() {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Employee</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Role & Department</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Status</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Contact</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500 text-right">Actions</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">{t('employee')}</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">{t('roleAndDepartment')}</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">{t('status')}</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">{t('contact')}</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-slate-500 text-right">{t('actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="py-16 text-center text-sm text-slate-400">
-                        No employees found.
+                        {t('noEmployeesFound')}
                       </td>
                     </tr>
                   ) : (
@@ -674,7 +676,7 @@ export default function UserManagement() {
                               </div>
                               <div>
                                 <p className="text-sm font-medium text-slate-800">{u.name}</p>
-                                <p className="text-xs text-slate-400">ID: {u.employeeId}</p>
+                                <p className="text-xs text-slate-400">{t('idLabel')}: {u.employeeId}</p>
                               </div>
                             </div>
                           </td>
@@ -710,7 +712,7 @@ export default function UserManagement() {
                               <button
                                 onClick={() => openEditUser(u)}
                                 className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
-                                title="Edit"
+                                title={t('edit')}
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
@@ -718,7 +720,7 @@ export default function UserManagement() {
                                 <button
                                   onClick={() => handleDeleteUser(u.id, u.name)}
                                   className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Delete"
+                                  title={t('delete')}
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -744,16 +746,16 @@ export default function UserManagement() {
           {/* Form */}
           <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
             <h3 className="text-base font-semibold text-slate-800">
-              {editingDeptId ? 'Edit Department' : 'Add Department'}
+              {editingDeptId ? t('editDepartment') : t('addDepartment')}
             </h3>
             <form onSubmit={handleSaveDept} className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-slate-600 mb-1 block">Department Name</label>
+                <label className="text-sm font-medium text-slate-600 mb-1 block">{t('departmentName')}</label>
                 <input
                   type="text"
                   value={deptFormName}
                   onChange={e => setDeptFormName(e.target.value)}
-                  placeholder="e.g. Operations, Finance"
+                  placeholder={t('departmentNamePlaceholder')}
                   className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                 />
               </div>
@@ -763,7 +765,7 @@ export default function UserManagement() {
                   className="flex-1 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
                   <Save className="w-4 h-4" />
-                  {editingDeptId ? 'Update' : 'Add Department'}
+                  {editingDeptId ? t('update') : t('addDepartment')}
                 </button>
                 {editingDeptId && (
                   <button
@@ -771,7 +773,7 @@ export default function UserManagement() {
                     onClick={() => { setEditingDeptId(null); setDeptFormName(''); }}
                     className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm rounded-lg"
                   >
-                    Cancel
+                    {t('cancel')}
                   </button>
                 )}
               </div>
@@ -781,11 +783,11 @@ export default function UserManagement() {
           {/* List */}
           <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6">
             <h3 className="text-base font-semibold text-slate-800 mb-4">
-              Departments ({departments.length})
+              {t('departmentsCount', { count: String(departments.length) })}
             </h3>
             {departments.length === 0 ? (
               <div className="py-12 text-center text-sm text-slate-400 border border-dashed border-slate-200 rounded-lg">
-                No departments added yet. Create one using the form.
+                {t('noDepartmentsYet')}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -793,7 +795,7 @@ export default function UserManagement() {
                   <div key={dept.id} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-lg hover:shadow-sm transition-shadow">
                     <div>
                       <h4 className="text-sm font-medium text-slate-800">{dept.name}</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">{users.filter(u => (u as any).departmentId === dept.id).length} employees</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{t('employeesCount', { count: String(users.filter(u => (u as any).departmentId === dept.id).length) })}</p>
                     </div>
                     <div className="flex gap-1">
                       <button
@@ -825,12 +827,12 @@ export default function UserManagement() {
           {!showRoleForm ? (
             <>
               <div className="flex justify-between items-center">
-                <h3 className="text-base font-semibold text-slate-800">Roles ({roles.length})</h3>
+                <h3 className="text-base font-semibold text-slate-800">{t('rolesCount', { count: String(roles.length) })}</h3>
                 <button
                   onClick={handleNewRole}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors"
                 >
-                  <Plus className="w-4 h-4" /> Add Role
+                  <Plus className="w-4 h-4" /> {t('addRoleTitle')}
                 </button>
               </div>
 
@@ -846,12 +848,12 @@ export default function UserManagement() {
                         "text-xs px-2 py-0.5 rounded-full font-medium",
                         r.isCustom ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"
                       )}>
-                        {r.isCustom ? 'Custom' : 'System'}
+                        {r.isCustom ? t('custom') : t('system')}
                       </span>
                     </div>
 
                     <div className="space-y-2 text-xs text-slate-500">
-                      <p>Data Access: <span className="font-medium text-slate-700">{r.dataVisibility || 'Own'}</span></p>
+                      <p>{t('dataAccess')}: <span className="font-medium text-slate-700">{r.dataVisibility || 'Own'}</span></p>
                       <div className="flex flex-wrap gap-1">
                         {Object.entries(r.menuAccess || {})
                           .filter(([_, v]) => v)
@@ -871,7 +873,7 @@ export default function UserManagement() {
                         onClick={() => { applyRoleToForm(r); setShowRoleForm(true); }}
                         className="flex-1 py-2 bg-slate-50 hover:bg-[#978C21] hover:text-white border border-slate-200 text-slate-600 text-xs font-medium rounded-lg transition-colors text-center"
                       >
-                        Configure
+                        {t('configureFeature')}
                       </button>
                       {r.roleId.toUpperCase() !== 'ADMIN' && (
                         <button
@@ -893,50 +895,50 @@ export default function UserManagement() {
                 onClick={() => setShowRoleForm(false)}
                 className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700"
               >
-                <ArrowLeft className="w-4 h-4" /> Back to Roles
+                <ArrowLeft className="w-4 h-4" /> {t('backToRoles')}
               </button>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Role basic info */}
                 <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
                   <h3 className="text-base font-semibold text-slate-800">
-                    {selectedRole ? 'Edit Role' : 'New Role'}
+                    {selectedRole ? t('editRole') : t('newRole')}
                   </h3>
 
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Role Name</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('roleName')}</label>
                     <input
                       type="text"
                       value={roleFormName}
                       onChange={e => setRoleFormName(e.target.value)}
-                      placeholder="e.g. Area Manager"
+                      placeholder={t('roleNamePlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
                     />
                   </div>
 
                   {!selectedRole && (
                     <div>
-                      <label className="text-sm font-medium text-slate-600 mb-1 block">Role ID</label>
+                      <label className="text-sm font-medium text-slate-600 mb-1 block">{t('roleId')}</label>
                       <input
                         type="text"
                         value={roleFormSlug}
                         onChange={e => setRoleFormSlug(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                        placeholder="e.g. area_manager"
+                        placeholder={t('roleIdPlaceholder')}
                         className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] font-mono"
                       />
-                      <p className="text-xs text-slate-400 mt-1">Lowercase letters, numbers and underscores only.</p>
+                      <p className="text-xs text-slate-400 mt-1">{t('roleIdHint')}</p>
                     </div>
                   )}
 
                   {/* Data visibility */}
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-2 block">Data Visibility</label>
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">{t('dataVisibility')}</label>
                     <div className="grid grid-cols-2 gap-2">
                       {(['Own', 'DownTeam', 'FullTeam', 'Organization'] as const).map(scope => {
-                        const desc = scope === 'Own' ? 'Only own data'
-                          : scope === 'DownTeam' ? 'Own + team below'
-                          : scope === 'FullTeam' ? 'All team data'
-                          : 'Entire organization';
+                        const desc = scope === 'Own' ? t('ownOnly')
+                          : scope === 'DownTeam' ? t('ownTeamBelow')
+                          : scope === 'FullTeam' ? t('allTeamData')
+                          : t('entireOrganization');
                         return (
                           <button
                             key={scope}
@@ -961,14 +963,14 @@ export default function UserManagement() {
                     onClick={handleSaveRole}
                     className="w-full py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
                   >
-                    <Save className="w-4 h-4" /> Save Role
+                    <Save className="w-4 h-4" /> {t('saveRole')}
                   </button>
                 </div>
 
                 {/* Feature permissions */}
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-                  <h3 className="text-base font-semibold text-slate-800">Feature Access</h3>
-                  <p className="text-sm text-slate-500">Enable pages and specific actions for this role.</p>
+                  <h3 className="text-base font-semibold text-slate-800">{t('featureAccess')}</h3>
+                  <p className="text-sm text-slate-500">{t('featureAccessDesc')}</p>
 
                   <div className="space-y-3">
                     {APP_FEATURES.map(item => {
@@ -1001,7 +1003,7 @@ export default function UserManagement() {
                                   : "bg-white text-slate-400 border-slate-200"
                               )}
                             >
-                              {isOn ? '✓ Enabled' : 'Disabled'}
+                              {isOn ? '✓ ' + t('enabled') : t('disabled')}
                             </button>
                           </div>
                           {isOn && item.suboptions && item.suboptions.length > 0 && (
@@ -1048,9 +1050,9 @@ export default function UserManagement() {
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold text-slate-800">Company Hierarchy Ladder</h3>
+              <h3 className="text-base font-semibold text-slate-800">{t('companyHierarchyLadder')}</h3>
               <p className="text-sm text-slate-500">
-                One company-wide ladder — Level 1 is the CEO. Every other employee reports to a specific manager exactly one level up, within the same department.
+                {t('hierarchyDesc')}
               </p>
             </div>
             <button
@@ -1058,7 +1060,7 @@ export default function UserManagement() {
               disabled={savingLadder}
               className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-60"
             >
-              <Save className="w-4 h-4" /> {savingLadder ? 'Saving…' : 'Save Ladder'}
+              <Save className="w-4 h-4" /> {savingLadder ? t('savingLadder') : t('saveLadder')}
             </button>
           </div>
 
@@ -1081,13 +1083,13 @@ export default function UserManagement() {
                     <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-amber-800">
-                        Hierarchy changed. Some existing reporting relationships are no longer valid and require correction.
+                        {t('hierarchyChangedNeedCorrection')}
                       </p>
                       <p className="text-xs text-amber-700 mt-1">
-                        {invalid.length} reporting relationship{invalid.length === 1 ? '' : 's'} need correction. Your existing
-                        manager assignments were <span className="font-semibold">not changed automatically</span> — open each
-                        employee in the <span className="font-semibold">Employees</span> tab and set a valid reporting manager
-                        (one level up, same department).
+                        {t('needsCorrectionNotAutoChanged', { count: String(invalid.length) })}
+                        
+                        
+                        
                       </p>
                       <ul className="mt-2 space-y-1 max-h-48 overflow-auto pr-1">
                         {invalid.map(link => (
@@ -1103,10 +1105,10 @@ export default function UserManagement() {
 
               <div className="bg-white border border-slate-200 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-slate-700">Reporting setup</span>
+                  <span className="text-sm font-medium text-slate-700">{t('reportingSetup')}</span>
                   <span className="text-sm text-slate-500">
-                    {hierConfig.setup.usersWithManager} / {managerBase} employees have a reporting manager
-                    <span className="text-slate-400">  ·  Level 1 / CEO excluded (no manager required)</span>
+                    {t('employeesHaveManager', { with: String(hierConfig.setup.usersWithManager), total: String(managerBase) })}
+                    <span className="text-slate-400">  ·  {t('level1Excluded')}</span>
                   </span>
                 </div>
                 <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -1114,11 +1116,10 @@ export default function UserManagement() {
                 </div>
                 {hierConfig.setup.usersWithoutManager > 0 ? (
                   <p className="mt-2 text-xs text-red-600">
-                    {hierConfig.setup.usersWithoutManager} employee{hierConfig.setup.usersWithoutManager === 1 ? '' : 's'} on Level 2 or below
-                    have no reporting manager.
+                    {t('employeesMissingManager', { count: String(hierConfig.setup.usersWithoutManager) })}
                   </p>
                 ) : (
-                  <p className="mt-2 text-xs text-emerald-600">All employees that require a manager have one.</p>
+                  <p className="mt-2 text-xs text-emerald-600">{t('allEmployeesHaveManager')}</p>
                 )}
               </div>
             </div>
@@ -1135,25 +1136,25 @@ export default function UserManagement() {
                       {level.level}
                     </div>
                     <div>
-                      <div className="text-sm font-semibold text-slate-800">Level {level.level}</div>
-                      <div className="text-xs text-slate-400">{level.level === 1 ? 'CEO — top of the company' : `Reports to Level ${level.level - 1}`}</div>
+                      <div className="text-sm font-semibold text-slate-800">{t('level')} {level.level}</div>
+                      <div className="text-xs text-slate-400">{level.level === 1 ? t('ceoTopOfCompany') : t('reportsToLevel', { level: String(level.level - 1) })}</div>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 flex-1">
                     {level.roles.map(role => (
                       <div key={role.roleId} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
                         <span className="text-sm text-slate-700 font-medium">{role.roleName}</span>
-                        <span className="text-xs text-slate-400">{role.employeeCount} emp.</span>
+                        <span className="text-xs text-slate-400">{t('empAbbrev', { count: String(role.employeeCount) })}</span>
                         <select
                           value={ladderAssignments[role.roleId] ?? level.level}
                           onChange={e => setRoleLadderLevel(role.roleId, Number(e.target.value))}
                           className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
-                          title="Move this role to another level"
+                          title={t('moveRoleToAnotherLevel')}
                         >
                           {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
                             <option key={n} value={n}>L{n}</option>
                           ))}
-                          <option value={0}>— off</option>
+                          <option value={0}>— {t('off')}</option>
                         </select>
                       </div>
                     ))}
@@ -1161,25 +1162,25 @@ export default function UserManagement() {
                 </div>
               ))
             ) : (
-              <div className="text-sm text-slate-500">No roles placed in the ladder yet. Assign levels to the roles below and save.</div>
+              <div className="text-sm text-slate-500">{t('noRolesInLadder')}</div>
             )}
 
             {/* Unassigned roles */}
             {hierConfig && hierConfig.unassignedRoles.length > 0 && (
               <div className="pt-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Roles not in the ladder</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{t('roleNotInLadder')}</div>
                 <div className="flex flex-wrap gap-2">
                   {hierConfig.unassignedRoles.map(role => (
                     <div key={role.roleId} className="flex items-center gap-2 bg-slate-50 border border-dashed border-slate-300 rounded-lg px-3 py-1.5">
                       <span className="text-sm text-slate-600">{role.roleName}</span>
-                      <span className="text-xs text-slate-400">{role.employeeCount} emp.</span>
+                      <span className="text-xs text-slate-400">{t('empAbbrev', { count: String(role.employeeCount) })}</span>
                       <select
                         value={ladderAssignments[role.roleId] ?? 0}
                         onChange={e => setRoleLadderLevel(role.roleId, Number(e.target.value))}
                         className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
-                        title="Place this role into a ladder level"
+                        title={t('placeRoleIntoLevel')}
                       >
-                        <option value={0}>— off</option>
+                        <option value={0}>— {t('off')}</option>
                         {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
                           <option key={n} value={n}>L{n}</option>
                         ))}
@@ -1216,9 +1217,9 @@ export default function UserManagement() {
               <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between z-10">
                 <div>
                   <h2 className="text-lg font-semibold text-slate-800">
-                    {editingUser ? 'Edit Employee' : 'Add New Employee'}
+                    {editingUser ? t('editEmployee') : t('addNewEmployee')}
                   </h2>
-                  <p className="text-sm text-slate-500">Fill in the employee details below.</p>
+                  <p className="text-sm text-slate-500">{t('fillEmployeeDetails')}</p>
                 </div>
                 <button
                   onClick={() => setIsUserModalOpen(false)}
@@ -1232,60 +1233,60 @@ export default function UserManagement() {
               <form onSubmit={handleSaveUser} className="p-6 space-y-5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Full Name *</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('fullName')} *</label>
                     <input
                       type="text"
                       required
                       value={userForm.name}
                       onChange={e => setUserForm({ ...userForm, name: e.target.value })}
-                      placeholder="e.g. Abdur Rahman"
+                      placeholder={t('namePlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Employee ID *</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('employeeId')} *</label>
                     <input
                       type="text"
                       required
                       value={userForm.employeeId}
                       onChange={e => setUserForm({ ...userForm, employeeId: e.target.value })}
-                      placeholder="e.g. RM001"
+                      placeholder={t('empIdPlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Phone Number</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('phoneNumber')}</label>
                     <input
                       type="text"
                       value={userForm.contact}
                       onChange={e => setUserForm({ ...userForm, contact: e.target.value })}
-                      placeholder="e.g. 01712345678"
+                      placeholder={t('phonePlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Email Address *</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('emailAddress')} *</label>
                     <input
                       type="email"
                       required
                       value={userForm.email}
                       onChange={e => setUserForm({ ...userForm, email: e.target.value })}
-                      placeholder="e.g. abdur@company.com"
+                      placeholder={t('emailPlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Designation</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('designation')}</label>
                     <input
                       type="text"
                       value={userForm.designation}
                       onChange={e => setUserForm({ ...userForm, designation: e.target.value })}
-                      placeholder="e.g. Senior Manager"
+                      placeholder={t('designationPlaceholder')}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Role</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('role')}</label>
                     <select
                       value={userForm.role}
                       onChange={e => setUserForm({ ...userForm, role: e.target.value })}
@@ -1297,23 +1298,23 @@ export default function UserManagement() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Department</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('department')}</label>
                     <select
                       value={userForm.departmentId}
                       onChange={e => setUserForm({ ...userForm, departmentId: e.target.value })}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
                     >
-                      <option value="">No Department</option>
+                      <option value="">{t('noDepartment')}</option>
                       {departments.map(d => (
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Reporting Manager</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('reportingManager')}</label>
                     {(roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel === 1 ? (
                       <div className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-500 bg-slate-50">
-                        Level 1 (CEO) — reports to no one
+                        {t('level1ReportsToNone')}
                       </div>
                     ) : (
                       <select
@@ -1322,7 +1323,7 @@ export default function UserManagement() {
                         disabled={loadingManagers}
                         className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
                       >
-                        <option value="">{loadingManagers ? 'Loading managers…' : 'Select manager (one level up, same department)'}</option>
+                        <option value="">{loadingManagers ? t('loadingData') : t('selectManager')}</option>
                         {managerOptions.map(o => (
                           <option key={o.employeeId} value={o.employeeId}>
                             {o.fullName} ({o.employeeId}) — {o.roleName}
@@ -1331,18 +1332,18 @@ export default function UserManagement() {
                       </select>
                     )}
                     <p className="text-xs text-slate-400 mt-1">
-                      The dropdown lists employees whose role is one level above this role, in the same department.
+                      {t('managerDropdownHint')}
                     </p>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Status</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">{t('status')}</label>
                     <select
                       value={userForm.status}
                       onChange={e => setUserForm({ ...userForm, status: e.target.value as any })}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
                     >
-                      <option value="Active">Active</option>
-                      <option value="Inactive">Inactive</option>
+                      <option value="Active">{t('active')}</option>
+                      <option value="Inactive">{t('inactive')}</option>
                     </select>
                   </div>
                 </div>
@@ -1351,19 +1352,17 @@ export default function UserManagement() {
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
                   <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
                     <Lock className="w-4 h-4 text-[#978C21]" />
-                    {editingUser ? 'Reset Password' : 'Password'}
+                    {editingUser ? t('resetPassword') : t('password')}
                   </label>
                   <input
                     type="text"
                     value={userForm.password}
                     onChange={e => setUserForm({ ...userForm, password: e.target.value })}
-                    placeholder={editingUser ? "Leave blank to keep current password" : "Leave blank to auto-generate"}
+                    placeholder={editingUser ? t('leaveBlankKeepPassword') : t('leaveBlankAutoGenerate')}
                     className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
                   />
                   <p className="text-xs text-slate-400">
-                    {editingUser
-                      ? "Enter a new password to reset. The employee will be required to change it on next login."
-                      : "A temporary password will be auto-generated if left blank. The employee must change it on first login."}
+                    {editingUser ? t('resetPasswordHint') : t('autoPasswordHint')}
                   </p>
                 </div>
 
@@ -1374,13 +1373,13 @@ export default function UserManagement() {
                     onClick={() => setIsUserModalOpen(false)}
                     className="px-5 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium rounded-lg transition-colors"
                   >
-                    Cancel
+                    {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     className="px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
                   >
-                    {editingUser ? 'Save Changes' : 'Add Employee'}
+                    {editingUser ? t('saveChanges') : t('addEmployee')}
                   </button>
                 </div>
               </form>

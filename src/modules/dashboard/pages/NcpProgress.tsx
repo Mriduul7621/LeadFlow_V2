@@ -9,11 +9,13 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
+import { useTranslation } from '../../shared/utils/translations';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 
 export default function NcpProgress() {
   const { user } = useAuthStore();
+  const { t } = useTranslation();
   const [period, setPeriod] = useState('THIS MONTH');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().substring(0, 10));
   const [customDates, setCustomDates] = useState({ 
@@ -114,7 +116,7 @@ export default function NcpProgress() {
       });
 
     } catch (err) {
-      toast.error('NCP progress retrieval failure');
+      toast.error(t('ncpRetrievalFailure'));
     } finally {
       setLoading(false);
     }
@@ -160,15 +162,15 @@ export default function NcpProgress() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "NCP_Ledger");
     XLSX.writeFile(workbook, `NCP_Progress_Ledger_${period}.xlsx`);
-    toast.success("NCP Ledger downloaded successfully!");
+    toast.success(t('ncpLedgerDownloaded'));
   };
 
   return (
     <div className="space-y-8 pb-24 bg-white font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">NCP Progress</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Volume Velocity, collected BDT metrics and conversions</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{t('ncpProgressTitle')}</h1>
+          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">{t('volumeVelocity')}</p>
         </div>
         <div className="flex items-center gap-3 animate-fade-in">
           <button 
@@ -187,12 +189,12 @@ export default function NcpProgress() {
               <TrendingUp className="w-4 h-4 text-[#10B981]" />
            </div>
            <div>
-              <h4 className="text-white text-sm font-semibold">Performance</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">NCP tracking status range</p>
+              <h4 className="text-white text-sm font-semibold">{t('performance')}</h4>
+              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{t('ncpTrackingRange')}</p>
            </div>
         </div>
         <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
-           {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
+           {(['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'] as const).map(p => (
              <button 
                key={p}
                onClick={() => setPeriod(p)}
@@ -201,7 +203,7 @@ export default function NcpProgress() {
                  period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                )}
              >
-               {p}
+               {p === 'TODAY' ? t('periodToday') : p === 'THIS MONTH' ? t('periodThisMonth') : p === 'LAST MONTH' ? t('periodLastMonth') : t('periodCustom')}
              </button>
            ))}
            <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
@@ -215,7 +217,7 @@ export default function NcpProgress() {
       {period === 'CUSTOM' && (
         <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4 animate-fade-in">
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
+              <span className="text-xs font-medium text-slate-500">{t('startDate')}:</span>
               <input 
                 type="date" 
                 value={customDates.start}
@@ -224,7 +226,7 @@ export default function NcpProgress() {
               />
            </div>
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
+              <span className="text-xs font-medium text-slate-500">{t('endDate')}:</span>
               <input 
                 type="date" 
                 value={customDates.end}
@@ -245,21 +247,21 @@ export default function NcpProgress() {
           <div className="lg:col-span-3 bg-white rounded-sm border border-slate-100 p-8 md:p-10 shadow-sm">
              <div className="flex flex-col md:flex-row md:items-start justify-between gap-8 mb-8">
                 <div>
-                   <h4 className="text-[20px] font-black text-brand-text tracking-tighter italic leading-tight uppercase">Financial Target Tracking</h4>
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 ml-0.5">Collected BDT vs Projected Potential</p>
+                   <h4 className="text-[20px] font-black text-brand-text tracking-tighter italic leading-tight uppercase">{t('financialTargetTracking')}</h4>
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 ml-0.5">{t('collectedVsProjected')}</p>
                 </div>
                 <div className="text-right border-l-0 md:border-l md:pl-6 border-slate-100 flex flex-row md:flex-col gap-4 md:gap-2 justify-between items-end">
                    <div>
-                      <p className="text-xs font-medium text-slate-500 mb-1 italic">Collected NCP</p>
+                      <p className="text-xs font-medium text-slate-500 mb-1 italic">{t('collectedNCP')}</p>
                       <h3 className="text-2xl md:text-3xl font-black text-[#978C21] italic tracking-tighter leading-none">৳{stats.collected.toLocaleString()}</h3>
                    </div>
                    <div>
-                      <p className="text-xs font-medium text-slate-500 mb-1 italic">Projected NCP</p>
+                      <p className="text-xs font-medium text-slate-500 mb-1 italic">{t('projectedNCP')}</p>
                       <h4 className="text-lg md:text-xl font-black text-slate-500 italic tracking-tighter leading-none">৳{stats.projected.toLocaleString()}</h4>
                    </div>
                    <p className="text-[11px] font-black text-[#978C21] mt-1 italic flex items-center gap-1">
                       <TrendingUp className="w-3.5 h-3.5" /> 
-                      {stats.projected > 0 ? ((stats.collected / stats.projected) * 100).toFixed(1) : 0}% of Potential
+                      {stats.projected > 0 ? ((stats.collected / stats.projected) * 100).toFixed(1) : 0}% {t('ofPotential')}
                    </p>
                 </div>
              </div>
@@ -303,15 +305,15 @@ export default function NcpProgress() {
 
              <div className="grid grid-cols-3 gap-2 mt-6 border-t border-slate-50 pt-6">
                 <div>
-                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Conversion</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">{t('conversion')}</p>
                    <h4 className="text-xl md:text-2xl font-black text-brand-blue italic leading-none">{stats.conversionRate}</h4>
                 </div>
                 <div>
-                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Response TAT</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">{t('responseTAT')}</p>
                    <h4 className="text-xl md:text-2xl font-black text-slate-800 italic leading-none">{stats.avgResponseTAT}</h4>
                 </div>
                 <div>
-                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">Active Leads</p>
+                   <p className="text-xs font-medium text-slate-500 mb-1.5 italic">{t('activeLeads')}</p>
                    <h4 className="text-xl md:text-2xl font-black text-slate-800 italic leading-none">{stats.activeLeads}</h4>
                 </div>
              </div>
@@ -321,17 +323,17 @@ export default function NcpProgress() {
           <div className="flex flex-col gap-6 justify-between">
              <div className="flex-1 bg-[#1A1A1A] text-white p-6 rounded-sm border border-slate-800 flex flex-col justify-between shadow-md">
                  <div>
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block mb-3">Collected Segment (Finalized)</span>
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block mb-3">{t('collectedSegmentFinalized')}</span>
                     <h3 className="text-3xl font-black text-[#978C21] italic tracking-tighter leading-tight break-all">৳{stats.collected.toLocaleString()}</h3>
                  </div>
-                 <div className="text-right text-[9px] font-bold text-slate-500 uppercase mt-4">NCP extracted ledger</div>
+                 <div className="text-right text-[9px] font-bold text-slate-500 uppercase mt-4">{t('ncpExtractedLedger')}</div>
              </div>
              <div className="flex-1 bg-[#FBFAF8] p-6 rounded-sm border border-slate-100 flex flex-col justify-between shadow-sm">
                  <div>
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block mb-3">Projected Segment (Potential)</span>
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic block mb-3">{t('projectedSegmentPotential')}</span>
                     <h3 className="text-3xl font-black text-slate-800 italic tracking-tighter leading-tight break-all">৳{stats.projected.toLocaleString()}</h3>
                  </div>
-                 <div className="text-right text-[9px] font-bold text-[#978C21] uppercase mt-4">Pipeline locked BDT potential</div>
+                 <div className="text-right text-[9px] font-bold text-[#978C21] uppercase mt-4">{t('pipelineLockedPotential')}</div>
              </div>
           </div>
         </div>
@@ -342,35 +344,35 @@ export default function NcpProgress() {
         <div className="bg-white rounded-sm border border-slate-100 overflow-hidden shadow-sm mt-8 mx-1">
            <div className="px-8 py-6 border-b border-slate-50 flex items-center justify-between">
               <div>
-                 <h4 className="text-[12px] font-black uppercase text-brand-text tracking-widest italic">NCP Registry Ledger</h4>
-                 <p className="text-[8px] tracking-widest text-slate-400 uppercase font-bold mt-1">Direct individual clients progression lines</p>
+                 <h4 className="text-[12px] font-black uppercase text-brand-text tracking-widest italic">{t('ncpRegistryLedger')}</h4>
+                 <p className="text-[8px] tracking-widest text-slate-400 uppercase font-bold mt-1">{t('individualClientsLines')}</p>
               </div>
               <button 
                 onClick={handleExportNcpLeads}
                 className="flex items-center gap-2 border border-slate-100 bg-white hover:bg-slate-50 px-4 py-2 my-1 text-[10px] uppercase font-black tracking-wider shadow-sm transition-all text-[#978C21]"
               >
                 <Download className="w-3.5 h-3.5" />
-                Export ledger
+                {t('exportLedger')}
               </button>
            </div>
            <div className="overflow-x-auto">
               <table className="w-full text-left">
                  <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
                     <tr>
-                       <th className="px-8 py-4">Client Prospect</th>
-                       <th className="px-6 py-4">Area Location</th>
-                       <th className="px-6 py-4 text-center">Campaign Name</th>
-                       <th className="px-6 py-4 text-center">Product Choice</th>
-                       <th className="px-6 py-4 text-center">Projected NCP</th>
-                       <th className="px-6 py-4 text-center text-[#10B981]">Collected NCP</th>
-                       <th className="px-6 py-4 text-center">NCP Status Line</th>
+                       <th className="px-8 py-4">{t('clientProspect')}</th>
+                       <th className="px-6 py-4">{t('areaLocation')}</th>
+                       <th className="px-6 py-4 text-center">{t('campaignName')}</th>
+                       <th className="px-6 py-4 text-center">{t('productChoice')}</th>
+                       <th className="px-6 py-4 text-center">{t('projectedNCP')}</th>
+                       <th className="px-6 py-4 text-center text-[#10B981]">{t('collectedNCP')}</th>
+                       <th className="px-6 py-4 text-center">{t('ncpStatusLine')}</th>
                     </tr>
                  </thead>
                  <tbody className="divide-y divide-slate-50 italic text-[11px] text-slate-600 font-medium">
                     {leads.length === 0 ? (
                        <tr>
                           <td colSpan={7} className="text-center py-10 text-slate-450 font-bold uppercase tracking-widest text-[9px] italic">
-                             No NCP progress lines matched for this period scope
+                             {t('noNcpProgressLines')}
                           </td>
                        </tr>
                     ) : (

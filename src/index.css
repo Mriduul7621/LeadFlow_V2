@@ -1,16 +1,54 @@
-@import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400;1,500;1,600;1,700;1,800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400;1,500;1,600;1,700;1,800&family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
+/**
+ * LeadFlow design tokens (centralized, brand-aligned).
+ * ------------------------------------------------------------------
+ * Brand palette (Shanta Life):
+ *   #F3702B  orange   → --color-brand-accent
+ *   #978C21  olive    → --color-brand-primary
+ *   #0359B3  blue     → --color-brand-blue
+ *   #3C3C3C  neutral  → --color-brand-dark
+ *   #FFFFFF  white    → surfaces
+ *
+ * Components should consume these tokens (bg-brand-primary, text-brand-blue,
+ * rounded-card, shadow-card, …) instead of scattering raw hex values.
+ */
 @theme {
-  --font-sans: "Open Sans", ui-sans-serif, system-ui, sans-serif;
-  --color-primary: #978C21;
+  --font-sans: "Open Sans", "Noto Sans Bengali", ui-sans-serif, system-ui, sans-serif;
+
+  /* Brand */
+  --color-brand-primary: #978C21;
+  --color-brand-primary-hover: #83781C;
+  --color-brand-accent: #F3702B;
   --color-brand-blue: #0359B3;
-  --color-brand-accent: #026A8B;
-  --color-surface: #F9F9F4;
-  --color-card: #FFFFFF;
-  --color-border: #D1D5DB;
+  --color-brand-dark: #3C3C3C;
   --color-brand-text: #3C3C3C;
-  --color-brand-dark: #1F2937;
+
+  /* Keep the legacy `primary` alias so existing utilities keep working. */
+  --color-primary: #978C21;
+
+  /* Neutral app surfaces */
+  --color-surface: #F7F5F1;
+  --color-surface-soft: #FBFAF8;
+  --color-card: #FFFFFF;
+  --color-border: #E6E3DE;
+  --color-border-strong: #D1D5DB;
+
+  /* Semantic */
+  --color-success: #10B981;
+  --color-danger: #DC2626;
+  --color-warning: #D97706;
+  --color-info: #0359B3;
+
+  /* Radius scale */
+  --radius-card: 0.875rem;   /* 14px — cards */
+  --radius-control: 0.625rem; /* 10px — inputs/buttons */
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(60, 60, 60, 0.04), 0 2px 8px rgba(60, 60, 60, 0.04);
+  --shadow-card-hover: 0 2px 4px rgba(60, 60, 60, 0.05), 0 6px 16px rgba(60, 60, 60, 0.07);
+  --shadow-popover: 0 8px 30px rgba(60, 60, 60, 0.12);
 }
 
 @layer base {
@@ -18,29 +56,82 @@
     @apply bg-surface text-brand-text antialiased scroll-smooth;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+
+  /* Visible, consistent focus rings for keyboard accessibility. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-primary/40 ring-offset-1;
+  }
 }
 
 @layer components {
+  /* ---------------------------------------------------------- */
+  /*  Cards                                                      */
+  /* ---------------------------------------------------------- */
+  .card {
+    @apply bg-card border border-border rounded-card shadow-card;
+  }
   .card-premium {
-    @apply bg-white border border-border rounded-lg p-6 shadow-sm hover:shadow-md transition-all duration-300;
+    @apply bg-card border border-border rounded-card p-6 shadow-card hover:shadow-card-hover transition-shadow duration-150;
   }
 
+  /* ---------------------------------------------------------- */
+  /*  Buttons                                                    */
+  /* ---------------------------------------------------------- */
   .btn-primary {
-    @apply px-5 py-2.5 bg-primary text-white rounded-md font-bold uppercase tracking-widest text-xs hover:opacity-90 active:scale-95 transition-all duration-200 shadow-sm disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-brand-primary text-white rounded-control text-sm font-semibold shadow-sm hover:bg-brand-primary-hover active:scale-[0.99] transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-border-strong text-brand-text rounded-control text-sm font-semibold hover:bg-surface-soft active:scale-[0.99] transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-transparent text-brand-text rounded-control text-sm font-medium hover:bg-slate-100 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-danger text-white rounded-control text-sm font-semibold hover:bg-red-700 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
   }
 
-  .btn-outline {
-    @apply px-5 py-2.5 bg-white border border-border text-brand-text rounded-md font-bold uppercase tracking-widest text-xs hover:bg-slate-50 active:scale-95 transition-all duration-200;
-  }
-
+  /* ---------------------------------------------------------- */
+  /*  Inputs / selects / textareas                               */
+  /* ---------------------------------------------------------- */
   .input-standard {
-    @apply w-full px-4 py-2.5 bg-slate-50 border border-border rounded-lg text-sm font-medium focus:ring-2 focus:ring-primary/10 focus:border-primary focus:bg-white outline-none transition-all;
+    @apply w-full px-4 py-2.5 bg-surface-soft border border-border rounded-control text-sm font-medium text-brand-text placeholder:text-slate-400 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-white outline-none transition-colors duration-150 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed;
+  }
+  .label-standard {
+    @apply block text-sm font-medium text-slate-700 mb-1.5;
+  }
+  .field-error {
+    @apply text-xs text-danger font-medium mt-1;
   }
 
-  /* Custom Scrollbar */
+  /* ---------------------------------------------------------- */
+  /*  Badges                                                     */
+  /* ---------------------------------------------------------- */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded-control text-[11px] font-semibold leading-none;
+  }
+
+  /* ---------------------------------------------------------- */
+  /*  Data tables                                                */
+  /* ---------------------------------------------------------- */
+  .table-base {
+    @apply w-full text-left text-sm;
+  }
+  .table-base thead th {
+    @apply bg-surface-soft px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-border;
+  }
+  .table-base tbody td {
+    @apply px-4 py-3 border-b border-border/60 text-sm text-slate-700;
+  }
+  .table-base tbody tr {
+    @apply hover:bg-surface-soft/70 transition-colors duration-150;
+  }
+
+  /* ---------------------------------------------------------- */
+  /*  Scrollbar                                                  */
+  /* ---------------------------------------------------------- */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -115,4 +206,3 @@
   height: 24px;
   transform: translateX(-50%);
 }
-
