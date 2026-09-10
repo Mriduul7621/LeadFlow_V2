@@ -783,11 +783,6 @@ function importLeadCode(mobile: string): string {
   return `imp_${digits}`;
 }
 
-// Minimal helper for testing vercel
-export const FORBIDDEN_CUSTOM_KEYS = new Set(['assignedBy']);
-export function sanitizeCustomFields(input: Record<string, any>) { return input; }
-
-
 /* ====================================================================
    DB STATUS / HEALTH
 ==================================================================== */
