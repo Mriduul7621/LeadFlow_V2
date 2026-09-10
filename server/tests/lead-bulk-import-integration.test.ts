@@ -693,4 +693,108 @@ describe('Bulk Lead Import - Real PostgreSQL Integration', () => {
     const camps: any = await pool.query(`SELECT COUNT(*)::int AS c FROM options WHERE field_key = 'Campaign' AND option_value = 'Legacy Campaign'`);
     assert.equal(camps.rows[0].c, 1);
   });
+
+  it('Y. REGRESSION: Lead Date never changes created_at on bulk UPDATE (update + batch-conflict paths)', async () => {
+    // 1. Insert with historical Lead Date 22-Apr-2026
+    const first = await importRows([realSheetRow()]);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.data.inserted, 1, JSON.stringify(first.body.data));
+    const original: any = await pool.query(`SELECT id, created_at FROM leads WHERE mobile = $1`, ['8801557586634']);
+    assert.equal(original.rows.length, 1);
+    const originalCreatedAt = original.rows[0].created_at;
+    assert.equal(new Date(originalCreatedAt).toISOString(), '2026-04-22T00:00:00.000Z');
+
+    // 2. Re-import SAME lead with a DIFFERENT Lead Date -> must be an UPDATE
+    const second = await importRows([realSheetRow({
+      'Lead Date': '01-May-2026',
+      'Final Remarks': 'Current-state remarks changed by May re-import',
+      'Follow up': 'Busy',
+    })]);
+    assert.equal(second.status, 200);
+    const d2 = second.body.data;
+    assert.equal(d2.inserted, 0, 'must be an update, not a re-insert');
+    assert.equal(d2.updated, 1, JSON.stringify(d2));
+
+    // 3. created_at is EXACTLY the original 22-Apr-2026 (immutable on update)
+    const after: any = await pool.query(`SELECT created_at, notes, current_status FROM leads WHERE mobile = $1`, ['8801557586634']);
+    assert.equal(new Date(after.rows[0].created_at).getTime(), new Date(originalCreatedAt).getTime(),
+      'created_at must never change on a bulk UPDATE, regardless of incoming Lead Date');
+    assert.equal(new Date(after.rows[0].created_at).toISOString(), '2026-04-22T00:00:00.000Z');
+    // 4. Other supplied current-state fields still update normally
+    assert.equal(after.rows[0].notes, 'Current-state remarks changed by May re-import');
+    assert.equal(after.rows[0].current_status, 'Busy');
+
+    // 5. Blank Lead Date on UPDATE also leaves created_at unchanged
+    const third = await importRows([realSheetRow({ 'Lead Date': '', 'Final Remarks': 'Blank lead date update' })]);
+    assert.equal(third.body.data.updated, 1);
+    const afterBlank: any = await pool.query(`SELECT created_at, notes FROM leads WHERE mobile = $1`, ['8801557586634']);
+    assert.equal(new Date(afterBlank.rows[0].created_at).getTime(), new Date(originalCreatedAt).getTime());
+    assert.equal(afterBlank.rows[0].notes, 'Blank lead date update');
+
+    // 6. Batch-conflict path (same phone twice in ONE upload, last-wins
+    //    upsertByCode) must also keep created_at from the FIRST row's Lead Date
+    await pool.query(`DELETE FROM leads`);
+    const batch = await importRows([
+      realSheetRow({ 'Lead Date': '10-Mar-2026', 'Final Remarks': 'First row remarks' }),
+      realSheetRow({ 'Lead Date': '15-Jun-2026', 'Final Remarks': 'Second row wins content' }),
+    ]);
+    assert.equal(batch.status, 200, JSON.stringify(batch.body));
+    const db: any = await pool.query(`SELECT COUNT(*)::int AS c FROM leads`);
+    assert.equal(db.rows[0].c, 1, 'batch duplicates must not create two leads');
+    const batchRow: any = await pool.query(`SELECT created_at, notes FROM leads WHERE mobile = $1`, ['8801557586634']);
+    assert.equal(new Date(batchRow.rows[0].created_at).toISOString(), '2026-03-10T00:00:00.000Z',
+      'upsertByCode conflict must not rewrite created_at with the later row Lead Date');
+    assert.equal(batchRow.rows[0].notes, 'Second row wins content', 'last-wins content update still applies');
+  });
+
+  it('Z. REGRESSION: canonical leads.assignment_history is preserved and appended on bulk reassignment', async () => {
+    // 1. Seed a lead with TWO existing canonical assignment-history entries.
+    //    custom_fields carries a DECOY empty assignmentHistory to prove the
+    //    merge reads the canonical column, not the custom_fields bag.
+    // NOTE: no fromEmployeeId on the first entry (there was no previous
+    // assignee); JSONB also drops undefined keys, so the stored shape omits it.
+    const entry1: Record<string, any> = { id: 'assign_001', toEmployeeId: 'ADMIN1', changedBy: 'ADMIN1', date: '2026-01-05T04:00:00.000Z', note: 'Initial assignment at lead creation' };
+    const entry2 = { id: 'assign_002', fromEmployeeId: 'ADMIN1', toEmployeeId: 'Monsoor_CTG', changedBy: 'ADMIN1', date: '2026-02-10T05:30:00.000Z', note: 'Transferred to CTG team' };
+    await pool.query(
+      `INSERT INTO leads (lead_code, customer_name, mobile, email, assigned_to, assigned_by, assignment_history, custom_fields, current_status)
+       VALUES ('hist_case_01', 'History Case', '01712345099', 'historycase@test.com', $1, $2, $3::jsonb, $4::jsonb, 'Interested')`,
+      [
+        monsoor.id,
+        adminUser.id,
+        JSON.stringify([entry1, entry2]),
+        JSON.stringify({ assignedTo: 'Monsoor_CTG', assignmentHistory: [] }),
+      ]
+    );
+
+    // 2. Bulk-import the SAME lead (same mobile) with a DIFFERENT valid assignee
+    const res = await importRows([realSheetRow({
+      'Name': 'History Case',
+      'Phone': '01712345099',
+      'E-mail': 'historycase@test.com',
+      'Assigned To': 'EMPA',
+    })]);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const d = res.body.data;
+    assert.equal(d.failed, 0, JSON.stringify(d.errors));
+    assert.equal(d.inserted, 0);
+    assert.equal(d.updated, 1, 'reassignment must be an UPDATE');
+
+    // 3. Canonical assignment_history: original entries intact + exactly one append
+    const row: any = await pool.query(`SELECT assigned_to, assignment_history, custom_fields FROM leads WHERE mobile = $1`, ['01712345099']);
+    assert.equal(row.rows.length, 1);
+    const history = row.rows[0].assignment_history;
+    assert.ok(Array.isArray(history), 'assignment_history must be an array');
+    assert.equal(history.length, 3, 'exactly one new entry appended, none lost');
+    assert.deepEqual(history[0], entry1, 'original history entry #1 must remain untouched');
+    assert.deepEqual(history[1], entry2, 'original history entry #2 must remain untouched');
+    const appended = history[2];
+    assert.equal(appended.fromEmployeeId, 'Monsoor_CTG', 'new entry fromEmployeeId must be the previous assignee');
+    assert.equal(appended.toEmployeeId, 'EMPA', 'new entry toEmployeeId must be the new assignee');
+    assert.equal(appended.changedBy, 'ADMIN1', 'new entry actor must be the authenticated caller');
+    assert.ok(appended.id !== entry1.id && appended.id !== entry2.id);
+
+    // 4. Assignment actually moved to the resolved user
+    assert.equal(row.rows[0].assigned_to, employeeA.id);
+    assert.equal(row.rows[0].custom_fields.assignedTo, 'EMPA');
+  });
 });

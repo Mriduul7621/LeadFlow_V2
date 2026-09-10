@@ -3698,7 +3698,11 @@ const LEAD_UPSERT_SQL = `
     tags = EXCLUDED.tags,
     previous_assigned_to = COALESCE($31::uuid, leads.previous_assigned_to),
     updated_by = EXCLUDED.updated_by,
-    created_at = COALESCE($30::timestamp, leads.created_at),
+    -- created_at is IMMUTABLE on conflict/update: the historical Lead Date
+    -- is written on INSERT only (COALESCE($30, NOW()) in the VALUES above).
+    -- A spreadsheet Lead Date must NEVER rewrite an existing lead's
+    -- created_at (bulk import regression guard).
+    created_at = leads.created_at,
     is_deleted = FALSE,
     deleted_at = NULL,
     updated_at = NOW()
@@ -4279,7 +4283,8 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
     if (useDb()) {
       const existingRes = await getPool().query(
         `SELECT l.id, l.lead_code, l.mobile, l.email, l.assigned_to, l.current_status,
-                l.custom_fields, l.created_by, au.employee_id AS assigned_employee_id
+                l.custom_fields, l.created_by, l.assignment_history,
+                au.employee_id AS assigned_employee_id
          FROM leads l
          LEFT JOIN users au ON au.id = l.assigned_to
          LEFT JOIN LATERAL (SELECT REGEXP_REPLACE(COALESCE(l.mobile, ''), '[^0-9]', '', 'g') AS d) ph ON TRUE
@@ -4525,12 +4530,16 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
 
           // Server-side assignment history merge when reassigning an
           // existing lead (actor = authenticated caller).
+          // Source of truth is the CANONICAL leads.assignment_history column -
+          // never the custom_fields bag (which must not silently shadow it).
           if ((action.action === 'update' || action.action === 'upsertByCode') && action.existing) {
             const existing = action.existing;
             if (existing.assigned_to && p.assigned && String(existing.assigned_to) !== String(p.assigned.userId)) {
-              const existingHistory = Array.isArray(existing.custom_fields?.assignmentHistory)
-                ? existing.custom_fields.assignmentHistory
-                : [];
+              // Canonical DB column first; camelCase fallback only for the
+              // dev-demo in-memory store shape (never present in PG rows).
+              const existingHistory = Array.isArray(existing.assignment_history)
+                ? existing.assignment_history
+                : (Array.isArray((existing as any).assignmentHistory) ? (existing as any).assignmentHistory : []);
               const fromEmployeeId = existing.assigned_employee_id || existing.custom_fields?.assignedTo || undefined;
               (record as any).assignmentHistory = [
                 ...existingHistory,
