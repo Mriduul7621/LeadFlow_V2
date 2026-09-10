@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
+import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 
 /**
@@ -204,6 +205,7 @@ const jsonbOr = (value: any, fallback: any = null): any => {
 
 const DEFAULT_ROLES: Array<{ code: string; name: string; level: number }> = [
   { code: 'ADMIN', name: 'Administrator', level: 1 },
+  { code: 'CEO', name: 'Chief Executive Officer', level: 1 },
   { code: 'MANAGER', name: 'Manager', level: 2 },
   { code: 'TEAM_LEAD', name: 'Team Lead', level: 3 },
   { code: 'EMPLOYEE', name: 'Employee', level: 4 },
@@ -212,6 +214,13 @@ const DEFAULT_ROLES: Array<{ code: string; name: string; level: number }> = [
   { code: 'SBE', name: 'Senior Business Executive', level: 4 },
   { code: 'BE', name: 'Business Executive', level: 5 },
 ];
+
+/** System roles that exist for platform administration and never take part
+ *  in the business reporting ladder (Level 1..N company-wide hierarchy). */
+const SYSTEM_ROLES = ['ADMIN', 'SUPERADMIN'];
+
+/** Levels at or above this value are considered "not placed in the ladder". */
+const UNASSIGNED_LEVEL = 99;
 
 let rolesEnsured = false;
 
@@ -230,6 +239,14 @@ async function ensureDefaultRoles(): Promise<void> {
         [role.code, role.name, role.level]
       );
     }
+  } else {
+    // Existing databases: guarantee the business ladder has a Level-1 (CEO)
+    // role available even when the table was seeded before it existed.
+    await pool.query(
+      `INSERT INTO roles (role_code, role_name, hierarchy_level, is_active, created_at, updated_at)
+       VALUES ('CEO', 'Chief Executive Officer', 1, TRUE, NOW(), NOW())
+       ON CONFLICT (role_code) DO NOTHING`
+    );
   }
   rolesEnsured = true;
 }
@@ -275,6 +292,274 @@ async function resolveUserId(ref: any): Promise<string | null> {
 }
 
 /* ====================================================================
+   COMPANY-WIDE REPORTING LADDER  (Level 1 = CEO ... Level N)
+==================================================================== */
+
+interface RoleRow { id: string; role_code: string; role_name: string; hierarchy_level: number; is_active: boolean }
+
+async function getRoleRows(exec: { query: Function }): Promise<RoleRow[]> {
+  const result = await exec.query(
+    `SELECT id, role_code, role_name, hierarchy_level, is_active
+       FROM roles ORDER BY hierarchy_level ASC, role_name ASC`
+  );
+  return result.rows as RoleRow[];
+}
+
+/** Role level lookup: role code -> ladder level (99 = not in ladder). */
+async function roleLevelOf(exec: { query: Function }, roleId: string | null): Promise<number> {
+  if (!roleId) return UNASSIGNED_LEVEL;
+  const result = await exec.query(
+    'SELECT hierarchy_level FROM roles WHERE id = $1 LIMIT 1',
+    [roleId]
+  );
+  const level = Number(result.rows[0]?.hierarchy_level);
+  return Number.isFinite(level) && level > 0 ? level : UNASSIGNED_LEVEL;
+}
+
+/**
+ * Validates a reporting link against the company ladder:
+ *   - The manager's role must sit EXACTLY one level above the employee's.
+ *   - Both must be in the same department, EXCEPT when the manager is at
+ *     Level 1 (CEO) — the CEO sits above every department.
+ *   - Level-1 (CEO) employees report to nobody.
+ *   - Roles not placed in the ladder (level 99) may omit the manager.
+ *   - Cycles are rejected (an employee can never manage their own ancestor).
+ * Returns an error message, or null when the link is valid.
+ */
+async function validateReportingLink(
+  exec: { query: Function },
+  opts: { selfId: string | null; roleId: string | null; departmentId: string | null; managerId: string | null; managerIsRequired: boolean }
+): Promise<string | null> {
+  const { selfId, roleId, departmentId, managerId, managerIsRequired } = opts;
+  const level = await roleLevelOf(exec, roleId);
+  const inLadder = level > 0 && level < UNASSIGNED_LEVEL;
+
+  if (level === 1) {
+    if (managerId) {
+      return 'A Level-1 (CEO) employee cannot report to anyone. Leave the reporting manager empty.';
+    }
+    return null;
+  }
+
+  if (!managerId) {
+    if (inLadder && managerIsRequired) {
+      return 'A reporting manager is required: select the employee this person reports to.';
+    }
+    return null;
+  }
+
+  if (selfId && managerId === selfId) {
+    return 'An employee cannot report to themselves.';
+  }
+
+  const managerResult = await exec.query(
+    `SELECT u.id, u.employee_id, u.department_id, u.is_active, r.role_code, r.hierarchy_level
+       FROM users u LEFT JOIN roles r ON r.id = u.role_id
+      WHERE u.id = $1 LIMIT 1`,
+    [managerId]
+  );
+  const manager = managerResult.rows[0];
+  if (!manager) return 'The selected reporting manager was not found.';
+  if (manager.is_active === false) return 'The reporting manager must be an active employee.';
+
+  const managerLevel = Number(manager.hierarchy_level) > 0 ? Number(manager.hierarchy_level) : UNASSIGNED_LEVEL;
+
+  if (inLadder) {
+    // The manager sits one level UP the ladder (Level 1 = CEO at the top),
+    // i.e. manager level = employee level - 1.
+    if (managerLevel !== level - 1) {
+      return `Invalid reporting manager: this role sits at Level ${level}, so the manager must hold a Level ${level - 1} role.`;
+    }
+    if (managerLevel !== 1) {
+      // Same-department rule — the CEO (Level 1) is the only cross-department link.
+      if (!departmentId || !manager.department_id || String(manager.department_id) !== String(departmentId)) {
+        return 'Invalid reporting manager: the manager must belong to the same department.';
+      }
+    }
+  }
+
+  // Cycle guard: walk up from the proposed manager; the employee must not
+  // appear in their own management chain.
+  let cursor: string | null = managerId;
+  const seen = new Set<string>([managerId]);
+  while (cursor) {
+    if (selfId && cursor === selfId) {
+      return 'Invalid reporting manager: that would create a circular reporting chain.';
+    }
+    const up = await exec.query('SELECT manager_id FROM users WHERE id = $1 LIMIT 1', [cursor]);
+    const next: string | null = up.rows[0]?.manager_id || null;
+    if (next && seen.has(next)) break; // pre-existing cycle in stored data; stop walking
+    seen.add(next || '');
+    cursor = next;
+  }
+  return null;
+}
+
+/**
+ * Server-authoritative recompute of reporting_chain / subordinates for all
+ * users (derived from users.manager_id), plus the era-B `hierarchies` sync
+ * rows. Called after any user create/update that can change the tree.
+ */
+async function recomputeReportingChains(exec: { query: Function }): Promise<void> {
+  const result = await exec.query('SELECT id, employee_id, manager_id FROM users');
+  const byId = new Map<string, { id: string; employeeId: string; managerId: string | null }>();
+  for (const row of result.rows) {
+    byId.set(row.id, { id: row.id, employeeId: row.employee_id, managerId: row.manager_id || null });
+  }
+  const childrenOf = new Map<string, string[]>();
+  for (const u of byId.values()) {
+    if (!u.managerId) continue;
+    const list = childrenOf.get(u.managerId) || [];
+    list.push(u.id);
+    childrenOf.set(u.managerId, list);
+  }
+
+  const chainMemo = new Map<string, string[]>();
+  const chainOf = (id: string, guard: Set<string>): string[] => {
+    if (chainMemo.has(id)) return chainMemo.get(id)!;
+    const user = byId.get(id);
+    if (!user || !user.managerId || guard.has(id)) return [];
+    guard.add(id);
+    const manager = byId.get(user.managerId);
+    const chain = manager ? [manager.employeeId, ...chainOf(user.managerId, guard)] : [];
+    guard.delete(id);
+    chainMemo.set(id, chain);
+    return chain;
+  };
+
+  const subsMemo = new Map<string, string[]>();
+  const subsOf = (id: string): string[] => {
+    if (subsMemo.has(id)) return subsMemo.get(id)!;
+    const kids = childrenOf.get(id) || [];
+    const all: string[] = [];
+    for (const kid of kids) {
+      const kidUser = byId.get(kid);
+      if (kidUser) all.push(kidUser.employeeId, ...subsOf(kid));
+    }
+    subsMemo.set(id, all);
+    return all;
+  };
+
+  for (const user of byId.values()) {
+    const chain = chainOf(user.id, new Set());
+    const subs = subsOf(user.id);
+    await exec.query(
+      `UPDATE users SET reporting_chain = $2, subordinates = $3, updated_at = NOW() WHERE id = $1`,
+      [user.id, JSON.stringify(chain), JSON.stringify(subs)]
+    );
+    if (user.managerId) {
+      await exec.query(
+        `INSERT INTO hierarchies (user_id, manager_id, level, path, created_at, updated_at)
+         VALUES ($1, $2, GREATEST($3, 1), $4, NOW(), NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           manager_id = EXCLUDED.manager_id,
+           level = EXCLUDED.level,
+           path = EXCLUDED.path,
+           updated_at = NOW()`,
+        [user.id, user.managerId, chain.length + 1, JSON.stringify(chain)]
+      );
+    } else {
+      await exec.query('DELETE FROM hierarchies WHERE user_id = $1', [user.id]).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Ladder + setup status for the admin hierarchy screen.
+ * Reports links whose manager no longer matches the ladder rules
+ * (e.g. after levels were changed) without blocking the save.
+ */
+async function buildHierarchyConfig() {
+  const pool = getPool();
+  await ensureDefaultRoles();
+  const roles = (await getRoleRows(pool)).filter(
+    r => !SYSTEM_ROLES.includes(String(r.role_code).toUpperCase())
+  );
+  const usersResult = await pool.query(
+    `SELECT u.id, u.employee_id, u.full_name, u.manager_id, u.department_id, u.is_active,
+            r.role_code, r.hierarchy_level
+       FROM users u LEFT JOIN roles r ON r.id = u.role_id`
+  );
+
+  const levelMap = new Map<string, number>();
+  for (const r of roles) levelMap.set(String(r.role_code).toUpperCase(), Number(r.hierarchy_level));
+
+  const ladderRoles = roles.filter(r => Number(r.hierarchy_level) > 0 && Number(r.hierarchy_level) < UNASSIGNED_LEVEL);
+  const levels: Array<{ level: number; roles: Array<{ roleId: string; roleName: string; employeeCount: number }> }> = [];
+  for (const role of ladderRoles) {
+    const level = Number(role.hierarchy_level);
+    let entry = levels.find(l => l.level === level);
+    if (!entry) { entry = { level, roles: [] }; levels.push(entry); }
+    entry.roles.push({
+      roleId: String(role.role_code),
+      roleName: role.role_name,
+      employeeCount: usersResult.rows.filter(
+        (u: any) => String(u.role_code || '').toUpperCase() === String(role.role_code).toUpperCase() && u.is_active !== false
+      ).length,
+    });
+  }
+  levels.sort((a, b) => a.level - b.level);
+
+  const unassignedRoles = roles
+    .filter(r => !(Number(r.hierarchy_level) > 0 && Number(r.hierarchy_level) < UNASSIGNED_LEVEL))
+    .map(r => ({ roleId: String(r.role_code), roleName: r.role_name, employeeCount: usersResult.rows.filter((u: any) => String(u.role_code || '').toUpperCase() === String(r.role_code).toUpperCase() && u.is_active !== false).length }));
+
+  let usersWithManager = 0;
+  let ladderUsers = 0;
+  const invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }> = [];
+  const userById = new Map<string, any>(usersResult.rows.map((u: any) => [u.id, u]));
+  const levelOfUser = (u: any): number => {
+    const code = String(u.role_code || '').toUpperCase();
+    return levelMap.has(code) ? levelMap.get(code)! : UNASSIGNED_LEVEL;
+  };
+  for (const u of usersResult.rows) {
+    if (u.is_active === false) continue;
+    const level = levelOfUser(u);
+    if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
+    ladderUsers++;
+    if (u.manager_id) usersWithManager++;
+    if (level === UNASSIGNED_LEVEL) continue; // role not placed in the ladder yet
+
+    if (level === 1) {
+      if (u.manager_id) invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'A Level-1 (CEO) employee must not have a reporting manager.' });
+      continue;
+    }
+    if (!u.manager_id) {
+      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: `Level ${level} employee has no reporting manager.` });
+      continue;
+    }
+    const manager = userById.get(u.manager_id);
+    if (!manager) {
+      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'Reporting manager not found.' });
+      continue;
+    }
+    const managerLevel = levelOfUser(manager);
+    if (managerLevel !== level - 1) {
+      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: `Manager must be Level ${level - 1} (currently Level ${managerLevel === UNASSIGNED_LEVEL ? 'unassigned' : managerLevel}).` });
+    } else if (managerLevel !== 1 && String(manager.department_id || '') !== String(u.department_id || '')) {
+      invalidLinks.push({ employeeId: u.employee_id, employeeName: u.full_name, reason: 'Manager belongs to a different department.' });
+    }
+  }
+
+  return {
+    levels,
+    unassignedRoles,
+    setup: {
+      totalUsers: ladderUsers,
+      usersWithManager,
+      usersWithoutManager: Math.max(0, ladderUsers - usersWithManager),
+      invalidLinks,
+    },
+    rules: {
+      levelGap: 1,
+      sameDepartmentRequired: true,
+      level1CrossesDepartments: true,
+      description: 'Level 1 = CEO (company-wide). Every other employee reports to a specific manager exactly one level up, within the same department.',
+    },
+  };
+}
+
+/* ====================================================================
    ROW MAPPERS  (database rows -> frontend contract)
 ==================================================================== */
 
@@ -306,13 +591,14 @@ function mapUserRow(row: any, managerEmployeeId?: string | null) {
     mustChangePassword: row.must_change_password === true,
     reportingChain: jsonbOr(row.reporting_chain, []),
     subordinates: jsonbOr(row.subordinates, []),
+    hierarchyLevel: Number(row.hierarchy_level) > 0 ? Number(row.hierarchy_level) : 0,
     createdDate: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 const USER_SELECT = `
-  SELECT u.*, r.role_code, r.role_name, m.employee_id AS manager_employee_id
+  SELECT u.*, r.role_code, r.role_name, r.hierarchy_level, m.employee_id AS manager_employee_id
   FROM users u
   LEFT JOIN roles r ON r.id = u.role_id
   LEFT JOIN users m ON m.id = u.manager_id
@@ -832,6 +1118,61 @@ router.get('/users', requireAuth, async (_req, res) => {
   }
 });
 
+/* Reporting-manager candidates for an employee form: the employees whose
+   role sits exactly one level above the given role, in the same
+   department (Level 1 / CEO candidates are department-agnostic).
+   NOTE: registered BEFORE /users/:id so "reporting-options" is not
+   captured as an :id path parameter. */
+router.get('/users/reporting-options', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) return sendJson(res, 200, []);
+  try {
+    const pool = getPool();
+    const roleCode = clean(req.query?.role).toUpperCase();
+    const departmentId = await resolveDepartmentId(req.query?.departmentId);
+    if (!roleCode) return sendJson(res, 400, { success: false, message: 'role query parameter is required.' });
+
+    const roles = await getRoleRows(pool);
+    const role = roles.find(r => String(r.role_code).toUpperCase() === roleCode);
+    const level = role ? Number(role.hierarchy_level) : UNASSIGNED_LEVEL;
+    if (level === UNASSIGNED_LEVEL) return sendJson(res, 200, []);
+    if (level === 1) return sendJson(res, 200, []); // CEO reports to nobody
+
+    const managerLevel = level - 1; // the manager sits one level UP the ladder
+    const managerRoleCodes = roles
+      .filter(r => Number(r.hierarchy_level) === managerLevel)
+      .map(r => String(r.role_code).toUpperCase());
+    if (managerRoleCodes.length === 0) return sendJson(res, 200, []);
+
+    const placeholders = managerRoleCodes.map((_, i) => `$${i + 1}`).join(', ');
+    const params: any[] = [...managerRoleCodes];
+    let sql = `
+      SELECT u.id, u.employee_id, u.full_name, u.designation, d.department_name, r.role_code AS role_code, r.role_name AS role_name
+        FROM users u
+        LEFT JOIN roles r ON r.id = u.role_id
+        LEFT JOIN departments d ON d.id = u.department_id
+       WHERE u.is_active = TRUE AND UPPER(r.role_code) IN (${placeholders})`;
+    if (managerLevel !== 1) {
+      if (!departmentId) return sendJson(res, 200, []);
+      sql += ` AND u.department_id = $${params.length + 1}`;
+      params.push(departmentId);
+    }
+    sql += ` ORDER BY u.full_name ASC`;
+    const result = await pool.query(sql, params);
+    return sendJson(res, 200, result.rows.map((row: any) => ({
+      id: row.id,
+      employeeId: row.employee_id,
+      fullName: row.full_name,
+      designation: row.designation || '',
+      departmentName: row.department_name || '',
+      roleCode: row.role_code,
+      roleName: row.role_name,
+    })));
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Reporting options fetch failed' });
+  }
+});
+
 router.get('/users/:id', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
@@ -941,7 +1282,18 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
     if (teamRef && !teamId) {
       return sendJson(res, 400, { success: false, message: `Unknown team "${teamRef}". Please select a valid team.` });
     }
-    const managerId = await resolveUserId(payload.managerId || payload.reportingManagerId);
+    const managerId = await resolveUserId(payload.managerId || payload.reportingManagerId || null);
+
+    // Reporting ladder: the manager must sit exactly one level up, in the
+    // same department (Level-1 CEO is the only cross-department link).
+    const reportingError = await validateReportingLink(getPool(), {
+      selfId: null,
+      roleId,
+      departmentId,
+      managerId,
+      managerIsRequired: true,
+    });
+    if (reportingError) return sendJson(res, 400, { success: false, message: reportingError });
 
     const result = await getPool().query(
       `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, department_id, team_id,
@@ -970,8 +1322,13 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
       ]
     );
     const row = result.rows[0];
-    const roleCode = await roleCodeOf(row.role_id);
-    const mapped = mapUserRow({ ...row, role_code: roleCode, role_name: roleCode });
+    // Server-authoritative reporting chains: recompute for everyone now
+    // that the new employee (and their manager link) exists.
+    await recomputeReportingChains(getPool()).catch((err: any) => console.error('Reporting chain sync failed:', err?.message || err));
+    const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
+    const freshRow = fresh.rows[0] || row;
+    const roleCode = await roleCodeOf(freshRow.role_id);
+    const mapped = mapUserRow({ ...freshRow, role_code: roleCode, role_name: roleCode });
     return sendJson(res, 201, { success: true, data: mapped });
   } catch (error: any) {
     if (error?.code === '23505') {
@@ -1099,17 +1456,25 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
       managerId = await resolveUserId(managerRef === '' || managerRef == null ? null : managerRef);
     }
     const mustChangePassword = payload.mustChangePassword !== undefined ? !!payload.mustChangePassword : existing.must_change_password === true;
-    const reportingChain = Array.isArray(payload.reportingChain) ? payload.reportingChain : jsonbOr(existing.reporting_chain, []);
-    const subordinates = Array.isArray(payload.subordinates) ? payload.subordinates : jsonbOr(existing.subordinates, []);
 
-    // If the client sent an explicit reporting chain, the immediate
-    // manager is the first entry (reportingChain[0] is the direct parent).
-    if (Array.isArray(payload.reportingChain) && payload.reportingChain.length > 0 && !managerRef) {
-      managerId = await resolveUserId(payload.reportingChain[0]);
+    // Reporting ladder validation (single source of truth: users.manager_id).
+    // reporting_chain / subordinates are recomputed server-side after the
+    // update — client-supplied values are no longer trusted.
+    const nextRoleId = roleId || existing.role_id;
+    const reportingError = await validateReportingLink(client, {
+      selfId: existing.id,
+      roleId: nextRoleId,
+      departmentId,
+      managerId,
+      managerIsRequired: false,
+    });
+    if (reportingError) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: reportingError });
     }
-    if (Array.isArray(payload.reportingChain) && payload.reportingChain.length === 0 && !managerRef) {
-      managerId = null;
-    }
+
+    const existingChain = jsonbOr(existing.reporting_chain, []);
+    const existingSubs = jsonbOr(existing.subordinates, []);
 
     let hash = existing.password;
     if (payload.password && String(payload.password).length > 0) {
@@ -1137,29 +1502,19 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
         departmentId, teamId, managerId,
         clean(payload.designation), clean(payload.avatarUrl),
         status, mustChangePassword,
-        JSON.stringify(reportingChain), JSON.stringify(subordinates),
+        JSON.stringify(existingChain), JSON.stringify(existingSubs),
         existing.id,
       ]
     );
     const row = updated.rows[0];
-    // Keep the era-B reporting table in sync with users.manager_id.
-    if (row.manager_id) {
-      await client.query(
-        `INSERT INTO hierarchies (user_id, manager_id, level, path, created_at, updated_at)
-         VALUES ($1, $2, GREATEST($3, 1), $4, NOW(), NOW())
-         ON CONFLICT (user_id) DO UPDATE SET
-           manager_id = EXCLUDED.manager_id,
-           level = EXCLUDED.level,
-           path = EXCLUDED.path,
-           updated_at = NOW()`,
-        [row.id, row.manager_id, reportingChain.length + 1, JSON.stringify(reportingChain)]
-      );
-    } else {
-      await client.query('DELETE FROM hierarchies WHERE user_id = $1', [row.id]).catch(() => undefined);
-    }
+    // Server-authoritative reporting chains for the whole tree (the link
+    // change can affect ancestors and descendants alike).
+    await recomputeReportingChains(client);
     await client.query('COMMIT');
-    const roleCode = await roleCodeOf(row.role_id);
-    const mapped = mapUserRow({ ...row, role_code: roleCode, role_name: roleCode }, await managerEmployeeId(row.manager_id));
+    const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
+    const freshRow = fresh.rows[0] || row;
+    const roleCode = await roleCodeOf(freshRow.role_id);
+    const mapped = mapUserRow(freshRow);
     return sendJson(res, 200, { success: true, data: mapped });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -1896,6 +2251,136 @@ router.delete('/hierarchies/:id', requireAuth, requireAdmin, async (req, res) =>
 });
 
 /* ====================================================================
+   COMPANY-WIDE REPORTING LADDER (Level 1 = CEO ... Level N)
+==================================================================== */
+
+router.get('/hierarchy-config', requireAuth, async (_req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    return sendJson(res, 200, {
+      levels: [],
+      unassignedRoles: [],
+      setup: { totalUsers: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [] },
+      rules: { levelGap: 1, sameDepartmentRequired: true, level1CrossesDepartments: true, description: 'Ladder configuration requires a database connection.' },
+    });
+  }
+  try {
+    return sendJson(res, 200, await buildHierarchyConfig());
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Hierarchy config fetch failed' });
+  }
+});
+
+router.put('/hierarchy-config', requireAuth, requireAdmin, async (req, res) => {
+  const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+  if (assignments.length === 0) {
+    return sendJson(res, 400, { success: false, message: 'assignments[] with { roleId, level } entries is required.' });
+  }
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    return sendJson(res, 200, { success: true, data: { levels: [] }, message: 'Ladder saved (demo mode).' });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const entry of assignments) {
+      const roleCode = String(clean(entry?.roleId)).toUpperCase();
+      const level = Number(entry?.level);
+      if (!roleCode) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'Every assignment needs a roleId.' });
+      }
+      if (SYSTEM_ROLES.includes(roleCode)) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: `The ${roleCode} system role cannot be placed in the business ladder.` });
+      }
+      if (!Number.isInteger(level) || level < 0 || level >= UNASSIGNED_LEVEL) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: `Invalid level for ${roleCode}: use a whole number between 1 and ${UNASSIGNED_LEVEL - 1}, or 0 to remove the role from the ladder.` });
+      }
+      const storedLevel = level === 0 ? UNASSIGNED_LEVEL : level;
+      const updated = await client.query(
+        `UPDATE roles SET hierarchy_level = $2, updated_at = NOW()
+          WHERE UPPER(role_code) = UPPER($1) RETURNING id`,
+        [roleCode, storedLevel]
+      );
+      if (!updated.rows[0]) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: `Role ${roleCode} not found.` });
+      }
+    }
+    await client.query('COMMIT');
+    return sendJson(res, 200, { success: true, data: await buildHierarchyConfig() });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Hierarchy config save failed' });
+  } finally {
+    client.release();
+  }
+});
+
+/* ====================================================================
+   ORGANOGRAM (auto-generated from users.manager_id — no manual drawing)
+==================================================================== */
+router.get('/organogram', requireAuth, async (_req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    const nodes = fallbackStore.users.map(u => ({
+      id: u.id, employeeId: u.employeeId, fullName: u.fullName || u.name, name: u.fullName || u.name,
+      designation: u.designation || '', roleId: normalizeRole(u.roleCode || u.role), roleName: u.roleCode || u.role,
+      level: 0, departmentId: u.departmentId || '', departmentName: '',
+      managerId: u.managerId || null, managerEmployeeId: u.managerId || null,
+      isActive: u.isActive !== false, avatarUrl: u.avatarUrl || '', directReports: 0,
+    }));
+    const byId = new Map(nodes.map(n => [n.employeeId, n]));
+    for (const n of nodes) n.directReports = nodes.filter(c => c.managerEmployeeId === n.employeeId).length;
+    return sendJson(res, 200, { nodes, roots: nodes.filter(n => !n.managerEmployeeId || !byId.has(n.managerEmployeeId)).map(n => n.employeeId) });
+  }
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT u.id, u.employee_id, u.full_name, u.designation, u.is_active, u.profile_photo,
+              u.manager_id, m.employee_id AS manager_employee_id,
+              u.department_id, d.department_name,
+              r.role_code, r.role_name, r.hierarchy_level
+         FROM users u
+         LEFT JOIN users m ON m.id = u.manager_id
+         LEFT JOIN departments d ON d.id = u.department_id
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE UPPER(COALESCE(r.role_code, '')) NOT IN ('ADMIN', 'SUPERADMIN')`
+    );
+    const nodes = result.rows.map((row: any) => ({
+      id: row.id,
+      employeeId: row.employee_id,
+      fullName: row.full_name,
+      name: row.full_name,
+      designation: row.designation || '',
+      roleId: row.role_code || '',
+      roleName: row.role_name || row.role_code || '',
+      level: Number(row.hierarchy_level) > 0 ? Number(row.hierarchy_level) : 0,
+      departmentId: row.department_id || '',
+      departmentName: row.department_name || '',
+      managerId: row.manager_id || null,
+      managerEmployeeId: row.manager_employee_id || null,
+      isActive: row.is_active !== false,
+      avatarUrl: row.profile_photo || '',
+      directReports: 0,
+    }));
+    const byEmployeeId = new Map(nodes.map(n => [n.employeeId, n]));
+    for (const n of nodes) {
+      n.directReports = nodes.filter(c => c.managerEmployeeId === n.employeeId).length;
+    }
+    const roots = nodes
+      .filter(n => !n.managerEmployeeId || !byEmployeeId.has(n.managerEmployeeId))
+      .map(n => n.employeeId);
+    return sendJson(res, 200, { nodes, roots });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Organogram fetch failed' });
+  }
+});
+
+/* ====================================================================
    METADATA TYPES
 ==================================================================== */
 
@@ -2566,6 +3051,17 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       params.push(`%${String(search)}%`);
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
     }
+    // Server-side data-visibility scoping (role permission profile):
+    // Own / DownTeam / FullTeam callers only ever receive lead rows that
+    // belong to their visible employee set. ADMIN/Organization sees all.
+    const caller = req.currentUser || {};
+    const visibility = await resolveVisibility(String(caller.id || ''), String(caller.role || caller.roleCode || ''));
+    if (!visibility.all) {
+      params.push(visibility.userIds, visibility.employeeIds);
+      const pUser = params.length - 1;
+      const pEmp = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.custom_fields->>'assignedTo' = ANY($${pEmp}::text[]))`);
+    }
     const result = await pool.query(
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
       params
@@ -2969,16 +3465,29 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
    DASHBOARD
 ==================================================================== */
 
-router.get('/dashboard', requireAuth, async (_req, res) => {
+router.get('/dashboard', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
     return sendJson(res, 200, { success: true, data: { leadCount: fallbackStore.leads.length, userCount: fallbackStore.users.length } });
   }
   try {
     const pool = getPool();
+    // Same server-side visibility scope as the leads list, so dashboard
+    // counters can never leak another team's totals.
+    const caller = req.currentUser || {};
+    const visibility = await resolveVisibility(String(caller.id || ''), String(caller.role || caller.roleCode || ''));
     const [leads, users] = await Promise.all([
-      pool.query('SELECT COUNT(*)::int AS count FROM leads WHERE is_deleted = FALSE'),
-      pool.query('SELECT COUNT(*)::int AS count FROM users'),
+      visibility.all
+        ? pool.query('SELECT COUNT(*)::int AS count FROM leads WHERE is_deleted = FALSE')
+        : pool.query(
+            `SELECT COUNT(*)::int AS count FROM leads
+              WHERE is_deleted = FALSE
+                AND (assigned_to::text = ANY($1::text[]) OR custom_fields->>'assignedTo' = ANY($2::text[]))`,
+            [visibility.userIds, visibility.employeeIds]
+          ),
+      visibility.all
+        ? pool.query('SELECT COUNT(*)::int AS count FROM users')
+        : pool.query('SELECT COUNT(*)::int AS count FROM users WHERE id = ANY($1::uuid[])', [visibility.userIds]),
     ]);
     return sendJson(res, 200, { success: true, data: { leadCount: leads.rows[0].count, userCount: users.rows[0].count } });
   } catch (error: any) {

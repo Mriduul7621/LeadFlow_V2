@@ -21,6 +21,57 @@ export interface Hierarchy {
   updatedAt: string;
 }
 
+/** One employee node of the auto-generated organogram tree. */
+export interface OrganogramNode {
+  id: string;
+  employeeId: string;
+  fullName: string;
+  name: string;
+  designation: string;
+  roleId: string;
+  roleName: string;
+  level: number;
+  departmentId: string;
+  departmentName: string;
+  managerId: string | null;
+  managerEmployeeId: string | null;
+  isActive: boolean;
+  avatarUrl: string;
+  directReports: number;
+}
+
+/** Company-wide reporting ladder configuration (admin-managed). */
+export interface HierarchyConfig {
+  levels: Array<{
+    level: number;
+    roles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
+  }>;
+  unassignedRoles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
+  setup: {
+    totalUsers: number;
+    usersWithManager: number;
+    usersWithoutManager: number;
+    invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }>;
+  };
+  rules: {
+    levelGap: number;
+    sameDepartmentRequired: boolean;
+    level1CrossesDepartments: boolean;
+    description: string;
+  };
+}
+
+/** Reporting-manager candidate for the employee form dropdown. */
+export interface ReportingOption {
+  id: string;
+  employeeId: string;
+  fullName: string;
+  designation: string;
+  departmentName: string;
+  roleCode: string;
+  roleName: string;
+}
+
 const KEYS = {
   DEPT: 'lf_local_departments',
   HIER: 'lf_local_hierarchies',
@@ -51,6 +102,32 @@ function writeCache<T>(key: string, value: T[]): void {
  * that is only refreshed after a confirmed database commit.
  */
 export const orgService = {
+  // --- ORGANOGRAM (auto-generated from users.manager_id) ---
+  async getOrganogram(): Promise<{ nodes: OrganogramNode[]; roots: string[] }> {
+    return apiRequest<{ nodes: OrganogramNode[]; roots: string[] }>('/api/organogram');
+  },
+
+  // --- COMPANY-WIDE REPORTING LADDER ---
+  async getHierarchyConfig(): Promise<HierarchyConfig> {
+    return apiRequest<HierarchyConfig>('/api/hierarchy-config');
+  },
+
+  async saveHierarchyConfig(assignments: Array<{ roleId: string; level: number }>): Promise<HierarchyConfig> {
+    const body = await apiRequest<{ success: boolean; data: HierarchyConfig }>('/api/hierarchy-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignments }),
+    });
+    return body.data;
+  },
+
+  /** Reporting-manager candidates: one level up, same department. */
+  async getReportingOptions(role: string, departmentId?: string): Promise<ReportingOption[]> {
+    const query = new URLSearchParams({ role });
+    if (departmentId) query.set('departmentId', departmentId);
+    return apiRequest<ReportingOption[]>(`/api/users/reporting-options?${query.toString()}`);
+  },
+
   // --- DEPARTMENTS ---
   async getDepartments(): Promise<Department[]> {
     try {

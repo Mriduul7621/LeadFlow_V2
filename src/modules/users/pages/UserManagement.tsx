@@ -24,7 +24,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { userService } from '../services/userService';
 import { adminService } from '../../admin/services/adminService';
-import { orgService, Department, Hierarchy, HierarchyLayer } from '../../hierarchy/services/orgService';
+import { orgService, Department, HierarchyConfig, ReportingOption } from '../../hierarchy/services/orgService';
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission, User } from '../../shared/types';
 
@@ -141,7 +141,6 @@ export default function UserManagement() {
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [roles, setRoles] = useState<RolePermission[]>([]);
-  const [hierarchies, setHierarchies] = useState<Hierarchy[]>([]);
 
   // ---- Active tab ----
   const [activeTab, setActiveTab] = useState<TabKey>('employees');
@@ -160,6 +159,7 @@ export default function UserManagement() {
     designation: '',
     role: '',
     departmentId: '',
+    managerId: '',
     password: '',
     status: 'Active' as 'Active' | 'Inactive',
   });
@@ -176,9 +176,12 @@ export default function UserManagement() {
   const [roleFormFeatures, setRoleFormFeatures] = useState<Record<string, Record<string, boolean>>>({});
   const [showRoleForm, setShowRoleForm] = useState(false);
 
-  // ---- Hierarchy states ----
-  const [activeHierDeptId, setActiveHierDeptId] = useState('');
-  const [hierLayers, setHierLayers] = useState<HierarchyLayer[]>([]);
+  // ---- Hierarchy (company-wide reporting ladder) states ----
+  const [hierConfig, setHierConfig] = useState<HierarchyConfig | null>(null);
+  const [ladderAssignments, setLadderAssignments] = useState<Record<string, number>>({});
+  const [savingLadder, setSavingLadder] = useState(false);
+  const [managerOptions, setManagerOptions] = useState<ReportingOption[]>([]);
+  const [loadingManagers, setLoadingManagers] = useState(false);
 
   /* ------------------------------------------------------------------ */
   /*  Load all data                                                      */
@@ -190,19 +193,14 @@ export default function UserManagement() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [roster, depts, accessRoles, hiers] = await Promise.all([
+      const [roster, depts, accessRoles] = await Promise.all([
         userService.getAllUsers(),
         orgService.getDepartments(),
         adminService.getRoles(),
-        orgService.getHierarchies(),
       ]);
       setUsers(roster);
       setDepartments(depts);
       setRoles(accessRoles);
-      setHierarchies(hiers);
-      if (depts.length > 0 && !activeHierDeptId) {
-        setActiveHierDeptId(depts[0].id);
-      }
     } catch (err) {
       toast.error('Could not load data. Please check your connection.');
     } finally {
@@ -220,8 +218,10 @@ export default function UserManagement() {
       designation: '',
       role: roles.length > 0 ? roles[0].roleId : 'ADMIN',
       departmentId: departments.length > 0 ? departments[0].id : '',
+      managerId: '',
       password: '', status: 'Active',
     });
+    setManagerOptions([]);
     setIsUserModalOpen(true);
   };
 
@@ -235,9 +235,11 @@ export default function UserManagement() {
       designation: u.designation || '',
       role: u.role || (roles.length > 0 ? roles[0].roleId : 'ADMIN'),
       departmentId: (u as any).departmentId || '',
+      managerId: (u as any).managerId || (u as any).reportingManagerId || '',
       password: '',
       status: u.status || 'Active',
     });
+    setManagerOptions([]);
     setIsUserModalOpen(true);
   };
 
@@ -245,6 +247,15 @@ export default function UserManagement() {
     e.preventDefault();
     if (!userForm.name.trim() || !userForm.employeeId.trim() || !userForm.email.trim()) {
       toast.error('Please fill in Name, Employee ID and Email.');
+      return;
+    }
+    const formRoleLevel = (roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel ?? 0;
+    if (formRoleLevel > 1 && formRoleLevel < 99 && !userForm.managerId) {
+      toast.error('Please select a reporting manager (one level up, same department).');
+      return;
+    }
+    if (formRoleLevel === 1 && userForm.managerId) {
+      toast.error('A Level-1 (CEO) employee cannot have a reporting manager.');
       return;
     }
 
@@ -282,8 +293,7 @@ export default function UserManagement() {
         mustChangePassword: editingUser
           ? (userForm.password ? true : (editingUser.mustChangePassword ?? false))
           : true,
-        reportingChain: editingUser ? (editingUser.reportingChain || []) : [],
-        subordinates: editingUser ? (editingUser.subordinates || []) : [],
+        managerId: userForm.managerId,
       };
 
       if (editingUser) {
@@ -312,6 +322,36 @@ export default function UserManagement() {
       }
     }
   };
+
+  /* ================================================================== */
+  /*  REPORTING MANAGER OPTIONS (ladder-driven dropdown)                 */
+  /* ================================================================== */
+  useEffect(() => {
+    if (!isUserModalOpen) return;
+    const roleLevel = (roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel ?? 0;
+    if (!userForm.role || roleLevel === 1) {
+      setManagerOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingManagers(true);
+    orgService
+      .getReportingOptions(userForm.role, userForm.departmentId || undefined)
+      .then(options => { if (!cancelled) setManagerOptions(options); })
+      .catch(() => { if (!cancelled) setManagerOptions([]); })
+      .finally(() => { if (!cancelled) setLoadingManagers(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUserModalOpen, userForm.role, userForm.departmentId, roles]);
+
+  // Clear a stale manager selection when the role/department filter changes.
+  useEffect(() => {
+    if (!isUserModalOpen) return;
+    if (userForm.managerId && managerOptions.length > 0 && !managerOptions.some(o => o.employeeId === userForm.managerId)) {
+      setUserForm(prev => ({ ...prev, managerId: '' }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managerOptions]);
 
   /* ================================================================== */
   /*  DEPARTMENT HANDLERS                                                */
@@ -431,224 +471,56 @@ export default function UserManagement() {
   };
 
   /* ================================================================== */
-  /*  HIERARCHY HANDLERS                                                 */
+  /*  HIERARCHY (COMPANY-WIDE LADDER) HANDLERS                           */
   /* ================================================================== */
-  useEffect(() => {
-    if (!activeHierDeptId) return;
-    const matched = hierarchies.find(h => h.departmentId === activeHierDeptId);
-    if (matched && matched.layers && matched.layers.length > 0) {
-      const hasTreeFields = matched.layers.every(l => l.id !== undefined);
-      if (hasTreeFields) {
-        setHierLayers(matched.layers);
-      } else {
-        const migrated: HierarchyLayer[] = matched.layers.map((l, i) => ({
-          ...l,
-          id: l.id || `node_${i}`,
-          parentId: i === 0 ? null : (matched.layers[i - 1].id || `node_${i - 1}`),
-        }));
-        setHierLayers(migrated);
-      }
-    } else {
-      const defaultRole = roles.length > 0 ? roles[0].roleId : 'ADMIN';
-      setHierLayers([{ id: 'root', parentId: null, roleId: defaultRole, employeeIds: [] }]);
-    }
-  }, [activeHierDeptId, hierarchies, roles]);
-
-  const toggleEmpInLayer = (nodeId: string, empId: string) => {
-    setHierLayers(prev => prev.map(l => {
-      if (l.id === nodeId) {
-        const list = l.employeeIds || [];
-        return { ...l, employeeIds: list.includes(empId) ? list.filter(id => id !== empId) : [...list, empId] };
-      }
-      return l;
-    }));
-  };
-
-  const handleRootRoleChange = (roleId: string) => {
-    setHierLayers(prev => prev.map(l =>
-      l.parentId === null || l.id === 'root' ? { ...l, roleId, employeeIds: [] } : l
-    ));
-  };
-
-  const toggleChildRole = (parentId: string, roleId: string) => {
-    setHierLayers(prev => {
-      const existing = prev.find(l => l.parentId === parentId && l.roleId === roleId);
-      if (existing) {
-        const getDesc = (pid: string): string[] => {
-          const children = prev.filter(l => l.parentId === pid);
-          return [...children.map(c => c.id!), ...children.flatMap(c => getDesc(c.id!))];
-        };
-        return prev.filter(l => ![existing.id!, ...getDesc(existing.id!)].includes(l.id!));
-      }
-      return [...prev, { id: `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`, parentId, roleId, employeeIds: [] }];
-    });
-  };
-
-  const handleSaveHierarchy = async () => {
-    if (!activeHierDeptId) { toast.error('Please select a department.'); return; }
+  const loadHierarchyConfig = async () => {
     try {
-      await orgService.saveHierarchy({
-        id: `${activeHierDeptId}_hierarchy`,
-        departmentId: activeHierDeptId,
-        layers: hierLayers,
-        updatedAt: new Date().toISOString(),
-      });
-
-      // Update reporting chains
-      toast.info('Updating reporting chains...');
-      for (const u of users) {
-        const myNode = hierLayers.find(l => l.employeeIds.includes(u.employeeId));
-        if (!myNode) {
-          await userService.updateUser(u.id, { reportingChain: [], subordinates: [] });
-          continue;
-        }
-        const getAncestors = (nid: string, layers: HierarchyLayer[]): string[] => {
-          const node = layers.find(l => l.id === nid);
-          if (!node || !node.parentId) return [];
-          const parent = layers.find(l => l.id === node.parentId);
-          if (!parent) return [];
-          return [...parent.employeeIds, ...getAncestors(parent.id!, layers)];
-        };
-        const getDescendants = (nid: string, layers: HierarchyLayer[]): string[] => {
-          const children = layers.filter(l => l.parentId === nid);
-          return [...children.flatMap(c => c.employeeIds), ...children.flatMap(c => getDescendants(c.id!, layers))];
-        };
-        await userService.updateUser(u.id, {
-          reportingChain: getAncestors(myNode.id!, hierLayers),
-          subordinates: getDescendants(myNode.id!, hierLayers),
-        });
+      const config = await orgService.getHierarchyConfig();
+      setHierConfig(config);
+      const assignments: Record<string, number> = {};
+      for (const level of config.levels) {
+        for (const role of level.roles) assignments[role.roleId] = level.level;
       }
-      toast.success('Hierarchy and reporting chains saved.');
-      await loadData();
-    } catch (e) {
-      toast.error('Could not save hierarchy.');
+      for (const role of config.unassignedRoles) assignments[role.roleId] = 0; // 0 = not in ladder
+      setLadderAssignments(assignments);
+    } catch {
+      toast.error('Could not load the hierarchy configuration.');
     }
   };
 
-  const renderTreeNode = (node: HierarchyLayer, depth: number = 0) => {
-    if (!node) return null;
-    const children = hierLayers.filter(l => l.parentId === node.id);
-    const matchedEmployees = users.filter(u => u.role === node.roleId);
-    const getAncestorRoleIds = (nid: string, layers: HierarchyLayer[]): string[] => {
-      const n = layers.find(l => l.id === nid);
-      if (!n || !n.parentId) return [];
-      const parent = layers.find(l => l.id === n.parentId);
-      if (!parent) return [];
-      return [parent.roleId, ...getAncestorRoleIds(parent.id!, layers)];
-    };
-    const prohibited = [...getAncestorRoleIds(node.id!, hierLayers), node.roleId];
-    const availableChildRoles = roles.filter(r => !prohibited.includes(r.roleId));
+  useEffect(() => {
+    if (activeTab === 'hierarchy') loadHierarchyConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
-    return (
-      <div key={node.id} className="relative mt-4 pl-6">
-        {depth > 0 && (
-          <div className="absolute left-0 top-0 bottom-0 border-l-2 border-dashed border-slate-300 w-5 h-8 border-b rounded-bl-lg pointer-events-none" />
-        )}
-        <div className={cn(
-          "bg-white border rounded-xl p-5 space-y-4 transition-all",
-          depth === 0 ? "border-[#978C21]/40 shadow-md" : "border-slate-200 shadow-sm"
-        )}>
-          {/* Node header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full bg-[#978C21] text-white text-sm flex items-center justify-center font-bold">
-                {depth + 1}
-              </div>
-              <div>
-                <span className="text-sm font-semibold text-slate-800">
-                  {depth === 0 ? 'Top Leader' : `Level ${depth + 1} Reporting Node`}
-                </span>
-                <p className="text-xs text-slate-400">
-                  {roles.find(r => r.roleId === node.roleId)?.roleName || node.roleId}
-                </p>
-              </div>
-            </div>
-            {depth === 0 ? (
-              <select
-                value={node.roleId}
-                onChange={e => handleRootRoleChange(e.target.value)}
-                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium outline-none focus:border-[#978C21]"
-              >
-                {roles.map(r => (
-                  <option key={r.roleId} value={r.roleId}>{r.roleName}</option>
-                ))}
-              </select>
-            ) : (
-              <span className="px-3 py-1.5 bg-amber-50 text-[#978C21] border border-amber-200 text-sm font-semibold rounded-lg">
-                {roles.find(r => r.roleId === node.roleId)?.roleName || node.roleId}
-              </span>
-            )}
-          </div>
+  const setRoleLadderLevel = (roleId: string, level: number) => {
+    setLadderAssignments(prev => ({ ...prev, [roleId]: level }));
+  };
 
-          {/* Employee selection */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-600">
-              Assign Employees ({matchedEmployees.length} available)
-            </label>
-            {matchedEmployees.length === 0 ? (
-              <p className="text-sm text-slate-400 bg-slate-50 border border-dashed border-slate-200 p-3 rounded-lg">
-                No employees with role "{node.roleId}" found. Add employees in the Employees tab.
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-2 p-3 bg-slate-50 border border-slate-100 rounded-lg max-h-32 overflow-y-auto">
-                {matchedEmployees.map(emp => {
-                  const active = (node.employeeIds || []).includes(emp.employeeId);
-                  return (
-                    <button
-                      key={emp.employeeId}
-                      type="button"
-                      onClick={() => toggleEmpInLayer(node.id!, emp.employeeId)}
-                      className={cn(
-                        "px-3 py-1.5 text-xs font-medium rounded-lg transition-all border",
-                        active
-                          ? "bg-[#978C21] border-[#978C21] text-white"
-                          : "bg-white border-slate-200 text-slate-600 hover:border-[#978C21]"
-                      )}
-                    >
-                      {emp.name} ({emp.employeeId})
-                      {active && <Check className="w-3 h-3 inline ml-1" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Child role toggles */}
-          {availableChildRoles.length > 0 && (
-            <div className="border-t border-slate-100 pt-3 space-y-2">
-              <label className="text-sm font-medium text-slate-600">Add Sub-ordinate Level</label>
-              <div className="flex flex-wrap gap-2">
-                {availableChildRoles.map(r => {
-                  const active = children.some(c => c.roleId === r.roleId);
-                  return (
-                    <button
-                      key={r.roleId}
-                      type="button"
-                      onClick={() => toggleChildRole(node.id!, r.roleId)}
-                      className={cn(
-                        "px-3 py-1.5 text-xs font-medium rounded-lg transition-all border",
-                        active
-                          ? "bg-[#978C21] border-[#978C21] text-white"
-                          : "bg-white border-slate-200 text-slate-600 hover:border-[#978C21]"
-                      )}
-                    >
-                      {r.roleName} {active ? '✓' : '+ Add'}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {children.length > 0 && (
-          <div className="pl-4 mt-2 space-y-2">
-            {children.map(child => renderTreeNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    );
+  const saveLadder = async () => {
+    // Every known role is sent; level 0 removes the role from the ladder.
+    const assignments: Array<{ roleId: string; level: number }> = [];
+    for (const roleId of Object.keys(ladderAssignments)) {
+      assignments.push({ roleId, level: Number(ladderAssignments[roleId] ?? 0) });
+    }
+    if (!assignments.some(a => a.level > 0)) {
+      toast.error('Place at least one role in the ladder before saving.');
+      return;
+    }
+    if (!assignments.some(a => a.level === 1)) {
+      toast.error('Level 1 (CEO) is required — the ladder starts at the top.');
+      return;
+    }
+    setSavingLadder(true);
+    try {
+      const config = await orgService.saveHierarchyConfig(assignments);
+      setHierConfig(config);
+      toast.success('Company ladder saved.');
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not save the ladder.');
+    } finally {
+      setSavingLadder(false);
+    }
   };
 
   /* ================================================================== */
@@ -670,7 +542,7 @@ export default function UserManagement() {
     { key: 'employees', label: 'Employees', icon: <Users className="w-4 h-4" />, count: users.length },
     { key: 'departments', label: 'Departments', icon: <Building className="w-4 h-4" />, count: departments.length },
     { key: 'roles', label: 'Roles & Access', icon: <Shield className="w-4 h-4" />, count: roles.length },
-    { key: 'hierarchy', label: 'Hierarchy', icon: <Layers className="w-4 h-4" />, count: departments.length },
+    { key: 'hierarchy', label: 'Hierarchy', icon: <Layers className="w-4 h-4" />, count: hierConfig?.levels.length ?? 0 },
   ];
 
   /* ================================================================== */
@@ -1173,30 +1045,114 @@ export default function UserManagement() {
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold text-slate-800">Reporting Hierarchy</h3>
-              <p className="text-sm text-slate-500">Set up reporting chains for each department.</p>
+              <h3 className="text-base font-semibold text-slate-800">Company Hierarchy Ladder</h3>
+              <p className="text-sm text-slate-500">
+                One company-wide ladder — Level 1 is the CEO. Every other employee reports to a specific manager exactly one level up, within the same department.
+              </p>
             </div>
-            <select
-              value={activeHierDeptId}
-              onChange={e => setActiveHierDeptId(e.target.value)}
-              className="px-4 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
-            >
-              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </div>
-
-          {/* Tree */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
-            {hierLayers.length > 0 && hierLayers[0] && renderTreeNode(hierLayers[0])}
-          </div>
-
-          <div className="flex justify-end">
             <button
-              onClick={handleSaveHierarchy}
-              className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+              onClick={saveLadder}
+              disabled={savingLadder}
+              className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-60"
             >
-              <Save className="w-4 h-4" /> Save Hierarchy
+              <Save className="w-4 h-4" /> {savingLadder ? 'Saving…' : 'Save Ladder'}
             </button>
+          </div>
+
+          {/* Reporting setup progress */}
+          {hierConfig && (
+            <div className="bg-white border border-slate-200 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-slate-700">Reporting setup</span>
+                <span className="text-sm text-slate-500">
+                  {hierConfig.setup.usersWithManager} / {hierConfig.setup.totalUsers} employees have a reporting manager
+                </span>
+              </div>
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[#978C21] transition-all"
+                  style={{ width: `${hierConfig.setup.totalUsers > 0 ? Math.round((hierConfig.setup.usersWithManager / hierConfig.setup.totalUsers) * 100) : 0}%` }}
+                />
+              </div>
+              {hierConfig.setup.invalidLinks.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  {hierConfig.setup.invalidLinks.slice(0, 8).map(link => (
+                    <div key={link.employeeId} className="text-xs text-red-600">
+                      ⚠ {link.employeeName} ({link.employeeId}): {link.reason}
+                    </div>
+                  ))}
+                  {hierConfig.setup.invalidLinks.length > 8 && (
+                    <div className="text-xs text-slate-400">…and {hierConfig.setup.invalidLinks.length - 8} more</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Ladder levels */}
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+            {hierConfig && hierConfig.levels.length > 0 ? (
+              hierConfig.levels.map(level => (
+                <div key={level.level} className="flex flex-col sm:flex-row sm:items-center gap-3 pb-4 border-b border-slate-100 last:border-0 last:pb-0">
+                  <div className="flex items-center gap-3 min-w-[150px]">
+                    <div className={`h-9 w-9 rounded-full flex items-center justify-center text-sm font-bold ${level.level === 1 ? 'bg-[#0359B3] text-white' : 'bg-[#978C21] text-white'}`}>
+                      {level.level}
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-slate-800">Level {level.level}</div>
+                      <div className="text-xs text-slate-400">{level.level === 1 ? 'CEO — top of the company' : `Reports to Level ${level.level - 1}`}</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 flex-1">
+                    {level.roles.map(role => (
+                      <div key={role.roleId} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                        <span className="text-sm text-slate-700 font-medium">{role.roleName}</span>
+                        <span className="text-xs text-slate-400">{role.employeeCount} emp.</span>
+                        <select
+                          value={ladderAssignments[role.roleId] ?? level.level}
+                          onChange={e => setRoleLadderLevel(role.roleId, Number(e.target.value))}
+                          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+                          title="Move this role to another level"
+                        >
+                          {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                            <option key={n} value={n}>L{n}</option>
+                          ))}
+                          <option value={0}>— off</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-sm text-slate-500">No roles placed in the ladder yet. Assign levels to the roles below and save.</div>
+            )}
+
+            {/* Unassigned roles */}
+            {hierConfig && hierConfig.unassignedRoles.length > 0 && (
+              <div className="pt-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Roles not in the ladder</div>
+                <div className="flex flex-wrap gap-2">
+                  {hierConfig.unassignedRoles.map(role => (
+                    <div key={role.roleId} className="flex items-center gap-2 bg-slate-50 border border-dashed border-slate-300 rounded-lg px-3 py-1.5">
+                      <span className="text-sm text-slate-600">{role.roleName}</span>
+                      <span className="text-xs text-slate-400">{role.employeeCount} emp.</span>
+                      <select
+                        value={ladderAssignments[role.roleId] ?? 0}
+                        onChange={e => setRoleLadderLevel(role.roleId, Number(e.target.value))}
+                        className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+                        title="Place this role into a ladder level"
+                      >
+                        <option value={0}>— off</option>
+                        {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                          <option key={n} value={n}>L{n}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1316,6 +1272,31 @@ export default function UserManagement() {
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
                     </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">Reporting Manager</label>
+                    {(roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel === 1 ? (
+                      <div className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-500 bg-slate-50">
+                        Level 1 (CEO) — reports to no one
+                      </div>
+                    ) : (
+                      <select
+                        value={userForm.managerId}
+                        onChange={e => setUserForm({ ...userForm, managerId: e.target.value })}
+                        disabled={loadingManagers}
+                        className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
+                      >
+                        <option value="">{loadingManagers ? 'Loading managers…' : 'Select manager (one level up, same department)'}</option>
+                        {managerOptions.map(o => (
+                          <option key={o.employeeId} value={o.employeeId}>
+                            {o.fullName} ({o.employeeId}) — {o.roleName}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <p className="text-xs text-slate-400 mt-1">
+                      The dropdown lists employees whose role is one level above this role, in the same department.
+                    </p>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-600 mb-1 block">Status</label>
