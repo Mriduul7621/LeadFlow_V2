@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User } from '../../shared/types';
+import { clearSessionCache } from '../../shared/api/sessionCache';
 
 /**
  * authStore.ts
@@ -56,6 +57,10 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         localStorage.removeItem('leadflow-auth');
         localStorage.removeItem('leadflow_last_activity');
+        // Session-scoped data (roles, notifications, permission sheet)
+        // belongs to the user being logged out: nothing may be carried
+        // into the next session.
+        clearSessionCache();
         // `isInitialized` is deliberately preserved: logging out is a settled
         // state, and re-running validation after a logout is how a page ends
         // up in a redirect loop.

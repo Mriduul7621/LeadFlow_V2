@@ -5,6 +5,8 @@ import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import { computeHierarchyHealth } from '../utils/hierarchyHealth.js';
+import { createPerf } from '../utils/perf.js';
+import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
   mapSpreadsheetRow,
   normalizePhoneKey,
@@ -820,8 +822,48 @@ export interface CallerDbInfo {
   department_id: string | null;
 }
 
-/** Resolve caller to DB record (or fallbackStore in dev-demo). */
+export interface CallerVisibilityResult {
+  /** true = unrestricted (sees everyone) */
+  all: boolean;
+  userIds: string[];
+  employeeIds: string[];
+}
+
+/**
+ * Per-caller authorization memo. The caller object is created once per
+ * HTTP request (and shared by reference only within that request), so
+ * memoizing on it is request-scoped: no authorization result ever leaks
+ * across requests or users, and nothing survives longer than one request.
+ */
+interface CallerAuthzMemo {
+  permissions: Map<string, Promise<boolean>>;
+  visibility: Promise<CallerVisibilityResult> | null;
+}
+
+function callerMemo(caller: CallerDbInfo): CallerAuthzMemo {
+  let memo = (caller as any).__authzMemo as CallerAuthzMemo | undefined;
+  if (!memo) {
+    memo = { permissions: new Map(), visibility: null };
+    (caller as any).__authzMemo = memo;
+  }
+  return memo;
+}
+
+/**
+ * Resolve caller to DB record (or fallbackStore in dev-demo).
+ * Memoized per HTTP request: a route that authorizes several times
+ * (guard + handler, multiple permission codes) performs the caller
+ * lookup exactly once.
+ */
 export async function getCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
+  const memo = getRequestMemo(req);
+  if (memo?.callerPromise) return memo.callerPromise as Promise<CallerDbInfo | null>;
+  const promise = resolveCallerDbInfo(req);
+  if (memo) memo.callerPromise = promise;
+  return promise;
+}
+
+async function resolveCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
   const rawId = String(req.currentUser?.id || '').trim();
   const rawEmp = String(req.currentUser?.employeeId || '').trim();
   const rawEmail = String(req.currentUser?.email || '').trim();
@@ -866,7 +908,20 @@ export async function getCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
   }
 }
 
-/** Check if caller has a specific permission code (admin bypass). */
+/** Check if caller has a specific permission code (admin bypass).
+ *
+ * Resolution semantics (unchanged from the previous sequential lookups):
+ *   ADMIN/SUPERADMIN            -> allow
+ *   permission definition missing -> deny (fail closed)
+ *   user override row exists     -> its is_allowed wins (precedence)
+ *   else role grant row exists   -> its is_allowed
+ *   else                         -> deny (fail closed)
+ *   DB error                     -> deny (fail closed)
+ *
+ * The three lookups now run as ONE join, and each (caller, code) result is
+ * memoized for the lifetime of the caller object — i.e. a single request —
+ * so a route checking several codes pays for the resolution once.
+ */
 export async function hasPermissionCode(caller: CallerDbInfo | null, permissionCode: string): Promise<boolean> {
   if (!caller) return false;
   const role = normalizeRole(caller.role_code);
@@ -878,47 +933,68 @@ export async function hasPermissionCode(caller: CallerDbInfo | null, permissionC
     if (!knownLeadCodes.has(permissionCode)) return false;
     return true;
   }
-  try {
-    const pool = getPool();
-    const permResult = await pool.query(`SELECT id FROM permissions WHERE permission_code = $1 LIMIT 1`, [permissionCode]);
-    if (!permResult.rows[0]) {
-      // Fail closed: missing permission definition => deny
-      console.warn(`Permission definition missing for ${permissionCode} - denying access`);
+  const memo = callerMemo(caller);
+  const cached = memo.permissions.get(permissionCode);
+  if (cached) return cached;
+  const resolution = (async () => {
+    try {
+      const pool = getPool();
+      // One round trip: definition + user override + role grant.
+      // Zero rows => the permission definition does not exist.
+      // Row presence is detected via the NOT NULL composite-PK column
+      // (neither grant table has a surrogate id column).
+      const result = await pool.query(
+        `SELECT
+           up.permission_id IS NOT NULL  AS has_user_override,
+           up.is_allowed             AS user_override_allowed,
+           rp.permission_id IS NOT NULL  AS has_role_grant,
+           rp.is_allowed             AS role_grant_allowed
+         FROM (SELECT id FROM permissions WHERE permission_code = $3 LIMIT 1) p
+         LEFT JOIN user_permissions up ON up.permission_id = p.id AND up.user_id = $1
+         LEFT JOIN role_permissions rp ON rp.permission_id = p.id AND rp.role_id = $2`,
+        [caller.id, caller.role_id || null, permissionCode]
+      );
+      if (result.rows.length === 0) {
+        // Fail closed: missing permission definition => deny
+        console.warn(`Permission definition missing for ${permissionCode} - denying access`);
+        return false;
+      }
+      const row = result.rows[0];
+      if (row.has_user_override) {
+        return row.user_override_allowed === true;
+      }
+      if (row.has_role_grant) {
+        return row.role_grant_allowed === true;
+      }
+      // No explicit grant => deny (fail closed)
+      return false;
+    } catch (e) {
+      console.warn(`Permission check failed for ${permissionCode}:`, (e as any)?.message || e);
+      // Fail closed on DB error
       return false;
     }
-    const permId = permResult.rows[0].id;
-    const userOverride = await pool.query(
-      `SELECT is_allowed FROM user_permissions WHERE user_id = $1 AND permission_id = $2 LIMIT 1`,
-      [caller.id, permId]
-    );
-    if (userOverride.rows[0] !== undefined) {
-      return userOverride.rows[0].is_allowed === true;
-    }
-    if (caller.role_id) {
-      const roleGrant = await pool.query(
-        `SELECT is_allowed FROM role_permissions WHERE role_id = $1 AND permission_id = $2 LIMIT 1`,
-        [caller.role_id, permId]
-      );
-      if (roleGrant.rows[0]) {
-        return roleGrant.rows[0].is_allowed === true;
-      }
-    }
-    // No explicit grant => deny (fail closed)
-    return false;
-  } catch (e) {
-    console.warn(`Permission check failed for ${permissionCode}:`, (e as any)?.message || e);
-    // Fail closed on DB error
-    return false;
-  }
+  })();
+  memo.permissions.set(permissionCode, resolution);
+  return resolution;
 }
 
-/** Resolve visibility for caller (admin => all). */
-export async function resolveCallerVisibility(caller: CallerDbInfo) {
+/** Resolve visibility for caller (admin => all).
+ *  Memoized per caller instance (one request): routes that scope reads
+ *  AND authorize writes resolve the visibility set once. */
+export async function resolveCallerVisibility(caller: CallerDbInfo): Promise<CallerVisibilityResult> {
   if (!caller) return { all: false, userIds: [], employeeIds: [] };
   const role = normalizeRole(caller.role_code);
   if (role === 'ADMIN' || role === 'SUPERADMIN') {
     return { all: true, userIds: [], employeeIds: [] };
   }
+  const memo = callerMemo(caller);
+  if (!memo.visibility) {
+    memo.visibility = resolveCallerVisibilityOnce(caller);
+  }
+  return memo.visibility;
+}
+
+async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
   if (!useDb()) {
     // Demo mode: compute downline from fallbackStore for MANAGER-like roles
     // to allow realistic integration tests without PostgreSQL
@@ -1274,6 +1350,7 @@ router.post('/auth/login', async (req, res) => {
     return res.status(200).json({ token, user: { ...safeUser, name: user.fullName || user.name } });
   }
 
+  const perf = createPerf('auth.login');
   try {
     const pool = getPool();
     // Same projection as GET /auth/session below: the profile the client
@@ -1287,21 +1364,31 @@ router.post('/auth/login', async (req, res) => {
        LIMIT 1`,
       [loginId]
     );
+    perf.span('db.userLookup');
     const user = result.rows[0];
     if (!user) {
+      perf.finish(res);
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
     const valid = user.password && String(user.password).startsWith('$2')
       ? await bcrypt.compare(password, user.password)
       : user.password === password;
+    perf.span('auth.bcryptVerify');
     if (!valid) {
+      perf.finish(res);
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
-    await pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]).catch(() => undefined);
+    // last_login is bookkeeping: its semantics are preserved (the update is
+    // still issued for every successful login) but it no longer delays the
+    // authenticated response — authentication is already confirmed.
+    void pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id])
+      .catch(() => undefined);
     const role = user.role_code || 'EMPLOYEE';
     const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
+    perf.finish(res);
     return sendJson(res, 200, { token, user: mapUserRow(user, user.manager_employee_id) });
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Login failed' });
   }
 });
@@ -1332,12 +1419,14 @@ router.post('/auth/login', async (req, res) => {
  *          an infrastructure outage.
  */
 router.get('/auth/session', requireAuth, async (req: any, res) => {
+  const perf = createPerf('auth.session');
   const claim = req.currentUser || {};
   const claimId = String(claim.id || '').trim();
   const claimEmployeeId = String(claim.employeeId || '').trim();
   const claimEmail = String(claim.email || '').trim();
 
   if (!claimId && !claimEmployeeId && !claimEmail) {
+    perf.finish(res);
     return sendJson(res, 401, { success: false, message: 'Your session is not valid. Please log in again.' });
   }
 
@@ -1350,15 +1439,20 @@ router.get('/auth/session', requireAuth, async (req: any, res) => {
          LIMIT 1`,
         [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
       );
+      perf.span('db.userLookup');
       const row = result.rows[0];
       if (!row) {
+        perf.finish(res);
         return sendJson(res, 401, { success: false, message: 'Your account no longer exists. Please log in again.' });
       }
       if (row.is_active === false || String(row.account_status || '').toUpperCase() === 'INACTIVE') {
+        perf.finish(res);
         return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
       }
+      perf.finish(res);
       return sendJson(res, 200, { success: true, data: mapUserRow(row, row.manager_employee_id) });
     } catch (error: any) {
+      perf.finish(res);
       return sendJson(res, dbErrorStatus(error), {
         success: false,
         message: error?.message || 'Session validation is temporarily unavailable.',
@@ -2481,6 +2575,20 @@ async function managerEmployeeId(userId: string | null): Promise<string | null> 
   if (!userId) return null;
   const result = await getPool().query('SELECT employee_id FROM users WHERE id = $1', [userId]);
   return result.rows[0]?.employee_id || null;
+}
+
+/**
+ * Resolve many user UUIDs to employee ids in ONE round trip (primary-key
+ * lookup). Replaces sequential per-user lookups on mutation response
+ * paths (e.g. a lead save joining assigned_to + assigned_by).
+ */
+async function employeeIdsFor(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const unique = Array.from(new Set(ids.map(i => asUuid(String(i || ''))).filter((v): v is string => !!v)));
+  const out = new Map<string, string>();
+  if (unique.length === 0) return out;
+  const result = await getPool().query('SELECT id, employee_id FROM users WHERE id = ANY($1::uuid[])', [unique]);
+  for (const row of result.rows) out.set(String(row.id), row.employee_id);
+  return out;
 }
 
 router.get('/teams', requireAuth, async (_req, res) => {
@@ -3618,16 +3726,22 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     });
     return sendJson(res, 200, filtered);
   }
+  const perf = createPerf('leads.list');
   try {
     const pool = getPool();
     const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
     if (!caller) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
     // Permission check: leads.view
     if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      perf.span('authz.permission');
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
+    perf.span('authz.permission');
 
     const params: any[] = [];
     const where: string[] = ['l.is_deleted = FALSE'];
@@ -3647,6 +3761,7 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
     }
     const visibility = await resolveCallerVisibility(caller);
+    perf.span('authz.visibility');
     if (!visibility.all) {
       params.push(visibility.userIds, visibility.employeeIds);
       const pUser = params.length - 1;
@@ -3657,8 +3772,11 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
       params
     );
+    perf.span('db.query');
+    perf.finish(res);
     return sendJson(res, 200, result.rows.map(mapLeadRow));
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
   }
 });
@@ -3721,13 +3839,17 @@ const LEAD_UPSERT_SQL = `
   RETURNING *, (xmax = 0) AS _inserted`;
 
 router.post('/leads', requireAuth, async (req: any, res) => {
+  const perf = createPerf('lead.save');
   if (sendDbUnavailable(res)) return;
   try {
     const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
     if (!caller) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
     const visibility = await resolveCallerVisibility(caller);
+    perf.span('authz.visibility');
     const payload = req.body || {};
 
     // Determine if this is an update (existing lead) via lead_code or mobile
@@ -3815,9 +3937,12 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       const canAssign = await hasPermissionCode(caller, 'leads.assign');
       const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
       if (!canAssign && !canTransfer && !visibility.all) {
+        perf.span('authz.permissions');
+        perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign this lead to another user.' });
       }
     }
+    perf.span('authz.permissions');
 
     const record = await buildSecureLeadRecord(payload, caller, targetAssigned);
     if ('error' in record) {
@@ -3907,14 +4032,27 @@ router.post('/leads', requireAuth, async (req: any, res) => {
 
     try {
       const result = await getPool().query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
+      perf.span('db.upsert');
       const row = result.rows[0];
-      const assigned = row.assigned_to ? await managerEmployeeId(row.assigned_to) : null;
-      const assignedByEmp = row.assigned_by ? await managerEmployeeId(row.assigned_by) : null;
-      return sendJson(res, 200, { success: true, data: mapLeadRow({ ...row, assigned_to_employee_id: assigned, assigned_by_employee_id: assignedByEmp }) });
+      // One primary-key lookup for both joined employee ids (was two
+      // sequential lookups on the response path).
+      const employeeIds = await employeeIdsFor([row.assigned_to, row.assigned_by]);
+      perf.span('db.responseJoins');
+      perf.finish(res);
+      return sendJson(res, 200, {
+        success: true,
+        data: mapLeadRow({
+          ...row,
+          assigned_to_employee_id: employeeIds.get(String(row.assigned_to || '')) || null,
+          assigned_by_employee_id: employeeIds.get(String(row.assigned_by || '')) || null,
+        }),
+      });
     } catch (error: any) {
+      perf.finish(res);
       return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
     }
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
   }
 });
@@ -5257,15 +5395,21 @@ router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
    date, timestamp, statusHistory, assignmentHistory
 ------------------------------------------------------------------- */
 router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
+  const perf = createPerf('lead.followUp');
   if (sendDbUnavailable(res)) return;
   try {
     const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
     if (!caller) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
     if (!(await hasPermissionCode(caller, 'leads.edit'))) {
+      perf.span('authz.permission');
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to update leads.' });
     }
+    perf.span('authz.permission');
     const param = String(req.params.id || '').trim();
     if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
 
@@ -5448,14 +5592,18 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         `SELECT l.* FROM leads l WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1 FOR UPDATE`,
         [param]
       );
+      perf.span('db.lockLead');
       const leadRow = leadRes.rows[0];
       if (!leadRow) {
         await client.query('ROLLBACK');
+        perf.finish(res);
         return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
       const visibility = await resolveCallerVisibility(caller);
+      perf.span('authz.visibility');
       if (!isLeadAccessible(leadRow, visibility, caller)) {
         await client.query('ROLLBACK');
+        perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
       }
 
@@ -5599,21 +5747,34 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' });
       }
 
+      perf.span('db.updateAndActivity');
       await client.query('COMMIT');
+      perf.span('db.commit');
 
-      // Fetch mapped lead with employee joins for frontend shape
-      const freshLead = await pool.query(`${LEAD_SELECT} WHERE l.id = $1`, [updatedRow.id]);
-      const mappedLead = freshLead.rows[0] ? mapLeadRow(freshLead.rows[0]) : mapLeadRow(updatedRow);
+      // The UPDATE above already RETURNED the full row; the only joined
+      // columns are the employee ids of assigned_to/assigned_by, which this
+      // follow-up does not change. One primary-key lookup therefore
+      // replaces the previous post-commit LEAD_SELECT re-fetch.
+      const employeeIds = await employeeIdsFor([updatedRow.assigned_to, updatedRow.assigned_by]);
+      perf.span('db.responseJoins');
+      const mappedLead = mapLeadRow({
+        ...updatedRow,
+        assigned_to_employee_id: employeeIds.get(String(updatedRow.assigned_to || '')) || null,
+        assigned_by_employee_id: employeeIds.get(String(updatedRow.assigned_by || '')) || null,
+      });
       const mappedActivity = mapActivityRow({ ...activityInsert.rows[0], actor_employee_id: caller.employee_id });
+      perf.finish(res);
 
       return sendJson(res, 200, { success: true, data: { lead: mappedLead, activity: mappedActivity } });
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch {}
+      perf.finish(res);
       return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up failed.' });
     } finally {
       try { client.release(); } catch {}
     }
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up failed.' });
   }
 });
@@ -5925,23 +6086,29 @@ function computeDashboardFromLeads(
 }
 
 router.get('/dashboard', requireAuth, async (req: any, res) => {
+  const perf = createPerf('dashboard');
   if (sendDbUnavailable(res)) return;
   try {
     const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
     if (!caller) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
 
     // Fail closed: require dashboard.view or leads.view (admin bypass inside hasPermissionCode).
     const canDashboard = await hasPermissionCode(caller, 'dashboard.view');
     const canLeads = await hasPermissionCode(caller, 'leads.view');
+    perf.span('authz.permission');
     if (!canDashboard && !canLeads) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view the dashboard.' });
     }
 
     // Forged role / employee / assignedTo params MUST NOT widen scope.
     // Visibility is always derived from the authenticated session.
     const visibility = await resolveCallerVisibility(caller);
+    perf.span('authz.visibility');
     const bounds = getDhakaBusinessDayBounds(new Date());
     const period = parseDashboardPeriod(req.query || {});
 
@@ -6085,6 +6252,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       pool.query(fuCountSql, fuParams),
       pool.query(agentSql, agentParams),
     ]);
+    perf.span('db.queries');
 
     const m = metricRes.rows[0] || {};
     const statusCounts = emptyStatusCounts();
@@ -6172,8 +6340,10 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       userCount: agentStats.length,
     };
 
+    perf.finish(res);
     return sendJson(res, 200, { success: true, data });
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Dashboard fetch failed' });
   }
 });

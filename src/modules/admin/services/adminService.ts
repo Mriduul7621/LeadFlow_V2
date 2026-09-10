@@ -2,6 +2,9 @@ import { RolePermission, Team, User, Permissions } from '../../shared/types';
 import { toast } from 'sonner';
 import { userService } from '../../users/services/userService';
 import { apiRequest, ApiError } from '../../shared/api/http';
+import { emitRolesCacheChanged } from '../../shared/utils/localCacheEvents';
+import { invalidateSessionCache } from '../../shared/api/sessionCache';
+import { useAuthStore } from '../../auth/store/authStore';
 
 const KEYS = {
   ROLES: 'lf_local_roles_permissions',
@@ -68,6 +71,21 @@ function writeCache<T>(key: string, value: T): void {
   } catch (e) {
     console.error(`Failed to write local cache ${key}:`, e);
   }
+  // Same-tab writers must be announced: the browser only emits `storage`
+  // events to OTHER tabs, so the permissions hook listens for this
+  // instead of polling localStorage on a timer.
+  if (key === KEYS.ROLES) emitRolesCacheChanged();
+}
+
+/**
+ * Invalidation hook for the session-scoped role/menu cache (AppLayout).
+ * Called AFTER a successful role or fine-permission save/delete: the
+ * saved change is authoritative, so the next render re-fetches instead
+ * of serving the pre-change session cache.
+ */
+function invalidateRoleMenuSessionCache(): void {
+  const user = useAuthStore.getState().user;
+  if (user?.id) invalidateSessionCache(`roles:${user.id}`);
 }
 
 // Seed initial default permissions for built-in clearance levels
@@ -261,6 +279,8 @@ export const adminService = {
     if (idx > -1) roles[idx] = finalized;
     else roles.push(finalized);
     writeCache(KEYS.ROLES, roles);
+    // Server confirmed the change: the session role/menu cache is stale.
+    invalidateRoleMenuSessionCache();
     return finalized;
   },
 
@@ -271,6 +291,8 @@ export const adminService = {
     }
     await apiRequest(`/api/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
     writeCache(KEYS.ROLES, cachedRoles().filter(r => String(r.roleId).toUpperCase() !== String(roleId).toUpperCase()));
+    // Server confirmed the deletion: the session role/menu cache is stale.
+    invalidateRoleMenuSessionCache();
     return true;
   },
 

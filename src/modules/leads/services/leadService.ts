@@ -176,10 +176,16 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications are a side channel - fired only after the
-    // lead itself committed to the database.
+    // Assignment notifications are a side channel - fired only AFTER the
+    // lead itself committed to the database, and fire-and-forget: the
+    // save is already server-confirmed, so the notification fan-out
+    // (which fans out one request per supervisor up the chain) must not
+    // extend the user's "saving..." state. Failures still surface via the
+    // warning toast inside sendHierarchyNotifications.
     if (saved.assignedTo) {
-      await sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System');
+      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System').catch(
+        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
+      );
     }
     return saved;
   },
@@ -436,9 +442,13 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications after the DB commit confirmed.
+    // Assignment notifications after the DB commit confirmed — and
+    // fire-and-forget, so the confirmed save is not extended by the
+    // per-supervisor fan-out (see createLead above).
     if (fields.assignedTo && fields.assignedTo !== existing.assignedTo) {
-      await sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater);
+      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater).catch(
+        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
+      );
     }
     return saved;
   },

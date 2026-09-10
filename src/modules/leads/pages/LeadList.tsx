@@ -149,12 +149,27 @@ export default function LeadList() {
     }
   };
 
+  /**
+   * Apply a server-confirmed lead mutation in place instead of refetching
+   * the full lead list (which would also re-fetch the users list just for
+   * the visibility filter). The mutation response carries the
+   * authoritative row, so the local list is patched with it.
+   */
+  const applyLeadUpdate = (updated: Lead) => {
+    const patch = (list: Lead[]) => list.map(l => (l.id === updated.id ? updated : l));
+    setLeads(prev => patch(prev));
+    setAdvancedFilteredLeads(prev => (prev.some(l => l.id === updated.id) ? patch(prev) : prev));
+  };
+
   const handleDeleteLead = async (leadId: string) => {
     if (!window.confirm('Are you sure you want to permanently delete this lead?')) return;
     try {
       await leadService.deleteLead(leadId);
       toast.success('Lead has been deleted successfully');
-      loadLeads();
+      // The server confirmed the soft delete; remove the row locally
+      // instead of refetching the entire lead list.
+      setLeads(prev => prev.filter(l => l.id !== leadId));
+      setAdvancedFilteredLeads(prev => prev.filter(l => l.id !== leadId));
     } catch (err) {
       toast.error('Failed to delete the lead');
     }
@@ -252,7 +267,7 @@ export default function LeadList() {
       const updaterName = user ? `${user.name} (${user.employeeId})` : 'System';
       const finalStatus: LeadStatus = formStatus === 'Meeting Completed' ? (formSubStatus as LeadStatus) : formStatus;
 
-      await leadService.updateLeadStatus(
+      const updated = await leadService.updateLeadStatus(
         selectedLead.id, 
         finalStatus, 
         isConverted ? formCollectedNCP : undefined, 
@@ -266,14 +281,12 @@ export default function LeadList() {
         isPipelineLocked ? formProjectedNCP : undefined
       );
       toast.success('Lead status and remarks logged successfully!');
-      
-      // Refresh list
-      const allLeads = await leadService.getLeads({ 
-        role: user?.role, 
-        employeeId: user?.employeeId 
-      });
-      setLeads(allLeads);
-      
+
+      // The follow-up response carries the authoritative updated lead —
+      // patch the list in place instead of refetching the full lead list.
+      if (updated) applyLeadUpdate(updated);
+      else loadLeads();
+
       // Close the tracking details popup/modal automatically
       setSelectedLead(null);
       setFormRemarks(''); // clear comments textarea
@@ -284,9 +297,10 @@ export default function LeadList() {
 
   const handleUpdateStatus = async (leadId: string, status: LeadStatus, ncp?: number) => {
     try {
-      await leadService.updateLeadStatus(leadId, status, ncp, 'Initial assignment tracking');
+      const updated = await leadService.updateLeadStatus(leadId, status, ncp, 'Initial assignment tracking');
       toast.success('Lead intelligence updated');
-      loadLeads();
+      if (updated) applyLeadUpdate(updated);
+      else loadLeads();
       setSelectedLead(null);
     } catch (err) {
       toast.error('Failed to update lead status');
