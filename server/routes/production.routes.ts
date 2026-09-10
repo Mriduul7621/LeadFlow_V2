@@ -326,8 +326,13 @@ async function roleLevelOf(exec: { query: Function }, roleId: string | null): Pr
  *   - Roles not placed in the ladder (level 99) may omit the manager.
  *   - Cycles are rejected (an employee can never manage their own ancestor).
  * Returns an error message, or null when the link is valid.
+ *
+ * `managerIsRequired` MUST be true on both user create and user update:
+ * Level 2+ ladder employees always need exactly one reporting manager.
+ * (Exported for regression tests; the HTTP routes remain the only callers
+ * in production code.)
  */
-async function validateReportingLink(
+export async function validateReportingLink(
   exec: { query: Function },
   opts: { selfId: string | null; roleId: string | null; departmentId: string | null; managerId: string | null; managerIsRequired: boolean }
 ): Promise<string | null> {
@@ -400,8 +405,14 @@ async function validateReportingLink(
  * Server-authoritative recompute of reporting_chain / subordinates for all
  * users (derived from users.manager_id), plus the era-B `hierarchies` sync
  * rows. Called after any user create/update that can change the tree.
+ *
+ * Every database error propagates to the caller: the caller runs this
+ * inside the same transaction as the user write and rolls the whole
+ * transaction back on failure, so NOTHING here may swallow errors.
+ * (Exported for regression tests; the HTTP routes remain the only callers
+ * in production code.)
  */
-async function recomputeReportingChains(exec: { query: Function }): Promise<void> {
+export async function recomputeReportingChains(exec: { query: Function }): Promise<void> {
   const result = await exec.query('SELECT id, employee_id, manager_id FROM users');
   const byId = new Map<string, { id: string; employeeId: string; managerId: string | null }>();
   for (const row of result.rows) {
@@ -460,7 +471,10 @@ async function recomputeReportingChains(exec: { query: Function }): Promise<void
         [user.id, user.managerId, chain.length + 1, JSON.stringify(chain)]
       );
     } else {
-      await exec.query('DELETE FROM hierarchies WHERE user_id = $1', [user.id]).catch(() => undefined);
+      // No error swallowing here: a failed DELETE inside the caller's
+      // transaction would abort that transaction, and the caller must see
+      // the failure so it can roll back instead of committing partial data.
+      await exec.query('DELETE FROM hierarchies WHERE user_id = $1', [user.id]);
     }
   }
 }
@@ -1237,13 +1251,25 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
     return sendJson(res, 200, { success: true, data: safeUser });
   }
 
+  const pool = getPool();
+  const client = await pool.connect();
   try {
+    // User creation and reporting-chain recomputation share ONE PostgreSQL
+    // transaction: if the recompute fails, the user insert rolls back with
+    // it and no partially-created user is left behind.
+    await client.query('BEGIN');
     const duplicateError = await validateUserPayload(payload);
-    if (duplicateError) return sendJson(res, 409, { success: false, message: duplicateError });
+    if (duplicateError) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 409, { success: false, message: duplicateError });
+    }
 
     const email = clean(payload.email).toLowerCase();
     const roleId = await resolveRoleId(normalizeRole(payload.role || payload.roleCode));
-    if (!roleId) return sendJson(res, 400, { success: false, message: 'Unknown role code.' });
+    if (!roleId) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: 'Unknown role code.' });
+    }
     const hash = payload.password ? await bcrypt.hash(String(payload.password), 10) : null;
     const departmentId = await resolveDepartmentId(payload.departmentId);
     // Unknown team references must fail loudly instead of being silently
@@ -1252,22 +1278,28 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
     const teamRef = clean(payload.teamId);
     const teamId = teamRef ? await resolveTeamId(teamRef) : null;
     if (teamRef && !teamId) {
+      await client.query('ROLLBACK');
       return sendJson(res, 400, { success: false, message: `Unknown team "${teamRef}". Please select a valid team.` });
     }
     const managerId = await resolveUserId(payload.managerId || payload.reportingManagerId || null);
 
     // Reporting ladder: the manager must sit exactly one level up, in the
     // same department (Level-1 CEO is the only cross-department link).
-    const reportingError = await validateReportingLink(getPool(), {
+    // Validated on the transaction client so the check and the insert below
+    // see the same snapshot.
+    const reportingError = await validateReportingLink(client, {
       selfId: null,
       roleId,
       departmentId,
       managerId,
       managerIsRequired: true,
     });
-    if (reportingError) return sendJson(res, 400, { success: false, message: reportingError });
+    if (reportingError) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: reportingError });
+    }
 
-    const result = await getPool().query(
+    const result = await client.query(
       `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, department_id, team_id,
                           manager_id, designation, profile_photo, is_active, account_status,
                           must_change_password, reporting_chain, subordinates, created_at, updated_at)
@@ -1294,19 +1326,28 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
       ]
     );
     const row = result.rows[0];
-    // Server-authoritative reporting chains: recompute for everyone now
-    // that the new employee (and their manager link) exists.
-    await recomputeReportingChains(getPool()).catch((err: any) => console.error('Reporting chain sync failed:', err?.message || err));
-    const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
+    // Server-authoritative reporting chains: recomputed in the SAME
+    // transaction as the insert above. Errors are NOT swallowed — a failure
+    // here throws into the catch below, which rolls the whole transaction
+    // back (no partially-created user survives) and returns an error
+    // response instead of a false success.
+    await recomputeReportingChains(client);
+    await client.query('COMMIT');
+    const fresh = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
     const roleCode = await roleCodeOf(freshRow.role_id);
     const mapped = mapUserRow({ ...freshRow, role_code: roleCode, role_name: roleCode });
     return sendJson(res, 201, { success: true, data: mapped });
   } catch (error: any) {
+    // Any failure after BEGIN — including a reporting-chain recomputation
+    // failure — rolls the user insert back; the client is always released.
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     if (error?.code === '23505') {
       return sendJson(res, 409, { success: false, message: 'A user with that employee ID or email already exists.' });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Create user failed' });
+  } finally {
+    client.release();
   }
 });
 
@@ -1432,13 +1473,21 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     // Reporting ladder validation (single source of truth: users.manager_id).
     // reporting_chain / subordinates are recomputed server-side after the
     // update — client-supplied values are no longer trusted.
+    // The manager is MANDATORY here, exactly as on create: a Level 2+
+    // employee must always keep exactly one valid reporting manager, so an
+    // update that would leave them without one is rejected (and rolled
+    // back, preserving the stored manager_id). Level-1 (CEO) employees must
+    // still have NO manager; roles outside the ladder (level 99, including
+    // the ADMIN/SUPERADMIN system roles) keep the existing optional-manager
+    // behavior because validateReportingLink only requires a manager for
+    // in-ladder Level 2+ roles.
     const nextRoleId = roleId || existing.role_id;
     const reportingError = await validateReportingLink(client, {
       selfId: existing.id,
       roleId: nextRoleId,
       departmentId,
       managerId,
-      managerIsRequired: false,
+      managerIsRequired: true,
     });
     if (reportingError) {
       await client.query('ROLLBACK');
