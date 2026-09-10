@@ -10,6 +10,8 @@ import {
   normalizePhoneKey,
   parseAmount,
   parseTat,
+  resolveImportStatus,
+  DEFAULT_STATUS_DICTIONARY,
   rowFingerprint,
   type ImportRow,
 } from './leadImport.js';
@@ -4147,7 +4149,6 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
     // options table is not migrated/configured yet, fall back to the app's
     // documented built-in status list (the same defaults the UI uses) so
     // imports still resolve against a well-known taxonomy.
-    const DEFAULT_STATUS_DICTIONARY = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
     let statusList: string[] = [];
     if (useDb()) {
       try {
@@ -4164,7 +4165,6 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
         .map((o: any) => String(o.value));
     }
     if (statusList.length === 0) statusList = DEFAULT_STATUS_DICTIONARY;
-    const statusDict = new Map(statusList.map(v => [v.toLowerCase(), v]));
 
     // Existing Campaign option values (for deterministic registration).
     const existingCampaigns = new Set<string>();
@@ -4220,27 +4220,29 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
         }
       }
 
-      // Status resolution against the canonical dictionary. Unknown
-      // statuses are ERRORS - never silently replaced by "Untouched".
+      // Status resolution against the canonical dictionary (+ the
+      // centralized legacy alias table from leadImport.ts — the exact same
+      // rules the client preview uses). Unknown statuses are ERRORS - never
+      // silently replaced by "Untouched".
       let initialStatus = '';
       if (row.initialStatus) {
-        const resolved = statusDict.get(row.initialStatus.toLowerCase());
-        if (!resolved) rowErrors.push(`Initial Status "${row.initialStatus}" is not a valid status`);
-        else initialStatus = resolved;
+        const resolved = resolveImportStatus(row.initialStatus, statusList);
+        if (!resolved.ok) rowErrors.push(`Initial Status "${row.initialStatus}" is not a valid status`);
+        else initialStatus = resolved.status;
       }
       let followUpStatus = '';
       if (row.followUp) {
-        const resolved = statusDict.get(row.followUp.toLowerCase());
-        if (!resolved) rowErrors.push(`Follow up "${row.followUp}" is not a valid status`);
-        else followUpStatus = resolved;
+        const resolved = resolveImportStatus(row.followUp, statusList);
+        if (!resolved.ok) rowErrors.push(`Follow up "${row.followUp}" is not a valid status`);
+        else followUpStatus = resolved.status;
       }
       // Legacy API-shaped rows carry the status in currentStatus - resolve
       // it against the same dictionary (never accepted blindly).
       let legacyStatus = '';
       if (!initialStatus && !followUpStatus && row.currentStatus) {
-        const resolved = statusDict.get(row.currentStatus.toLowerCase());
-        if (!resolved) rowErrors.push(`Current Status "${row.currentStatus}" is not a valid status`);
-        else legacyStatus = resolved;
+        const resolved = resolveImportStatus(row.currentStatus, statusList);
+        if (!resolved.ok) rowErrors.push(`Current Status "${row.currentStatus}" is not a valid status`);
+        else legacyStatus = resolved.status;
       }
       const currentStatus = followUpStatus || initialStatus || legacyStatus; // latest known state wins
 
@@ -4251,6 +4253,13 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
         const customFields: Record<string, any> = {};
         if (initialStatus) customFields.initialStatus = initialStatus;
         if (followUpStatus) customFields.followUpStatus = followUpStatus;
+        // PR #13 contract: custom_fields.initialStatus / followUpStatus hold
+        // the RESOLVED canonical value; the raw spreadsheet text is kept
+        // alongside so a legacy alias ("Unreachable", "Follow up") never
+        // loses its original wording. current_status only ever receives the
+        // resolved canonical status.
+        if (row.initialStatus) customFields.initialStatusRaw = row.initialStatus;
+        if (row.followUp) customFields.followUpStatusRaw = row.followUp;
         if (row.initialRemarks) customFields.initialRemarks = row.initialRemarks;
         if (row.previouslyAssigned) customFields.previouslyAssigned = row.previouslyAssigned;
         if (row.tat !== '' && tatValue !== null) customFields.tat = tatValue;
