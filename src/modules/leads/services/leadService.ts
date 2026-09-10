@@ -8,6 +8,37 @@ import { apiRequest, ApiError } from '../../shared/api/http';
 import { toast } from 'sonner';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
+export interface FollowUpQueueItem {
+  id: string;
+  leadCode?: string;
+  prospectName: string;
+  customerName?: string;
+  mobile: string;
+  assignedTo: string;
+  assignedEmployeeName?: string;
+  currentStatus: string;
+  nextFollowUpAt: string;
+  lastContactedAt?: string | null;
+  followUpCount?: number;
+  campaign?: string;
+  product?: string;
+  area?: string;
+  priority?: string;
+  overdueDays?: number;
+  dueState: 'overdue' | 'today' | 'upcoming' | string;
+  latestActivity?: { status?: string; remarks?: string; createdAt?: string } | null;
+}
+
+export interface FollowUpQueueResult {
+  bucket: string;
+  timezone: string;
+  todayDate: string;
+  bounds: { todayStart: string; tomorrowStart: string };
+  items: FollowUpQueueItem[];
+  counts: { overdue: number; today: number; upcoming: number; all: number };
+  pagination: { limit: number; offset: number; total: number };
+}
+
 export interface BulkImportResult {
   dryRun?: boolean;
   inserted: number;
@@ -315,6 +346,34 @@ export const leadService = {
    * Fetch authoritative activity history for a lead.
    * Uses GET /api/leads/:id/activities (reverse chronological).
    */
+  /**
+   * Server-authoritative follow-up queue.
+   * Visibility is enforced on the server; do not client-filter by role.
+   */
+  async getFollowUpQueue(params?: {
+    bucket?: 'overdue' | 'today' | 'upcoming' | 'all';
+    status?: string;
+    assignedTo?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+    includeTerminal?: boolean;
+  }): Promise<FollowUpQueueResult> {
+    const qs = new URLSearchParams();
+    if (params?.bucket) qs.set('bucket', params.bucket);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.assignedTo) qs.set('assignedTo', params.assignedTo);
+    if (params?.from) qs.set('from', params.from);
+    if (params?.to) qs.set('to', params.to);
+    if (params?.limit != null) qs.set('limit', String(params.limit));
+    if (params?.offset != null) qs.set('offset', String(params.offset));
+    if (params?.includeTerminal) qs.set('includeTerminal', 'true');
+    const path = `/api/leads/follow-ups${qs.toString() ? `?${qs.toString()}` : ''}`;
+    const data = await apiRequest<FollowUpQueueResult>(path);
+    return data;
+  },
+
   async getLeadActivities(leadId: string): Promise<Array<Record<string, any>>> {
     try {
       const activities = await apiRequest<Array<Record<string, any>>>(`/api/leads/${encodeURIComponent(leadId)}/activities`);

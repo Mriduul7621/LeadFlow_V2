@@ -15,6 +15,15 @@ import {
   rowFingerprint,
   type ImportRow,
 } from './leadImport.js';
+import {
+  BUSINESS_TIMEZONE,
+  TERMINAL_LEAD_STATUSES,
+  getDhakaBusinessDayBounds,
+  overdueDays,
+  parseYmd,
+  dhakaStartUtc,
+  addCalendarDays,
+} from '../utils/businessTime.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -4863,6 +4872,288 @@ async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): Promise<
   );
   return result.rows[0] || null;
 }
+
+/* ------------------------------------------------------------------
+   GET /leads/follow-ups — operational follow-up queue (Step 4B)
+   MUST be registered BEFORE /leads/:id so "follow-ups" is never an id.
+------------------------------------------------------------------- */
+const FOLLOWUP_QUEUE_MAX_LIMIT = 200;
+const FOLLOWUP_QUEUE_DEFAULT_LIMIT = 50;
+
+router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+
+    const rawBucket = String(req.query?.bucket || 'all').toLowerCase().trim();
+    if (rawBucket && !['overdue', 'today', 'upcoming', 'all'].includes(rawBucket)) {
+      return sendJson(res, 400, { success: false, message: 'bucket must be overdue, today, upcoming, or all.' });
+    }
+    const bucket = (rawBucket || 'all') as string;
+    const includeTerminal = String(req.query?.includeTerminal || '').toLowerCase() === 'true';
+    const statusFilter = req.query?.status ? String(req.query.status).trim() : '';
+    const assignedToRaw = req.query?.assignedTo ? String(req.query.assignedTo).trim() : '';
+    const fromYmd = parseYmd(req.query?.from ? String(req.query.from) : null);
+    const toYmd = parseYmd(req.query?.to ? String(req.query.to) : null);
+    if (req.query?.from && !fromYmd) {
+      return sendJson(res, 400, { success: false, message: 'from must be YYYY-MM-DD.' });
+    }
+    if (req.query?.to && !toYmd) {
+      return sendJson(res, 400, { success: false, message: 'to must be YYYY-MM-DD.' });
+    }
+
+    let limit = Number(req.query?.limit);
+    if (!Number.isFinite(limit) || limit <= 0) limit = FOLLOWUP_QUEUE_DEFAULT_LIMIT;
+    limit = Math.min(Math.floor(limit), FOLLOWUP_QUEUE_MAX_LIMIT);
+    let offset = Number(req.query?.offset);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    offset = Math.floor(offset);
+
+    const bounds = getDhakaBusinessDayBounds(new Date());
+    const visibility = await resolveCallerVisibility(caller);
+
+    let assignedFilter: { userId: string; employeeId: string } | null = null;
+    let assignedOutOfScope = false;
+    if (assignedToRaw) {
+      const resolved = await resolveAssignedTo(assignedToRaw);
+      if (!resolved || !isAssignedToAllowed(resolved, visibility, caller)) {
+        assignedOutOfScope = true;
+      } else {
+        assignedFilter = resolved;
+      }
+    }
+
+    const emptyPayload = (extra: Record<string, any> = {}) =>
+      sendJson(res, 200, {
+        success: true,
+        data: {
+          bucket,
+          timezone: BUSINESS_TIMEZONE,
+          todayDate: bounds.todayDate,
+          bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+          items: [],
+          counts: { overdue: 0, today: 0, upcoming: 0, all: 0 },
+          pagination: { limit, offset, total: 0 },
+          ...extra,
+        },
+      });
+
+    if (assignedOutOfScope) {
+      return emptyPayload({ assignedToRejected: true });
+    }
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      let rows = (fallbackStore.leads || []).filter((l: any) => {
+        if (l.is_deleted === true) return false;
+        const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+        if (!nfd) return false;
+        if (!visibility.all) {
+          const assigned = String(l.assignedTo || '').toUpperCase();
+          if (!assigned || !visEmp.includes(assigned)) return false;
+        }
+        const st = String(l.currentStatus || '');
+        if (!includeTerminal && terminal.has(st.toLowerCase())) return false;
+        if (statusFilter && st !== statusFilter) return false;
+        if (assignedFilter && String(l.assignedTo || '').toUpperCase() !== assignedFilter.employeeId.toUpperCase()) return false;
+        const t = new Date(nfd).getTime();
+        if (fromYmd) {
+          const fromStart = dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).getTime();
+          if (t < fromStart) return false;
+        }
+        if (toYmd) {
+          const next = addCalendarDays(toYmd.y, toYmd.m, toYmd.d, 1);
+          const toEnd = dhakaStartUtc(next.y, next.m, next.d).getTime();
+          if (t >= toEnd) return false;
+        }
+        return true;
+      });
+      const classify = (l: any) => {
+        const t = new Date(l.nextFollowUpDate || l.next_follow_up_at).getTime();
+        if (t < bounds.todayStart.getTime()) return 'overdue';
+        if (t < bounds.tomorrowStart.getTime()) return 'today';
+        return 'upcoming';
+      };
+      const counts = { overdue: 0, today: 0, upcoming: 0, all: rows.length };
+      for (const l of rows) {
+        const b = classify(l) as 'overdue' | 'today' | 'upcoming';
+        counts[b]++;
+      }
+      if (bucket !== 'all') rows = rows.filter((l: any) => classify(l) === bucket);
+      const total = rows.length;
+      rows.sort((a: any, b: any) => new Date(a.nextFollowUpDate || 0).getTime() - new Date(b.nextFollowUpDate || 0).getTime());
+      const page = rows.slice(offset, offset + limit);
+      const items = page.map((l: any) => {
+        const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+        return {
+          id: l.id,
+          leadCode: l.id,
+          prospectName: l.prospectName || l.customerName,
+          customerName: l.customerName || l.prospectName,
+          mobile: l.mobile,
+          assignedTo: l.assignedTo,
+          assignedEmployeeName: l.assignedTo,
+          currentStatus: l.currentStatus,
+          nextFollowUpAt: nfd,
+          lastContactedAt: l.lastFollowUpDate || null,
+          followUpCount: l.followUpCount || 0,
+          campaign: l.campaignName || '',
+          product: l.productName || '',
+          area: l.area || '',
+          priority: l.priority || 'NORMAL',
+          overdueDays: overdueDays(nfd, bounds),
+          dueState: classify(l),
+          latestActivity: null,
+        };
+      });
+      return sendJson(res, 200, {
+        success: true,
+        data: {
+          bucket,
+          timezone: BUSINESS_TIMEZONE,
+          todayDate: bounds.todayDate,
+          bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+          items,
+          counts,
+          pagination: { limit, offset, total },
+        },
+      });
+    }
+
+    const pool = getPool();
+    const params: any[] = [];
+    const where: string[] = [
+      'l.is_deleted = FALSE',
+      'l.next_follow_up_at IS NOT NULL',
+    ];
+
+    if (!includeTerminal) {
+      params.push([...TERMINAL_LEAD_STATUSES]);
+      where.push(`l.current_status <> ALL($${params.length}::text[])`);
+    }
+    if (statusFilter) {
+      params.push(statusFilter);
+      where.push(`l.current_status = $${params.length}`);
+    }
+    if (assignedFilter) {
+      params.push(assignedFilter.userId, assignedFilter.employeeId);
+      where.push(`(l.assigned_to::text = $${params.length - 1} OR UPPER(l.custom_fields->>'assignedTo') = UPPER($${params.length}))`);
+    }
+    if (fromYmd) {
+      params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
+      where.push(`l.next_follow_up_at >= $${params.length}::timestamp`);
+    }
+    if (toYmd) {
+      const next = addCalendarDays(toYmd.y, toYmd.m, toYmd.d, 1);
+      params.push(dhakaStartUtc(next.y, next.m, next.d).toISOString());
+      where.push(`l.next_follow_up_at < $${params.length}::timestamp`);
+    }
+    if (!visibility.all) {
+      params.push(visibility.userIds, visibility.employeeIds);
+      const pUser = params.length - 1;
+      const pEmp = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+    }
+
+    const todayLit = bounds.todayStartIso.replace(/'/g, "''");
+    const tomorrowLit = bounds.tomorrowStartIso.replace(/'/g, "''");
+    const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
+
+    const countSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${where.join(' AND ')} GROUP BY 1`;
+    const countRes = await pool.query(countSql, params);
+    const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    for (const row of countRes.rows) {
+      const b = String(row.bucket);
+      const c = Number(row.cnt) || 0;
+      if (b === 'overdue' || b === 'today' || b === 'upcoming') counts[b] = c;
+      counts.all += c;
+    }
+
+    const listWhere = bucket === 'all' ? where : [...where, `${bucketExpr} = '${bucket}'`];
+    const totalRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM leads l WHERE ${listWhere.join(' AND ')}`, params);
+    const total = Number(totalRes.rows[0]?.cnt || 0);
+
+    params.push(limit, offset);
+    const pLimit = params.length - 1;
+    const pOffset = params.length;
+
+    const listSql = `
+      SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.area, l.priority,
+             l.current_status, l.next_follow_up_at, l.last_contacted_at,
+             COALESCE(l.follow_up_count, 0) AS follow_up_count,
+             l.custom_fields,
+             au.employee_id AS assigned_to_employee_id,
+             au.full_name AS assigned_to_full_name,
+             ${bucketExpr} AS due_state,
+             latest.status AS latest_activity_status,
+             latest.remarks AS latest_activity_remarks,
+             latest.created_at AS latest_activity_at
+      FROM leads l
+      LEFT JOIN users au ON au.id = l.assigned_to
+      LEFT JOIN LATERAL (
+        SELECT a.status, a.remarks, a.created_at
+        FROM lead_activities a
+        WHERE a.lead_id = l.id
+        ORDER BY a.created_at DESC
+        LIMIT 1
+      ) latest ON TRUE
+      WHERE ${listWhere.join(' AND ')}
+      ORDER BY l.next_follow_up_at ASC
+      LIMIT $${pLimit} OFFSET $${pOffset}
+    `;
+    const listRes = await pool.query(listSql, params);
+    const items = listRes.rows.map((row: any) => {
+      const cf = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
+      const nfd = row.next_follow_up_at;
+      return {
+        id: row.lead_code || row.id,
+        dbId: row.id,
+        leadCode: row.lead_code,
+        prospectName: row.customer_name,
+        customerName: row.customer_name,
+        mobile: row.mobile || '',
+        assignedTo: row.assigned_to_employee_id || cf.assignedTo || '',
+        assignedEmployeeName: row.assigned_to_full_name || row.assigned_to_employee_id || '',
+        currentStatus: row.current_status,
+        nextFollowUpAt: nfd,
+        lastContactedAt: row.last_contacted_at || null,
+        followUpCount: Number(row.follow_up_count) || 0,
+        campaign: cf.campaignName || '',
+        product: cf.productName || '',
+        area: row.area || '',
+        priority: row.priority || 'NORMAL',
+        overdueDays: overdueDays(nfd, bounds),
+        dueState: String(row.due_state || 'upcoming'),
+        latestActivity: row.latest_activity_at
+          ? { status: row.latest_activity_status, remarks: row.latest_activity_remarks, createdAt: row.latest_activity_at }
+          : null,
+      };
+    });
+
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        bucket,
+        timezone: BUSINESS_TIMEZONE,
+        todayDate: bounds.todayDate,
+        bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+        items,
+        counts,
+        pagination: { limit, offset, total },
+      },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up queue fetch failed.' });
+  }
+});
 
 /* ------------------------------------------------------------------
    GET /leads/:id — direct single-lead retrieval (visibility enforced)
