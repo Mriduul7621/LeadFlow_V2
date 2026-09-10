@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import { 
-  Upload, 
-  FileSpreadsheet, 
-  AlertCircle, 
-  CheckCircle2, 
+import {
+  FileSpreadsheet,
+  AlertCircle,
+  CheckCircle2,
   Download,
   Info,
   X,
@@ -11,46 +10,37 @@ import {
   ArrowRight,
   Database,
   BarChart3,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle,
+  ListChecks
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
-import { leadService } from '../services/leadService';
-import { settingsService } from '../../../services/settingsService';
-import { userService } from '../../users/services/userService';
+import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { REAL_SHEET_HEADERS, mapRowForPreview, formatDateForDisplay, type PreviewRow } from '../utils/leadUploadMapping';
 
-function parseExcelDate(val: any): string {
-  if (val === undefined || val === null || val === '') {
-    return '';
-  }
-  
-  if (val instanceof Date) {
-    if (!isNaN(val.getTime())) {
-      return val.toISOString();
-    }
-  }
-
-  const num = Number(val);
-  if (!isNaN(num) && num > 10000 && num < 100000) {
-    const date = new Date(Math.round((num - 25569) * 86400 * 1000));
-    if (!isNaN(date.getTime())) {
-      return date.toISOString();
-    }
-  }
-
-  const parsed = new Date(val);
-  if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString();
-  }
-
-  return '';
+/** Display formatting for preview cells (never mutates the submitted data). */
+function displayCell(cell: any): string {
+  if (cell === null || cell === undefined) return '';
+  if (cell instanceof Date) return isNaN(cell.getTime()) ? String(cell) : cell.toISOString().slice(0, 10);
+  return formatDateForDisplay(cell);
 }
 
 export default function LeadUpload() {
   const { canAccess, userRole } = usePermissions();
+
+  const [dragActive, setDragActive] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<any[]>([]);
+  const [fullData, setFullData] = useState<any[]>([]);
+  const [mappedRows, setMappedRows] = useState<PreviewRow[]>([]);
+  const [serverPreview, setServerPreview] = useState<BulkImportResult | null>(null);
+  const [importResult, setImportResult] = useState<BulkImportResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [processing, setProcessing] = useState(false);
 
   if (!canAccess('lead_upl_gen', 'upload_raw_csv_xlsx')) {
     return (
@@ -72,74 +62,51 @@ export default function LeadUpload() {
     );
   }
 
-  const [dragActive, setDragActive] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [previewData, setPreviewData] = useState<any[]>([]);
-  const [fullData, setFullData] = useState<any[]>([]);
-  const [processing, setProcessing] = useState(false);
-
   const downloadTemplate = () => {
-    // Generate sample data exactly matching requested format
+    // Exact real spreadsheet headers with the business example row.
     const templateData = [
       {
-        "Assigned Date": "",
-        "Lead Date": "2026-05-20",
-        "Name": "Mridul Hassan",
-        "Phone": "01711001122",
-        "E-mail": "mr.mriduul@gmail.com",
-        "Area": "Gulshan",
-        "Source": "Website",
-        "Product": "Life Secure+",
-        "Other Info": "Interested in premium policy options",
-        "Campaign Name": "Corporate Wellness Drive"
-      },
-      {
-        "Assigned Date": "",
-        "Lead Date": "2026-05-20",
-        "Name": "Faria Rahman",
-        "Phone": "01822334455",
-        "E-mail": "faria@shanta.com",
-        "Area": "Dhanmondi",
-        "Source": "Facebook",
-        "Product": "Child Education Plan",
-        "Other Info": "Wants follow up next Monday",
-        "Campaign Name": "Summer Promo Offer"
+        'Assigned Date': '23-Apr-2026',
+        'Lead Date': '22-Apr-2026',
+        'Name': 'Ranjon Tng',
+        'Phone': '8801557586634',
+        'E-mail': 'ranjanchakama@gmail.com',
+        'Area': 'CTG',
+        'Interested amount of investment': 500000,
+        'Source': 'Social media',
+        'Product': 'SCEP',
+        'Other Info': '',
+        'Campaign Name': "Child Education April`26",
+        'Assigned To': 'Monsoor_CTG',
+        'Previously Assigned': '',
+        'TAT': 1,
+        '1st Call date': '23-Apr-2026',
+        'Initial Status': 'No response',
+        'Initial Remarks': '',
+        'Follow up date': '29-Apr-2026',
+        'Follow up': 'Interested',
+        'Final Remarks': 'The customer is currently busy as he works in a factory. He asked to be called at 8 PM.'
       }
     ];
 
     try {
-      const worksheet = XLSX.utils.json_to_sheet(templateData);
+      const worksheet = XLSX.utils.json_to_sheet(templateData, { header: [...REAL_SHEET_HEADERS] });
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Leads Template");
-      
-      // Auto-adjust column width for readability
-      const maxColWidths = [
-        { wch: 15 }, // Assigned Date
-        { wch: 15 }, // Lead Date
-        { wch: 20 }, // Name
-        { wch: 15 }, // Phone
-        { wch: 25 }, // E-mail
-        { wch: 12 }, // Area
-        { wch: 12 }, // Source
-        { wch: 20 }, // Product
-        { wch: 30 }, // Other Info
-        { wch: 25 }  // Campaign Name
-      ];
-      worksheet['!cols'] = maxColWidths;
-
-      XLSX.writeFile(workbook, "Shanta_Life_Leads_Upload_Template.xlsx");
-      toast.success("Correct format template downloaded! Fill and upload this sheet.");
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Leads Template');
+      worksheet['!cols'] = REAL_SHEET_HEADERS.map(() => ({ wch: 18 }));
+      XLSX.writeFile(workbook, 'Shanta_Life_Leads_Upload_Template.xlsx');
+      toast.success('Correct format template downloaded! Fill and upload this sheet.');
     } catch (err) {
-      toast.error("Failed to generate download spreadsheet template.");
+      toast.error('Failed to generate download spreadsheet template.');
     }
   };
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
+    if (e.type === 'dragenter' || e.type === 'dragover') {
       setDragActive(true);
-    } else if (e.type === "dragleave") {
+    } else if (e.type === 'dragleave') {
       setDragActive(false);
     }
   };
@@ -159,11 +126,39 @@ export default function LeadUpload() {
     }
   };
 
+  /**
+   * Ask the server to validate the rows WITHOUT importing (dryRun).
+   * This is the authoritative preview: it resolves "Assigned To" against
+   * real users, statuses against the configured dictionary, and detects
+   * duplicates - without writing anything.
+   */
+  const runServerValidation = async (rows: any[]) => {
+    setValidating(true);
+    try {
+      const result = await leadService.bulkUploadLeads(rows, { dryRun: true });
+      setServerPreview(result);
+    } catch (err: any) {
+      setServerPreview(null);
+      toast.error(err?.message || 'Preview validation failed. Check your connection and permissions.');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const resetFileState = () => {
+    setFile(null);
+    setPreviewData([]);
+    setFullData([]);
+    setMappedRows([]);
+    setServerPreview(null);
+    setImportResult(null);
+  };
+
   const processFile = (file: File) => {
     if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
       setFile(file);
       setProcessing(true);
-      
+
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
@@ -171,136 +166,76 @@ export default function LeadUpload() {
           const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
-          const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-          const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+          const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          // Rows keyed by the FIRST ROW's headers - raw rows are submitted
+          // unchanged and the server maps the exact headers authoritatively.
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
           setFullData(rows);
           setPreviewData(data.slice(0, 7)); // Preview header + 6 rows
-          toast.success("Data imported successfully");
+          setImportResult(null);
+          setMappedRows(rows.map((row: any, i: number) => mapRowForPreview(row, i)).filter(r => r.hasAnyValue));
+          toast.success('Data imported successfully');
+          if (rows.length > 0) {
+            void runServerValidation(rows);
+          } else {
+            setServerPreview(null);
+          }
         } catch (err) {
-          toast.error("Failed to parse file. Check integrity.");
+          toast.error('Failed to parse file. Check integrity.');
         } finally {
           setProcessing(false);
         }
       };
       reader.readAsBinaryString(file);
     } else {
-      toast.error("Invalid protocol. Please inject Excel or CSV format.");
+      toast.error('Invalid protocol. Please inject Excel or CSV format.');
     }
   };
 
   const handleUpload = async () => {
     if (fullData.length === 0) return;
-    
+
     setProcessing(true);
     try {
-      // 1. Gather all unique campaigns in uploaded dataset
-      const uniqueCampaigns = Array.from(
-        new Set(
-          fullData
-            .map((row: any) => {
-              const val = row['Campaign Name'] || row.Campaign || row.campaignName;
-              return val ? String(val).trim() : '';
-            })
-            .filter(Boolean)
-        )
-      ) as string[];
+      // Raw rows are sent as-is: the server maps the exact spreadsheet
+      // headers, resolves "Assigned To" against active users, validates
+      // statuses and dates, registers new campaigns deterministically and
+      // reports per-row results.
+      const result = await leadService.bulkUploadLeads(fullData);
+      setImportResult(result);
+      setServerPreview(null);
 
-      // 2. Fetch existing registered campaigns to compare against
-      const existingCampaignsList = await settingsService.getOptionsByType('Campaign');
-      const existingSetLower = new Set(existingCampaignsList.map(c => c.toLowerCase().trim()));
-
-      let newlyAddedCampaignsCount = 0;
-      for (const camp of uniqueCampaigns) {
-        if (!existingSetLower.has(camp.toLowerCase())) {
-          await settingsService.addOption('Campaign', camp);
-          newlyAddedCampaignsCount++;
-        }
+      if (result.failed > 0) {
+        toast.warning(`${result.inserted} inserted, ${result.updated} updated, ${result.failed} failed of ${result.total} row(s). See the report below.`);
+      } else {
+        toast.success(`Successfully imported ${result.inserted} new and ${result.updated} updated lead(s).`);
+        resetFileState();
       }
-
-      if (newlyAddedCampaignsCount > 0) {
-        toast.info(`Auto-registered ${newlyAddedCampaignsCount} new campaign(s) in the options database.`);
-      }
-
-      // 3. Load all system users to match assignment person accurately
-      const allUsers = await userService.getAllUsers();
-
-      // 4. Transform rows using exact columns
-      const leadsToUpload = fullData.map((row: any) => {
-        const rawName = row.Name || row['Customer Name'] || row.prospectName || 'Unknown';
-        const rawMobile = String(row.Phone || row['Mobile Number'] || row.Mobile || row.mobile || '').trim();
-        const rawCampaign = row['Campaign Name'] || row.Campaign || row.campaignName || 'Default';
-        const rawAssignPerson = String(row['Assign Person'] || row.Operator || row.assignedTo || '').trim();
-        const rawEmail = row['E-mail'] || row.Email || row.email || '';
-        const rawArea = row.Area || row.area || 'Gulshan';
-        const rawSource = row.Source || row.source || 'Bulk Upload';
-        const rawProduct = row.Product || row['Product Name'] || row.productName || 'Default';
-        const rawOtherInfo = row['Other Info'] || row.otherInfo || '';
-
-        // "lead date is uploaded date" -> Let's check 'Lead Date' column. If present, parse or use, fallback to now.
-        const leadDateValue = row['Lead Date'] || row.creationDate;
-        let creationDate = parseExcelDate(leadDateValue);
-        if (!creationDate) {
-          creationDate = new Date().toISOString();
-        }
-
-        // "assign date will be select by after upload admin when assign"
-        // Let's parse 'Assigned Date' if optionally filled in sheet, else it starts as empty and can be assigned by Admin.
-        const assignedDateValue = row['Assigned Date'] || row.assignedDate;
-        const assignedDate = parseExcelDate(assignedDateValue);
-
-        // High Intelligence Match for Assigned Person (if provided as fallback)
-        let assignedTo = '';
-        if (rawAssignPerson && rawAssignPerson !== 'undefined' && rawAssignPerson !== 'null') {
-          const matchedUser = allUsers.find(
-            u => 
-              u.employeeId.toLowerCase() === rawAssignPerson.toLowerCase() ||
-              u.name.toLowerCase() === rawAssignPerson.toLowerCase() ||
-              u.email.toLowerCase() === rawAssignPerson.toLowerCase()
-          );
-          if (matchedUser) {
-            assignedTo = matchedUser.employeeId;
-          } else {
-            // Keep the exact designated assignee identifier
-            assignedTo = rawAssignPerson;
-          }
-        }
-
-        return {
-          prospectName: rawName,
-          mobile: rawMobile,
-          mobileNumber: rawMobile, // Support both references
-          email: rawEmail,
-          profession: row.Profession || row.profession || 'Service',
-          area: rawArea,
-          source: rawSource,
-          productName: rawProduct,
-          campaignName: rawCampaign,
-          assignedTo: assignedTo,
-          assignedBy: assignedTo ? 'ADMIN' : '',
-          assignedDate: assignedTo && !assignedDate ? new Date().toISOString() : assignedDate,
-          currentStatus: 'Untouched' as any,
-          projectedNCP: 0,
-          collectedNCP: 0,
-          creationDate: creationDate,
-          timestamp: creationDate,
-          otherInfo: rawOtherInfo || '',
-          familyMember: row['Family Member'] || row.familyMember || '0',
-          maritalStatus: row['Marital Status'] || row.maritalStatus || 'Single',
-          hasChild: row['Has Child'] === 'Yes' || row.HasChild === 'Yes'
-        };
-      });
-
-      await leadService.bulkUploadLeads(leadsToUpload);
-      toast.success(`Successfully uploaded ${leadsToUpload.length} leads matching corresponding campaign assigned users!`);
-      setFile(null);
-      setPreviewData([]);
-      setFullData([]);
-    } catch (err) {
-      toast.error('Synchronization failure during extraction');
+    } catch (err: any) {
+      toast.error(err?.message || 'Import failed. Nothing was saved.');
     } finally {
       setProcessing(false);
     }
   };
+
+  const localIssueRows = mappedRows.filter(r => r.localIssues.length > 0);
+  const serverErrors = serverPreview?.errors || [];
+  const serverWarnings = serverPreview?.warnings || [];
+  const attentionRows: Array<{ rowNumber: number; name: string; phone: string; assignedTo: string; issues: string[] }> = [
+    ...localIssueRows.map(r => ({ rowNumber: r.rowNumber, name: r.name, phone: r.phone, assignedTo: r.assignedTo, issues: r.localIssues })),
+    ...serverErrors
+      .filter(e => !localIssueRows.some(r => r.rowNumber === e.index + 1))
+      .map(e => {
+        const row = mappedRows.find(r => r.rowNumber === e.index + 1);
+        return {
+          rowNumber: e.index + 1,
+          name: row?.name || '',
+          phone: row?.phone || '',
+          assignedTo: row?.assignedTo || '',
+          issues: [e.message],
+        };
+      }),
+  ];
 
   return (
     <div className="max-w-5xl mx-auto space-y-12 pb-24">
@@ -314,7 +249,7 @@ export default function LeadUpload() {
             <p className="text-sm text-slate-500 mt-2">Upload leads from Excel files</p>
           </div>
         </div>
-        <button 
+        <button
           onClick={downloadTemplate}
           className="flex items-center gap-3 px-6 py-3 bg-[#978C21]/10 hover:bg-[#978C21]/20 border border-[#978C21]/30 text-[#978C21] text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm active:scale-95 group animate-bounce-slow"
         >
@@ -325,30 +260,30 @@ export default function LeadUpload() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
          <div className="lg:col-span-2 space-y-8">
-            <div 
-               onDragEnter={handleDrag} 
-               onDragOver={handleDrag} 
-               onDragLeave={handleDrag} 
+            <div
+               onDragEnter={handleDrag}
+               onDragOver={handleDrag}
+               onDragLeave={handleDrag}
                onDrop={handleDrop}
                className={cn(
                   "relative h-96 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden rounded-sm border-2 border-dashed",
                   dragActive ? "border-[#978C21] bg-[#978C21]/5 scale-[1.01]" : "border-slate-200 hover:border-[#978C21]/50 bg-[#FBFAF8]"
                )}
             >
-               <input 
-                  type="file" 
-                  className="absolute inset-0 opacity-0 cursor-pointer z-10" 
+               <input
+                  type="file"
+                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
                   onChange={handleChange}
                   accept=".xlsx, .xls, .csv"
                />
-               
+
                <div className="w-20 h-20 bg-white rounded-sm shadow-xl flex items-center justify-center mb-8 border border-slate-50">
-                  <FileSpreadsheet className={cn("w-10 h-10 text-[#978C21]", processing && "animate-pulse")} />
+                  <FileSpreadsheet className={cn('w-10 h-10 text-[#978C21]', processing && 'animate-pulse')} />
                </div>
-               
+
                <AnimatePresence mode="wait">
                   {file ? (
-                     <motion.div 
+                     <motion.div
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
                         className="space-y-4"
@@ -357,10 +292,10 @@ export default function LeadUpload() {
                         <div className="flex items-center justify-center gap-4">
                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{(file.size / 1024).toFixed(2)} KB</span>
                            <div className="w-1 h-1 rounded-full bg-slate-300" />
-                           <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest italic">Ready for Extraction</span>
+                           <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest italic">{fullData.length} row(s) parsed</span>
                         </div>
-                        <button 
-                           onClick={(e) => { e.stopPropagation(); setFile(null); setPreviewData([]); }} 
+                        <button
+                           onClick={(e) => { e.stopPropagation(); resetFileState(); }}
                            className="text-red-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 mx-auto hover:bg-red-50 px-4 py-2 rounded-sm mt-8 z-20 transition-all border border-transparent hover:border-red-100"
                         >
                         <X className="w-4 h-4" /> Remove Entity
@@ -381,55 +316,110 @@ export default function LeadUpload() {
                </AnimatePresence>
             </div>
 
-            {previewData.length > 0 && (
-               <motion.div 
+            {fullData.length > 0 && (
+               <motion.div
                   initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm space-y-10"
                >
                   <div className="flex items-center justify-between border-b border-slate-50 pb-8">
                     <div className="flex items-center gap-4">
-                      <ShieldCheck className="w-8 h-8 text-emerald-500" />
+                      <ShieldCheck className={cn('w-8 h-8', attentionRows.length > 0 ? 'text-amber-500' : 'text-emerald-500')} />
                       <div>
                         <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Data Integrity Assessment</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 italic">Validation Level 0.998 SECURE</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 italic">
+                          {validating ? 'Validating against database…' : 'Pre-commit validation (read-only)'}
+                        </p>
                       </div>
                     </div>
                     <div className="px-4 py-2 bg-slate-50 rounded-sm">
-                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">Encryption Active</p>
+                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">{mappedRows.length} data row(s)</p>
                     </div>
                   </div>
 
+                  {/* Validation summary */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                     {[
+                        { label: 'Total Rows', val: mappedRows.length, tone: 'text-slate-700' },
+                        { label: 'Local Issues', val: localIssueRows.length, tone: localIssueRows.length ? 'text-red-500' : 'text-emerald-600' },
+                        { label: 'Would Insert', val: serverPreview ? serverPreview.inserted : '—', tone: 'text-emerald-600' },
+                        { label: 'Would Update', val: serverPreview ? serverPreview.updated : '—', tone: 'text-blue-600' },
+                     ].map((item, i) => (
+                        <div key={i} className="border border-slate-100 rounded-sm p-4 bg-[#FBFAF8]">
+                           <p className={cn('text-xl font-black', item.tone)}>{item.val}</p>
+                           <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{item.label}</p>
+                        </div>
+                     ))}
+                  </div>
+
+                  {serverPreview && serverPreview.failed > 0 && (
+                     <div className="flex items-start gap-4 bg-red-50 border border-red-100 p-5 rounded-sm">
+                        <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                        <p className="text-[11px] font-black text-red-600 leading-relaxed uppercase tracking-tight">
+                           {serverPreview.failed} row(s) will be rejected. Fix the issues below (or remove those rows) before importing — valid rows can still be imported.
+                        </p>
+                     </div>
+                  )}
+
+                  {/* Rows needing attention */}
+                  {attentionRows.length > 0 && (
+                     <div className="space-y-4">
+                        <div className="flex items-center gap-3">
+                           <ListChecks className="w-5 h-5 text-amber-500" />
+                           <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Rows needing attention</h4>
+                        </div>
+                        <div className="overflow-x-auto border border-slate-100 rounded-sm max-h-64 overflow-y-auto">
+                           <table className="w-full text-left">
+                              <thead>
+                                 <tr className="bg-[#3C3C3C] text-white text-[9px] font-black uppercase tracking-widest">
+                                    <th className="px-4 py-3">Sheet Row</th>
+                                    <th className="px-4 py-3">Name</th>
+                                    <th className="px-4 py-3">Phone</th>
+                                    <th className="px-4 py-3">Assigned To</th>
+                                    <th className="px-4 py-3">Issues</th>
+                                 </tr>
+                              </thead>
+                              <tbody>
+                                 {attentionRows.slice(0, 50).map((row, i) => (
+                                    <tr key={i} className="text-[11px] text-slate-600 border-t border-slate-50 hover:bg-slate-50/60">
+                                       <td className="px-4 py-3 font-black">{row.rowNumber + 1}</td>
+                                       <td className="px-4 py-3">{row.name || '—'}</td>
+                                       <td className="px-4 py-3">{row.phone || '—'}</td>
+                                       <td className="px-4 py-3">{row.assignedTo || '—'}</td>
+                                       <td className="px-4 py-3 text-red-500 font-bold">{row.issues.join(' · ')}</td>
+                                    </tr>
+                                 ))}
+                              </tbody>
+                           </table>
+                        </div>
+                     </div>
+                  )}
+
+                  {serverWarnings.length > 0 && (
+                     <div className="bg-amber-50 border border-amber-100 p-5 rounded-sm space-y-2">
+                        <p className="text-[10px] font-black text-amber-700 uppercase tracking-widest">Warnings ({serverWarnings.length})</p>
+                        <ul className="space-y-1 max-h-32 overflow-y-auto">
+                           {serverWarnings.slice(0, 20).map((w, i) => (
+                              <li key={i} className="text-[11px] text-amber-700 font-bold">Row {w.index + 2}: {w.message}</li>
+                           ))}
+                        </ul>
+                     </div>
+                  )}
+
+                  {/* Raw data preview */}
                   <div className="overflow-x-auto border border-slate-50 rounded-sm shadow-inner bg-[#FBFAF8]">
                     <table className="w-full text-left">
                       <tbody className="italic">
                         {previewData.map((row: any, i) => (
                           <tr key={i} className={cn(
-                             "text-[11px] group transition-all", 
-                             i === 0 ? "bg-[#3C3C3C] font-black text-white uppercase tracking-[0.1em]" : "text-slate-500 font-bold hover:bg-white"
+                             'text-[11px] group transition-all',
+                             i === 0 ? 'bg-[#3C3C3C] font-black text-white uppercase tracking-[0.1em]' : 'text-slate-500 font-bold hover:bg-white'
                           )}>
-                            {row.map((cell: any, j: number) => {
-                              let displayVal = cell;
-                              if (cell instanceof Date) {
-                                displayVal = cell.toLocaleDateString('en-CA');
-                              } else if (cell === null || cell === undefined) {
-                                displayVal = '';
-                              } else if (i > 0 && (j === 0 || j === 1)) {
-                                // Format Excel number dates in Lead Date or Assigned Date column
-                                const num = Number(cell);
-                                if (!isNaN(num) && num > 10000 && num < 100000) {
-                                  const date = new Date(Math.round((num - 25569) * 86400 * 1000));
-                                  if (!isNaN(date.getTime())) {
-                                    displayVal = date.toLocaleDateString('en-CA');
-                                  }
-                                }
-                              }
-                              return (
-                                <td key={j} className="px-6 py-4 whitespace-nowrap border-r border-slate-100/10">
-                                  {String(displayVal)}
-                                </td>
-                              );
-                            })}
+                            {row.map((cell: any, j: number) => (
+                              <td key={j} className="px-6 py-4 whitespace-nowrap border-r border-slate-100/10">
+                                {String(displayCell(cell))}
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
@@ -439,15 +429,53 @@ export default function LeadUpload() {
                   <div className="flex items-center gap-6 bg-[#978C21]/5 p-6 rounded-sm border border-[#978C21]/10">
                     <Info className="w-6 h-6 text-[#978C21] shrink-0" />
                     <p className="text-[11px] font-black text-brand-text leading-relaxed italic uppercase tracking-tight">
-                      <strong>Operational Directive:</strong> System mapping will sync "Mobile" entities to Intelligence Hub. Ensure unique keys prefix 880 or 01.
+                      <strong>Assignment Logic:</strong> "Assigned To" must match an active employee ID (e.g. Monsoor_CTG) — otherwise the row is rejected. Blank leaves the lead unassigned. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
                     </p>
                   </div>
 
-                  <button 
+                  {/* Import result report */}
+                  {importResult && (
+                     <div className={cn('border p-6 rounded-sm space-y-4', importResult.failed > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50')}>
+                        <div className="flex items-center gap-3">
+                           {importResult.failed > 0 ? <AlertTriangle className="w-5 h-5 text-amber-600" /> : <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                           <h4 className="text-[12px] font-black uppercase tracking-widest text-slate-700">Import report</h4>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                           {[
+                              { label: 'Inserted', val: importResult.inserted },
+                              { label: 'Updated', val: importResult.updated },
+                              { label: 'Skipped Duplicates', val: importResult.skipped },
+                              { label: 'Failed', val: importResult.failed },
+                              { label: 'Total', val: importResult.total },
+                           ].map((item, i) => (
+                              <div key={i} className="bg-white border border-slate-100 rounded-sm p-3">
+                                 <p className="text-lg font-black text-slate-800">{item.val}</p>
+                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
+                              </div>
+                           ))}
+                        </div>
+                        {typeof importResult.campaignsRegistered === 'number' && importResult.campaignsRegistered > 0 && (
+                           <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">{importResult.campaignsRegistered} new campaign(s) registered.</p>
+                        )}
+                        {importResult.errors.length > 0 && (
+                           <div className="max-h-48 overflow-y-auto bg-white border border-slate-100 rounded-sm divide-y divide-slate-50">
+                              {importResult.errors.map((e, i) => (
+                                 <p key={i} className="text-[11px] text-red-600 font-bold px-4 py-2">Sheet row {e.index + 2}: {e.message}</p>
+                              ))}
+                           </div>
+                        )}
+                     </div>
+                  )}
+
+                  <button
                     onClick={handleUpload}
-                    className="w-full py-6 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-[0.4em] transition-all rounded-sm shadow-xl flex items-center justify-center gap-4 group italic"
+                    disabled={processing || validating || fullData.length === 0}
+                    className={cn(
+                      'w-full py-6 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-[0.4em] transition-all rounded-sm shadow-xl flex items-center justify-center gap-4 group italic',
+                      (processing || validating || fullData.length === 0) && 'opacity-60 cursor-not-allowed'
+                    )}
                   >
-                    Execute Extraction Protocol
+                    {processing ? 'Importing…' : validating ? 'Validating…' : `Import ${fullData.length} row(s)`}
                     <ArrowRight className="w-5 h-5 text-[#978C21] group-hover:translate-x-2 transition-transform" />
                   </button>
                </motion.div>
@@ -466,7 +494,9 @@ export default function LeadUpload() {
                   {[
                      { label: 'Protocols', val: 'XLSX, XLS, CSV' },
                      { label: 'Max Payload', val: '5,000 Entities' },
-                     { label: 'Mandatory', val: 'Name, Phone, Source' }
+                     { label: 'Mandatory', val: 'Name, Phone' },
+                     { label: 'Assigned To', val: 'Active Employee ID' },
+                     { label: 'Statuses', val: 'Configured Options' }
                   ].map((item, i) => (
                      <li key={i} className="flex justify-between items-end border-b border-slate-50 pb-2">
                         <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{item.label}</span>
@@ -480,10 +510,10 @@ export default function LeadUpload() {
                <div className="relative z-10">
                   <div className="flex items-center gap-4 mb-8">
                      <ShieldCheck className="w-6 h-6 text-[#978C21]" />
-                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Assignment Logic</h4>
+                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Snapshot Integrity</h4>
                   </div>
                   <p className="text-[11px] font-black text-slate-400 leading-relaxed italic uppercase tracking-tighter">
-                     Lead date corresponds to bulk upload date. Assigned Date will be set automatically when the Admin assigns the lead.
+                     Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
                   </p>
                </div>
                <BarChart3 className="absolute -bottom-6 -right-6 w-32 h-32 text-white/5 rotate-12" />
@@ -491,16 +521,12 @@ export default function LeadUpload() {
 
             <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm">
                <div className="flex items-center justify-between mb-6">
-                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Global Upload Volume</span>
+                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Database Sync</span>
                   <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
                </div>
-               <div className="h-2 w-full bg-slate-50 rounded-full overflow-hidden">
-                  <div className="h-full bg-[#978C21] w-[64%]" />
-               </div>
-               <div className="flex justify-between items-center mt-3">
-                  <span className="text-[11px] font-black text-brand-text italic uppercase">6,432 / 10,000</span>
-                  <span className="text-[10px] font-medium text-slate-400 uppercase tracking-widest">Monthly Limit</span>
-               </div>
+               <p className="text-[11px] font-black text-slate-500 leading-relaxed italic uppercase tracking-tight">
+                  Rows commit directly to PostgreSQL in a single transaction. Nothing is reported as saved unless the database confirmed it.
+               </p>
             </div>
          </div>
       </div>

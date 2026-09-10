@@ -5,6 +5,14 @@ import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import { computeHierarchyHealth } from '../utils/hierarchyHealth.js';
+import {
+  mapSpreadsheetRow,
+  normalizePhoneKey,
+  parseAmount,
+  parseTat,
+  rowFingerprint,
+  type ImportRow,
+} from './leadImport.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -3316,6 +3324,10 @@ export interface LeadRecord {
   customFields: Record<string, any>;
   createdBy: string | null;
   updatedBy: string | null;
+  /** Historical Lead Date - written to created_at on INSERT only. */
+  createdAt: string | null;
+  /** Resolved Previously Assigned user id (previous_assigned_to FK). */
+  previousAssignedTo: string | null;
 }
 
 const LEAD_IGNORED_KEYS = new Set([
@@ -3332,11 +3344,18 @@ const LEAD_IGNORED_KEYS = new Set([
 
 /** Normalize an incoming lead payload (frontend shape) to DB fields - SECURE version.
  *  Caller identity is derived from session, not client.
+ *  options.allowUnassigned         - bulk import: a BLANK assignment stays
+ *                                    unassigned (schema allows it) instead of
+ *                                    silently self-assigning to the caller.
+ *  options.preserveSuppliedDates   - bulk import: never substitute "now" for
+ *                                    a blank/supplied date; keep exactly what
+ *                                    the row says (null when absent).
  */
 export async function buildSecureLeadRecord(
   lead: any,
   caller: CallerDbInfo,
-  targetAssigned: { userId: string; employeeId: string } | null
+  targetAssigned: { userId: string; employeeId: string } | null,
+  options?: { allowUnassigned?: boolean; preserveSuppliedDates?: boolean }
 ): Promise<LeadRecord | { error: string }> {
   const customerName = clean(lead.customerName || lead.customer_name || lead.prospectName || lead.prospect_name);
   const mobile = clean(lead.mobile || lead.mobileNumber || lead.phone);
@@ -3346,15 +3365,19 @@ export async function buildSecureLeadRecord(
   const numeric = (v: any): number | null => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
   const leadCode = String(lead.leadCode || lead.lead_code || lead.id || createId('lead')).slice(0, 50);
 
-  // AssignedTo is validated target, default to caller if null
-  const effectiveAssigned = targetAssigned || { userId: caller.id, employeeId: caller.employee_id };
-  const assignedToId = effectiveAssigned.userId;
-  const assignedById = caller.id;
+  // AssignedTo is a validated target. Single-lead create defaults to the
+  // caller; the bulk import path may explicitly leave a lead unassigned.
+  const preserveDates = options?.preserveSuppliedDates === true;
+  const effectiveAssigned = targetAssigned || (options?.allowUnassigned ? null : { userId: caller.id, employeeId: caller.employee_id });
+  const assignedToId = effectiveAssigned ? effectiveAssigned.userId : null;
+  // Audit actor: the assigner is ALWAYS the authenticated session user.
+  let assignedById = caller.id;
+  if (!effectiveAssigned) assignedById = null;
 
   const reserved: Record<string, any> = {
-    assignedTo: effectiveAssigned.employeeId || '',
-    assignedBy: caller.employee_id || '',
-    assignedDate: lead.assignedDate || new Date().toISOString(),
+    assignedTo: effectiveAssigned ? effectiveAssigned.employeeId || '' : '',
+    assignedBy: effectiveAssigned ? caller.employee_id || '' : '',
+    assignedDate: lead.assignedDate || (preserveDates ? '' : new Date().toISOString()),
     projectedNCP: lead.projectedNCP,
     sumAssured: lead.sumAssured,
     collectedNCP: lead.collectedNCP,
@@ -3446,10 +3469,10 @@ export async function buildSecureLeadRecord(
     notes: lead.notes != null && lead.notes !== '' ? String(lead.notes) : null,
     assignedTo: assignedToId,
     assignedBy: assignedById,
-    assignedAt: dateOrNull(lead.assignedDate) || new Date().toISOString(),
+    assignedAt: preserveDates ? dateOrNull(lead.assignedDate) : (dateOrNull(lead.assignedDate) || new Date().toISOString()),
     lastFollowUpDate: dateOrNull(lead.lastFollowUpDate || lead.lastContactedAt),
     nextFollowUpDate: dateOrNull(lead.nextFollowUpDate || lead.nextFollowUpAt),
-    currentStatus: clean(lead.currentStatus).slice(0, 255) || 'Untouched',
+    currentStatus: clean(lead.currentStatus).slice(0, 255) || (preserveDates ? '' : 'Untouched'),
     statusHistory,
     assignmentHistory,
     documents: Array.isArray(lead.documents) ? lead.documents : [],
@@ -3457,6 +3480,10 @@ export async function buildSecureLeadRecord(
     customFields,
     createdBy: caller.id,
     updatedBy: caller.id,
+    // Historical Lead Date (created_at on INSERT; never overwritten on update)
+    createdAt: dateOrNull(lead.leadDate || lead.creationDate),
+    // Resolved Previously Assigned reference (uuid) when supplied by the import
+    previousAssignedTo: asUuid(lead.previousAssignedTo) || asUuid(lead.previous_assigned_to),
   };
 }
 
@@ -3552,6 +3579,8 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
     customFields,
     createdBy: null,
     updatedBy: null,
+    createdAt: null,
+    previousAssignedTo: null,
   };
 }
 
@@ -3628,7 +3657,7 @@ const LEAD_UPSERT_SQL = `
     address, area, district, division, source, priority, expected_premium, expected_value,
     notes, assigned_to, assigned_by, assigned_at, last_contacted_at, next_follow_up_at,
     current_status, status_history, assignment_history, documents, custom_fields, tags,
-    created_by, updated_by, created_at, updated_at
+    created_by, updated_by, created_at, updated_at, previous_assigned_to
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12, COALESCE(NULLIF($13, ''), 'NORMAL'), $14, $15, $16,
@@ -3638,7 +3667,7 @@ const LEAD_UPSERT_SQL = `
     COALESCE($25::jsonb, '[]'::jsonb),
     COALESCE($26::jsonb, '{}'::jsonb), COALESCE($27::jsonb, '[]'::jsonb),
     $28, $29,
-    NOW(), NOW()
+    COALESCE($30::timestamp, NOW()), NOW(), $31
   )
   ON CONFLICT (lead_code) DO UPDATE SET
     customer_name = EXCLUDED.customer_name,
@@ -3667,11 +3696,13 @@ const LEAD_UPSERT_SQL = `
     documents = EXCLUDED.documents,
     custom_fields = leads.custom_fields || EXCLUDED.custom_fields,
     tags = EXCLUDED.tags,
+    previous_assigned_to = COALESCE($31::uuid, leads.previous_assigned_to),
     updated_by = EXCLUDED.updated_by,
+    created_at = COALESCE($30::timestamp, leads.created_at),
     is_deleted = FALSE,
     deleted_at = NULL,
     updated_at = NOW()
-  RETURNING *`;
+  RETURNING *, (xmax = 0) AS _inserted`;
 
 router.post('/leads', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
@@ -3859,37 +3890,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
     }
 
     try {
-      const result = await getPool().query(LEAD_UPSERT_SQL, [
-        record.leadCode,
-        record.customerName,
-        record.mobile,
-        record.alternateMobile,
-        record.email,
-        record.maritalStatus,
-        record.occupation,
-        record.address,
-        record.area,
-        record.district,
-        record.division,
-        record.source,
-        record.priority,
-        record.projectedNCP,
-        record.sumAssured,
-        record.notes,
-        record.assignedTo,
-        record.assignedBy,
-        record.assignedAt,
-        record.lastFollowUpDate,
-        record.nextFollowUpDate,
-        record.currentStatus,
-        JSON.stringify(record.statusHistory),
-        JSON.stringify(record.assignmentHistory),
-        JSON.stringify(record.documents),
-        JSON.stringify(record.customFields),
-        JSON.stringify(record.tags),
-        record.createdBy,
-        record.updatedBy,
-      ]);
+      const result = await getPool().query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
       const row = result.rows[0];
       const assigned = row.assigned_to ? await managerEmployeeId(row.assigned_to) : null;
       const assignedByEmp = row.assigned_by ? await managerEmployeeId(row.assigned_by) : null;
@@ -3902,11 +3903,207 @@ router.post('/leads', requireAuth, async (req: any, res) => {
   }
 });
 
+/* ====================================================================
+   POST /leads/bulk — HARDENED BULK IMPORT (spreadsheet current-state)
+   - Same single endpoint as before (no second import route).
+   - Accepts BOTH the real spreadsheet headers (including "Assigned To",
+     "Initial Status", "Follow up", "TAT", ...) AND the historical API
+     payload shape — mapping lives in server/routes/leadImport.ts.
+   - dryRun:true runs the FULL validation + duplicate-detection pipeline
+     without writing anything. This powers the Bulk Upload preview and
+     performs zero DB mutations.
+   - Reference data (users, statuses, campaigns, existing leads,
+     permissions) is resolved in bulk — no per-row N+1 queries.
+   - Statuses are resolved against the canonical FollowUpStatus options;
+     unknown statuses are row-level errors (never silently "Untouched").
+   - "Assigned To" must resolve to an ACTIVE users row via the canonical
+     employee identifier (employee_id, e.g. "Monsoor_CTG"); a blank value
+     leaves the lead unassigned (the schema allows it) instead of faking
+     an assignment to the caller.
+   - Row-level partial success inside ONE transaction with SAVEPOINTs;
+     any hard failure rolls the whole import back and reports failure —
+     success is never reported unless PostgreSQL committed.
+   - Audit actors always derive from the authenticated session.
+==================================================================== */
+
+const BULK_IMPORT_MAX_ROWS = 5000;
+
+interface PlannedImportRow {
+  row: ImportRow;
+  assigned: { userId: string; employeeId: string } | null;
+  previousAssignedUserId: string | null;
+  /** Resolved canonical status (latest known state) or '' when blank. */
+  currentStatus: string;
+  initialStatus: string;
+  followUpStatus: string;
+  tatValue: number | null;
+  amountValue: number | null;
+  customFields: Record<string, any>;
+  fingerprint: string;
+}
+
+interface PlannedImportAction {
+  planned: PlannedImportRow;
+  action: 'insert' | 'update' | 'upsertByCode' | 'skip';
+  existing: any | null;
+  leadCode: string;
+  batchDuplicateOf: number | null;
+}
+
+/** Build the lead payload for buildSecureLeadRecord from a validated row. */
+function importRowPayload(p: PlannedImportRow): any {
+  const row = p.row;
+  const customFields: Record<string, any> = { ...p.customFields };
+  if (row.tat !== '' && p.tatValue === null) customFields.tat = row.tat; // preserve non-numeric TAT as text
+  if (row.interestedAmount !== '' && p.amountValue === null) customFields.interestedAmount = row.interestedAmount;
+  return {
+    leadCode: row.leadCode || '',
+    prospectName: row.name,
+    mobile: row.phone,
+    email: row.email,
+    area: row.area,
+    source: row.source,
+    productName: row.product,
+    campaignName: row.campaign,
+    otherInfo: row.otherInfo,
+    notes: row.finalRemarks, // Final Remarks -> first-class notes column
+    assignedDate: row.assignedDate || '',
+    leadDate: row.leadDate || '',
+    lastFollowUpDate: row.firstCallDate || '',
+    nextFollowUpDate: row.followUpDate || '',
+    currentStatus: p.currentStatus,
+    projectedNCP: p.amountValue,
+    previousAssignedTo: p.previousAssignedUserId || '',
+    customFields,
+  };
+}
+
+/**
+ * Resolve a set of user references (employee_id / email / uuid) in ONE
+ * query against the authoritative users table. The returned map is keyed
+ * by UPPER(employee_id), UPPER(email) and raw uuid.
+ */
+export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, { userId: string; employeeId: string; isActive: boolean }>> {
+  const map = new Map<string, { userId: string; employeeId: string; isActive: boolean }>();
+  const values = Array.from(new Set(refs.map(r => String(r).trim()).filter(Boolean)));
+  if (values.length === 0) return map;
+  if (!useDb()) {
+    for (const value of values) {
+      const user = fallbackStore.users.find((u: any) =>
+        u.id === value ||
+        String(u.employeeId || '').toUpperCase() === value.toUpperCase() ||
+        String(u.email || '').toLowerCase() === value.toLowerCase()
+      );
+      if (user) {
+        const statusText = String((user as any).status ?? (user as any).employmentStatus ?? 'Active');
+        const entry = { userId: user.id, employeeId: String(user.employeeId || ''), isActive: statusText.toLowerCase() !== 'inactive' };
+        map.set(value.toUpperCase(), entry);
+      }
+    }
+    return map;
+  }
+  const upper = values.map(v => v.toUpperCase());
+  const uuids = values.map(v => asUuid(v)).filter((v): v is string => !!v);
+  const result = await getPool().query(
+    `SELECT id, employee_id, email, COALESCE(is_active, TRUE) AS is_active
+     FROM users
+     WHERE UPPER(employee_id) = ANY($1::text[])
+        OR UPPER(email) = ANY($1::text[])
+        OR ($2::text[] IS NOT NULL AND id::text = ANY($2::text[]))`,
+    [upper, uuids.length ? uuids : null]
+  );
+  for (const row of result.rows) {
+    const entry = { userId: String(row.id), employeeId: String(row.employee_id || ''), isActive: row.is_active === true };
+    if (row.employee_id) map.set(String(row.employee_id).toUpperCase(), entry);
+    if (row.email) map.set(String(row.email).toUpperCase(), entry);
+    map.set(String(row.id), entry);
+  }
+  return map;
+}
+
+/**
+ * Bulk-import UPDATE: the sheet is a current-state snapshot, so supplied
+ * (non-blank) values overwrite and BLANK values preserve the existing
+ * lead - a re-import must never wipe data because a cell was empty.
+ */
+const LEAD_BULK_UPDATE_SQL = `
+  UPDATE leads SET
+    customer_name = $2,
+    alternate_mobile = COALESCE(NULLIF($3, ''), leads.alternate_mobile),
+    email = COALESCE(NULLIF($4, ''), leads.email),
+    marital_status = COALESCE(NULLIF($5, ''), leads.marital_status),
+    occupation = COALESCE(NULLIF($6, ''), leads.occupation),
+    address = COALESCE(NULLIF($7, ''), leads.address),
+    area = COALESCE(NULLIF($8, ''), leads.area),
+    district = COALESCE(NULLIF($9, ''), leads.district),
+    division = COALESCE(NULLIF($10, ''), leads.division),
+    source = COALESCE(NULLIF($11, ''), leads.source),
+    priority = COALESCE(NULLIF($12, ''), leads.priority),
+    expected_premium = COALESCE($13, leads.expected_premium),
+    expected_value = COALESCE($14, leads.expected_value),
+    notes = COALESCE(NULLIF($15, ''), leads.notes),
+    assigned_to = COALESCE($16, leads.assigned_to),
+    assigned_by = COALESCE($17, leads.assigned_by),
+    assigned_at = COALESCE($18, leads.assigned_at),
+    previous_assigned_to = COALESCE($19, leads.previous_assigned_to),
+    last_contacted_at = COALESCE($20, leads.last_contacted_at),
+    next_follow_up_at = COALESCE($21, leads.next_follow_up_at),
+    current_status = COALESCE(NULLIF($22, ''), leads.current_status),
+    assignment_history = CASE WHEN jsonb_array_length(COALESCE($23::jsonb, '[]'::jsonb)) > 0 THEN $23::jsonb ELSE leads.assignment_history END,
+    status_history = CASE WHEN jsonb_array_length(COALESCE($24::jsonb, '[]'::jsonb)) > 0 THEN $24::jsonb ELSE leads.status_history END,
+    documents = CASE WHEN jsonb_array_length(COALESCE($25::jsonb, '[]'::jsonb)) > 0 THEN $25::jsonb ELSE leads.documents END,
+    tags = CASE WHEN jsonb_array_length(COALESCE($27::jsonb, '[]'::jsonb)) > 0 THEN $27::jsonb ELSE leads.tags END,
+    custom_fields = leads.custom_fields || COALESCE($26::jsonb, '{}'::jsonb),
+    updated_by = $28,
+    is_deleted = FALSE,
+    deleted_at = NULL,
+    updated_at = NOW()
+  WHERE id = $1
+  RETURNING id`;
+
+function bulkUpdateParams(record: LeadRecord, existingId: string): any[] {
+  return [
+    existingId,
+    record.customerName,
+    record.alternateMobile || '',
+    record.email || '',
+    record.maritalStatus || '',
+    record.occupation || '',
+    record.address || '',
+    record.area || '',
+    record.district || '',
+    record.division || '',
+    record.source || '',
+    record.priority || '',
+    record.projectedNCP,
+    record.sumAssured,
+    record.notes || '',
+    record.assignedTo,
+    record.assignedBy,
+    record.assignedAt,
+    record.previousAssignedTo,
+    record.lastFollowUpDate,
+    record.nextFollowUpDate,
+    record.currentStatus,
+    JSON.stringify(record.assignmentHistory || []),
+    JSON.stringify(record.statusHistory || []),
+    JSON.stringify(record.documents || []),
+    JSON.stringify(record.customFields || {}),
+    JSON.stringify(record.tags || []),
+    record.updatedBy,
+  ];
+}
+
 router.post('/leads/bulk', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
-  const incoming = Array.isArray(req.body?.leads) ? req.body.leads : Array.isArray(req.body) ? req.body : [];
+  const body: any = Array.isArray(req.body) ? { leads: req.body } : (req.body || {});
+  const incoming: any[] = Array.isArray(body.leads) ? body.leads : Array.isArray(req.body) ? req.body : [];
+  const dryRun = body.dryRun === true;
   if (incoming.length === 0) {
     return sendJson(res, 400, { success: false, message: 'No leads supplied for bulk import.' });
+  }
+  if (incoming.length > BULK_IMPORT_MAX_ROWS) {
+    return sendJson(res, 413, { success: false, message: `Bulk import is limited to ${BULK_IMPORT_MAX_ROWS} rows per request.` });
   }
 
   try {
@@ -3916,266 +4113,492 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
     }
     const visibility = await resolveCallerVisibility(caller);
 
-    // Permission: require import or create
+    // Permission checks: fetched ONCE for the whole request (never per row).
     const canImport = await hasPermissionCode(caller, 'leads.import');
     const canCreate = await hasPermissionCode(caller, 'leads.create');
     if (!canImport && !canCreate) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
     }
+    const canEdit = await hasPermissionCode(caller, 'leads.edit');
+    const canAssign = await hasPermissionCode(caller, 'leads.assign');
+    const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
 
+    /* ---- 1. Map rows (real spreadsheet headers + legacy API shape) ---- */
+    const rows: ImportRow[] = incoming.map((raw, index) =>
+      mapSpreadsheetRow(raw && typeof raw === 'object' ? raw : {}, index)
+    );
+
+    /* ---- 2. Reference data in bulk (no per-row queries) ---- */
+    let userMap: Map<string, { userId: string; employeeId: string; isActive: boolean }>;
+    try {
+      userMap = await bulkResolveUserRefs([
+        ...rows.map(r => r.assignedTo),
+        ...rows.map(r => r.previouslyAssigned),
+      ]);
+    } catch (error: any) {
+      return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not resolve assigned users.' });
+    }
+
+    // Canonical status dictionary = active FollowUpStatus options. When the
+    // options table is not migrated/configured yet, fall back to the app's
+    // documented built-in status list (the same defaults the UI uses) so
+    // imports still resolve against a well-known taxonomy.
+    const DEFAULT_STATUS_DICTIONARY = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    let statusList: string[] = [];
+    if (useDb()) {
+      try {
+        const statusRes = await getPool().query(
+          `SELECT option_value FROM options WHERE field_key = 'FollowUpStatus' AND COALESCE(is_active, TRUE) = TRUE`
+        );
+        statusList = statusRes.rows.map((r: any) => String(r.option_value));
+      } catch {
+        statusList = [];
+      }
+    } else {
+      statusList = fallbackStore.options
+        .filter((o: any) => o.type === 'FollowUpStatus' && o.status !== 'Inactive')
+        .map((o: any) => String(o.value));
+    }
+    if (statusList.length === 0) statusList = DEFAULT_STATUS_DICTIONARY;
+    const statusDict = new Map(statusList.map(v => [v.toLowerCase(), v]));
+
+    // Existing Campaign option values (for deterministic registration).
+    const existingCampaigns = new Set<string>();
+    if (useDb()) {
+      try {
+        const campRes = await getPool().query(`SELECT option_value FROM options WHERE field_key = 'Campaign'`);
+        campRes.rows.forEach((r: any) => existingCampaigns.add(String(r.option_value).toLowerCase()));
+      } catch {
+        // options table not migrated - treat as empty (see registration below)
+      }
+    } else {
+      fallbackStore.options
+        .filter((o: any) => o.type === 'Campaign')
+        .forEach((o: any) => existingCampaigns.add(String(o.value).toLowerCase()));
+    }
+
+    /* ---- 3. Validate every row (pure, no writes) ---- */
+    const errors: Array<{ index: number; message: string }> = [];
+    const warnings: Array<{ index: number; message: string }> = [];
+    const planned: PlannedImportRow[] = [];
+
+    for (const row of rows) {
+      const rowErrors: string[] = [...row.issues];
+      const rowWarnings: string[] = [];
+
+      // Assignee resolution against the authoritative users data.
+      let assigned: { userId: string; employeeId: string } | null = null;
+      if (row.assignedTo) {
+        const entry = userMap.get(row.assignedTo.toUpperCase()) || userMap.get(row.assignedTo);
+        if (!entry || !entry.isActive) {
+          rowErrors.push(`Assigned To "${row.assignedTo}" does not match an active user`);
+        } else {
+          assigned = { userId: entry.userId, employeeId: entry.employeeId };
+        }
+      }
+      // A blank "Assigned To" stays blank: unassigned lead (schema allows
+      // it) - never a fake assignment to the importing user.
+
+      if (assigned && !isAssignedToAllowed(assigned, visibility, caller)) {
+        rowErrors.push(`Cannot assign to "${row.assignedTo}" - outside your authorized scope`);
+      }
+
+      // Previously Assigned: informational. Link when resolvable, always
+      // preserve the sheet text; never invalidate the row over it.
+      let previousAssignedUserId: string | null = null;
+      if (row.previouslyAssigned) {
+        const entry = userMap.get(row.previouslyAssigned.toUpperCase()) || userMap.get(row.previouslyAssigned);
+        if (entry) {
+          previousAssignedUserId = entry.userId;
+          if (!entry.isActive) rowWarnings.push(`Previously Assigned "${row.previouslyAssigned}" is inactive; linked for reference`);
+        } else {
+          rowWarnings.push(`Previously Assigned "${row.previouslyAssigned}" does not match a user; preserved as text`);
+        }
+      }
+
+      // Status resolution against the canonical dictionary. Unknown
+      // statuses are ERRORS - never silently replaced by "Untouched".
+      let initialStatus = '';
+      if (row.initialStatus) {
+        const resolved = statusDict.get(row.initialStatus.toLowerCase());
+        if (!resolved) rowErrors.push(`Initial Status "${row.initialStatus}" is not a valid status`);
+        else initialStatus = resolved;
+      }
+      let followUpStatus = '';
+      if (row.followUp) {
+        const resolved = statusDict.get(row.followUp.toLowerCase());
+        if (!resolved) rowErrors.push(`Follow up "${row.followUp}" is not a valid status`);
+        else followUpStatus = resolved;
+      }
+      // Legacy API-shaped rows carry the status in currentStatus - resolve
+      // it against the same dictionary (never accepted blindly).
+      let legacyStatus = '';
+      if (!initialStatus && !followUpStatus && row.currentStatus) {
+        const resolved = statusDict.get(row.currentStatus.toLowerCase());
+        if (!resolved) rowErrors.push(`Current Status "${row.currentStatus}" is not a valid status`);
+        else legacyStatus = resolved;
+      }
+      const currentStatus = followUpStatus || initialStatus || legacyStatus; // latest known state wins
+
+      const tatValue = parseTat(row.tat);
+      const amountValue = parseAmount(row.interestedAmount);
+
+      if (rowErrors.length === 0) {
+        const customFields: Record<string, any> = {};
+        if (initialStatus) customFields.initialStatus = initialStatus;
+        if (followUpStatus) customFields.followUpStatus = followUpStatus;
+        if (row.initialRemarks) customFields.initialRemarks = row.initialRemarks;
+        if (row.previouslyAssigned) customFields.previouslyAssigned = row.previouslyAssigned;
+        if (row.tat !== '' && tatValue !== null) customFields.tat = tatValue;
+        planned.push({
+          row,
+          assigned,
+          previousAssignedUserId,
+          currentStatus,
+          initialStatus,
+          followUpStatus,
+          tatValue,
+          amountValue,
+          customFields,
+          fingerprint: rowFingerprint(row, assigned ? assigned.employeeId : ''),
+        });
+      } else {
+        for (const message of rowErrors) errors.push({ index: row.index, message });
+        for (const message of rowWarnings) warnings.push({ index: row.index, message });
+      }
+    }
+
+    /* ---- 4. Existing-lead lookup (one query) + duplicate planning ---- */
+    const codeCandidates = Array.from(new Set(planned.map(p => p.row.leadCode).filter(Boolean)));
+    const phoneCandidates = Array.from(new Set(planned.map(p => normalizePhoneKey(p.row.phone)).filter(Boolean)));
+    const emailCandidates = Array.from(new Set(planned.map(p => p.row.email.toLowerCase()).filter(Boolean)));
+
+      let codeMap = new Map<string, any>();
+    let phoneMap = new Map<string, any[]>();
+    let emailMap = new Map<string, any[]>();
+    if (useDb()) {
+      const existingRes = await getPool().query(
+        `SELECT l.id, l.lead_code, l.mobile, l.email, l.assigned_to, l.current_status,
+                l.custom_fields, l.created_by, au.employee_id AS assigned_employee_id
+         FROM leads l
+         LEFT JOIN users au ON au.id = l.assigned_to
+         LEFT JOIN LATERAL (SELECT REGEXP_REPLACE(COALESCE(l.mobile, ''), '[^0-9]', '', 'g') AS d) ph ON TRUE
+         WHERE l.is_deleted = FALSE
+           AND (
+             ($1::text[] IS NOT NULL AND l.lead_code = ANY($1::text[]))
+             OR ($2::text[] IS NOT NULL AND
+                 -- mirrors normalizePhoneKey(): strip 880 country code and
+                 -- leading 0 so 01711001122 / 8801711001122 / 1711001122 match
+                 CASE
+                   WHEN LENGTH(ph.d) IN (13, 14) AND LEFT(ph.d, 3) = '880' THEN SUBSTRING(ph.d FROM 4)
+                   WHEN LENGTH(ph.d) = 11 AND LEFT(ph.d, 1) = '0' THEN SUBSTRING(ph.d FROM 2)
+                   ELSE ph.d
+                 END = ANY($2::text[]))
+             OR ($3::text[] IS NOT NULL AND UPPER(l.email) = ANY($3::text[]))
+           )`,
+        [
+          codeCandidates.length ? codeCandidates : null,
+          phoneCandidates.length ? phoneCandidates : null,
+          emailCandidates.length ? emailCandidates.map(e => e.toUpperCase()) : null,
+        ]
+      );
+      for (const lead of existingRes.rows) {
+        if (lead.lead_code) codeMap.set(String(lead.lead_code), lead);
+        const pkey = normalizePhoneKey(lead.mobile);
+        if (pkey) {
+          const list = phoneMap.get(pkey) || [];
+          list.push(lead);
+          phoneMap.set(pkey, list);
+        }
+        if (lead.email) {
+          const ekey = String(lead.email).toLowerCase();
+          const list = emailMap.get(ekey) || [];
+          list.push(lead);
+          emailMap.set(ekey, list);
+        }
+      }
+    } else {
+      for (const lead of fallbackStore.leads) {
+        if (lead.id || lead.leadCode) codeMap.set(String(lead.id || lead.leadCode), lead);
+        const pkey = normalizePhoneKey(lead.mobile);
+        if (pkey) {
+          const list = phoneMap.get(pkey) || [];
+          list.push(lead);
+          phoneMap.set(pkey, list);
+        }
+        if (lead.email) {
+          const ekey = String(lead.email).toLowerCase();
+          const list = emailMap.get(ekey) || [];
+          list.push(lead);
+          emailMap.set(ekey, list);
+        }
+      }
+    }
+
+    const actions: PlannedImportAction[] = [];
+    const batchByPhone = new Map<string, number>(); // normalized phone -> index in actions[]
+
+    const planErrorsFor = (p: PlannedImportRow, existing: any | null): string | null => {
+      // Shared authorization checks for any action that touches an EXISTING lead.
+      if (!existing) return null;
+      if (!isLeadAccessible(existing, visibility, caller)) {
+        return 'Existing lead with this phone/email is outside your authorized scope';
+      }
+      if (!canEdit) return 'No permission to edit existing leads';
+      if (
+        existing.assigned_to && p.assigned &&
+        String(existing.assigned_to) !== String(p.assigned.userId) &&
+        !canAssign && !canTransfer && !visibility.all
+      ) {
+        return 'No permission to reassign an existing lead';
+      }
+      return null;
+    };
+
+    for (const p of planned) {
+      const pkey = normalizePhoneKey(p.row.phone);
+      const priorActionIdx = batchByPhone.get(pkey);
+
+      if (priorActionIdx !== undefined) {
+        // Duplicate within the same upload - deterministic handling.
+        const prior = actions[priorActionIdx];
+        if (prior.planned.fingerprint === p.fingerprint) {
+          actions.push({ planned: p, action: 'skip', existing: null, leadCode: '', batchDuplicateOf: prior.planned.row.index });
+          warnings.push({ index: p.row.index, message: `Exact duplicate of sheet row ${prior.planned.row.index + 1}; skipped` });
+        } else {
+          // Different content: deterministic last-wins update of the lead
+          // the earlier row targets.
+          const conflictError = planErrorsFor(p, prior.existing);
+          if (conflictError) {
+            errors.push({ index: p.row.index, message: conflictError });
+            continue;
+          }
+          warnings.push({ index: p.row.index, message: `Same phone as sheet row ${prior.planned.row.index + 1} with different data; this row wins` });
+          actions.push({
+            planned: p,
+            action: 'upsertByCode',
+            existing: prior.existing,
+            leadCode: prior.leadCode || importLeadCode(p.row.phone),
+            batchDuplicateOf: prior.planned.row.index,
+          });
+        }
+        batchByPhone.set(pkey, actions.length - 1);
+        continue;
+      }
+
+      // Match against existing leads: lead_code first, then normalized
+      // phone, then email as an additional candidate. Ambiguities fail
+      // the row instead of silently overwriting the wrong lead.
+      let existing: any | null = null;
+      let matchError: string | null = null;
+      if (p.row.leadCode && codeMap.has(p.row.leadCode)) {
+        existing = codeMap.get(p.row.leadCode);
+      }
+      if (!existing) {
+        const phoneMatches = phoneMap.get(pkey) || [];
+        if (phoneMatches.length > 1) {
+          matchError = `Phone matches ${phoneMatches.length} existing leads - ambiguous, not imported`;
+        } else if (phoneMatches.length === 1) {
+          existing = phoneMatches[0];
+        }
+      }
+      if (!matchError && p.row.email) {
+        const emailMatches = emailMap.get(p.row.email.toLowerCase()) || [];
+        if (emailMatches.length > 1) {
+          matchError = `Email matches ${emailMatches.length} existing leads - ambiguous, not imported`;
+        } else if (emailMatches.length === 1) {
+          if (existing && String(existing.id) !== String(emailMatches[0].id)) {
+            matchError = 'Phone and email match two different existing leads - ambiguous, not imported';
+          } else if (!existing) {
+            existing = emailMatches[0];
+          }
+        }
+      }
+
+      if (matchError) {
+        errors.push({ index: p.row.index, message: matchError });
+        continue;
+      }
+
+      if (existing) {
+        const conflictError = planErrorsFor(p, existing);
+        if (conflictError) {
+          errors.push({ index: p.row.index, message: conflictError });
+          continue;
+        }
+        actions.push({ planned: p, action: 'update', existing, leadCode: String(existing.lead_code || ''), batchDuplicateOf: null });
+      } else {
+        actions.push({ planned: p, action: 'insert', existing: null, leadCode: p.row.leadCode || importLeadCode(p.row.phone), batchDuplicateOf: null });
+      }
+      batchByPhone.set(pkey, actions.length - 1);
+    }
+
+    const summarize = (extra: Record<string, any> = {}) => {
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+      for (const action of actions) {
+        if (action.action === 'insert') inserted++;
+        else if (action.action === 'skip') skipped++;
+        else if (action.action === 'update' || action.action === 'upsertByCode') updated++;
+      }
+      const failed = rows.length - inserted - updated - skipped;
+      return { inserted, updated, skipped, failed, total: rows.length, errors, warnings, ...extra };
+    };
+
+    /* ---- 5. Dry run: report the plan without writing anything ---- */
+    if (dryRun) {
+      return sendJson(res, 200, { success: true, data: summarize({ dryRun: true }) });
+    }
+
+    /* ---- 6. Commit ---- */
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      // Demo mode: enforce scope per row
-      const results: any[] = [];
-      const errors: Array<{ index: number; message: string }> = [];
-      for (let idx = 0; idx < incoming.length; idx++) {
-        const lead = incoming[idx];
-        const assignedRef = lead.assignedTo ? await resolveAssignedTo(lead.assignedTo) : { userId: caller.id, employeeId: caller.employee_id };
-        if (lead.assignedTo && !assignedRef) {
-          errors.push({ index: idx, message: `Assigned user "${lead.assignedTo}" not found` });
-          continue;
+      // Dev-demo in-memory mode: same planning, non-persistent store. Never
+      // active in production and never reported as a DB success.
+      for (const action of actions) {
+        const p = action.planned;
+        if (action.action === 'skip') continue;
+        try {
+          const record = buildDemoImportRecord(p, caller);
+          if (action.action === 'insert') {
+            fallbackStore.leads.push(record);
+          } else if (action.existing) {
+            Object.assign(action.existing, record, { id: (action.existing as any).id });
+          } else {
+            const idx = fallbackStore.leads.findIndex((l: any) => String(l.id) === String(action.leadCode));
+            if (idx >= 0) fallbackStore.leads[idx] = { ...fallbackStore.leads[idx], ...record };
+            else fallbackStore.leads.push(record);
+          }
+        } catch (err: any) {
+          errors.push({ index: p.row.index, message: err?.message || 'Row failed (demo mode)' });
         }
-        if (!isAssignedToAllowed(assignedRef as any, visibility, caller)) {
-          errors.push({ index: idx, message: 'Unauthorized assignment outside your scope' });
-          continue;
-        }
-        const id = String(lead.id || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
-        fallbackStore.leads.push({ ...lead, id, assignedTo: (assignedRef as any)?.employeeId || caller.employee_id, assignedBy: caller.employee_id, timestamp: lead.timestamp || new Date().toISOString() });
-        results.push({ ok: true, id });
       }
-      return sendJson(res, 200, { success: true, data: { inserted: results.length, updated: 0, failed: errors.length, total: incoming.length, errors } });
+      return sendJson(res, 200, { success: true, data: summarize() });
     }
 
     const pool = getPool();
     const client = await pool.connect();
-    const errors: Array<{ index: number; message: string }> = [];
-    let inserted = 0;
-    let updated = 0;
-    const seenMobiles = new Map<string, number>();
-    const rowKeyOf = (mobile: string) => mobile.replace(/\D/g, '').slice(-11) || mobile.toLowerCase();
-
     try {
       await client.query('BEGIN');
-      for (let index = 0; index < incoming.length; index++) {
-        const raw = incoming[index] || {};
+
+      // Deterministic campaign auto-registration AFTER validation, inside
+      // the same transaction: no duplicate options, and no side effects if
+      // the import rolls back.
+      const newCampaigns = Array.from(new Set(planned.map(p => p.row.campaign).filter(Boolean)))
+        .filter(c => !existingCampaigns.has(c.toLowerCase()));
+      let campaignsRegistered = 0;
+      if (newCampaigns.length > 0) {
         try {
-          const customerName = clean(raw.customerName || raw.customer_name || raw.prospectName || raw.prospect_name);
-          const mobile = clean(raw.mobile || raw.mobileNumber || raw.phone);
-          if (!customerName || !mobile) {
-            errors.push({ index, message: 'Customer name and mobile are required' });
-            continue;
-          }
-
-          // Resolve assignedTo for this row
-          let targetAssigned: { userId: string; employeeId: string } | null = null;
-          if (raw.assignedTo) {
-            const resolved = await resolveAssignedTo(raw.assignedTo);
-            if (!resolved) {
-              errors.push({ index, message: `Assigned user "${raw.assignedTo}" not found` });
-              continue;
-            }
-            targetAssigned = resolved;
-          } else {
-            targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
-          }
-
-          if (!isAssignedToAllowed(targetAssigned, visibility, caller)) {
-            errors.push({ index, message: 'Unauthorized: assignment outside your authorized scope' });
-            continue;
-          }
-
-          const batchKey = rowKeyOf(mobile);
-          if (seenMobiles.has(batchKey)) {
-            const priorIndex = seenMobiles.get(batchKey)!;
-            const priorLeadCode = String(incoming[priorIndex].leadCode || incoming[priorIndex].lead_code || incoming[priorIndex].id || importLeadCode(mobile)).slice(0, 50);
-            // Need to check auth for prior lead as well (already checked? but re-check)
-            const priorExisting = await client.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE LIMIT 1`, [priorLeadCode]);
-            if (priorExisting.rows[0] && !isLeadAccessible(priorExisting.rows[0], visibility, caller)) {
-              errors.push({ index, message: 'Unauthorized: cannot update lead outside your scope (duplicate in batch)' });
-              continue;
-            }
-            const recordDup = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in recordDup) {
-              errors.push({ index, message: recordDup.error });
-              continue;
-            }
-            const dupResult = await client.query(LEAD_UPSERT_SQL, [
-              priorLeadCode,
-              recordDup.customerName,
-              recordDup.mobile,
-              recordDup.alternateMobile,
-              recordDup.email,
-              recordDup.maritalStatus,
-              recordDup.occupation,
-              recordDup.address,
-              recordDup.area,
-              recordDup.district,
-              recordDup.division,
-              recordDup.source,
-              recordDup.priority,
-              recordDup.projectedNCP,
-              recordDup.sumAssured,
-              recordDup.notes,
-              recordDup.assignedTo,
-              recordDup.assignedBy,
-              recordDup.assignedAt,
-              recordDup.lastFollowUpDate,
-              recordDup.nextFollowUpDate,
-              recordDup.currentStatus,
-              JSON.stringify(recordDup.statusHistory),
-              JSON.stringify(recordDup.assignmentHistory),
-              JSON.stringify(recordDup.documents),
-              JSON.stringify(recordDup.customFields),
-              JSON.stringify(recordDup.tags),
-              recordDup.createdBy,
-              recordDup.updatedBy,
-            ]);
-            if (dupResult.rows[0]) updated++;
-            continue;
-          }
-          seenMobiles.set(batchKey, index);
-
-          const clientCode = String(raw.leadCode || raw.lead_code || raw.id || '').slice(0, 50);
-          const leadCode = clientCode || importLeadCode(mobile);
-
-          // Check existing by code or mobile
-          let existing: any = null;
-          if (clientCode) {
-            const byCode = await client.query('SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE LIMIT 1', [leadCode]);
-            existing = byCode.rows[0] || null;
-          }
-          if (!existing) {
-            const byMobile = await client.query('SELECT * FROM leads WHERE UPPER(mobile) = UPPER($1) AND is_deleted = FALSE AND lead_code <> $2 LIMIT 1', [mobile, leadCode]);
-            existing = byMobile.rows[0] || null;
-          }
-
-          if (existing) {
-            if (!isLeadAccessible(existing, visibility, caller)) {
-              errors.push({ index, message: 'Unauthorized: cannot update lead outside your authorized scope' });
-              continue;
-            }
-            if (!(await hasPermissionCode(caller, 'leads.edit'))) {
-              errors.push({ index, message: 'No permission to edit existing lead' });
-              continue;
-            }
-            // Check reassign permission if needed
-            if (existing.assigned_to && targetAssigned && String(existing.assigned_to) !== String(targetAssigned.userId)) {
-              const canAssign = await hasPermissionCode(caller, 'leads.assign');
-              const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
-              if (!canAssign && !canTransfer && !visibility.all) {
-                errors.push({ index, message: 'No permission to reassign lead' });
-                continue;
-              }
-            }
-            await client.query('SAVEPOINT bulk_row');
-            const record = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in record) {
-              await client.query('ROLLBACK TO SAVEPOINT bulk_row');
-              errors.push({ index, message: record.error });
-              continue;
-            }
-            // Merge assignment history if reassigned
-            if (String(existing.assigned_to) !== String(targetAssigned.userId)) {
-              const existingHistory = Array.isArray(existing.assignment_history) ? existing.assignment_history : [];
-              const newEntry = {
-                id: `assign_${Date.now()}_${index}`,
-                fromEmployeeId: existing.custom_fields?.assignedTo || await managerEmployeeId(existing.assigned_to) || undefined,
-                toEmployeeId: targetAssigned.employeeId,
-                changedBy: caller.employee_id,
-                date: new Date().toISOString(),
-                note: 'Reassigned via bulk import',
-              };
-              (record as any).assignmentHistory = [...existingHistory, newEntry];
-            }
-
-            const upd = await client.query(
-              `UPDATE leads SET
-                 customer_name = $2, email = $3, occupation = $4, address = $5, area = $6,
-                 district = $7, division = $8, source = $9, priority = $10,
-                 expected_premium = $11, expected_value = $12, notes = $13,
-                 assigned_to = $14, assigned_by = $15, last_contacted_at = $16,
-                 next_follow_up_at = $17, current_status = $18,
-                 status_history = COALESCE($19::jsonb, '[]'::jsonb),
-                 assignment_history = COALESCE($20::jsonb, '[]'::jsonb),
-                 documents = COALESCE($21::jsonb, '[]'::jsonb),
-                 custom_fields = custom_fields || COALESCE($22::jsonb, '{}'::jsonb),
-                 tags = COALESCE($23::jsonb, '[]'::jsonb),
-                 updated_by = $24,
-                 is_deleted = FALSE, deleted_at = NULL, updated_at = NOW()
-               WHERE id = $1`,
-              [
-                existing.id, record.customerName, record.email, record.occupation,
-                record.address, record.area, record.district, record.division, record.source,
-                record.priority, record.projectedNCP, record.sumAssured, record.notes,
-                record.assignedTo, record.assignedBy, record.lastFollowUpDate,
-                record.nextFollowUpDate, record.currentStatus,
-                JSON.stringify(record.statusHistory), JSON.stringify(record.assignmentHistory),
-                JSON.stringify(record.documents), JSON.stringify(record.customFields),
-                JSON.stringify(record.tags),
-                record.updatedBy,
-              ]
-            );
-            if ((upd.rowCount ?? 0) > 0) updated++;
-            else inserted++;
-            await client.query('RELEASE SAVEPOINT bulk_row');
-          } else {
-            await client.query('SAVEPOINT bulk_row');
-            const record = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in record) {
-              await client.query('ROLLBACK TO SAVEPOINT bulk_row');
-              errors.push({ index, message: record.error });
-              continue;
-            }
-            const ins = await client.query(LEAD_UPSERT_SQL, [
-              leadCode,
-              record.customerName,
-              record.mobile,
-              record.alternateMobile,
-              record.email,
-              record.maritalStatus,
-              record.occupation,
-              record.address,
-              record.area,
-              record.district,
-              record.division,
-              record.source,
-              record.priority,
-              record.projectedNCP,
-              record.sumAssured,
-              record.notes,
-              record.assignedTo,
-              record.assignedBy,
-              record.assignedAt,
-              record.lastFollowUpDate,
-              record.nextFollowUpDate,
-              record.currentStatus,
-              JSON.stringify(record.statusHistory),
-              JSON.stringify(record.assignmentHistory),
-              JSON.stringify(record.documents),
-              JSON.stringify(record.customFields),
-              JSON.stringify(record.tags),
-              record.createdBy,
-              record.updatedBy,
-            ]);
-            if (ins.rows[0]) inserted++;
-            await client.query('RELEASE SAVEPOINT bulk_row');
-          }
-        } catch (err: any) {
-          try { await client.query('ROLLBACK TO SAVEPOINT bulk_row'); } catch {}
-          errors.push({ index, message: err?.message || 'Row failed' });
+          const campRes = await client.query(
+            `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
+             SELECT 'Campaign', c, c,
+                    COALESCE((SELECT MAX(sort_order) FROM options WHERE field_key = 'Campaign'), 0) + ROW_NUMBER() OVER (ORDER BY c),
+                    FALSE, TRUE, '{}'::jsonb, NOW(), NOW()
+             FROM unnest($1::text[]) AS c
+             ON CONFLICT (field_key, option_value) DO NOTHING`,
+            [newCampaigns]
+          );
+          campaignsRegistered = campRes.rowCount ?? 0;
+        } catch (campErr: any) {
+          // Campaign registration is an option-list side effect; the lead
+          // data itself is unaffected. Surface it instead of failing rows.
+          warnings.push({ index: -1, message: `Campaign auto-registration skipped: ${campErr?.message || 'options table unavailable'}` });
         }
       }
+
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+      for (const action of actions) {
+        const p = action.planned;
+        if (action.action === 'skip') { skipped++; continue; }
+        try {
+          await client.query('SAVEPOINT bulk_row');
+          const record = await buildSecureLeadRecord(
+            importRowPayload(p),
+            caller,
+            p.assigned,
+            { allowUnassigned: true, preserveSuppliedDates: true }
+          );
+          if ('error' in record) throw new Error(record.error);
+
+          // Server-side assignment history merge when reassigning an
+          // existing lead (actor = authenticated caller).
+          if ((action.action === 'update' || action.action === 'upsertByCode') && action.existing) {
+            const existing = action.existing;
+            if (existing.assigned_to && p.assigned && String(existing.assigned_to) !== String(p.assigned.userId)) {
+              const existingHistory = Array.isArray(existing.custom_fields?.assignmentHistory)
+                ? existing.custom_fields.assignmentHistory
+                : [];
+              const fromEmployeeId = existing.assigned_employee_id || existing.custom_fields?.assignedTo || undefined;
+              (record as any).assignmentHistory = [
+                ...existingHistory,
+                {
+                  id: `assign_${Date.now()}_${p.row.index}`,
+                  fromEmployeeId,
+                  toEmployeeId: p.assigned.employeeId,
+                  changedBy: caller.employee_id,
+                  date: new Date().toISOString(),
+                  note: 'Reassigned via bulk import',
+                },
+              ];
+              (record as any).customFields = {
+                ...(record as any).customFields,
+                assignedTo: p.assigned.employeeId,
+                assignedBy: caller.employee_id,
+                assignedDate: new Date().toISOString(),
+              };
+            }
+          }
+
+          if (action.action === 'insert') {
+            const ins = await client.query(LEAD_UPSERT_SQL, leadParams(record, action.leadCode));
+            if (!ins.rows[0]) throw new Error('Insert did not return a row');
+            // xmax=0 means the row was truly inserted; a conflict-triggered
+            // update (e.g. soft-deleted lead resurrected) counts as updated.
+            if (ins.rows[0]._inserted === false) updated++;
+            else inserted++;
+          } else if (action.action === 'update') {
+            const upd = await client.query(LEAD_BULK_UPDATE_SQL, bulkUpdateParams(record, String(action.existing.id)));
+            if ((upd.rowCount ?? 0) > 0) updated++;
+            else throw new Error('Existing lead no longer exists');
+          } else { // upsertByCode - duplicate within the same upload
+            const ups = await client.query(LEAD_UPSERT_SQL, leadParams(record, action.leadCode));
+            if (!ups.rows[0]) throw new Error('Upsert did not return a row');
+            if (ups.rows[0]._inserted === false) updated++;
+            else inserted++;
+          }
+          await client.query('RELEASE SAVEPOINT bulk_row');
+        } catch (rowErr: any) {
+          try { await client.query('ROLLBACK TO SAVEPOINT bulk_row'); } catch {}
+          errors.push({ index: p.row.index, message: rowErr?.message || 'Row failed' });
+        }
+      }
+
       await client.query('COMMIT');
+      const failed = rows.length - inserted - updated - skipped;
       return sendJson(res, 200, {
         success: true,
-        data: { inserted, updated, failed: errors.length, total: incoming.length, errors },
+        data: {
+          inserted,
+          updated,
+          skipped,
+          failed,
+          total: rows.length,
+          errors,
+          warnings,
+          campaignsRegistered,
+        },
       });
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch {}
+      // No partial success, no fake success: nothing is committed and the
+      // response is an explicit failure.
       return sendJson(res, 500, {
         success: false,
         message: error?.message || 'Bulk import failed - no rows were committed.',
-        data: { inserted: 0, updated: 0, failed: incoming.length, total: incoming.length, errors },
+        data: { inserted: 0, updated: 0, skipped: 0, failed: rows.length, total: rows.length, errors, warnings, dryRun: false },
       });
     } finally {
       client.release();
@@ -4185,7 +4608,51 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
   }
 });
 
-/** Param array for the canonical lead upsert (now includes created_by, updated_by). */
+/** Dev-demo (in-memory) snapshot for one planned import row. Never used when a database is configured. */
+function buildDemoImportRecord(p: PlannedImportRow, caller: CallerDbInfo): any {
+  const row = p.row;
+  const leadCode = row.leadCode || importLeadCode(row.phone) || createId('lead');
+  const customFields: Record<string, any> = {
+    ...p.customFields,
+    otherInfo: row.otherInfo || '',
+    campaignName: row.campaign || '',
+    productName: row.product || '',
+    assignedTo: p.assigned ? p.assigned.employeeId : '',
+    assignedBy: p.assigned ? caller.employee_id : '',
+    assignedDate: row.assignedDate || '',
+    tat: p.tatValue ?? row.tat,
+  };
+  if (row.interestedAmount !== '' && p.amountValue === null) customFields.interestedAmount = row.interestedAmount;
+  return {
+    id: leadCode,
+    leadCode,
+    prospectName: row.name,
+    customerName: row.name,
+    mobile: row.phone,
+    email: row.email,
+    area: row.area,
+    source: row.source,
+    productName: row.product || '',
+    campaignName: row.campaign || '',
+    otherInfo: row.otherInfo || '',
+    notes: row.finalRemarks || '',
+    assignedTo: p.assigned ? p.assigned.employeeId : '',
+    assignedBy: p.assigned ? caller.employee_id : '',
+    assignedDate: row.assignedDate || '',
+    creationDate: row.leadDate || new Date().toISOString(),
+    currentStatus: p.currentStatus || 'Untouched',
+    projectedNCP: p.amountValue ?? 0,
+    collectedNCP: 0,
+    customFields,
+    createdBy: caller.id,
+    updatedBy: caller.id,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+
+
+/** Param array for the canonical lead upsert (now includes created_by, updated_by, created_at, previous_assigned_to). */
 function leadParams(record: LeadRecord, leadCode: string): any[] {
   return [
     leadCode,
@@ -4217,6 +4684,8 @@ function leadParams(record: LeadRecord, leadCode: string): any[] {
     JSON.stringify(record.tags),
     record.createdBy,
     record.updatedBy,
+    record.createdAt,
+    record.previousAssignedTo,
   ];
 }
 

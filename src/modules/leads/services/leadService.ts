@@ -7,6 +7,19 @@ import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { toast } from 'sonner';
 
+/** Result of POST /api/leads/bulk (row-level partial success semantics). */
+export interface BulkImportResult {
+  dryRun?: boolean;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  total: number;
+  errors: Array<{ index: number; message: string }>;
+  warnings?: Array<{ index: number; message: string }>;
+  campaignsRegistered?: number;
+}
+
 /**
  * leadService.ts
  * ------------------------------------------------------------------
@@ -140,25 +153,34 @@ export const leadService = {
     return saved;
   },
 
-  async bulkUploadLeads(leads: Omit<Lead, 'id'>[]): Promise<{ inserted: number; updated: number; failed: number; total: number; errors: Array<{ index: number; message: string }> }> {
-    const payloads = leads.map(lead => ({
-      ...lead,
-      id: (lead as Lead).id || `lead_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      timestamp: new Date().toISOString(),
-    }));
-
-    const result = await apiRequest<{ inserted: number; updated: number; failed: number; total: number; errors: Array<{ index: number; message: string }> }>('/api/leads/bulk', {
+  /**
+   * Bulk import rows through the hardened /api/leads/bulk endpoint.
+   * Rows may be raw spreadsheet rows (exact legacy headers - the server
+   * maps them authoritatively) or already API-shaped lead payloads.
+   *
+   * dryRun:true performs server-side validation + duplicate detection
+   * WITHOUT writing anything - used by the Bulk Upload preview so users
+   * see row-level problems before committing.
+   *
+   * Row-level failures do NOT throw: the caller receives the full
+   * result (inserted/updated/skipped/failed + per-row errors) so the UI
+   * can report exactly what happened. Only transport/server failures
+   * (network, 5xx, auth) throw.
+   */
+  async bulkUploadLeads(
+    leads: Array<Record<string, any>>,
+    options?: { dryRun?: boolean }
+  ): Promise<BulkImportResult> {
+    const dryRun = options?.dryRun === true;
+    const result = await apiRequest<BulkImportResult>('/api/leads/bulk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leads: payloads }),
+      body: JSON.stringify({ leads, dryRun }),
     });
 
-    // Refresh the local cache with whatever the server committed.
-    this.getAllLeads().catch(() => undefined);
-
-    if (result.failed > 0) {
-      const firstMessage = result.errors?.[0]?.message || 'Unknown row error';
-      throw new ApiError(422, `${result.failed} of ${result.total} leads could not be saved. ${firstMessage}`);
+    if (!dryRun) {
+      // Refresh the local cache with whatever the server committed.
+      this.getAllLeads().catch(() => undefined);
     }
     return result;
   },
