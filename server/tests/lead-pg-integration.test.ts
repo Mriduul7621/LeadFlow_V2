@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
-import { PGlite } from '@electric-sql/pglite';
 
 import { _setTestPoolForTest, _resetPoolsForTest, closePool } from '../database/connection.js';
-import { getPGliteInstance, createPGlitePool, resetPGlite } from '../database/pglitePool.js';
+import { getPGliteInstanceAsync, createPGlitePoolAsync, resetPGlite } from '../database/pglitePool.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'leadflow_development_only_secret';
 
@@ -23,8 +22,8 @@ function createTestApp() {
   });
 }
 
-async function setupSchema(db: PGlite) {
-  await db.query(`
+async function setupSchema(pool: any) {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS departments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       department_code VARCHAR(100),
@@ -32,7 +31,7 @@ async function setupSchema(db: PGlite) {
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS roles (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       role_code VARCHAR(100) UNIQUE,
@@ -44,7 +43,7 @@ async function setupSchema(db: PGlite) {
       feature_permissions JSONB
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       employee_id VARCHAR(30) UNIQUE NOT NULL,
@@ -62,14 +61,14 @@ async function setupSchema(db: PGlite) {
       updated_at TIMESTAMP DEFAULT NOW()
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS permissions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       permission_code VARCHAR(100) UNIQUE NOT NULL,
       permission_name VARCHAR(255)
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS role_permissions (
       role_id UUID NOT NULL,
       permission_id UUID NOT NULL,
@@ -77,7 +76,7 @@ async function setupSchema(db: PGlite) {
       PRIMARY KEY (role_id, permission_id)
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS user_permissions (
       user_id UUID NOT NULL,
       permission_id UUID NOT NULL,
@@ -85,7 +84,7 @@ async function setupSchema(db: PGlite) {
       PRIMARY KEY (user_id, permission_id)
     );
   `);
-  await db.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS leads (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       lead_code VARCHAR(50) UNIQUE,
@@ -125,13 +124,9 @@ async function setupSchema(db: PGlite) {
       deleted_by UUID
     );
   `);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_code ON leads(lead_code);`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_mobile ON leads(mobile);`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_assigned_to ON leads(assigned_to);`);
 }
 
 describe('Lead API - Real PostgreSQL Integration', () => {
-  let db: PGlite;
   let pool: any;
   let app: express.Express;
 
@@ -154,62 +149,63 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     process.env.JWT_SECRET = JWT_SECRET;
     process.env.NODE_ENV = 'test';
 
-    db = getPGliteInstance();
-    await setupSchema(db);
-    pool = createPGlitePool();
+    const db = await getPGliteInstanceAsync();
+    pool = await createPGlitePoolAsync();
     _setTestPoolForTest(pool);
 
-    await db.query(`DELETE FROM leads`);
-    await db.query(`DELETE FROM user_permissions`);
-    await db.query(`DELETE FROM role_permissions`);
-    await db.query(`DELETE FROM users`);
-    await db.query(`DELETE FROM permissions`);
-    await db.query(`DELETE FROM roles`);
-    await db.query(`DELETE FROM departments`);
+    await setupSchema(pool);
 
-    const deptRes: any = await db.query(`INSERT INTO departments (department_code, department_name) VALUES ('DEPT1', 'Sales') RETURNING id`);
+    await pool.query(`DELETE FROM leads`);
+    await pool.query(`DELETE FROM user_permissions`);
+    await pool.query(`DELETE FROM role_permissions`);
+    await pool.query(`DELETE FROM users`);
+    await pool.query(`DELETE FROM permissions`);
+    await pool.query(`DELETE FROM roles`);
+    await pool.query(`DELETE FROM departments`);
+
+    const deptRes: any = await pool.query(`INSERT INTO departments (department_code, department_name) VALUES ('DEPT1', 'Sales') RETURNING id`);
     const deptId = (deptRes.rows[0] as any).id;
 
-    const adminRoleRes: any = await db.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('ADMIN', 'Admin', 100, 'Organization') RETURNING id`);
+    const adminRoleRes: any = await pool.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('ADMIN', 'Admin', 100, 'Organization') RETURNING id`);
     adminRoleId = (adminRoleRes.rows[0] as any).id;
 
-    const managerRoleRes: any = await db.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('MANAGER', 'Manager', 50, 'DownTeam') RETURNING id`);
+    const managerRoleRes: any = await pool.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('MANAGER', 'Manager', 50, 'DownTeam') RETURNING id`);
     managerRoleId = (managerRoleRes.rows[0] as any).id;
 
-    const employeeRoleRes: any = await db.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('EMPLOYEE', 'Employee', 10, 'Own') RETURNING id`);
+    const employeeRoleRes: any = await pool.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('EMPLOYEE', 'Employee', 10, 'Own') RETURNING id`);
     employeeRoleId = (employeeRoleRes.rows[0] as any).id;
 
     const permCodes = ['leads.view', 'leads.create', 'leads.edit', 'leads.delete', 'leads.assign', 'leads.transfer', 'leads.import', 'leads.export'];
     for (const code of permCodes) {
-      const res: any = await db.query(`INSERT INTO permissions (permission_code, permission_name) VALUES ($1, $2) RETURNING id`, [code, code]);
+      const res: any = await pool.query(`INSERT INTO permissions (permission_code, permission_name) VALUES ($1, $2) RETURNING id`, [code, code]);
       permIds[code] = (res.rows[0] as any).id;
     }
 
     for (const roleId of [adminRoleId, managerRoleId, employeeRoleId]) {
       for (const code of permCodes) {
-        await db.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`, [roleId, permIds[code]]);
+        await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`, [roleId, permIds[code]]);
       }
     }
 
-    const userARes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('EMPA', 'User A', 'usera@test.com', 'hashed', $1, $2, true) RETURNING id, employee_id, email`, [employeeRoleId, deptId]);
+    const userARes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('EMPA', 'User A', 'usera@test.com', 'hashed', $1, $2, true) RETURNING id`, [employeeRoleId, deptId]);
     userA = { id: (userARes.rows[0] as any).id, employeeId: 'EMPA', email: 'usera@test.com', role: 'EMPLOYEE' };
 
-    const userBRes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('EMPB', 'User B', 'userb@test.com', 'hashed', $1, $2, true) RETURNING id, employee_id, email`, [employeeRoleId, deptId]);
+    const userBRes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('EMPB', 'User B', 'userb@test.com', 'hashed', $1, $2, true) RETURNING id`, [employeeRoleId, deptId]);
     userB = { id: (userBRes.rows[0] as any).id, employeeId: 'EMPB', email: 'userb@test.com', role: 'EMPLOYEE' };
 
-    const managerARes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('MGRA', 'Manager A', 'mgra@test.com', 'hashed', $1, $2, true) RETURNING id, employee_id, email`, [managerRoleId, deptId]);
+    const managerARes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('MGRA', 'Manager A', 'mgra@test.com', 'hashed', $1, $2, true) RETURNING id`, [managerRoleId, deptId]);
     managerA = { id: (managerARes.rows[0] as any).id, employeeId: 'MGRA', email: 'mgra@test.com', role: 'MANAGER' };
 
-    const managerBRes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('MGRB', 'Manager B', 'mgrb@test.com', 'hashed', $1, $2, true) RETURNING id, employee_id, email`, [managerRoleId, deptId]);
+    const managerBRes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('MGRB', 'Manager B', 'mgrb@test.com', 'hashed', $1, $2, true) RETURNING id`, [managerRoleId, deptId]);
     managerB = { id: (managerBRes.rows[0] as any).id, employeeId: 'MGRB', email: 'mgrb@test.com', role: 'MANAGER' };
 
-    const subARes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('SUBA', 'Subordinate A', 'suba@test.com', 'hashed', $1, $2, $3, true) RETURNING id, employee_id, email`, [employeeRoleId, deptId, managerA.id]);
+    const subARes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('SUBA', 'Subordinate A', 'suba@test.com', 'hashed', $1, $2, $3, true) RETURNING id`, [employeeRoleId, deptId, managerA.id]);
     subordinateA = { id: (subARes.rows[0] as any).id, employeeId: 'SUBA', email: 'suba@test.com', role: 'EMPLOYEE', managerId: managerA.employeeId };
 
-    const subBRes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('SUBB', 'Subordinate B', 'subb@test.com', 'hashed', $1, $2, $3, true) RETURNING id, employee_id, email`, [employeeRoleId, deptId, managerB.id]);
+    const subBRes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('SUBB', 'Subordinate B', 'subb@test.com', 'hashed', $1, $2, $3, true) RETURNING id`, [employeeRoleId, deptId, managerB.id]);
     subordinateB = { id: (subBRes.rows[0] as any).id, employeeId: 'SUBB', email: 'subb@test.com', role: 'EMPLOYEE', managerId: managerB.employeeId };
 
-    const adminRes: any = await db.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('ADMIN1', 'Admin User', 'admin@test.com', 'hashed', $1, $2, true) RETURNING id, employee_id, email`, [adminRoleId, deptId]);
+    const adminRes: any = await pool.query(`INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, is_active) VALUES ('ADMIN1', 'Admin User', 'admin@test.com', 'hashed', $1, $2, true) RETURNING id`, [adminRoleId, deptId]);
     adminUser = { id: (adminRes.rows[0] as any).id, employeeId: 'ADMIN1', email: 'admin@test.com', role: 'ADMIN' };
 
     app = await createTestApp();
@@ -223,7 +219,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
   });
 
   beforeEach(async () => {
-    await db.query(`DELETE FROM leads`);
+    await pool.query(`DELETE FROM leads`);
   });
 
   it('A. Cross-user update: User B cannot update Lead A owned by User A - PG unchanged', async () => {
@@ -234,7 +230,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    const pgBefore: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgBefore: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal(pgBefore.rows.length, 1);
     assert.equal((pgBefore.rows[0] as any).customer_name, 'Lead A');
     const originalName = (pgBefore.rows[0] as any).customer_name;
@@ -242,7 +238,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     const updateRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenB}`).send({ id: leadCode, customerName: 'Hacked Lead', mobile: '01700000001' });
     assert.equal(updateRes.status, 403);
 
-    const pgAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal(pgAfter.rows.length, 1);
     assert.equal((pgAfter.rows[0] as any).customer_name, originalName);
     assert.notEqual((pgAfter.rows[0] as any).customer_name, 'Hacked Lead');
@@ -256,13 +252,13 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    const pgBefore: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+    const pgBefore: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
     assert.equal(pgBefore.rows.length, 1);
 
     const deleteRes = await request(app).delete(`/api/leads/${leadCode}`).set('Authorization', `Bearer ${tokenB}`);
     assert.equal(deleteRes.status, 403);
 
-    const pgAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+    const pgAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
     assert.equal(pgAfter.rows.length, 1);
   });
 
@@ -277,7 +273,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     const updateRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenMgr}`).send({ id: leadCode, customerName: 'Updated by Manager', mobile: '01700000003' });
     assert.equal(updateRes.status, 200);
 
-    const pgAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal(pgAfter.rows.length, 1);
     assert.equal((pgAfter.rows[0] as any).customer_name, 'Updated by Manager');
   });
@@ -290,13 +286,13 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    const pgBefore: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgBefore: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     const originalName = (pgBefore.rows[0] as any).customer_name;
 
     const updateRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenMgrA}`).send({ id: leadCode, customerName: 'Hacked Sibling', mobile: '01700000004' });
     assert.equal(updateRes.status, 403);
 
-    const pgAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal((pgAfter.rows[0] as any).customer_name, originalName);
   });
 
@@ -322,7 +318,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
       assert.ok(data.failed >= 1);
     }
 
-    const pgAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCodeA]);
+    const pgAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCodeA]);
     assert.equal((pgAfter.rows[0] as any).customer_name, 'Lead A Bulk');
 
     const adminBulkRes = await request(app).post('/api/leads/bulk').set('Authorization', `Bearer ${tokenAdmin}`).send({
@@ -333,10 +329,10 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     });
 
     assert.equal(adminBulkRes.status, 200);
-    const pgAdminAfter: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCodeA]);
+    const pgAdminAfter: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCodeA]);
     assert.equal((pgAdminAfter.rows[0] as any).customer_name, 'Updated by Admin Bulk');
 
-    const pgNewLead: any = await db.query(`SELECT * FROM leads WHERE mobile = '01700000007'`);
+    const pgNewLead: any = await pool.query(`SELECT * FROM leads WHERE mobile = '01700000007'`);
     assert.equal(pgNewLead.rows.length, 1);
   });
 
@@ -362,7 +358,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    const pgRow: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgRow: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal(pgRow.rows.length, 1);
     const row = pgRow.rows[0] as any;
     assert.equal(row.assigned_by, userA.id);
@@ -382,22 +378,22 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    let pgRow: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+    let pgRow: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
     assert.equal(pgRow.rows.length, 1);
     assert.equal((pgRow.rows[0] as any).customer_name, 'Persist Lead');
 
     const updateRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenA}`).send({ id: leadCode, customerName: 'Persist Lead Updated', mobile: '01700000009' });
     assert.equal(updateRes.status, 200);
 
-    pgRow = await db.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+    pgRow = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
     assert.equal((pgRow.rows[0] as any).customer_name, 'Persist Lead Updated');
 
     const deleteRes = await request(app).delete(`/api/leads/${leadCode}`).set('Authorization', `Bearer ${tokenA}`);
     assert.ok([200, 403].includes(deleteRes.status));
     if (deleteRes.status === 200) {
-      const pgAfterDelete: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+      const pgAfterDelete: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
       assert.equal(pgAfterDelete.rows.length, 0);
-      const pgDeleted: any = await db.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+      const pgDeleted: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
       assert.equal(pgDeleted.rows.length, 1);
       assert.equal((pgDeleted.rows[0] as any).is_deleted, true);
     }
@@ -411,13 +407,13 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(createRes.status, 200);
     const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
 
-    const pgBefore: any = await db.query(`SELECT customer_name FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgBefore: any = await pool.query(`SELECT customer_name FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal((pgBefore.rows[0] as any).customer_name, 'Cache Test');
 
     const failRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenB}`).send({ id: leadCode, customerName: 'Hacked Cache', mobile: '01700000010' });
     assert.equal(failRes.status, 403);
 
-    const pgAfter: any = await db.query(`SELECT customer_name FROM leads WHERE lead_code = $1`, [leadCode]);
+    const pgAfter: any = await pool.query(`SELECT customer_name FROM leads WHERE lead_code = $1`, [leadCode]);
     assert.equal((pgAfter.rows[0] as any).customer_name, 'Cache Test');
     assert.equal(failRes.body.success, false);
   });

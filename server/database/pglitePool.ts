@@ -1,32 +1,31 @@
-import { PGlite } from '@electric-sql/pglite';
-
-let pgliteInstance: PGlite | null = null;
+let pgliteInstance: any = null;
+let pglitePool: any = null;
 
 class PGliteClient {
-  constructor(private db: PGlite) {}
+  private db: any;
+  constructor(db: any) {
+    this.db = db;
+  }
   async query(sql: string, params?: any[]) {
     const res = await this.db.query(sql, params);
-    // pg returns rowCount, rows
     return {
-      rows: res.rows,
-      rowCount: (res as any).affectedRows ?? res.rows?.length ?? 0,
-      command: (res as any).command,
+      rows: (res as any).rows,
+      rowCount: (res as any).affectedRows ?? (res as any).rows?.length ?? 0,
     };
   }
   release() {}
 }
 
 class PGlitePool {
-  private db: PGlite;
-  constructor(db: PGlite) {
+  private db: any;
+  constructor(db: any) {
     this.db = db;
   }
   async query(sql: string, params?: any[]) {
     const res = await this.db.query(sql, params);
     return {
-      rows: res.rows,
-      rowCount: (res as any).affectedRows ?? res.rows?.length ?? 0,
-      command: (res as any).command,
+      rows: (res as any).rows,
+      rowCount: (res as any).affectedRows ?? (res as any).rows?.length ?? 0,
     };
   }
   async connect() {
@@ -34,27 +33,48 @@ class PGlitePool {
   }
   on(_event: string, _handler: any) {}
   async end() {
-    // PGlite doesn't need explicit close for in-memory, but we can clear
     try {
       await this.db.close();
     } catch {}
     pgliteInstance = null;
+    pglitePool = null;
   }
 }
 
-export function getPGliteInstance(): PGlite {
+export async function getPGliteInstanceAsync(): Promise<any> {
   if (!pgliteInstance) {
-    // Use memory by default, or file path if specified after pglite://
+    const { PGlite } = await import('@electric-sql/pglite');
     pgliteInstance = new PGlite();
   }
   return pgliteInstance;
 }
 
+export function getPGliteInstance(): any {
+  if (!pgliteInstance) {
+    throw new Error('PGlite instance not initialized. Call getPGliteInstanceAsync() first.');
+  }
+  return pgliteInstance;
+}
+
+export async function createPGlitePoolAsync(): Promise<any> {
+  if (!pgliteInstance) {
+    const { PGlite } = await import('@electric-sql/pglite');
+    pgliteInstance = new PGlite();
+  }
+  if (!pglitePool) {
+    pglitePool = new PGlitePool(pgliteInstance);
+  }
+  return pglitePool;
+}
+
 export function createPGlitePool(): any {
-  const db = getPGliteInstance();
-  return new PGlitePool(db) as any;
+  if (!pgliteInstance || !pglitePool) {
+    throw new Error('PGlite pool not initialized. Call createPGlitePoolAsync() first.');
+  }
+  return pglitePool;
 }
 
 export function resetPGlite() {
   pgliteInstance = null;
+  pglitePool = null;
 }
