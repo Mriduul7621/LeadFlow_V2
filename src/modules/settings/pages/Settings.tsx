@@ -574,7 +574,35 @@ export default function Settings() {
                   ))}
                   
                   {userRoleNormalized === 'ADMIN' && (
-                    <div className="pt-6">
+                    <div className="pt-6 space-y-4">
+                      <div className="bg-white rounded-[12px] border border-stone-100 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded-[10px] bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600">
+                            <Globe className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-stone-700">System Sync</h4>
+                            <p className="text-[11px] text-stone-400 font-medium mt-1">Verify cloud database connection and synchronize local cache. Moved from header to System Tools.</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const result = await databaseStatusService.checkDatabaseStatus();
+                              if (result && (result as any).connected) {
+                                toast.success("Connected to the cloud database. All data is persisted directly to PostgreSQL.");
+                              } else {
+                                toast.error((result as any)?.message || "Database connection failed. Changes cannot be persisted right now.");
+                              }
+                            } catch {
+                              toast.error("Failed to run sync. Check your cloud connection.");
+                            }
+                          }}
+                          className="px-4 py-2.5 bg-[#978C21] hover:bg-[#8a7f1e] text-white rounded-[10px] text-xs font-bold shadow-sm whitespace-nowrap flex items-center gap-2"
+                        >
+                          <Wifi className="w-4 h-4" /> Sync Now
+                        </button>
+                      </div>
                       <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 flex items-center justify-between italic">
                         <div className="flex items-center gap-4">
                            <div className="p-4 bg-red-50 text-red-500 rounded-sm border border-red-100">
