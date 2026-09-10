@@ -11,7 +11,7 @@ const THROTTLE_MS = 5000; // Throttle activity saves to every 5 seconds for perf
  * and automatically logs out the user after 15 minutes of idle state.
  */
 export function useSessionTimeout() {
-  const { isAuthenticated, logout } = useAuthStore();
+  const { isAuthenticated, isInitialized, logout } = useAuthStore();
   const lastWriteRef = useRef<number>(0);
 
   const updateActivity = useCallback(() => {
@@ -24,7 +24,12 @@ export function useSessionTimeout() {
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    // Idle tracking only starts once auth initialization has settled (the
+    // persisted session was hydrated and confirmed by the server). Otherwise
+    // the immediate check below can log a user out - with a "Session Expired"
+    // toast - while startup validation is still in flight, purely because a
+    // previous visit left an old timestamp in localStorage.
+    if (!isAuthenticated || !isInitialized) return;
 
     // Initialize or refresh last activity timestamp on mount
     if (!localStorage.getItem('leadflow_last_activity')) {
@@ -81,5 +86,5 @@ export function useSessionTimeout() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(intervalId);
     };
-  }, [isAuthenticated, logout, updateActivity]);
+  }, [isAuthenticated, isInitialized, logout, updateActivity]);
 }

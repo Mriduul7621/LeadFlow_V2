@@ -4,7 +4,6 @@ import {
   RouterProvider, 
   Navigate 
 } from 'react-router-dom';
-import AppLayout from './layouts/AppLayout';
 import Dashboard from './modules/dashboard/pages/Dashboard';
 import FollowUpStrategy from './modules/leads/pages/FollowUpStrategy';
 import LeadGenerate from './modules/leads/pages/LeadGenerate';
@@ -22,26 +21,10 @@ import CampaignBreakdown from './modules/dashboard/pages/CampaignBreakdown';
 import TaskCalendar from './modules/auth/pages/TaskCalendar';
 import Lead360 from './modules/leads/pages/Lead360';
 import Activities from './modules/leads/pages/Activities';
-import { useAuthStore } from './modules/auth/store/authStore';
+import ProtectedRoute from './modules/auth/components/ProtectedRoute';
+import { initializeAuthSession } from './modules/auth/services/authFlow';
 import { Toaster } from 'sonner';
-import { userService } from './modules/users/services/userService';
-import { databaseStatusService } from './services/syncService';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
-
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, isInitialized } = useAuthStore();
-  
-  if (!isInitialized) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-  
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
-  return <AppLayout>{children}</AppLayout>;
-};
 
 const router = createBrowserRouter([
   {
@@ -119,20 +102,19 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
-  const { setInitialized, login, logout } = useAuthStore();
-
-  // Run the 15-minute idle inactivity tracker
+  // 15-minute idle tracker (it defers itself until auth initialization
+  // settles, so a stale localStorage timestamp can never race the startup
+  // session validation into a premature logout).
   useSessionTimeout();
 
   React.useEffect(() => {
-    // 1. Trigger background data synchronization if authenticated
-    const state = useAuthStore.getState();
-    if (state.isAuthenticated && state.user) {
-      databaseStatusService.checkDatabaseStatus().catch(() => undefined);
-    }
-
-    // 2. Manage authentication state changes
-    setInitialized(true);
+    // Deterministic auth initialization: wait for the persisted snapshot to
+    // hydrate, confirm the persisted token with PostgreSQL/Supabase, then
+    // release the protected routes. Guarded so React StrictMode's double
+    // effect run performs exactly one validation request.
+    //
+    // It never rejects, so `void` cannot create an unhandled rejection.
+    void initializeAuthSession();
   }, []);
 
   return (

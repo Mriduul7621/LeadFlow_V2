@@ -1256,10 +1256,13 @@ router.post('/auth/login', async (req, res) => {
 
   try {
     const pool = getPool();
+    // Same projection as GET /auth/session below: the profile the client
+    // caches at login is then byte-identical to the one startup validation
+    // compares it against, so a cold reload of an unchanged account needs no
+    // state rewrite (and therefore no re-run of the [user] effects that
+    // re-fetch roles/notifications/dashboard data).
     const result = await pool.query(
-      `SELECT u.*, r.role_code, r.role_name
-       FROM users u
-       LEFT JOIN roles r ON r.id = u.role_id
+      `${USER_SELECT}
        WHERE UPPER(u.employee_id) = UPPER($1) OR UPPER(u.email) = UPPER($1)
        LIMIT 1`,
       [loginId]
@@ -1277,10 +1280,99 @@ router.post('/auth/login', async (req, res) => {
     await pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]).catch(() => undefined);
     const role = user.role_code || 'EMPLOYEE';
     const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
-    return sendJson(res, 200, { token, user: mapUserRow(user) });
+    return sendJson(res, 200, { token, user: mapUserRow(user, user.manager_employee_id) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Login failed' });
   }
+});
+
+/**
+ * GET /auth/session — authoritative session validation for app startup.
+ * ------------------------------------------------------------------
+ * The browser must never treat its cached auth state (Zustand persist /
+ * localStorage) as proof that a session is still valid. On every cold load
+ * the client asks this endpoint before it renders a protected route.
+ *
+ * Validation is server-side and deliberately cheap:
+ *   1. `requireAuth` verifies the bearer token signature and expiry.
+ *   2. The account is then re-read (PostgreSQL when configured, the
+ *      development in-memory store otherwise) so a deleted or deactivated
+ *      employee's cached token stops working immediately instead of
+ *      surviving until the JWT expires.
+ *
+ * The reply uses the same `{ success, data }` envelope as the rest of the
+ * production API, so the centralized client helper unwraps it, and `data`
+ * is exactly the user object `/auth/login` returns - never the password
+ * column.
+ *
+ * Status contract the client relies on:
+ *   401 -> this session was REJECTED (clear it and re-login)
+ *   503 -> validation is UNAVAILABLE (database down/unconfigured) - the
+ *          client keeps the session rather than logging people out during
+ *          an infrastructure outage.
+ */
+router.get('/auth/session', requireAuth, async (req: any, res) => {
+  const claim = req.currentUser || {};
+  const claimId = String(claim.id || '').trim();
+  const claimEmployeeId = String(claim.employeeId || '').trim();
+  const claimEmail = String(claim.email || '').trim();
+
+  if (!claimId && !claimEmployeeId && !claimEmail) {
+    return sendJson(res, 401, { success: false, message: 'Your session is not valid. Please log in again.' });
+  }
+
+  if (useDb()) {
+    try {
+      const pool = getPool();
+      const result = await pool.query(
+        `${USER_SELECT}
+         WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR UPPER(u.email) = UPPER($3)
+         LIMIT 1`,
+        [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return sendJson(res, 401, { success: false, message: 'Your account no longer exists. Please log in again.' });
+      }
+      if (row.is_active === false || String(row.account_status || '').toUpperCase() === 'INACTIVE') {
+        return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
+      }
+      return sendJson(res, 200, { success: true, data: mapUserRow(row, row.manager_employee_id) });
+    } catch (error: any) {
+      return sendJson(res, dbErrorStatus(error), {
+        success: false,
+        message: error?.message || 'Session validation is temporarily unavailable.',
+      });
+    }
+  }
+
+  // No database configured: production stays honest (503 - not a rejected
+  // session), development uses the in-memory demo store it logged into.
+  if (!demoModeAllowed()) {
+    return sendJson(res, 503, {
+      success: false,
+      message: 'Database is not configured. Session validation is unavailable.',
+      mode: 'db-unconfigured',
+    });
+  }
+
+  const demoUser = fallbackStore.users.find(item =>
+    (claimId && item.id === claimId) ||
+    (claimEmployeeId && String(item.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
+    (claimEmail && String(item.email).toLowerCase() === claimEmail.toLowerCase())
+  );
+  if (!demoUser) {
+    return sendJson(res, 401, { success: false, message: 'Your account no longer exists. Please log in again.' });
+  }
+  if (
+    demoUser.status === 'Inactive' ||
+    demoUser.isActive === false ||
+    String(demoUser.accountStatus || '').toUpperCase() === 'INACTIVE'
+  ) {
+    return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
+  }
+  const { password: _pw, ...safeSessionUser } = demoUser;
+  return sendJson(res, 200, { success: true, data: safeSessionUser });
 });
 
 router.post('/auth/change-password', requireAuth, async (req, res) => {

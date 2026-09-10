@@ -395,8 +395,14 @@ export default function Dashboard() {
         setLossReasonOptions(await metadataService.getActiveValues('LossReason'));
         setMeetingTypeOptions(await metadataService.getActiveValues('MeetingType'));
 
-        const usersList = await userService.getAllUsers();
-        setAllUsers(usersList);
+        // loadDashboardData() (same mount, same effect batch) already fetches
+        // the roster into the very same `allUsers` state for every role except
+        // RO, so requesting it here as well just doubled the heaviest startup
+        // request on the landing tab. Only the RO branch above skips it.
+        if (user?.role === UserRole.RO) {
+          const usersList = await userService.getAllUsers();
+          setAllUsers(usersList);
+        }
       } catch (err) {
         console.error(err);
         setStatusOptions(DEFAULT_STATUS_LIST);

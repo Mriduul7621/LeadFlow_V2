@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
 import { ApiError } from '../../shared/api/http';
+import { activateSession, loginWithCredentials } from '../services/authFlow';
 import { User, UserRole } from '../../shared/types';
 import { useTranslation } from '../../shared/utils/translations';
 import { preloadLeadStatuses, invalidateLeadStatusCache } from '../../workflow/utils/leadStatusMeta';
@@ -70,11 +71,12 @@ const setupSchema = z.object({
 
 export default function Login() {
   const { t, language, setLanguage } = useTranslation();
-  const { login } = useAuthStore();
   const navigate = useNavigate();
   const [showForm, setShowForm] = React.useState(false);
   const [isFirstTimeSetup, setIsFirstTimeSetup] = React.useState(false);
   const [checkingSetup, setCheckingSetup] = React.useState(true);
+  const isAuthenticated = useAuthStore(state => state.isAuthenticated);
+  const isInitialized = useAuthStore(state => state.isInitialized);
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(loginSchema),
@@ -107,6 +109,37 @@ export default function Login() {
     checkUserCount();
   }, []);
 
+  // A session that has actually been established (login here, or a persisted
+  // token the server confirmed at startup) must never stay parked on /login.
+  // Both flags are required: `isAuthenticated` alone can be true for a
+  // persisted snapshot that startup validation has not cleared yet.
+  React.useEffect(() => {
+    if (isInitialized && isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [isInitialized, isAuthenticated, navigate]);
+
+  /**
+   * Everything that is merely nice-to-have once a session exists: refresh the
+   * read cache and warm the admin-configured lead-status metadata.
+   *
+   * It is called AFTER the session is established and AFTER navigation, and
+   * `activateSession` funnels it through a catch, so neither a localStorage
+   * failure nor a metadata outage can delay, fail or undo a login. localDb is
+   * a read cache only - it is written after the server confirmed the
+   * credentials against PostgreSQL and is never consulted to authenticate.
+   */
+  const warmUpAfterAuthentication = (user: User) => {
+    localDb.createUser(user);
+    invalidateLeadStatusCache();
+    return preloadLeadStatuses().then(
+      () => undefined,
+      err => {
+        console.warn('[auth] Lead-status preload failed; default statuses stay in use.', err);
+      }
+    );
+  };
+
   const onSetupSubmit = async (data: any) => {
     try {
       const empId = data.employeeId.toUpperCase().trim();
@@ -115,20 +148,20 @@ export default function Login() {
       // bootstrap endpoint. The server refuses this call (409) as soon
       // as any ADMIN exists, validates the input, hashes the password
       // with bcrypt and creates the user inside a database transaction.
-      const { token, user: serverUser } = await userService.bootstrapAdmin({
+      const session = await userService.bootstrapAdmin({
         fullName: data.fullName,
         employeeId: empId,
         email: data.email.toLowerCase().trim(),
         password: data.password,
       });
 
-      // Keep the read cache in sync (password never cached).
-      localDb.createUser({ ...serverUser, password: undefined } as any);
-      invalidateLeadStatusCache();
-      preloadLeadStatuses();
-      login(serverUser, token, false);
-      toast.success("Super Admin console initialized successfully!");
-      navigate('/');
+      // Same post-login sequence as a normal login: session + navigation
+      // first, cache/metadata warm-up afterwards.
+      await activateSession(session, {
+        navigate,
+        welcome: () => toast.success('Super Admin console initialized successfully!'),
+        afterAuthentication: warmUpAfterAuthentication,
+      });
     } catch (err) {
       console.error("Super Admin setup failed:", err);
       const message =
@@ -140,40 +173,32 @@ export default function Login() {
   };
 
   const onSubmit = async (data: any) => {
+    const empId = data.username.toUpperCase().trim();
+
     try {
-      const empId = data.username.toUpperCase().trim();
-      const enteredPassword = data.password;
+      // Server-side login through the centralized API contract helper: the
+      // password is verified against the bcrypt hash in PostgreSQL and the
+      // `{ success, data }` envelope is unwrapped in exactly one place
+      // (shared/api/http.ts + auth/services/loginContract.ts).
+      const session = await loginWithCredentials(empId, data.password);
 
-      // Server-side login: the password is verified against the bcrypt
-      // hash in the database - it is never fetched to, or compared in,
-      // the browser.
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: empId, password: enteredPassword }),
+      // Establishes the authenticated Zustand state and navigates to '/',
+      // then (never before) kicks off the background warm-up.
+      await activateSession(session, {
+        navigate,
+        welcome: user => toast.success(t('welcomeMessage', { name: user.name })),
+        afterAuthentication: warmUpAfterAuthentication,
       });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const message =
-          body?.message || body?.error || 'Authentication failed: Invalid credentials.';
-        toast.error(message);
-        return;
-      }
-
-      const { token, user: matchedUser } = await res.json();
-
-      // Cache is only ever written AFTER the server validated the
-      // credentials against PostgreSQL; it is never authoritative.
-      localDb.createUser({ ...matchedUser, password: undefined } as any);
-      invalidateLeadStatusCache();
-      preloadLeadStatuses();
-      login(matchedUser, token, false);
-      toast.success(t('welcomeMessage', { name: matchedUser.name }));
-      navigate('/');
-    } catch (err: any) {
-      console.error('Authentication process failed:', err);
-      toast.error('Login failed. Please check your connection and try again.');
+    } catch (err) {
+      // Meaningful server errors (invalid credentials, locked/inactive
+      // account, 503 database unavailable) are surfaced verbatim; nothing
+      // here can leave a half-authenticated state behind.
+      console.error('Login failed:', err);
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : 'Login failed. Please check your connection and try again.';
+      toast.error(message);
     }
   };
 
