@@ -389,14 +389,17 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal((pgRow.rows[0] as any).customer_name, 'Persist Lead Updated');
 
     const deleteRes = await request(app).delete(`/api/leads/${leadCode}`).set('Authorization', `Bearer ${tokenA}`);
-    assert.ok([200, 403].includes(deleteRes.status));
-    if (deleteRes.status === 200) {
-      const pgAfterDelete: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
-      assert.equal(pgAfterDelete.rows.length, 0);
-      const pgDeleted: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
-      assert.equal(pgDeleted.rows.length, 1);
-      assert.equal((pgDeleted.rows[0] as any).is_deleted, true);
-    }
+    assert.equal(deleteRes.status, 200, `Authorized owner DELETE must be 200, got ${deleteRes.status} ${JSON.stringify(deleteRes.body)}`);
+
+    const pgAfterDelete: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE`, [leadCode]);
+    assert.equal(pgAfterDelete.rows.length, 0, 'PG should have no active lead after DELETE 200');
+
+    const pgDeleted: any = await pool.query(`SELECT * FROM leads WHERE lead_code = $1`, [leadCode]);
+    assert.equal(pgDeleted.rows.length, 1, 'Lead should still exist in PG but soft-deleted');
+    const deletedRow = pgDeleted.rows[0] as any;
+    assert.equal(deletedRow.is_deleted, true, 'is_deleted must be TRUE after successful delete');
+    assert.equal(deletedRow.deleted_by, userA.id, 'deleted_by must equal authenticated user UUID');
+    assert.equal(deletedRow.updated_by, userA.id, 'updated_by must equal authenticated user UUID');
   });
 
   it('Cache failure: API failure does NOT update local cache / PG', async () => {
