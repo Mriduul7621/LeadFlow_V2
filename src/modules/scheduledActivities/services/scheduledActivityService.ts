@@ -1,4 +1,4 @@
-import { apiRequest, ApiError } from '../../shared/api/http';
+import { apiRequest, apiRequestEnvelope } from '../../shared/api/http';
 
 /**
  * scheduledActivityService.ts — Step 5C
@@ -85,20 +85,20 @@ function toQuery(params: ScheduledActivityListParams): string {
 }
 
 async function fetchScheduledPage(qs: string, params: ScheduledActivityListParams): Promise<{ items: ScheduledActivity[]; pagination: { limit: number; offset: number; total: number } }> {
-  // Single-request helper — do not call apiRequest + fetch (would double request)
-  const resp = await fetch(`/api/scheduled-activities${qs}`, { headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
-  const text = await resp.text().catch(() => '');
-  let body: any = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
-  if (!resp.ok) {
-    const msg = (body && (body.message || body.error)) || `Request failed with status ${resp.status}.`;
-    throw new ApiError(resp.status, msg, body);
-  }
+  // Single-request helper via shared authenticated layer — preserves EXACT
+  // auth (Authorization via lib/apiClient), 401/session handling, base URL
+  // and error mapping from http.ts while keeping the pagination envelope.
+  const body: any = await apiRequestEnvelope<ScheduledActivity[]>(`/api/scheduled-activities${qs}`);
   if (body && body.success === true && Array.isArray(body.data)) {
     return { items: body.data as ScheduledActivity[], pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
   }
   if (Array.isArray(body)) return { items: body as ScheduledActivity[], pagination: { limit: params.limit || 50, offset: params.offset || 0, total: (body as any).length } };
   if (body && Array.isArray(body.data)) return { items: body.data, pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
+  // Fallback for unwrapped envelope edge cases
+  if (body && typeof body === 'object' && Array.isArray((body as any).data)) {
+    const d = (body as any).data;
+    return { items: d as ScheduledActivity[], pagination: (body as any).pagination || { limit: params.limit || 50, offset: params.offset || 0, total: d.length } };
+  }
   return { items: [], pagination: { limit: params.limit || 50, offset: params.offset || 0, total: 0 } };
 }
 
