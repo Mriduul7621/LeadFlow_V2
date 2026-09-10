@@ -784,268 +784,6 @@ function importLeadCode(mobile: string): string {
 }
 
 /* ====================================================================
-   LEAD SECURITY HARDENING HELPERS
-   - PostgreSQL is authoritative
-   - All identity fields derived from authenticated session
-   - Ownership + hierarchy/data-scope enforced server-side
-   - Permission checks reuse existing permissions table
-==================================================================== */
-
-export interface CallerDbInfo {
-  id: string;
-  employee_id: string;
-  email: string;
-  role_id: string | null;
-  role_code: string;
-  department_id: string | null;
-}
-
-/** Resolve caller to DB record (or fallbackStore in dev-demo). */
-export async function getCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
-  const rawId = String(req.currentUser?.id || '').trim();
-  const rawEmp = String(req.currentUser?.employeeId || '').trim();
-  const rawEmail = String(req.currentUser?.email || '').trim();
-  if (!useDb()) {
-    const user = fallbackStore.users.find(u =>
-      (rawId && u.id === rawId) ||
-      (rawEmp && u.employeeId.toUpperCase() === rawEmp.toUpperCase()) ||
-      (rawEmail && u.email.toLowerCase() === rawEmail.toLowerCase())
-    );
-    if (!user) return null;
-    return {
-      id: user.id,
-      employee_id: user.employeeId,
-      email: user.email,
-      role_id: null,
-      role_code: normalizeRole(user.roleCode || user.role),
-      department_id: (user as any).departmentId || null,
-    };
-  }
-  try {
-    const pool = getPool();
-    const result = await pool.query(
-      `SELECT u.id, u.employee_id, u.email, u.role_id, u.department_id, r.role_code
-       FROM users u
-       LEFT JOIN roles r ON r.id = u.role_id
-       WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR UPPER(u.email) = UPPER($3)
-       LIMIT 1`,
-      [rawId || rawEmp || rawEmail, rawEmp || rawId, rawEmail || rawId]
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    return {
-      id: row.id,
-      employee_id: row.employee_id,
-      email: row.email || '',
-      role_id: row.role_id || null,
-      role_code: row.role_code || normalizeRole(req.currentUser?.role || req.currentUser?.roleCode),
-      department_id: row.department_id || null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Check if caller has a specific permission code (admin bypass). */
-export async function hasPermissionCode(caller: CallerDbInfo | null, permissionCode: string): Promise<boolean> {
-  if (!caller) return false;
-  const role = normalizeRole(caller.role_code);
-  if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
-  if (!useDb()) {
-    // Demo mode: allow only when caller exists, but still fail closed for unknown codes if we want strictness.
-    // For dev-demo usability, allow known lead codes; unknown codes deny.
-    const knownLeadCodes = new Set(['leads.view','leads.create','leads.edit','leads.delete','leads.assign','leads.transfer','leads.import','leads.export']);
-    if (!knownLeadCodes.has(permissionCode)) return false;
-    return true;
-  }
-  try {
-    const pool = getPool();
-    const permResult = await pool.query(`SELECT id FROM permissions WHERE permission_code = $1 LIMIT 1`, [permissionCode]);
-    if (!permResult.rows[0]) {
-      // Fail closed: missing permission definition => deny
-      console.warn(`Permission definition missing for ${permissionCode} - denying access`);
-      return false;
-    }
-    const permId = permResult.rows[0].id;
-    const userOverride = await pool.query(
-      `SELECT is_allowed FROM user_permissions WHERE user_id = $1 AND permission_id = $2 LIMIT 1`,
-      [caller.id, permId]
-    );
-    if (userOverride.rows[0] !== undefined) {
-      return userOverride.rows[0].is_allowed === true;
-    }
-    if (caller.role_id) {
-      const roleGrant = await pool.query(
-        `SELECT is_allowed FROM role_permissions WHERE role_id = $1 AND permission_id = $2 LIMIT 1`,
-        [caller.role_id, permId]
-      );
-      if (roleGrant.rows[0]) {
-        return roleGrant.rows[0].is_allowed === true;
-      }
-    }
-    // No explicit grant => deny (fail closed)
-    return false;
-  } catch (e) {
-    console.warn(`Permission check failed for ${permissionCode}:`, (e as any)?.message || e);
-    // Fail closed on DB error
-    return false;
-  }
-}
-
-/** Resolve visibility for caller (admin => all). */
-export async function resolveCallerVisibility(caller: CallerDbInfo) {
-  if (!caller) return { all: false, userIds: [], employeeIds: [] };
-  const role = normalizeRole(caller.role_code);
-  if (role === 'ADMIN' || role === 'SUPERADMIN') {
-    return { all: true, userIds: [], employeeIds: [] };
-  }
-  if (!useDb()) {
-    // Demo mode: compute downline from fallbackStore for MANAGER-like roles
-    // to allow realistic integration tests without PostgreSQL
-    try {
-      const allUsers = fallbackStore.users;
-      const callerUser = allUsers.find(u => u.id === caller.id || u.employeeId === caller.employee_id);
-      const roleUpper = normalizeRole(caller.role_code);
-      const isManagerLike = ['MANAGER','TEAM_LEAD','SM','BDM','CEO'].includes(roleUpper);
-      if (isManagerLike && callerUser) {
-        // BFS downline via managerId
-        const visited = new Set<string>();
-        const queue: string[] = [callerUser.employeeId];
-        const userIds: string[] = [caller.id];
-        const employeeIds: string[] = [caller.employee_id];
-        visited.add(callerUser.employeeId);
-        while (queue.length > 0) {
-          const currentEmp = queue.shift()!;
-          const directReports = allUsers.filter(u => String(u.managerId || '').toUpperCase() === String(currentEmp).toUpperCase());
-          for (const dr of directReports) {
-            if (!visited.has(dr.employeeId)) {
-              visited.add(dr.employeeId);
-              queue.push(dr.employeeId);
-              userIds.push(dr.id);
-              employeeIds.push(dr.employeeId);
-            }
-          }
-        }
-        return { all: false, userIds, employeeIds };
-      }
-    } catch {}
-    return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
-  }
-  try {
-    const vis = await resolveVisibility(caller.id, caller.role_code, caller.department_id);
-    if (!vis.all) {
-      if (!vis.userIds.includes(caller.id)) vis.userIds.push(caller.id);
-      const empUpper = vis.employeeIds.map((e: string) => String(e).toUpperCase());
-      if (caller.employee_id && !empUpper.includes(String(caller.employee_id).toUpperCase())) {
-        vis.employeeIds.push(caller.employee_id);
-      }
-    }
-    return vis;
-  } catch {
-    return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
-  }
-}
-
-/** Resolve assignedTo reference to userId + employeeId. */
-export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string } | null> {
-  if (!ref) return null;
-  const value = String(ref).trim();
-  if (!value) return null;
-  if (!useDb()) {
-    const user = fallbackStore.users.find(u =>
-      u.id === value ||
-      u.employeeId.toUpperCase() === value.toUpperCase() ||
-      u.email.toLowerCase() === value.toLowerCase()
-    );
-    if (!user) return null;
-    return { userId: user.id, employeeId: user.employeeId };
-  }
-  try {
-    const pool = getPool();
-    const uuid = asUuid(value);
-    const result = await pool.query(
-      `SELECT id, employee_id FROM users WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2) LIMIT 1`,
-      [uuid || value, value]
-    );
-    if (!result.rows[0]) return null;
-    return { userId: result.rows[0].id, employeeId: result.rows[0].employee_id };
-  } catch {
-    return null;
-  }
-}
-
-/** Check if a lead row is accessible to caller via visibility. */
-export function isLeadAccessible(leadRow: any, visibility: any, caller: CallerDbInfo): boolean {
-  if (!leadRow) return false;
-  if (visibility.all) return true;
-  // Support both DB row shape (assigned_to, custom_fields, created_by) and fallbackStore shape (assignedTo, customFields, etc)
-  const assignedToId = leadRow.assigned_to ? String(leadRow.assigned_to) : (leadRow.assignedTo ? '' : '');
-  // For fallbackStore, assignedTo is employeeId, need to check against employeeIds
-  const customFields = (leadRow.custom_fields && typeof leadRow.custom_fields === 'object' ? leadRow.custom_fields : (leadRow.customFields && typeof leadRow.customFields === 'object' ? leadRow.customFields : {}));
-  const customAssignedTo = String((customFields as any).assignedTo || leadRow.assignedTo || '').trim();
-  const createdBy = leadRow.created_by ? String(leadRow.created_by) : (leadRow.createdBy ? String(leadRow.createdBy) : '');
-
-  if (assignedToId) {
-    if (visibility.userIds.includes(assignedToId)) return true;
-    if (assignedToId === caller.id) return true;
-  }
-  // Also check direct assigned_to as userId for fallbackStore shape where assignedTo is employeeId but we have userId mapping
-  // Check customAssignedTo (employeeId) against visible employeeIds
-  if (customAssignedTo) {
-    const upperCustom = customAssignedTo.toUpperCase();
-    const empIdsUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-    if (empIdsUpper.includes(upperCustom)) return true;
-    if (caller.employee_id && upperCustom === String(caller.employee_id).toUpperCase()) return true;
-    // Also check if customAssignedTo matches any visible userId's employeeId via direct comparison
-    // For fallbackStore, assignedTo is employeeId, so check against caller employeeId already done, and against visibility employeeIds
-  }
-  // Check if leadRow has assigned_to as userId in fallback shape? Actually fallbackStore leads store assignedTo as employeeId, not userId.
-  // For safety, also check if leadRow.id or assignedTo matches caller
-  if (!assignedToId && !customAssignedTo) {
-    if (createdBy && createdBy === caller.id) return true;
-    return false;
-  }
-  // If no assigned_to but customAssignedTo matched via employeeIds already, return true handled above
-  // Otherwise, check createdBy as fallback for unassigned leads
-  if (createdBy && createdBy === caller.id) return true;
-  return false;
-}
-
-/** Check if caller is allowed to assign a lead to target user. */
-export function isAssignedToAllowed(target: { userId: string; employeeId: string } | null, visibility: any, caller: CallerDbInfo): boolean {
-  if (!target) return true;
-  if (visibility.all) return true;
-  if (target.userId && visibility.userIds.includes(target.userId)) return true;
-  if (target.userId === caller.id) return true;
-  const empUpper = String(target.employeeId || '').toUpperCase();
-  const visEmpUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-  if (empUpper && visEmpUpper.includes(empUpper)) return true;
-  if (empUpper && caller.employee_id && empUpper === String(caller.employee_id).toUpperCase()) return true;
-  return false;
-}
-
-/** Fields that must NEVER be trusted from client payload for authz. */
-export const FORBIDDEN_CUSTOM_KEYS = new Set([
-  'assignedBy', 'assigned_by', 'updatedBy', 'updated_by',
-  'createdBy', 'created_by', 'created_by_employee', 'updated_by_employee',
-  'deletedBy', 'deleted_by', 'owner', 'ownerId', 'owner_id',
-  'employeeId', 'employee_id', 'visibility', 'scope', 'role', 'roleCode', 'role_code',
-]);
-
-/** Sanitize customFields to remove forbidden authz-influencing keys. */
-export function sanitizeCustomFields(input: Record<string, any>): Record<string, any> {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(input || {})) {
-    if (FORBIDDEN_CUSTOM_KEYS.has(k)) continue;
-    if (k.startsWith('_')) continue;
-    if (v === undefined || v === null) continue;
-    out[k] = v;
-  }
-  return out;
-}
-
-
-/* ====================================================================
    DB STATUS / HEALTH
 ==================================================================== */
 
@@ -3181,19 +2919,8 @@ router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('u
    LEADS
 ==================================================================== */
 
-/* ====================================================================
-   LEADS - HARDENED
-   - PostgreSQL authoritative
-   - Authentication required for all mutations
-   - Server-side authorization via hierarchy/data-scope (resolveVisibility)
-   - Permission checks (leads.create, leads.edit, leads.delete, leads.import, leads.view)
-   - Spoofing prevention: assignedBy/created_by/updated_by derived from session
-   - assignedTo validated against caller's visible scope
-   - Mobile upsert does NOT bypass authz
-==================================================================== */
-
 /** Builds the column set + params for the leads upsert (single/bulk). */
-export interface LeadRecord {
+interface LeadRecord {
   leadCode: string;
   customerName: string;
   mobile: string;
@@ -3222,8 +2949,6 @@ export interface LeadRecord {
   documents: unknown[];
   tags: string[];
   customFields: Record<string, any>;
-  createdBy: string | null;
-  updatedBy: string | null;
 }
 
 const LEAD_IGNORED_KEYS = new Set([
@@ -3234,146 +2959,10 @@ const LEAD_IGNORED_KEYS = new Set([
   'expectedPremium', 'sumAssured', 'expectedValue', 'collectedNCP', 'lastFollowUpDate',
   'nextFollowUpDate', 'nextCallDate', 'meetingDate', 'tags', 'creationDate', 'timestamp',
   'statusHistory', 'assignmentHistory', 'documents', 'currentStatus', 'customFields',
-  'createdBy', 'updatedBy', 'created_by', 'updated_by', 'assigned_by', 'assigned_to',
-  'created_at', 'updated_at', 'is_deleted', 'deleted_at', 'deleted_by',
 ]);
 
-/** Normalize an incoming lead payload (frontend shape) to DB fields - SECURE version.
- *  Caller identity is derived from session, not client.
- */
-export async function buildSecureLeadRecord(
-  lead: any,
-  caller: CallerDbInfo,
-  targetAssigned: { userId: string; employeeId: string } | null
-): Promise<LeadRecord | { error: string }> {
-  const customerName = clean(lead.customerName || lead.customer_name || lead.prospectName || lead.prospect_name);
-  const mobile = clean(lead.mobile || lead.mobileNumber || lead.phone);
-  if (!customerName || !mobile) {
-    return { error: 'Customer name and mobile are required' };
-  }
-  const numeric = (v: any): number | null => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
-  const leadCode = String(lead.leadCode || lead.lead_code || lead.id || createId('lead')).slice(0, 50);
-
-  // AssignedTo is validated target, default to caller if null
-  const effectiveAssigned = targetAssigned || { userId: caller.id, employeeId: caller.employee_id };
-  const assignedToId = effectiveAssigned.userId;
-  const assignedById = caller.id;
-
-  const reserved: Record<string, any> = {
-    assignedTo: effectiveAssigned.employeeId || '',
-    assignedBy: caller.employee_id || '',
-    assignedDate: lead.assignedDate || new Date().toISOString(),
-    projectedNCP: lead.projectedNCP,
-    sumAssured: lead.sumAssured,
-    collectedNCP: lead.collectedNCP,
-    lastFollowUpDate: lead.lastFollowUpDate || null,
-    nextFollowUpDate: lead.nextFollowUpDate || null,
-    nextCallDate: lead.nextCallDate || null,
-    meetingDate: lead.meetingDate || null,
-    meetingType: lead.meetingType || null,
-    lossReason: lead.lossReason || null,
-    followUpType: lead.followUpType || null,
-    familyMember: lead.familyMember || null,
-    noOfChildren: lead.noOfChildren || null,
-    hasChild: lead.hasChild ?? null,
-    residenceAddress: lead.residenceAddress || null,
-    officeAddress: lead.officeAddress || null,
-    otherInfo: lead.otherInfo || null,
-    campaignName: lead.campaignName || null,
-    productName: lead.productName || null,
-    currentStatus: lead.currentStatus || null,
-    thana: lead.thana || null,
-  };
-
-  const customFields: Record<string, any> = {};
-  // Only allow non-authz keys from top-level payload
-  for (const [key, value] of Object.entries(lead)) {
-    if (LEAD_IGNORED_KEYS.has(key)) continue;
-    if (FORBIDDEN_CUSTOM_KEYS.has(key)) continue;
-    if (key.startsWith('_')) continue;
-    if (value === undefined || value === null) continue;
-    // Strip any nested authz attempt
-    if (typeof value === 'object') continue; // keep customFields flat for security, but allow primitives
-    customFields[key] = value;
-  }
-  // Merge sanitized customFields bag if provided
-  if (lead.customFields && typeof lead.customFields === 'object') {
-    const sanitized = sanitizeCustomFields(lead.customFields as any);
-    for (const [k, v] of Object.entries(sanitized)) {
-      if (v !== undefined && v !== null && v !== '') customFields[k] = v;
-    }
-  }
-  // Reserved fields override (but with secure assignedTo/By)
-  for (const [key, value] of Object.entries(reserved)) {
-    if (value !== null && value !== undefined && value !== '') customFields[key] = value;
-  }
-
-  // Server-side audit/history handling: NEVER trust client-provided actor identity.
-  // For any history entries supplied by client (e.g. during create), override actor to session user.
-  // Legitimate historical records preserved from DB are handled separately in update paths
-  // and are NOT rewritten here - only client-supplied arrays are sanitized.
-  let assignmentHistory: unknown[] = Array.isArray(lead.assignmentHistory) ? [...lead.assignmentHistory] : [];
-  assignmentHistory = assignmentHistory.map((entry: any) => {
-    if (!entry || typeof entry !== 'object') return entry;
-    // Always derive actor from authenticated session, ignore client value
-    const { changedBy: _cb, updatedBy: _ub, createdBy: _crb, assignedBy: _ab, deletedBy: _db, ...rest } = entry as any;
-    return {
-      ...rest,
-      changedBy: caller.employee_id,
-      // Preserve other fields but ensure actor is session-derived
-    };
-  });
-
-  let statusHistory: unknown[] = Array.isArray(lead.statusHistory) ? [...lead.statusHistory] : [];
-  statusHistory = statusHistory.map((entry: any) => {
-    if (!entry || typeof entry !== 'object') return entry;
-    const { updatedBy: _ub, changedBy: _cb, createdBy: _crb, assignedBy: _ab, deletedBy: _db, ...rest } = entry as any;
-    return {
-      ...rest,
-      updatedBy: caller.employee_id,
-    };
-  });
-
-  return {
-    leadCode,
-    customerName,
-    mobile,
-    alternateMobile: clean(lead.alternateMobile) || null,
-    email: clean(lead.email) || null,
-    maritalStatus: clean(lead.maritalStatus) || null,
-    occupation: clean(lead.occupation || lead.profession) || null,
-    address: clean(lead.address) || null,
-    area: clean(lead.area) || null,
-    district: clean(lead.district) || null,
-    division: clean(lead.division) || null,
-    source: clean(lead.source) || null,
-    priority: clean(lead.priority || 'NORMAL').toUpperCase().slice(0, 30) || 'NORMAL',
-    projectedNCP: numeric(lead.projectedNCP ?? lead.expectedPremium),
-    sumAssured: numeric(lead.sumAssured ?? lead.expectedValue),
-    collectedNCP: numeric(lead.collectedNCP),
-    notes: lead.notes != null && lead.notes !== '' ? String(lead.notes) : null,
-    assignedTo: assignedToId,
-    assignedBy: assignedById,
-    assignedAt: dateOrNull(lead.assignedDate) || new Date().toISOString(),
-    lastFollowUpDate: dateOrNull(lead.lastFollowUpDate || lead.lastContactedAt),
-    nextFollowUpDate: dateOrNull(lead.nextFollowUpDate || lead.nextFollowUpAt),
-    currentStatus: clean(lead.currentStatus).slice(0, 255) || 'Untouched',
-    statusHistory,
-    assignmentHistory,
-    documents: Array.isArray(lead.documents) ? lead.documents : [],
-    tags: Array.isArray(lead.tags) ? lead.tags.map(String) : [],
-    customFields,
-    createdBy: caller.id,
-    updatedBy: caller.id,
-  };
-}
-
-/** Legacy buildLeadRecord kept for internal use but now delegates to secure version where possible.
- *  For backward compat, it still exists but should NOT be used for authz-sensitive paths.
- */
+/** Normalize an incoming lead payload (frontend shape) to DB fields. */
 async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecord | { error: string }> {
-  // This legacy function is kept but will be overridden by secure version in hardened paths.
-  // It still respects FORBIDDEN keys removal.
   const customerName = clean(lead.customerName || lead.customer_name || lead.prospectName || lead.prospect_name);
   const mobile = clean(lead.mobile || lead.mobileNumber || lead.phone);
   if (!customerName || !mobile) {
@@ -3414,7 +3003,6 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
   const customFields: Record<string, any> = {};
   for (const [key, value] of Object.entries(lead)) {
     if (LEAD_IGNORED_KEYS.has(key)) continue;
-    if (FORBIDDEN_CUSTOM_KEYS.has(key)) continue;
     if (key.startsWith('_')) continue;
     if (value === undefined || value === null) continue;
     customFields[key] = value;
@@ -3422,9 +3010,9 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
   for (const [key, value] of Object.entries(reserved)) {
     if (value !== null && value !== undefined && value !== '') customFields[key] = value;
   }
+  // Merge any client-provided customFields bag too.
   if (lead.customFields && typeof lead.customFields === 'object') {
-    const sanitized = sanitizeCustomFields(lead.customFields as any);
-    for (const [key, value] of Object.entries(sanitized)) {
+    for (const [key, value] of Object.entries(lead.customFields)) {
       if (value !== undefined && value !== null && value !== '') customFields[key] = value;
     }
   }
@@ -3458,44 +3046,16 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
     documents: Array.isArray(lead.documents) ? lead.documents : [],
     tags: Array.isArray(lead.tags) ? lead.tags.map(String) : [],
     customFields,
-    createdBy: null,
-    updatedBy: null,
   };
 }
 
 router.get('/leads', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
-    // Demo mode: still enforce visibility via fallbackStore
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
-    }
-    const visibility = await resolveCallerVisibility(caller);
-    if (visibility.all) {
-      return sendJson(res, 200, fallbackStore.leads);
-    }
-    const filtered = fallbackStore.leads.filter((l: any) => {
-      const assigned = String(l.assignedTo || '').toUpperCase();
-      const callerEmpUpper = String(caller.employee_id || '').toUpperCase();
-      if (assigned && assigned === callerEmpUpper) return true;
-      // Also check if assignedTo matches any visible employee
-      const visEmpUpper = visibility.employeeIds.map((e: string) => String(e).toUpperCase());
-      return assigned && visEmpUpper.includes(assigned);
-    });
-    return sendJson(res, 200, filtered);
+    return sendJson(res, 200, fallbackStore.leads);
   }
   try {
     const pool = getPool();
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-    // Permission check: leads.view
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
-    }
-
     const params: any[] = [];
     const where: string[] = ['l.is_deleted = FALSE'];
     const { startDate, endDate, status, assignedTo, search } = req.query || {};
@@ -3503,22 +3063,25 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     if (endDate) { params.push(dateOrNull(String(endDate))); where.push(`l.created_at <= $${params.length}`); }
     if (status) { params.push(String(status)); where.push(`l.current_status = $${params.length}`); }
     if (assignedTo) {
-      const assignedResolved = await resolveAssignedTo(String(assignedTo));
-      const filterUserId = assignedResolved?.userId || String(assignedTo);
-      const filterEmpId = assignedResolved?.employeeId || String(assignedTo);
-      params.push(filterUserId, filterEmpId);
-      where.push(`(l.assigned_to::text = $${params.length - 1} OR UPPER(l.custom_fields->>'assignedTo') = UPPER($${params.length}))`);
+      const assignedId = await resolveUserId(String(assignedTo));
+      const filterValue = assignedId || String(assignedTo);
+      params.push(filterValue, filterValue);
+      where.push(`(l.assigned_to::text = $${params.length - 1} OR l.custom_fields->>'assignedTo' = $${params.length})`);
     }
     if (search) {
       params.push(`%${String(search)}%`);
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
     }
-    const visibility = await resolveCallerVisibility(caller);
+    // Server-side data-visibility scoping (role permission profile):
+    // Own / DownTeam / FullTeam callers only ever receive lead rows that
+    // belong to their visible employee set. ADMIN/Organization sees all.
+    const caller = req.currentUser || {};
+    const visibility = await resolveVisibility(String(caller.id || ''), String(caller.role || caller.roleCode || ''));
     if (!visibility.all) {
       params.push(visibility.userIds, visibility.employeeIds);
       const pUser = params.length - 1;
       const pEmp = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.custom_fields->>'assignedTo' = ANY($${pEmp}::text[]))`);
     }
     const result = await pool.query(
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
@@ -3536,7 +3099,7 @@ const LEAD_UPSERT_SQL = `
     address, area, district, division, source, priority, expected_premium, expected_value,
     notes, assigned_to, assigned_by, assigned_at, last_contacted_at, next_follow_up_at,
     current_status, status_history, assignment_history, documents, custom_fields, tags,
-    created_by, updated_by, created_at, updated_at
+    created_at, updated_at
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12, COALESCE(NULLIF($13, ''), 'NORMAL'), $14, $15, $16,
@@ -3545,7 +3108,6 @@ const LEAD_UPSERT_SQL = `
     COALESCE($23::jsonb, '[]'::jsonb), COALESCE($24::jsonb, '[]'::jsonb),
     COALESCE($25::jsonb, '[]'::jsonb),
     COALESCE($26::jsonb, '{}'::jsonb), COALESCE($27::jsonb, '[]'::jsonb),
-    $28, $29,
     NOW(), NOW()
   )
   ON CONFLICT (lead_code) DO UPDATE SET
@@ -3575,525 +3137,186 @@ const LEAD_UPSERT_SQL = `
     documents = EXCLUDED.documents,
     custom_fields = leads.custom_fields || EXCLUDED.custom_fields,
     tags = EXCLUDED.tags,
-    updated_by = EXCLUDED.updated_by,
     is_deleted = FALSE,
     deleted_at = NULL,
     updated_at = NOW()
   RETURNING *`;
 
-router.post('/leads', requireAuth, async (req: any, res) => {
-  if (sendDbUnavailable(res)) return;
+router.post('/leads', requireAuth, async (req, res) => {
+  const record = await buildLeadRecord(req.body || {}, useDb());
+  if ('error' in record) {
+    return sendJson(res, 400, { success: false, message: record.error });
+  }
+
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    const lead = {
+      ...(req.body || {}),
+      id: record.leadCode,
+      timestamp: req.body?.timestamp || new Date().toISOString(),
+    };
+    const existingIndex = fallbackStore.leads.findIndex(item => item.id === lead.id);
+    if (existingIndex >= 0) fallbackStore.leads[existingIndex] = { ...fallbackStore.leads[existingIndex], ...lead };
+    else fallbackStore.leads.push(lead);
+    return sendJson(res, 200, { success: true, data: lead });
+  }
+
   try {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-    const visibility = await resolveCallerVisibility(caller);
-    const payload = req.body || {};
-
-    // Determine if this is an update (existing lead) via lead_code or mobile
-    let existingLead: any = null;
-    const incomingLeadCode = String(payload.leadCode || payload.lead_code || payload.id || '').slice(0, 50).trim();
-    const incomingMobile = clean(payload.mobile || payload.mobileNumber || payload.phone);
-
-    if (useDb()) {
-      const pool = getPool();
-      if (incomingLeadCode) {
-        const found = await pool.query(
-          `SELECT * FROM leads WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE LIMIT 1`,
-          [incomingLeadCode]
-        );
-        existingLead = found.rows[0] || null;
-      }
-      if (!existingLead && incomingMobile) {
-        const foundMobile = await pool.query(
-          `SELECT * FROM leads WHERE UPPER(mobile) = UPPER($1) AND is_deleted = FALSE LIMIT 1`,
-          [incomingMobile]
-        );
-        existingLead = foundMobile.rows[0] || null;
-      }
-    } else {
-      // Demo mode lookup
-      if (incomingLeadCode) {
-        existingLead = fallbackStore.leads.find((l: any) => l.id === incomingLeadCode) || null;
-      }
-      if (!existingLead && incomingMobile) {
-        existingLead = fallbackStore.leads.find((l: any) => String(l.mobile || '').toUpperCase() === incomingMobile.toUpperCase()) || null;
-      }
-    }
-
-    // Permission checks
-    if (existingLead) {
-      // Must have edit permission and access to existing lead
-      if (!(await hasPermissionCode(caller, 'leads.edit'))) {
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to edit leads.' });
-      }
-      if (!isLeadAccessible(existingLead, visibility, caller)) {
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead. It is outside your authorized scope.' });
-      }
-    } else {
-      if (!(await hasPermissionCode(caller, 'leads.create'))) {
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to create leads.' });
-      }
-    }
-
-    // Resolve assignedTo target (prevent spoofing)
-    let targetAssigned: { userId: string; employeeId: string } | null = null;
-    if (payload.assignedTo) {
-      const resolved = await resolveAssignedTo(payload.assignedTo);
-      if (!resolved) {
-        return sendJson(res, 400, { success: false, message: `Assigned user "${payload.assignedTo}" not found.` });
-      }
-      targetAssigned = resolved;
-    } else if (existingLead) {
-      // For updates without assignedTo change, keep existing assignment
-      if (existingLead.assigned_to) {
-        const empId = await managerEmployeeId(existingLead.assigned_to);
-        targetAssigned = { userId: existingLead.assigned_to, employeeId: empId || caller.employee_id };
-      } else if ((existingLead as any).assignedTo) {
-        // FallbackStore shape
-        const empId = String((existingLead as any).assignedTo);
-        const resolved = await resolveAssignedTo(empId);
-        if (resolved) {
-          targetAssigned = resolved;
-        } else {
-          targetAssigned = { userId: caller.id, employeeId: empId || caller.employee_id };
-        }
-      } else {
-        targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
-      }
-    } else {
-      targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
-    }
-
-    // Validate assignedTo is within caller's scope
-    if (!isAssignedToAllowed(targetAssigned, visibility, caller)) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to assign leads to that user. Assignment is limited to your authorized scope.' });
-    }
-
-    // If reassigning to different user, require assign/transfer permission
-    if (existingLead && existingLead.assigned_to && targetAssigned && String(existingLead.assigned_to) !== String(targetAssigned.userId)) {
-      const canAssign = await hasPermissionCode(caller, 'leads.assign');
-      const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
-      if (!canAssign && !canTransfer && !visibility.all) {
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign this lead to another user.' });
-      }
-    }
-
-    const record = await buildSecureLeadRecord(payload, caller, targetAssigned);
-    if ('error' in record) {
-      return sendJson(res, 400, { success: false, message: record.error });
-    }
-
-    // For updates, merge assignment history server-side if reassigned
-    if (existingLead && targetAssigned && String(existingLead.assigned_to) !== String(targetAssigned.userId)) {
-      const existingHistory = Array.isArray(existingLead.assignment_history) ? existingLead.assignment_history : [];
-      const newEntry = {
-        id: `assign_${Date.now()}`,
-        fromEmployeeId: existingLead.custom_fields?.assignedTo || await managerEmployeeId(existingLead.assigned_to) || undefined,
-        toEmployeeId: targetAssigned.employeeId,
-        changedBy: caller.employee_id,
-        date: new Date().toISOString(),
-        note: 'Reassigned via API',
-      };
-      (record as any).assignmentHistory = [...existingHistory, newEntry];
-      (record as any).customFields = {
-        ...(record as any).customFields,
-        assignedTo: targetAssigned.employeeId,
-        assignedBy: caller.employee_id,
-        assignedDate: new Date().toISOString(),
-      };
-    }
-
-    if (!useDb()) {
-      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      // Demo mode: ensure actor identity is always session-derived, never client payload
-      // Preserve existing assignment history from stored lead if updating
-      let finalAssignmentHistory = record.assignmentHistory;
-      let finalStatusHistory = record.statusHistory;
-      if (existingLead) {
-        const existingAssignHist = Array.isArray((existingLead as any).assignmentHistory) ? (existingLead as any).assignmentHistory : (Array.isArray((existingLead as any).assignment_history) ? (existingLead as any).assignment_history : []);
-        const existingStatusHist = Array.isArray((existingLead as any).statusHistory) ? (existingLead as any).statusHistory : (Array.isArray((existingLead as any).status_history) ? (existingLead as any).status_history : []);
-        // If reassignment, we already merged in record above for DB path, but for demo we need to handle
-        if (existingAssignHist.length > 0 && !(existingLead as any).assigned_to) {
-          // Check if reassignment happened (target differs from existing assignedTo)
-          const existingAssignedEmp = String((existingLead as any).assignedTo || '').toUpperCase();
-          const newAssignedEmp = String(targetAssigned?.employeeId || '').toUpperCase();
-          if (existingAssignedEmp && newAssignedEmp && existingAssignedEmp !== newAssignedEmp) {
-            const newEntry = {
-              id: `assign_${Date.now()}`,
-              fromEmployeeId: existingAssignedEmp || undefined,
-              toEmployeeId: targetAssigned?.employeeId,
-              changedBy: caller.employee_id,
-              date: new Date().toISOString(),
-              note: 'Reassigned via API',
-            };
-            finalAssignmentHistory = [...existingAssignHist, newEntry];
-          } else {
-            // Preserve existing if not reassigning, but ensure no spoofed actor in preserved history? Keep legitimate history as is
-            finalAssignmentHistory = existingAssignHist.length > 0 ? existingAssignHist : record.assignmentHistory;
-            finalStatusHistory = existingStatusHist.length > 0 ? existingStatusHist : record.statusHistory;
-          }
-        }
-      }
-      const lead: any = {
-        id: record.leadCode,
-        prospectName: record.customerName,
-        customerName: record.customerName,
-        mobile: record.mobile,
-        alternateMobile: record.alternateMobile,
-        email: record.email,
-        profession: record.occupation || 'Unknown',
-        occupation: record.occupation || 'Unknown',
-        area: record.area || 'Unknown',
-        source: record.source || 'Unknown',
-        currentStatus: record.currentStatus || 'Untouched',
-        projectedNCP: record.projectedNCP ?? 0,
-        collectedNCP: record.collectedNCP ?? 0,
-        assignedTo: targetAssigned?.employeeId || caller.employee_id,
-        assignedBy: caller.employee_id,
-        timestamp: new Date().toISOString(),
-        customFields: record.customFields,
-        assignmentHistory: finalAssignmentHistory,
-        statusHistory: finalStatusHistory,
-        // Explicitly ignore any client-supplied actor fields
-        createdBy: (existingLead as any)?.createdBy || caller.id,
-        updatedBy: caller.id,
-      };
-      const existingIndex = fallbackStore.leads.findIndex((item: any) => item.id === lead.id || String(item.mobile || '').toUpperCase() === String(lead.mobile || '').toUpperCase());
-      if (existingIndex >= 0) fallbackStore.leads[existingIndex] = { ...fallbackStore.leads[existingIndex], ...lead };
-      else fallbackStore.leads.push(lead);
-      return sendJson(res, 200, { success: true, data: lead });
-    }
-
-    try {
-      const result = await getPool().query(LEAD_UPSERT_SQL, [
-        record.leadCode,
-        record.customerName,
-        record.mobile,
-        record.alternateMobile,
-        record.email,
-        record.maritalStatus,
-        record.occupation,
-        record.address,
-        record.area,
-        record.district,
-        record.division,
-        record.source,
-        record.priority,
-        record.projectedNCP,
-        record.sumAssured,
-        record.notes,
-        record.assignedTo,
-        record.assignedBy,
-        record.assignedAt,
-        record.lastFollowUpDate,
-        record.nextFollowUpDate,
-        record.currentStatus,
-        JSON.stringify(record.statusHistory),
-        JSON.stringify(record.assignmentHistory),
-        JSON.stringify(record.documents),
-        JSON.stringify(record.customFields),
-        JSON.stringify(record.tags),
-        record.createdBy,
-        record.updatedBy,
-      ]);
-      const row = result.rows[0];
-      const assigned = row.assigned_to ? await managerEmployeeId(row.assigned_to) : null;
-      const assignedByEmp = row.assigned_by ? await managerEmployeeId(row.assigned_by) : null;
-      return sendJson(res, 200, { success: true, data: mapLeadRow({ ...row, assigned_to_employee_id: assigned, assigned_by_employee_id: assignedByEmp }) });
-    } catch (error: any) {
-      return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
-    }
+    const result = await getPool().query(LEAD_UPSERT_SQL, [
+      record.leadCode,
+      record.customerName,
+      record.mobile,
+      record.alternateMobile,
+      record.email,
+      record.maritalStatus,
+      record.occupation,
+      record.address,
+      record.area,
+      record.district,
+      record.division,
+      record.source,
+      record.priority,
+      record.projectedNCP,
+      record.sumAssured,
+      record.notes,
+      record.assignedTo,
+      record.assignedBy,
+      record.assignedAt,
+      record.lastFollowUpDate,
+      record.nextFollowUpDate,
+      record.currentStatus,
+      JSON.stringify(record.statusHistory),
+      JSON.stringify(record.assignmentHistory),
+      JSON.stringify(record.documents),
+      JSON.stringify(record.customFields),
+      JSON.stringify(record.tags),
+    ]);
+    const row = result.rows[0];
+    const assigned = row.assigned_to ? await managerEmployeeId(row.assigned_to) : null;
+    const assignedByEmp = row.assigned_by ? await managerEmployeeId(row.assigned_by) : null;
+    return sendJson(res, 200, { success: true, data: mapLeadRow({ ...row, assigned_to_employee_id: assigned, assigned_by_employee_id: assignedByEmp }) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
   }
 });
 
-router.post('/leads/bulk', requireAuth, async (req: any, res) => {
-  if (sendDbUnavailable(res)) return;
+router.post('/leads/bulk', requireAuth, async (req, res) => {
   const incoming = Array.isArray(req.body?.leads) ? req.body.leads : Array.isArray(req.body) ? req.body : [];
   if (incoming.length === 0) {
     return sendJson(res, 400, { success: false, message: 'No leads supplied for bulk import.' });
   }
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    const results: any[] = [];
+    for (const lead of incoming) {
+      const id = String(lead.id || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+      fallbackStore.leads.push({ ...lead, id, timestamp: lead.timestamp || new Date().toISOString() });
+      results.push({ ok: true, id });
+    }
+    return sendJson(res, 200, { success: true, data: { inserted: results.length, updated: 0, failed: 0, total: results.length, errors: [] } });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  const errors: Array<{ index: number; message: string }> = [];
+  let inserted = 0;
+  let updated = 0;
+  const seenMobiles = new Map<string, number>(); // normalized mobile -> batch row index
+  const rowKeyOf = (mobile: string) => mobile.replace(/\D/g, '').slice(-11) || mobile.toLowerCase();
 
   try {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
-    }
-    const visibility = await resolveCallerVisibility(caller);
-
-    // Permission: require import or create
-    const canImport = await hasPermissionCode(caller, 'leads.import');
-    const canCreate = await hasPermissionCode(caller, 'leads.create');
-    if (!canImport && !canCreate) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
-    }
-
-    if (!useDb()) {
-      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      // Demo mode: enforce scope per row
-      const results: any[] = [];
-      const errors: Array<{ index: number; message: string }> = [];
-      for (let idx = 0; idx < incoming.length; idx++) {
-        const lead = incoming[idx];
-        const assignedRef = lead.assignedTo ? await resolveAssignedTo(lead.assignedTo) : { userId: caller.id, employeeId: caller.employee_id };
-        if (lead.assignedTo && !assignedRef) {
-          errors.push({ index: idx, message: `Assigned user "${lead.assignedTo}" not found` });
+    await client.query('BEGIN');
+    for (let index = 0; index < incoming.length; index++) {
+      const raw = incoming[index] || {};
+      try {
+        const record = await buildLeadRecord(raw, useDb());
+        if ('error' in record) {
+          errors.push({ index, message: record.error });
           continue;
         }
-        if (!isAssignedToAllowed(assignedRef as any, visibility, caller)) {
-          errors.push({ index: idx, message: 'Unauthorized assignment outside your scope' });
+        const batchKey = rowKeyOf(record.mobile);
+        if (seenMobiles.has(batchKey)) {
+          // Duplicate within this batch: update the earlier staged code instead
+          const priorIndex = seenMobiles.get(batchKey)!;
+          const priorLeadCode = String(incoming[priorIndex].leadCode || incoming[priorIndex].lead_code || incoming[priorIndex].id || importLeadCode(record.mobile)).slice(0, 50);
+          const dupResult = await client.query(LEAD_UPSERT_SQL, [
+            ...leadParams(record, priorLeadCode),
+          ]);
+          if (dupResult.rows[0]) updated++;
           continue;
         }
-        const id = String(lead.id || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
-        fallbackStore.leads.push({ ...lead, id, assignedTo: (assignedRef as any)?.employeeId || caller.employee_id, assignedBy: caller.employee_id, timestamp: lead.timestamp || new Date().toISOString() });
-        results.push({ ok: true, id });
-      }
-      return sendJson(res, 200, { success: true, data: { inserted: results.length, updated: 0, failed: errors.length, total: incoming.length, errors } });
-    }
+        seenMobiles.set(batchKey, index);
 
-    const pool = getPool();
-    const client = await pool.connect();
-    const errors: Array<{ index: number; message: string }> = [];
-    let inserted = 0;
-    let updated = 0;
-    const seenMobiles = new Map<string, number>();
-    const rowKeyOf = (mobile: string) => mobile.replace(/\D/g, '').slice(-11) || mobile.toLowerCase();
-
-    try {
-      await client.query('BEGIN');
-      for (let index = 0; index < incoming.length; index++) {
-        const raw = incoming[index] || {};
-        try {
-          const customerName = clean(raw.customerName || raw.customer_name || raw.prospectName || raw.prospect_name);
-          const mobile = clean(raw.mobile || raw.mobileNumber || raw.phone);
-          if (!customerName || !mobile) {
-            errors.push({ index, message: 'Customer name and mobile are required' });
-            continue;
-          }
-
-          // Resolve assignedTo for this row
-          let targetAssigned: { userId: string; employeeId: string } | null = null;
-          if (raw.assignedTo) {
-            const resolved = await resolveAssignedTo(raw.assignedTo);
-            if (!resolved) {
-              errors.push({ index, message: `Assigned user "${raw.assignedTo}" not found` });
-              continue;
-            }
-            targetAssigned = resolved;
-          } else {
-            targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
-          }
-
-          if (!isAssignedToAllowed(targetAssigned, visibility, caller)) {
-            errors.push({ index, message: 'Unauthorized: assignment outside your authorized scope' });
-            continue;
-          }
-
-          const batchKey = rowKeyOf(mobile);
-          if (seenMobiles.has(batchKey)) {
-            const priorIndex = seenMobiles.get(batchKey)!;
-            const priorLeadCode = String(incoming[priorIndex].leadCode || incoming[priorIndex].lead_code || incoming[priorIndex].id || importLeadCode(mobile)).slice(0, 50);
-            // Need to check auth for prior lead as well (already checked? but re-check)
-            const priorExisting = await client.query(`SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE LIMIT 1`, [priorLeadCode]);
-            if (priorExisting.rows[0] && !isLeadAccessible(priorExisting.rows[0], visibility, caller)) {
-              errors.push({ index, message: 'Unauthorized: cannot update lead outside your scope (duplicate in batch)' });
-              continue;
-            }
-            const recordDup = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in recordDup) {
-              errors.push({ index, message: recordDup.error });
-              continue;
-            }
-            const dupResult = await client.query(LEAD_UPSERT_SQL, [
-              priorLeadCode,
-              recordDup.customerName,
-              recordDup.mobile,
-              recordDup.alternateMobile,
-              recordDup.email,
-              recordDup.maritalStatus,
-              recordDup.occupation,
-              recordDup.address,
-              recordDup.area,
-              recordDup.district,
-              recordDup.division,
-              recordDup.source,
-              recordDup.priority,
-              recordDup.projectedNCP,
-              recordDup.sumAssured,
-              recordDup.notes,
-              recordDup.assignedTo,
-              recordDup.assignedBy,
-              recordDup.assignedAt,
-              recordDup.lastFollowUpDate,
-              recordDup.nextFollowUpDate,
-              recordDup.currentStatus,
-              JSON.stringify(recordDup.statusHistory),
-              JSON.stringify(recordDup.assignmentHistory),
-              JSON.stringify(recordDup.documents),
-              JSON.stringify(recordDup.customFields),
-              JSON.stringify(recordDup.tags),
-              recordDup.createdBy,
-              recordDup.updatedBy,
-            ]);
-            if (dupResult.rows[0]) updated++;
-            continue;
-          }
-          seenMobiles.set(batchKey, index);
-
-          const clientCode = String(raw.leadCode || raw.lead_code || raw.id || '').slice(0, 50);
-          const leadCode = clientCode || importLeadCode(mobile);
-
-          // Check existing by code or mobile
-          let existing: any = null;
-          if (clientCode) {
-            const byCode = await client.query('SELECT * FROM leads WHERE lead_code = $1 AND is_deleted = FALSE LIMIT 1', [leadCode]);
-            existing = byCode.rows[0] || null;
-          }
-          if (!existing) {
-            const byMobile = await client.query('SELECT * FROM leads WHERE UPPER(mobile) = UPPER($1) AND is_deleted = FALSE AND lead_code <> $2 LIMIT 1', [mobile, leadCode]);
-            existing = byMobile.rows[0] || null;
-          }
-
-          if (existing) {
-            if (!isLeadAccessible(existing, visibility, caller)) {
-              errors.push({ index, message: 'Unauthorized: cannot update lead outside your authorized scope' });
-              continue;
-            }
-            if (!(await hasPermissionCode(caller, 'leads.edit'))) {
-              errors.push({ index, message: 'No permission to edit existing lead' });
-              continue;
-            }
-            // Check reassign permission if needed
-            if (existing.assigned_to && targetAssigned && String(existing.assigned_to) !== String(targetAssigned.userId)) {
-              const canAssign = await hasPermissionCode(caller, 'leads.assign');
-              const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
-              if (!canAssign && !canTransfer && !visibility.all) {
-                errors.push({ index, message: 'No permission to reassign lead' });
-                continue;
-              }
-            }
-            await client.query('SAVEPOINT bulk_row');
-            const record = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in record) {
-              await client.query('ROLLBACK TO SAVEPOINT bulk_row');
-              errors.push({ index, message: record.error });
-              continue;
-            }
-            // Merge assignment history if reassigned
-            if (String(existing.assigned_to) !== String(targetAssigned.userId)) {
-              const existingHistory = Array.isArray(existing.assignment_history) ? existing.assignment_history : [];
-              const newEntry = {
-                id: `assign_${Date.now()}_${index}`,
-                fromEmployeeId: existing.custom_fields?.assignedTo || await managerEmployeeId(existing.assigned_to) || undefined,
-                toEmployeeId: targetAssigned.employeeId,
-                changedBy: caller.employee_id,
-                date: new Date().toISOString(),
-                note: 'Reassigned via bulk import',
-              };
-              (record as any).assignmentHistory = [...existingHistory, newEntry];
-            }
-
-            const upd = await client.query(
-              `UPDATE leads SET
-                 customer_name = $2, email = $3, occupation = $4, address = $5, area = $6,
-                 district = $7, division = $8, source = $9, priority = $10,
-                 expected_premium = $11, expected_value = $12, notes = $13,
-                 assigned_to = $14, assigned_by = $15, last_contacted_at = $16,
-                 next_follow_up_at = $17, current_status = $18,
-                 status_history = COALESCE($19::jsonb, '[]'::jsonb),
-                 assignment_history = COALESCE($20::jsonb, '[]'::jsonb),
-                 documents = COALESCE($21::jsonb, '[]'::jsonb),
-                 custom_fields = custom_fields || COALESCE($22::jsonb, '{}'::jsonb),
-                 tags = COALESCE($23::jsonb, '[]'::jsonb),
-                 updated_by = $24,
-                 is_deleted = FALSE, deleted_at = NULL, updated_at = NOW()
-               WHERE id = $1`,
-              [
-                existing.id, record.customerName, record.email, record.occupation,
-                record.address, record.area, record.district, record.division, record.source,
-                record.priority, record.projectedNCP, record.sumAssured, record.notes,
-                record.assignedTo, record.assignedBy, record.lastFollowUpDate,
-                record.nextFollowUpDate, record.currentStatus,
-                JSON.stringify(record.statusHistory), JSON.stringify(record.assignmentHistory),
-                JSON.stringify(record.documents), JSON.stringify(record.customFields),
-                JSON.stringify(record.tags),
-                record.updatedBy,
-              ]
-            );
-            if ((upd.rowCount ?? 0) > 0) updated++;
-            else inserted++;
-            await client.query('RELEASE SAVEPOINT bulk_row');
-          } else {
-            await client.query('SAVEPOINT bulk_row');
-            const record = await buildSecureLeadRecord(raw, caller, targetAssigned);
-            if ('error' in record) {
-              await client.query('ROLLBACK TO SAVEPOINT bulk_row');
-              errors.push({ index, message: record.error });
-              continue;
-            }
-            const ins = await client.query(LEAD_UPSERT_SQL, [
-              leadCode,
-              record.customerName,
-              record.mobile,
-              record.alternateMobile,
-              record.email,
-              record.maritalStatus,
-              record.occupation,
-              record.address,
-              record.area,
-              record.district,
-              record.division,
-              record.source,
-              record.priority,
-              record.projectedNCP,
-              record.sumAssured,
-              record.notes,
-              record.assignedTo,
-              record.assignedBy,
-              record.assignedAt,
-              record.lastFollowUpDate,
-              record.nextFollowUpDate,
-              record.currentStatus,
-              JSON.stringify(record.statusHistory),
-              JSON.stringify(record.assignmentHistory),
-              JSON.stringify(record.documents),
-              JSON.stringify(record.customFields),
+        // Retry-safe key: stable code derived from the mobile number so a
+        // re-run of the same file updates rows instead of duplicating them.
+        const clientCode = String(raw.leadCode || raw.lead_code || raw.id || '').slice(0, 50);
+        const leadCode = clientCode || importLeadCode(record.mobile);
+        const existingByCode = clientCode
+          ? await client.query('SELECT id FROM leads WHERE lead_code = $1 AND is_deleted = FALSE LIMIT 1', [leadCode])
+          : { rows: [] };
+        const existing = existingByCode.rows[0] || (
+          await client.query('SELECT id FROM leads WHERE UPPER(mobile) = UPPER($1) AND is_deleted = FALSE AND lead_code <> $2 LIMIT 1', [record.mobile, leadCode])
+        ).rows[0];
+        if (existing) {
+          // Same mobile / code already exists -> update that row (idempotent re-import).
+          await client.query('SAVEPOINT bulk_row');
+          const upd = await client.query(
+            `UPDATE leads SET
+               customer_name = $2, email = $3, occupation = $4, address = $5, area = $6,
+               district = $7, division = $8, source = $9, priority = $10,
+               expected_premium = $11, expected_value = $12, notes = $13,
+               assigned_to = $14, assigned_by = $15, last_contacted_at = $16,
+               next_follow_up_at = $17, current_status = $18,
+               status_history = COALESCE($19::jsonb, '[]'::jsonb),
+               assignment_history = COALESCE($20::jsonb, '[]'::jsonb),
+               documents = COALESCE($21::jsonb, '[]'::jsonb),
+               custom_fields = custom_fields || COALESCE($22::jsonb, '{}'::jsonb),
+               tags = COALESCE($23::jsonb, '[]'::jsonb),
+               is_deleted = FALSE, deleted_at = NULL, updated_at = NOW()
+             WHERE id = $1`,
+            [
+              existing.rows[0].id, record.customerName, record.email, record.occupation,
+              record.address, record.area, record.district, record.division, record.source,
+              record.priority, record.projectedNCP, record.sumAssured, record.notes,
+              record.assignedTo, record.assignedBy, record.lastFollowUpDate,
+              record.nextFollowUpDate, record.currentStatus,
+              JSON.stringify(record.statusHistory), JSON.stringify(record.assignmentHistory),
+              JSON.stringify(record.documents), JSON.stringify(record.customFields),
               JSON.stringify(record.tags),
-              record.createdBy,
-              record.updatedBy,
-            ]);
-            if (ins.rows[0]) inserted++;
-            await client.query('RELEASE SAVEPOINT bulk_row');
-          }
-        } catch (err: any) {
-          try { await client.query('ROLLBACK TO SAVEPOINT bulk_row'); } catch {}
-          errors.push({ index, message: err?.message || 'Row failed' });
+            ]
+          );
+          if ((upd.rowCount ?? 0) > 0) updated++;
+          else inserted++;
+          await client.query('RELEASE SAVEPOINT bulk_row');
+        } else {
+          await client.query('SAVEPOINT bulk_row');
+          const ins = await client.query(LEAD_UPSERT_SQL, [...leadParams(record, leadCode)]);
+          if (ins.rows[0]) inserted++;
+          await client.query('RELEASE SAVEPOINT bulk_row');
         }
+      } catch (err: any) {
+        try { await client.query('ROLLBACK TO SAVEPOINT bulk_row'); } catch { /* ignore */ }
+        errors.push({ index, message: err?.message || 'Row failed' });
       }
-      await client.query('COMMIT');
-      return sendJson(res, 200, {
-        success: true,
-        data: { inserted, updated, failed: errors.length, total: incoming.length, errors },
-      });
-    } catch (error: any) {
-      try { await client.query('ROLLBACK'); } catch {}
-      return sendJson(res, 500, {
-        success: false,
-        message: error?.message || 'Bulk import failed - no rows were committed.',
-        data: { inserted: 0, updated: 0, failed: incoming.length, total: incoming.length, errors },
-      });
-    } finally {
-      client.release();
     }
+    await client.query('COMMIT');
+    return sendJson(res, 200, {
+      success: true,
+      data: { inserted, updated, failed: errors.length, total: incoming.length, errors },
+    });
   } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Bulk import failed' });
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    return sendJson(res, 500, {
+      success: false,
+      message: error?.message || 'Bulk import failed - no rows were committed.',
+      data: { inserted: 0, updated: 0, failed: incoming.length, total: incoming.length, errors },
+    });
+  } finally {
+    client.release();
   }
 });
 
-/** Param array for the canonical lead upsert (now includes created_by, updated_by). */
+/** Param array for the canonical lead upsert. */
 function leadParams(record: LeadRecord, leadCode: string): any[] {
   return [
     leadCode,
@@ -4123,68 +3346,74 @@ function leadParams(record: LeadRecord, leadCode: string): any[] {
     JSON.stringify(record.documents),
     JSON.stringify(record.customFields),
     JSON.stringify(record.tags),
-    record.createdBy,
-    record.updatedBy,
   ];
 }
 
 /**
- * Server-side guard for single-lead deletion - HARDENED
- * - Requires authentication
- * - Requires leads.delete permission (admin bypass)
- * - Enforces data-scope: caller must have visibility to the lead
- * - FA can only delete own leads (via visibility Own)
- * - Manager can delete downline leads (via DownTeam visibility)
- * - Admin can delete any
+ * Server-side guard for single-lead deletion. The UI gates its delete
+ * buttons behind `canAccess('all_leads', 'delete_destroy_leads')`, but
+ * that check alone is not authorization. Deletion is allowed when the
+ * caller is an administrator, holds an explicit `leads.delete` grant
+ * (user override, else role grant), or owns the lead (it is assigned
+ * to them). Anything else is a 403. Returns true when the handler may
+ * proceed; otherwise the error response has already been sent.
  */
 async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
+  if (callerIsAdmin(req)) return true;
   try {
-    const caller = await getCallerDbInfo(req);
+    const pool = getPool();
+    const callerResult = await pool.query(
+      `SELECT id, employee_id, role_id FROM users
+       WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($3)
+       LIMIT 1`,
+      [String(req.currentUser?.id || ''), String(req.currentUser?.employeeId || ''), String(req.currentUser?.email || '')]
+    );
+    const caller = callerResult.rows[0];
     if (!caller) {
       sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
       return false;
     }
-    const role = normalizeRole(caller.role_code);
-    if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
+    const leadResult = await pool.query(
+      `SELECT id, assigned_to, custom_fields FROM leads
+       WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
+       LIMIT 1`,
+      [req.params.id]
+    );
+    // Missing leads fall through so the handler returns its 404.
+    if (!leadResult.rows[0]) return true;
+    const lead = leadResult.rows[0];
+    const assignedEmp = lead.custom_fields && typeof lead.custom_fields === 'object'
+      ? (lead.custom_fields as Record<string, any>).assignedTo
+      : null;
+    const isOwner = String(lead.assigned_to || '') === String(caller.id) ||
+      (!!assignedEmp && !!caller.employee_id &&
+        String(assignedEmp).toUpperCase() === String(caller.employee_id).toUpperCase());
+    if (isOwner) return true;
 
-    const visibility = await resolveCallerVisibility(caller);
-
-    // Fetch lead
-    let leadRow: any = null;
-    if (useDb()) {
-      const pool = getPool();
-      const leadResult = await pool.query(
-        `SELECT id, assigned_to, custom_fields, created_by FROM leads
-         WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
-         LIMIT 1`,
-        [req.params.id]
+    const permResult = await pool.query(
+      `SELECT id FROM permissions WHERE permission_code = 'leads.delete' LIMIT 1`
+    );
+    if (permResult.rows[0]) {
+      const permissionId = permResult.rows[0].id;
+      const override = await pool.query(
+        `SELECT is_allowed FROM user_permissions WHERE user_id = $1 AND permission_id = $2 LIMIT 1`,
+        [caller.id, permissionId]
       );
-      leadRow = leadResult.rows[0] || null;
-    } else {
-      leadRow = fallbackStore.leads.find((l: any) => l.id === req.params.id) || null;
-      if (leadRow) {
-        // Adapt demo shape to expected fields
-        leadRow = {
-          assigned_to: null,
-          custom_fields: { assignedTo: leadRow.assignedTo },
-          created_by: null,
-        };
+      if (override.rows[0]) {
+        if (override.rows[0].is_allowed === true) return true;
+      } else if (caller.role_id) {
+        const roleGrant = await pool.query(
+          `SELECT is_allowed FROM role_permissions WHERE role_id = $1 AND permission_id = $2 LIMIT 1`,
+          [caller.role_id, permissionId]
+        );
+        if (roleGrant.rows[0]?.is_allowed === true) return true;
       }
     }
-
-    if (!leadRow) return true; // let handler return 404
-
-    if (!isLeadAccessible(leadRow, visibility, caller)) {
-      sendJson(res, 403, { success: false, message: 'You do not have permission to delete this lead. It is outside your authorized scope.' });
-      return false;
-    }
-
-    if (!(await hasPermissionCode(caller, 'leads.delete'))) {
-      sendJson(res, 403, { success: false, message: 'You do not have permission to delete leads.' });
-      return false;
-    }
-
-    return true;
+    sendJson(res, 403, {
+      success: false,
+      message: 'You do not have permission to delete this lead. Only administrators, users with lead-delete permission, or the assigned owner may delete it.',
+    });
+    return false;
   } catch (error: any) {
     sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead delete check failed' });
     return false;
@@ -4194,28 +3423,16 @@ async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
 router.delete('/leads/:id', requireAuth, async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    // Demo mode: enforce scope
-    const caller = await getCallerDbInfo(req);
-    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
-    const visibility = await resolveCallerVisibility(caller);
-    const lead = fallbackStore.leads.find((l: any) => l.id === req.params.id);
-    if (lead) {
-      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: lead.assignedTo }, created_by: null };
-      if (!isLeadAccessible(fakeRow, visibility, caller) && !callerIsAdmin(req)) {
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to delete this lead.' });
-      }
-    }
-    fallbackStore.leads = fallbackStore.leads.filter((l: any) => l.id !== req.params.id);
+    fallbackStore.leads = fallbackStore.leads.filter(lead => lead.id !== req.params.id);
     return sendJson(res, 200, { success: true, message: 'Lead deleted' });
   }
   if (!(await checkLeadDeletePermission(req, res))) return;
   try {
-    const caller = await getCallerDbInfo(req);
     const result = await getPool().query(
-      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
+      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
        WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
        RETURNING id`,
-      [req.params.id, caller?.id || null]
+      [req.params.id]
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Lead not found' });
     return sendJson(res, 200, { success: true, message: 'Lead deleted' });
@@ -4228,16 +3445,15 @@ router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req
   const campaign = req.params.campaign;
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    fallbackStore.leads = fallbackStore.leads.filter((l: any) => l.campaignName !== campaign);
+    fallbackStore.leads = fallbackStore.leads.filter(lead => lead.campaignName !== campaign);
     return sendJson(res, 200, { success: true, message: 'Campaign leads deleted' });
   }
   try {
-    const caller = await getCallerDbInfo(req);
     const result = await getPool().query(
-      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
+      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
        WHERE custom_fields->>'campaignName' = $1 AND is_deleted = FALSE
        RETURNING id`,
-      [campaign, caller?.id || null]
+      [campaign]
     );
     return sendJson(res, 200, {
       success: true,
@@ -4256,18 +3472,15 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
     return sendJson(res, 200, { success: true, message: 'All leads cleared' });
   }
   try {
-    const caller = await getCallerDbInfo(req);
     const result = await getPool().query(
-      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $1, updated_by = $1, updated_at = NOW()
-       WHERE is_deleted = FALSE RETURNING id`,
-      [caller?.id || null]
+      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
+       WHERE is_deleted = FALSE RETURNING id`
     );
     return sendJson(res, 200, { success: true, message: 'All leads cleared', deleted: result.rows.length });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead clear failed' });
   }
 });
-
 
 /* ====================================================================
    DASHBOARD
