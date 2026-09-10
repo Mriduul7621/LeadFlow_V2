@@ -109,13 +109,12 @@ describe('Dashboard UX Step 5B — source guards', () => {
   });
 
   it('E. no client getLeads/localStorage/localDb KPI authority', () => {
-    // Scope to the KPI loader only: the informational Today/Tomorrow panel
-    // (loadActivities) is allowed to reuse the existing lead data source, but
-    // the KPI loader itself must never touch client lead lists.
+    // Scope to the KPI loader only (loadDashboardData). The KPI loader itself
+    // must never touch client lead lists.
     const page = DASHBOARD();
     const start = page.indexOf('const loadDashboardData');
-    const end = page.indexOf('const loadActivities');
-    assert.ok(start >= 0 && end > start, 'loaders must be ordered loadDashboardData then loadActivities');
+    const end = page.indexOf('const loadDailyExecution');
+    assert.ok(start >= 0 && end > start, 'loaders must be ordered loadDashboardData then loadDailyExecution');
     const body = page.slice(start, end);
     assert.ok(body.includes('dashboardService.getDashboard'));
     assert.ok(!body.includes('localStorage'), 'loadDashboardData must not read localStorage');
@@ -202,5 +201,17 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(page.includes('{canCreateLead &&'), 'quick action must be conditionally rendered on the permission');
     // Accessible on icon-only (small) screens.
     assert.ok(page.includes('aria-label="Add Lead"'), 'quick action needs an accessible label for icon-only screens');
+  });
+
+  it('O. Today/Tomorrow activity loads from follow-up queue, not getLeads()', () => {
+    const page = DASHBOARD();
+    // Blocker regression: the Daily Execution panel must not fetch the full lead list.
+    assert.ok(!page.includes('leadService.getLeads'), 'Dashboard must not call leadService.getLeads()');
+    assert.ok(!page.includes('buildActivities('), 'Dashboard must not derive activities from a full client lead list');
+    // It must read the server-authoritative follow-up queue instead.
+    assert.ok(page.includes('getFollowUpQueue'), 'Daily Execution must use leadService.getFollowUpQueue');
+    assert.ok(page.includes("bucket: 'today'"), 'panel must request today follow-ups');
+    // Unsupported activity types (calls/meetings) get an explicit limited note until Step 5C.
+    assert.ok(page.includes('scheduled_activities in Step 5C'), 'panel must note call/meeting activities arrive in Step 5C');
   });
 });

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users,
@@ -13,8 +13,6 @@ import {
   Calendar as CalendarIcon,
   RefreshCw,
   ChevronRight,
-  Phone,
-  MessageSquare,
   CalendarClock,
   ArrowRight,
   Info,
@@ -25,8 +23,7 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
-import { leadService } from '../../leads/services/leadService';
-import { buildActivities, type Activity } from '../../leads/utils/activityEngine';
+import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
 
@@ -38,9 +35,11 @@ import TaskCalendar from '../../auth/pages/TaskCalendar';
  * + Own/DownTeam/FullTeam/Organization visibility). Client lead lists are
  * never used as a source for authoritative totals.
  *
- * The "Today & Tomorrow" activity panel reuses the existing lead data
- * sources (same as the Activities page / TaskCalendar) for informational
- * drill-down only — it does not feed any metric.
+ * The "Today & Tomorrow" panel reads the server-authoritative follow-up
+ * queue (GET /api/leads/follow-ups) for follow-up items only — it never
+ * fetches the full lead list as a dashboard-load dependency. Call and
+ * meeting scheduled activities are deferred to Step 5C (scheduled_activities)
+ * and are shown as an explicit limited note rather than fabricated.
  *
  * Intentionally deferred (see docs/DASHBOARD_UX_STEP5B.md):
  *  - scheduled_activities backend (Step 5C)
@@ -67,6 +66,22 @@ const PIPELINE_STAGES = [
 
 const formatMoney = (n: number) => `৳ ${Number(n || 0).toLocaleString('en-US')}`;
 const formatCount = (n: number) => Number(n || 0).toLocaleString('en-US');
+
+/** Format a follow-up timestamp in the business timezone (Asia/Dhaka). */
+function formatDhakaDue(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-GB', {
+      timeZone: 'Asia/Dhaka',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
+}
 
 function toQueryPeriod(period: PeriodKey): string {
   if (period === 'THIS MONTH') return 'THIS_MONTH';
@@ -176,9 +191,11 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
-  // Today/Tomorrow activity list (informational only — see file header).
-  const [activityItems, setActivityItems] = useState<Activity[]>([]);
-  const [activityLoading, setActivityLoading] = useState(true);
+  // Today/Tomorrow follow-ups (informational only — see file header).
+  // Sourced from the server follow-up queue, never from a full client lead list.
+  const [todayFollowUps, setTodayFollowUps] = useState<FollowUpQueueItem[]>([]);
+  const [tomorrowFollowUps, setTomorrowFollowUps] = useState<FollowUpQueueItem[]>([]);
+  const [dailyLoading, setDailyLoading] = useState(true);
 
   const loadDashboardData = useCallback(async () => {
     if (!user) return;
@@ -203,21 +220,39 @@ export default function Dashboard() {
     }
   }, [user, period, selectedDate, customDates]);
 
-  const loadActivities = useCallback(async () => {
+  /**
+   * Daily Execution (Today & Tomorrow) — performance-safe.
+   *
+   * Uses the server-authoritative follow-up queue (GET /api/leads/follow-ups)
+   * instead of fetching the full lead list on every dashboard load. Call and
+   * meeting activity types are not yet backed by a scheduled_activities
+   * entity, so they are surfaced via an explicit "coming in Step 5C" note
+   * rather than fabricated from a full client lead fetch.
+   */
+  const loadDailyExecution = useCallback(async () => {
     if (!user) return;
-    setActivityLoading(true);
+    setDailyLoading(true);
     try {
-      // Informational drill-down only. This reuses the existing lead data
-      // source (same as the Activities page / TaskCalendar). It never feeds a metric.
-      const allLeads = await leadService.getLeads({ employeeId: user.employeeId, role: user.role });
-      const built = buildActivities(allLeads).filter(
-        (a) => a.category === 'Today' || a.category === 'Tomorrow',
+      const [todayRes, upcomingRes] = await Promise.all([
+        leadService.getFollowUpQueue({ bucket: 'today', limit: 50 }),
+        leadService.getFollowUpQueue({ bucket: 'upcoming', limit: 50 }),
+      ]);
+      setTodayFollowUps(todayRes.items ?? []);
+      // "Tomorrow" is the first Dhaka day inside the server's `upcoming` bucket.
+      // Asia/Dhaka has no DST, so a day is exactly 24h past the server-provided bound.
+      const tomorrowStartMs = new Date(upcomingRes.bounds.tomorrowStart).getTime();
+      const tomorrowEndMs = tomorrowStartMs + 86_400_000;
+      setTomorrowFollowUps(
+        (upcomingRes.items ?? []).filter((item) => {
+          const t = new Date(item.nextFollowUpAt).getTime();
+          return t >= tomorrowStartMs && t < tomorrowEndMs;
+        }),
       );
-      setActivityItems(built);
     } catch {
-      setActivityItems([]);
+      setTodayFollowUps([]);
+      setTomorrowFollowUps([]);
     } finally {
-      setActivityLoading(false);
+      setDailyLoading(false);
     }
   }, [user]);
 
@@ -226,8 +261,8 @@ export default function Dashboard() {
   }, [loadDashboardData]);
 
   useEffect(() => {
-    void loadActivities();
-  }, [loadActivities]);
+    void loadDailyExecution();
+  }, [loadDailyExecution]);
 
   const formattedDateRange = () => {
     const now = new Date();
@@ -244,9 +279,6 @@ export default function Dashboard() {
     return 'All time';
   };
 
-  const todayActivities = useMemo(() => activityItems.filter((a) => a.category === 'Today'), [activityItems]);
-  const tomorrowActivities = useMemo(() => activityItems.filter((a) => a.category === 'Tomorrow'), [activityItems]);
-
   const statusCounts = metrics?.statusCounts ?? {};
   const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
@@ -262,7 +294,7 @@ export default function Dashboard() {
 
   const refreshAll = () => {
     void loadDashboardData();
-    void loadActivities();
+    void loadDailyExecution();
   };
 
   return (
@@ -444,7 +476,7 @@ export default function Dashboard() {
                   <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Today &amp; Tomorrow</h3>
                 </div>
 
-                {activityLoading ? (
+                {dailyLoading ? (
                   <div className="space-y-3">
                     <div className="h-12 bg-slate-100 rounded animate-pulse" />
                     <div className="h-12 bg-slate-100 rounded animate-pulse" />
@@ -452,8 +484,8 @@ export default function Dashboard() {
                 ) : (
                   <div className="space-y-6">
                     {[
-                      { label: 'Today', items: todayActivities },
-                      { label: 'Tomorrow', items: tomorrowActivities },
+                      { label: 'Today', items: todayFollowUps },
+                      { label: 'Tomorrow', items: tomorrowFollowUps },
                     ].map((group) => (
                       <div key={group.label}>
                         <div className="flex items-center justify-between mb-2">
@@ -462,40 +494,37 @@ export default function Dashboard() {
                         </div>
                         {group.items.length === 0 ? (
                           <div className="rounded-sm border border-dashed border-slate-200 px-4 py-4 text-[11px] text-slate-400">
-                            No real follow-ups, calls or meetings scheduled for {group.label.toLowerCase()}.
+                            No follow-ups due {group.label.toLowerCase()}.
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            {group.items.slice(0, 8).map((activity) => {
-                              const TypeIcon = activity.type === 'Call' ? Phone : activity.type === 'Meeting' ? CalendarIcon : MessageSquare;
-                              return (
-                                <Link
-                                  key={activity.id}
-                                  to={`/leads/${encodeURIComponent(activity.leadId)}`}
-                                  className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
-                                >
-                                  <div className="w-8 h-8 rounded-sm bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                                    <TypeIcon className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#978C21]" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-sm font-semibold text-slate-800 truncate">{activity.prospectName}</p>
-                                    <p className="text-[10px] text-slate-400 uppercase tracking-wider">
-                                      {activity.type} · {new Date(activity.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                                    </p>
-                                  </div>
-                                  <span className={cn('px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-wider border shrink-0', getLeadStatusColorClasses(activity.status))}>
-                                    {activity.status}
-                                  </span>
-                                </Link>
-                              );
-                            })}
+                            {group.items.slice(0, 8).map((item) => (
+                              <Link
+                                key={item.id}
+                                to={`/leads/${encodeURIComponent(item.id)}`}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-sm border border-slate-100 hover:border-[#978C21]/40 hover:bg-white hover:shadow-sm transition-all group"
+                              >
+                                <div className="w-8 h-8 rounded-sm bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
+                                  <History className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#978C21]" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-slate-800 truncate">{item.prospectName || item.customerName}</p>
+                                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+                                    Follow-up · {formatDhakaDue(item.nextFollowUpAt)}
+                                  </p>
+                                </div>
+                                <span className={cn('px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-wider border shrink-0', getLeadStatusColorClasses(item.currentStatus))}>
+                                  {item.currentStatus}
+                                </span>
+                              </Link>
+                            ))}
                           </div>
                         )}
                       </div>
                     ))}
                     <p className="text-[10px] text-slate-400 italic border-t border-slate-100 pt-3">
-                      Dedicated scheduled-activity records land in Step 5C; until then this panel reflects the real
-                      follow-up / call / meeting dates already stored on leads.
+                      Follow-ups come from the server follow-up queue — no full lead-list fetch runs for this panel.
+                      Call and meeting scheduled activities arrive with scheduled_activities in Step 5C.
                     </p>
                   </div>
                 )}

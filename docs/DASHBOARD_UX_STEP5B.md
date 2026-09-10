@@ -39,11 +39,16 @@ The Dashboard is ordered top-to-bottom as follows:
    - No per-stage NCP is fabricated (the server does not provide it).
 
 5. **Daily Execution** (two-column)
-   - LEFT — *Today & Tomorrow* activity, computed from the existing lead data
-     source (`leadService.getLeads()` → `activityEngine.buildActivities()`), the
-     same path the Activities page and TaskCalendar use. It is **informational
-     drill-down only** and never feeds a KPI. If an activity type has no real
-     data, an explicit empty state is shown.
+   - LEFT — *Today & Tomorrow* **follow-ups only**, sourced from the
+     server-authoritative follow-up queue (`leadService.getFollowUpQueue()` →
+     `GET /api/leads/follow-ups`) for the `today` bucket and the first day of
+     the `upcoming` bucket. The dashboard **never** fetches the full lead list
+     (`leadService.getLeads()`) for this panel, so opening/refreshing the
+     dashboard does not trigger a large lead-list request.
+     - Call and meeting activity types are **not** backed by a data entity yet,
+       so they are not fabricated — an explicit note states they arrive with
+       `scheduled_activities` in **Step 5C**.
+     - This panel is informational drill-down only and never feeds a KPI.
    - RIGHT — the existing **TaskCalendar** embedded component (unchanged, still
      fully interactive).
    - The dedicated `scheduled_activities` backend arrives in **Step 5C**.
@@ -179,7 +184,10 @@ into UI-only checks; the server routes remain the enforcement point.
 free source guards covering: server-dashboard KPI consumption, no fabricated
 avgResponseTAT / team list / trend series, no client KPI authority, calendar +
 follow-up navigation, real-routes-only sidebar, menuAccess visibility, admin
-bypass, ProtectedRoute coverage, and mobile sidebar behavior.
+bypass, ProtectedRoute coverage, mobile sidebar behavior, the Add Lead quick
+action route/capability/accessibility, and a regression guard proving the
+Today/Tomorrow panel loads from `getFollowUpQueue` and **never** calls
+`leadService.getLeads()`.
 
 Existing Step 4A / 4B / Step 5 tests in
 `server/tests/dashboard-metrics-integration.test.ts` (and the rest of the
