@@ -88,7 +88,9 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(visible.includes('Date Range'), 'Dashboard must have Date Range collapsed label');
     assert.ok(visible.includes('Add Lead'), 'Dashboard must have Add Lead');
     assert.ok(visible.includes('Refresh'), 'Dashboard must have Refresh');
-    assert.ok(visible.includes('Sync failed') || visible.includes('Retry'), 'Dashboard must have error Retry English copy');
+    assert.ok(visible.includes('Dashboard data could not be loaded.') || visible.includes('Retry'), 'Dashboard must have neutral error copy Dashboard data could not be loaded. and keep Retry');
+    assert.ok(visible.includes('Your saved data is unchanged. Please try again.'), 'Dashboard must have secondary Your saved data is unchanged. Please try again.');
+    assert.ok(visible.includes('Retry'), 'Dashboard must keep Retry action');
     assert.ok(visible.includes('No trend data available'), 'Dashboard empty states must be English');
     // No developer jargon in visible UI (comments stripped already)
     assert.ok(!visible.includes('server-authoritative'), 'visible Dashboard must not show server-authoritative');
@@ -281,5 +283,34 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(!d.includes('getLeads'), 'Dashboard must not contain getLeads at all');
     const leadService = read('src/modules/leads/services/leadService.ts');
     assert.ok(leadService.includes('await apiRequest'), 'leadService must await server before caching');
+  });
+
+  it('Dashboard failure copy does not mislead about offline mode — neutral, distinct, with Retry', () => {
+    const d = stripComments(dashboard());
+    // Primary and secondary neutral copy must be present and distinct
+    assert.ok(d.includes('Dashboard data could not be loaded.'), 'Dashboard must show primary Dashboard data could not be loaded.');
+    assert.ok(d.includes('Your saved data is unchanged. Please try again.'), 'Dashboard must show secondary Your saved data is unchanged. Please try again.');
+    // Old misleading copy must be removed
+    assert.ok(!d.includes('Sync failed'), 'Dashboard must not contain old Sync failed copy');
+    assert.ok(!d.includes('Working in offline mode'), 'Dashboard must not contain Working in offline mode');
+    // Offline mode may only be claimed when an actual offline condition is checked
+    const hasOfflineModeClaim = /offline mode/i.test(d);
+    if (hasOfflineModeClaim) {
+      assert.ok(
+        d.includes('navigator.onLine') || d.includes('isOffline') || d.includes('offlineMode') || d.includes('isOfflineMode') || d.includes('Offline'),
+        'offline mode wording must only appear alongside an actual offline condition check',
+      );
+    } else {
+      assert.ok(!/offline mode/i.test(d), 'Dashboard failure copy must not claim offline mode');
+    }
+    // Keep Retry action for recovery
+    assert.ok(d.includes('Retry'), 'Dashboard must keep Retry action');
+    // Avoid rendering the same error sentence twice — each copy exactly once in visible source
+    const primaryCount = (d.match(/Dashboard data could not be loaded\./g) || []).length;
+    assert.equal(primaryCount, 1, 'primary error Dashboard data could not be loaded. should appear exactly once (avoid duplicate rendering)');
+    const secondaryCount = (d.match(/Your saved data is unchanged\. Please try again\./g) || []).length;
+    assert.equal(secondaryCount, 1, 'secondary error Your saved data is unchanged. Please try again. should appear exactly once');
+    // Ensure primary and secondary are not the same string
+    assert.notEqual('Dashboard data could not be loaded.', 'Your saved data is unchanged. Please try again.');
   });
 });

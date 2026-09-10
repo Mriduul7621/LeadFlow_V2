@@ -309,7 +309,7 @@ export default function Dashboard() {
       setMetrics(data);
     } catch {
       setMetrics(null);
-      setError('Sync failed. Working in offline mode.');
+      setError('Dashboard data could not be loaded.');
     } finally {
       setLoading(false);
     }
@@ -558,7 +558,7 @@ export default function Dashboard() {
             <AlertTriangle className="w-5 h-5" />
             <div>
               <p className="text-sm font-semibold">{error}</p>
-              <p className="text-xs text-red-500 mt-0.5">Sync failed. Working in offline mode.</p>
+              <p className="text-xs text-red-500 mt-0.5">Your saved data is unchanged. Please try again.</p>
             </div>
           </div>
           <button
