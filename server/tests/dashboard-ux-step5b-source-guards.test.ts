@@ -191,4 +191,16 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(!svc.includes('localStorage'), 'dashboardService must not read localStorage');
     assert.ok(!svc.includes('localDb'), 'dashboardService must not read localDb');
   });
+
+  it('N. Add Lead quick action navigates to /leads/new and respects leads.create', () => {
+    const page = DASHBOARD();
+    // Reuses the existing /leads/new route — no new route is created.
+    assert.ok(page.includes("to=\"/leads/new\""), 'quick action must navigate to the existing /leads/new route');
+    // Capability-gated via the same lead-create permission the page itself enforces.
+    assert.ok(page.includes("canAccess('lead_generate', 'create')"), 'quick action must gate on lead_generate.create capability');
+    // Only rendered when the user may create leads.
+    assert.ok(page.includes('{canCreateLead &&'), 'quick action must be conditionally rendered on the permission');
+    // Accessible on icon-only (small) screens.
+    assert.ok(page.includes('aria-label="Add Lead"'), 'quick action needs an accessible label for icon-only screens');
+  });
 });

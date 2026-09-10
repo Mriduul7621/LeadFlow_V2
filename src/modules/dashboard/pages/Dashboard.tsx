@@ -19,9 +19,11 @@ import {
   ArrowRight,
   Info,
   History,
+  Plus,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
+import { usePermissions } from '../../shared/hooks/usePermissions';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import { leadService } from '../../leads/services/leadService';
 import { buildActivities, type Activity } from '../../leads/utils/activityEngine';
@@ -156,6 +158,12 @@ function SkeletonCard() {
 
 export default function Dashboard() {
   const { user } = useAuthStore();
+  const { canAccess } = usePermissions();
+
+  // Lead-create capability (leads.create when the server permission exists,
+  // otherwise the role featurePermissions/menuAccess fallback). Same check the
+  // Add New Lead page itself enforces, so the button never out-runs the route.
+  const canCreateLead = canAccess('lead_generate', 'create');
 
   const [period, setPeriod] = useState<PeriodKey>('TODAY');
   const [selectedDate, setSelectedDate] = useState<string>(DEFAULT_TODAY);
@@ -324,6 +332,18 @@ export default function Dashboard() {
             <CalendarIcon className="w-3.5 h-3.5 text-[#978C21]" />
             <span className="text-xs font-semibold text-[#978C21]">{formattedDateRange()}</span>
           </div>
+
+          {canCreateLead && (
+            <Link
+              to="/leads/new"
+              title="Add Lead"
+              aria-label="Add Lead"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#978C21] text-white text-xs font-semibold shadow-sm hover:bg-[#8a7f1e] focus:outline-none focus:ring-2 focus:ring-[#978C21]/40 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className="hidden sm:inline">Add Lead</span>
+            </Link>
+          )}
 
           <button
             type="button"
