@@ -4304,4 +4304,3 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
 });
 
 export default router;
-// trigger vercel rebuild Thu Sep 10 04:45:06 UTC 2026
