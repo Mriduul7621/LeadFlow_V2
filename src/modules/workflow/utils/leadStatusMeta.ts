@@ -1,5 +1,6 @@
 import { DEFAULT_LEAD_STATUSES, DropdownOption } from '../../shared/types';
 import { metadataService } from '../../metadata/services/metadataService';
+import { registerSessionCacheClearHandler } from '../../shared/api/sessionCache';
 
 /**
  * leadStatusMeta.ts
@@ -42,6 +43,13 @@ const COLOR_CLASS_MAP: Record<string, string> = {
 
 let cachedStatuses: DropdownOption[] | null = null;
 let loadPromise: Promise<DropdownOption[]> | null = null;
+
+function clearLeadStatusSessionCache(): void {
+  cachedStatuses = null;
+  loadPromise = null;
+}
+
+registerSessionCacheClearHandler(clearLeadStatusSessionCache);
 
 function fallbackList(): DropdownOption[] {
   return DEFAULT_LEAD_STATUSES.map((value, i) => ({

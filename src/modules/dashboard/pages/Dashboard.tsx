@@ -29,6 +29,7 @@ import { dashboardService, type DashboardMetrics } from '../services/dashboardSe
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
 
 /** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
@@ -639,7 +640,10 @@ export default function Dashboard() {
   const [dailyLoading, setDailyLoading] = useState(true);
 
   const loadDashboardData = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      markCriticalStartupSettled();
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -659,6 +663,9 @@ export default function Dashboard() {
       setError('Dashboard data could not be loaded.');
     } finally {
       setLoading(false);
+      // STARTUP_CRITICAL = GET /api/dashboard — release Tier 2/3 waiters
+      // whether the KPI read succeeded or failed so they cannot hang.
+      markCriticalStartupSettled();
     }
   }, [user, period, customStart, customEnd]);
 
@@ -666,6 +673,11 @@ export default function Dashboard() {
     if (!user) return;
     setDailyLoading(true);
     try {
+      // Tier 2/3 must not start until the critical KPI request has
+      // settled — otherwise they share the mobile connection pool with
+      // GET /api/dashboard (the 45–47 s client waits in production).
+      await waitForCriticalStartup();
+
       const dhakaToday = getDhakaTodayYmd();
       const tomorrowYmd = (() => {
         const base = parseYmdToDate(dhakaToday)!;
@@ -674,10 +686,12 @@ export default function Dashboard() {
         return formatYmd(next);
       })();
 
-      const [todayRes, upcomingRes, scheduledRes] = await Promise.all([
+      // Today/Tomorrow cannot be derived from one bucket without changing
+      // limits/semantics (bucket=all at limit 50 would truncate). Keep the
+      // two server-authoritative reads, but start them only after KPIs.
+      const [todayRes, upcomingRes] = await Promise.all([
         leadService.getFollowUpQueue({ bucket: 'today', limit: 50 }),
         leadService.getFollowUpQueue({ bucket: 'upcoming', limit: 50 }),
-        scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 }),
       ]);
 
       setTodayFollowUps(todayRes.items ?? []);
@@ -699,6 +713,10 @@ export default function Dashboard() {
           return false;
         }
       };
+
+      // Tier 3 — scheduled activities after follow-ups settle so they do
+      // not join the first-login connection burst.
+      const scheduledRes = await scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 });
 
       setTodayScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, dhakaToday)));
       setTomorrowScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, tomorrowYmd)));

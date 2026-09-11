@@ -1,6 +1,14 @@
 import { DropdownOption, MetadataType } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
 import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
+import { useAuthStore } from '../../auth/store/authStore';
+import { coalesceGet } from '../../shared/api/coalesce';
+import {
+  readSessionCache,
+  writeSessionCache,
+  invalidateSessionCache,
+  registerSessionCacheClearHandler,
+} from '../../shared/api/sessionCache';
 
 /**
  * metadataService.ts
@@ -24,6 +32,41 @@ import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
 
 let typesCache: MetadataType[] | null = null;
 let valuesCache: Record<string, DropdownOption[]> = {};
+
+/** Short-lived session TTL for the options reference list (same window as roles). */
+const OPTIONS_REFERENCE_TTL_MS = 5 * 60 * 1000;
+
+function optionsSessionKey(): string | null {
+  const id = useAuthStore.getState().user?.id;
+  return id ? `options:${id}` : null;
+}
+
+function invalidateOptionsReferenceCache(): void {
+  const key = optionsSessionKey();
+  if (key) invalidateSessionCache(key);
+}
+
+async function loadAllOptions(forceRefresh = false): Promise<DropdownOption[]> {
+  const sessionKey = optionsSessionKey();
+  if (sessionKey && !forceRefresh) {
+    const cached = readSessionCache<DropdownOption[]>(sessionKey);
+    if (cached && Date.now() - cached.fetchedAt <= OPTIONS_REFERENCE_TTL_MS) {
+      return cached.value;
+    }
+  }
+  const all = await coalesceGet('/api/options', () => apiRequest<DropdownOption[]>('/api/options'));
+  if (sessionKey) writeSessionCache(sessionKey, all);
+  return all;
+}
+
+function clearMetadataSessionCaches(): void {
+  typesCache = null;
+  valuesCache = {};
+}
+
+// Per-type in-memory index dies with the session (no cross-user reuse).
+// Named function so HMR re-register is a Set no-op.
+registerSessionCacheClearHandler(clearMetadataSessionCaches);
 
 function isOfflineError(err: unknown): boolean {
   // status 0 = network failure; >=500 = server/database unavailable.
@@ -56,6 +99,7 @@ export const metadataService = {
     await apiRequest(`/api/metadata-types/${encodeURIComponent(key)}`, { method: 'DELETE' });
     typesCache = null;
     delete valuesCache[key];
+    invalidateOptionsReferenceCache();
   },
 
   /** All values (active + inactive) for a type, sorted by sortOrder. Used by the admin UI. */
@@ -63,7 +107,10 @@ export const metadataService = {
     const cacheKey = `__all__${type}`;
     if (valuesCache[cacheKey] && !forceRefresh) return valuesCache[cacheKey];
     try {
-      const all = await apiRequest<DropdownOption[]>('/api/options');
+      // GET read only: one coalesced /api/options round-trip per session
+      // window, then per-type filter. Never used for dashboard KPI /
+      // follow-up / scheduled-activity data.
+      const all = await loadAllOptions(forceRefresh);
       const forType = all
         .filter(o => o.type === type)
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
@@ -87,12 +134,14 @@ export const metadataService = {
       jsonBody({ type, value, label: label || value, status: 'Active', meta })
     );
     delete valuesCache[`__all__${type}`];
+    invalidateOptionsReferenceCache();
     return saved;
   },
 
   async updateValue(option: DropdownOption): Promise<DropdownOption> {
     const saved = await apiRequest<DropdownOption>('/api/options', jsonBody(option));
     delete valuesCache[`__all__${option.type}`];
+    invalidateOptionsReferenceCache();
     return saved;
   },
 
@@ -103,11 +152,13 @@ export const metadataService = {
   async deleteValue(type: string, value: string): Promise<void> {
     await apiRequest(`/api/options/${encodeURIComponent(type)}/${encodeURIComponent(value)}`, { method: 'DELETE' });
     delete valuesCache[`__all__${type}`];
+    invalidateOptionsReferenceCache();
   },
 
   async reorder(type: string, orderedIds: string[]): Promise<void> {
     await apiRequest('/api/options/reorder', jsonBody({ orderedIds }));
     delete valuesCache[`__all__${type}`];
+    invalidateOptionsReferenceCache();
   },
 
   clearCache() {
