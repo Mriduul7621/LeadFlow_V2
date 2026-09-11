@@ -21,6 +21,7 @@ import CampaignBreakdown from './modules/dashboard/pages/CampaignBreakdown';
 import TaskCalendar from './modules/auth/pages/TaskCalendar';
 import Lead360 from './modules/leads/pages/Lead360';
 import Activities from './modules/leads/pages/Activities';
+import DailyWorkbench from './modules/workbench/pages/DailyWorkbench';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import { Toaster } from 'sonner';
@@ -62,6 +63,10 @@ const router = createBrowserRouter([
   {
     path: '/activities',
     element: <ProtectedRoute><Activities /></ProtectedRoute>,
+  },
+  {
+    path: '/workbench',
+    element: <ProtectedRoute><DailyWorkbench /></ProtectedRoute>,
   },
   {
     path: '/leads/:id',

@@ -44,6 +44,7 @@ const FOLLOWUP = () => read('src/modules/leads/pages/FollowUpStrategy.tsx');
 /** Every route the sidebar is allowed to reference (must exist in App.tsx). */
 const REAL_ROUTES = [
   '/',
+  '/workbench',
   '/activities',
   '/task-calendar',
   '/follow-up',
@@ -175,7 +176,7 @@ describe('Dashboard UX Step 5B — source guards', () => {
   it('K. no new route bypasses ProtectedRoute', () => {
     const app = APP();
     const protectedPaths = [
-      '/', '/leads/new', '/leads', '/leads/upload', '/leads/all',
+      '/', '/workbench', '/leads/new', '/leads', '/leads/upload', '/leads/all',
       '/follow-up', '/task-calendar', '/activities', '/leads/:id',
       '/users', '/team', '/execution-intelligence', '/ncp-progress',
       '/trend-charts', '/campaign-breakdown', '/settings',
