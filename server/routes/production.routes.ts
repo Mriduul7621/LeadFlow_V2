@@ -1595,6 +1595,104 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * POST /auth/change-required-password — forced first-login password change.
+ * -------------------------------------------------------------------------
+ * The third, deliberately distinct password flow. A user provisioned (or
+ * admin-reset) with a temporary password has `must_change_password = TRUE`
+ * in PostgreSQL; the app blocks them behind the forced-change modal until
+ * they set a real one. This endpoint is SEPARATE from the other two flows:
+ *
+ *   1. POST /users/:id/reset-password   — ADMIN-only reset of ANOTHER user
+ *   2. POST /auth/change-password        — voluntary self-service, verifies
+ *                                          the CURRENT password first
+ *
+ * Contract (fail closed everywhere):
+ *   - authenticated session only; the target is ALWAYS the caller, derived
+ *     from the verified bearer token — a client-supplied id is ignored, so
+ *     no `users.edit` / admin capability / Settings Feature Access is ever
+ *     required, and another user's password can never be changed here
+ *   - the caller must exist AND currently have must_change_password = TRUE;
+ *     otherwise 409 and this endpoint does NOT touch the password
+ *   - password strength follows the forced-change UI minimum (>= 6 chars),
+ *     hashed with the existing bcrypt policy (10 rounds)
+ *   - the hash update and the flag clear happen in ONE UPDATE (atomic)
+ *   - no plaintext password is logged and the hash is never returned
+ */
+router.post('/auth/change-required-password', requireAuth, async (req: any, res) => {
+  const newPassword = String(req.body?.newPassword ?? req.body?.password ?? '');
+  if (newPassword.length < 6) {
+    return sendJson(res, 400, { success: false, message: 'Password must be at least 6 characters' });
+  }
+
+  // The caller's identity comes from the verified bearer token, never from
+  // the request body (which may not carry a target id at all).
+  const claim = req.currentUser || {};
+  const claimId = String(claim.id || '').trim();
+  const claimEmployeeId = String(claim.employeeId || '').trim();
+  const claimEmail = String(claim.email || '').trim();
+
+  if (!useDb()) {
+    if (!demoModeAllowed()) {
+      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    }
+    const demoUser = fallbackStore.users.find(u =>
+      (claimId && String(u.id) === claimId) ||
+      (claimEmployeeId && String(u.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
+      (claimEmail && String(u.email).toLowerCase() === claimEmail.toLowerCase())
+    );
+    if (!demoUser) {
+      return sendJson(res, 404, { success: false, message: 'User not found' });
+    }
+    if (demoUser.mustChangePassword !== true) {
+      return sendJson(res, 409, { success: false, message: 'No forced password change is required.' });
+    }
+    demoUser.password = await bcrypt.hash(newPassword, 10);
+    demoUser.mustChangePassword = false;
+    const { password: _pw, ...safeUser } = demoUser;
+    return sendJson(res, 200, { success: true, data: { ...safeUser, name: demoUser.fullName || demoUser.name } });
+  }
+
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT * FROM users
+       WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($3)
+       LIMIT 1`,
+      [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      return sendJson(res, 404, { success: false, message: 'User not found' });
+    }
+    if (user.must_change_password !== true) {
+      return sendJson(res, 409, { success: false, message: 'No forced password change is required.' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
+      [hashed, user.id]
+    );
+
+    // Security-safe audit event (no password material). Best-effort: a
+    // missing/readonly audit table must never fail the password change.
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
+         VALUES ($1, $1, 'required-password-change-completed', 'user', $1, '{}'::jsonb)`,
+        [user.id]
+      );
+    } catch { /* best-effort audit */ }
+
+    const fresh = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [user.id]);
+    const row = fresh.rows[0] || user;
+    return sendJson(res, 200, { success: true, data: mapUserRow(row, row.manager_employee_id) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Password change failed' });
+  }
+});
+
 /* ====================================================================
    USERS
 ==================================================================== */

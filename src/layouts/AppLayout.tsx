@@ -377,17 +377,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
       setPwResetLoading(true);
       try {
-        await userService.updateUser(user.id, {
-          password: trimmed,
-          mustChangePassword: false
-        });
-        useAuthStore.getState().login({
-          ...user,
-          mustChangePassword: false,
-          password: undefined
-        }, useAuthStore.getState().token || undefined, useAuthStore.getState().isOfflineMode);
+        // Dedicated forced first-login flow (POST /api/auth/change-required-password):
+        // self-only, no users.edit / admin / Settings capability required. The
+        // server returns the authoritative profile with mustChangePassword=false.
+        const updatedUser = await userService.changeRequiredPassword(trimmed);
+        useAuthStore.getState().setUser(updatedUser);
+        setNewPassword('');
+        setConfirmPassword('');
         toast.success("Password updated successfully. Welcome to LeadFlow.");
       } catch (err: any) {
+        // Server update failed: keep the modal open and the forced state intact.
         toast.error(err.message || "Failed to update password. Try again.");
       } finally {
         setPwResetLoading(false);
@@ -445,6 +444,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {pwResetLoading ? 'Updating password...' : 'Update Password & Continue'}
             </button>
           </form>
+
+          {/* Logout stays usable even while the forced-change flag is set. */}
+          <button
+            type="button"
+            onClick={() => { logout(); navigate('/login'); }}
+            className="w-full text-center text-xs font-medium text-stone-400 hover:text-red-600 transition-colors cursor-pointer"
+          >
+            Log out
+          </button>
         </motion.div>
       </div>
     );
