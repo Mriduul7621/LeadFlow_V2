@@ -59,6 +59,8 @@ const REAL_ROUTES = [
   '/team',
   '/users',
   '/settings',
+  // TEMPORARY admin-only diagnostics route (gated by AdminRoute in App.tsx).
+  '/settings/performance-diagnostics',
 ];
 
 /** Slice of Dashboard.tsx spanning the KPI data loader (like the Step 5 test). */

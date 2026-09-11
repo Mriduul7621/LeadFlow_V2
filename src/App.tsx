@@ -6,6 +6,7 @@ import {
 } from 'react-router-dom';
 import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
+import AdminRoute from './modules/auth/components/AdminRoute';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import { Toaster } from 'sonner';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
@@ -45,6 +46,9 @@ const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
 const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
 const CampaignBreakdown = lazy(() => import('./modules/dashboard/pages/CampaignBreakdown'));
 const Settings = lazy(() => import('./modules/settings/pages/Settings'));
+// TEMPORARY admin-only diagnostics page (its own lazy chunk, like every
+// other feature page — see the route map below).
+const PerformanceDiagnostics = lazy(() => import('./modules/settings/pages/PerformanceDiagnostics'));
 
 /**
  * Compact content-level fallback for the lazy route pages. Intentionally
@@ -139,6 +143,14 @@ const router = createBrowserRouter([
   {
     path: '/settings',
     element: <ProtectedRoute><LazyPage page={<Settings />} /></ProtectedRoute>,
+  },
+  {
+    // TEMPORARY admin-only mobile diagnostics. Still behind the standard
+    // ProtectedRoute gate, plus the ADMIN/SUPERADMIN-only AdminRoute gate
+    // (sidebar entry is also admin-only). Client-side only — no new
+    // server endpoint exists for this feature.
+    path: '/settings/performance-diagnostics',
+    element: <ProtectedRoute><LazyPage page={<AdminRoute><PerformanceDiagnostics /></AdminRoute>} /></ProtectedRoute>,
   },
   {
     path: '*',

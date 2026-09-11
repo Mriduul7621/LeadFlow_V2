@@ -20,7 +20,8 @@ import {
   Target,
   Lock,
   AlertCircle,
-  WifiOff
+  WifiOff,
+  Gauge
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -124,6 +125,11 @@ const menuSections: MenuSection[] = [
     labelKey: 'navSectionSystem',
     items: [
       { label: 'Settings', icon: Settings, path: '/settings', roles: ALL_ROLES },
+      // TEMPORARY admin-only diagnostics entry. Visibility falls back to
+      // roles.includes (ADMIN only) via resolveMenuVisibility, and the
+      // route itself is gated by AdminRoute — non-admins can neither see
+      // nor open it.
+      { label: 'Performance Diagnostics', icon: Gauge, path: '/settings/performance-diagnostics', roles: [UserRole.ADMIN] },
     ],
   },
 ];
