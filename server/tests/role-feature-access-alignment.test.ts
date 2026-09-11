@@ -95,10 +95,17 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(slice.includes("'/workbench': roleFormFeatures?.workbench?.view"), '/workbench must be driven by workbench.view');
   });
 
-  it('adminService seeds a workbench default and maps it to /workbench', () => {
+  it('adminService maps workbench to /workbench and defaults it fail-closed', () => {
     const svc = adminSvc();
-    assert.ok(svc.includes('workbench: { view: true }'), 'workbench default must exist');
+    // Newly introduced feature must NOT silently enable for existing
+    // custom/restricted roles (fail-closed default; Admin grants explicitly).
+    assert.ok(svc.includes('workbench: { view: false }'), 'workbench default must fail closed for non-admin roles');
     assert.ok(svc.includes("feat === 'workbench') route = '/workbench'"), 'workbench must map to /workbench route');
+  });
+
+  it('workbench fail-closed default is documented in adminService', () => {
+    const svc = adminSvc();
+    assert.ok(/FAIL-CLOSED|fail.closed|fail closed/i.test(svc), 'adminService must document the fail-closed workbench default');
   });
 
   it('legacy labels are renamed to current sidebar names (internal keys preserved)', () => {
@@ -194,6 +201,61 @@ describe('Role Feature Access — source guards', () => {
     const l = layout();
     assert.ok(l.includes('Daily Workbench'), 'sidebar must keep Daily Workbench label');
     assert.ok(l.includes("path: '/workbench'"), 'sidebar must keep /workbench path');
+  });
+
+  /* ---------- Granular canonical action control ---------- */
+
+  it('editor exposes the canonical leads action matrix', () => {
+    const src = userMgmt();
+    for (const code of [
+      'leads.view', 'leads.create', 'leads.edit', 'leads.delete',
+      'leads.assign', 'leads.transfer', 'leads.import', 'leads.export',
+      'dashboard.view',
+    ]) {
+      assert.ok(src.includes(code), `canonical action ${code} must be exposed in the editor`);
+    }
+  });
+
+  it('action permissions are independent (no grouping/derivation coupling)', () => {
+    const src = userMgmt();
+    // Each action is a standalone checkbox keyed by its canonical code.
+    assert.ok(src.includes('roleFormActions[item.code]'), 'each action must toggle independently by code');
+    assert.ok(src.includes('setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })'), 'toggling one action must not touch others');
+  });
+
+  it('canonical action grants are saved via a dedicated role_permissions write path', () => {
+    const src = userMgmt();
+    assert.ok(src.includes('adminService.saveRolePermissions(slug, grants)'), 'role save must persist canonical action grants');
+    const svc = adminSvc();
+    assert.ok(svc.includes('/permissions'), 'adminService must call the role permissions endpoint');
+    assert.ok(svc.includes('saveRolePermissions'), 'adminService must expose saveRolePermissions');
+    assert.ok(svc.includes('getRolePermissions'), 'adminService must expose getRolePermissions');
+  });
+
+  it('canonical action grants come from the server, not localStorage', () => {
+    const src = userMgmt();
+    assert.ok(src.includes('getRolePermissions(role.roleId)'), 'role edit must load grants from the server');
+    const svc = adminSvc();
+    // The canonical action layer is fetched from the API; it is never
+    // reconstructed from the localStorage role cache.
+    const getBlock = svc.slice(svc.indexOf('getRolePermissions'), svc.indexOf('saveRolePermissions'));
+    assert.ok(!getBlock.includes('localStorage.getItem'), 'getRolePermissions must not reconstruct grants from localStorage');
+  });
+
+  it('server exposes role permission read/write endpoints', () => {
+    const prod = read('server/routes/production.routes.ts');
+    assert.ok(prod.includes("router.get('/roles/:roleId/permissions'"), 'GET role permissions endpoint must exist');
+    assert.ok(prod.includes("router.put('/roles/:roleId/permissions'"), 'PUT role permissions endpoint must exist');
+    assert.ok(prod.includes('requireAdmin'), 'role permission writes must be admin-gated');
+  });
+
+  it('usePermissions resolves canonical lead actions from server permissions', () => {
+    const p = permsHook();
+    assert.ok(p.includes("'lead_upl_gen'"), 'lead_upl_gen must map to the leads module');
+    assert.ok(p.includes("upload_raw_csv_xlsx: 'import'"), 'bulk upload action must map to leads.import');
+    assert.ok(p.includes("delete_destroy_leads: 'delete'"), 'delete action must map to leads.delete');
+    assert.ok(p.includes("reassign_global_leads: 'assign'"), 'reassign must map to leads.assign');
+    assert.ok(p.includes("export_raw_xlsx: 'export'"), 'export action must map to leads.export');
   });
 
   it('docs/ROLE_FEATURE_ACCESS_ALIGNMENT.md exists and documents the alignment', () => {

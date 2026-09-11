@@ -135,6 +135,39 @@ const APP_FEATURES: FeatureMeta[] = [
   },
 ];
 
+/* ------------------------------------------------------------------ */
+/*  Canonical action permissions (permissions × role_permissions).     */
+/*  These are the granular, server-enforced action grants — separate   */
+/*  from feature/menu visibility (APP_FEATURES) and data visibility.   */
+/* ------------------------------------------------------------------ */
+interface ActionPermissionMeta {
+  code: string;
+  label: string;
+  desc: string;
+}
+
+const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] }[] = [
+  {
+    module: 'Dashboard',
+    items: [
+      { code: 'dashboard.view', label: 'View', desc: 'Open the Dashboard (performance summary, pipeline, follow-up discipline, daily execution).' },
+    ],
+  },
+  {
+    module: 'Leads',
+    items: [
+      { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },
+      { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add New Lead).' },
+      { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench complete, edit, cancel and reschedule.' },
+      { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (All Leads).' },
+      { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
+      { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
+      { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Bulk Upload).' },
+      { code: 'leads.export', label: 'Export', desc: 'Export lead audit logs.' },
+    ],
+  },
+];
+
 /* ================================================================== */
 /*  MAIN COMPONENT                                                     */
 /* ================================================================== */
@@ -182,6 +215,7 @@ export default function UserManagement() {
   const [roleFormSlug, setRoleFormSlug] = useState('');
   const [roleFormVisibility, setRoleFormVisibility] = useState<'Own' | 'DownTeam' | 'FullTeam' | 'Organization'>('Own');
   const [roleFormFeatures, setRoleFormFeatures] = useState<Record<string, Record<string, boolean>>>({});
+  const [roleFormActions, setRoleFormActions] = useState<Record<string, boolean>>({});
   const [showRoleForm, setShowRoleForm] = useState(false);
 
   // ---- Hierarchy (company-wide reporting ladder) states ----
@@ -400,6 +434,17 @@ export default function UserManagement() {
     setRoleFormSlug(role.roleId);
     setRoleFormVisibility((role.dataVisibility as any) || 'Own');
     setRoleFormFeatures(role.featurePermissions || {});
+    setRoleFormActions({});
+    // Load the canonical action grants for this role (server-authoritative,
+    // persisted in role_permissions — never reconstructed from localStorage).
+    adminService
+      .getRolePermissions(role.roleId)
+      .then(grants => {
+        const map: Record<string, boolean> = {};
+        grants.forEach(g => { map[g.code] = g.allowed; });
+        setRoleFormActions(map);
+      })
+      .catch(() => setRoleFormActions({}));
   };
 
   const handleNewRole = () => {
@@ -413,6 +458,11 @@ export default function UserManagement() {
       f.suboptions?.forEach(s => { defaults[f.key][s.key] = false; });
     });
     setRoleFormFeatures(defaults);
+    // New roles start fail-closed on every canonical action (Admin grants
+    // each action explicitly).
+    const actions: Record<string, boolean> = {};
+    ACTION_PERMISSION_GROUPS.forEach(g => g.items.forEach(i => { actions[i.code] = false; }));
+    setRoleFormActions(actions);
     setShowRoleForm(true);
   };
 
@@ -458,6 +508,14 @@ export default function UserManagement() {
       };
 
       await adminService.saveRole(payload);
+      // Persist the canonical action grants separately (role_permissions).
+      // Only codes the server already knows are stored; unknown codes are
+      // ignored server-side (fail closed).
+      const grants = ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => ({
+        code: i.code,
+        allowed: !!roleFormActions[i.code],
+      })));
+      await adminService.saveRolePermissions(slug, grants);
       toast.success('Role saved successfully.');
       setShowRoleForm(false);
       await loadData();
@@ -1042,6 +1100,44 @@ export default function UserManagement() {
                     })}
                   </div>
                 </div>
+              </div>
+
+              {/* Action permissions (canonical, server-enforced) */}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-800">Action Permissions</h3>
+                  <p className="text-sm text-slate-500">
+                    Granular actions this role can perform. These are enforced by the server
+                    and persist to the database — separate from page visibility and data access.
+                  </p>
+                </div>
+                {ACTION_PERMISSION_GROUPS.map(group => (
+                  <div key={group.module} className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {group.items.map(item => {
+                        const isOn = !!roleFormActions[item.code];
+                        return (
+                          <label key={item.code} className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-slate-50">
+                            <input
+                              type="checkbox"
+                              checked={isOn}
+                              onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
+                              className="mt-0.5 w-4 h-4 accent-[#978C21]"
+                            />
+                            <div>
+                              <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                              <p className="text-[10px] text-slate-400">{item.desc}</p>
+                              <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

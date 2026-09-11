@@ -83,8 +83,10 @@ removed from both the editor (`APP_FEATURES`) and the role defaults
 ### 2. Added Daily Workbench
 
 A new `workbench` feature maps to `/workbench`. Its `view` flag drives
-`menuAccess['/workbench']`. `adminService.ts` seeds `workbench: { view: true }`
-for the Admin default role and reconciles it for custom roles.
+`menuAccess['/workbench']`. It defaults **fail-closed** (`workbench: { view: false }`)
+so existing custom/restricted roles do **not** silently gain the new feature —
+an admin must grant `/workbench` explicitly. `ADMIN` / `SUPERADMIN` retain
+full access via the explicit bypass.
 
 ### 3. Renamed legacy labels (internal keys preserved)
 
@@ -124,6 +126,92 @@ data scope.
 
 ---
 
+## Action permissions (granular, server-enforced)
+
+In addition to feature/menu visibility, the editor exposes the canonical
+**action permission** model so Admin can independently grant or revoke what a
+role can *do* inside the modules it can *see*.
+
+These are **three independent layers**:
+
+| Layer | What it controls | Persisted where | Enforced by |
+| --- | --- | --- | --- |
+| A. Feature / menu visibility | which routes are visible | `roles.menu_access` (JSONB) | `resolveMenuVisibility` (client) |
+| B. Action permissions | what the user can do inside a route | `role_permissions` (canonical) | `hasPermissionCode` (server) |
+| C. Data visibility | Own / DownTeam / FullTeam / Organization | `roles.data_visibility` | `server/authz.ts` |
+
+Granting menu access never broadens data visibility, and granting `View`
+never grants `Edit`/`Delete` (and vice-versa).
+
+### Module / action matrix
+
+| Module | View | Create | Edit | Delete | Assign | Transfer | Import | Export | Canonical code |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Dashboard | ✅ | — | — | — | — | — | — | — | `dashboard.view` |
+| Leads | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | `leads.view/create/edit/delete/assign/transfer/import/export` |
+
+Each cell is an independent toggle. A configuration such as
+`View ✅, Create ✅, Edit ❌, Delete ❌, Assign ✅, Transfer ❌, Import ❌, Export ✅`
+is a valid role configuration.
+
+### Canonical code → UI behavior mapping
+
+| Canonical code | Gates (client) | Server enforcement |
+| --- | --- | --- |
+| `leads.view` | Lead Tracking / All Leads directory | `hasPermissionCode(caller, 'leads.view')` |
+| `leads.create` | Add New Lead | `hasPermissionCode(caller, 'leads.create')` |
+| `leads.edit` | Lead status update + Daily Workbench Complete/Edit/Cancel/Reschedule | `hasPermissionCode(caller, 'leads.edit')` |
+| `leads.delete` | All Leads delete | `hasPermissionCode(caller, 'leads.delete')` |
+| `leads.assign` | Assign / reassign ownership | `hasPermissionCode(caller, 'leads.assign')` |
+| `leads.transfer` | Transfer ownership | `hasPermissionCode(caller, 'leads.transfer')` |
+| `leads.import` | Bulk Upload | `hasPermissionCode(caller, 'leads.import')` |
+| `leads.export` | Export audit logs | client gate (`all_leads.export_raw_xlsx`) — no server export endpoint exists |
+| `dashboard.view` | Dashboard | `hasPermissionCode(caller, 'dashboard.view')` |
+
+> `leads.export` is a canonical code (migration `025_permissions`) and is
+> exposed and persisted for Admin to grant/revoke, but its only current
+> consumer is a client-side audit-log CSV download — there is no server
+> export endpoint yet. Hiding the button is **not** the security boundary;
+> the server remains the boundary for every action that has a server endpoint.
+
+The client maps legacy compound action keys to these canonical codes in
+`usePermissions` (`upload_raw_csv_xlsx → import`, `delete_destroy_leads → delete`,
+`reassign_global_leads → assign`, `export_raw_xlsx → export`, etc.) so the
+granular role grants actually gate the existing UI buttons.
+
+### DB-backed persistence
+
+Every role permission change is persisted to PostgreSQL, **not** to
+localStorage (the localStorage role copy is a read-through cache only):
+
+- `GET /api/roles/:roleId/permissions` — lists every canonical code with its
+  effective allowance.
+- `PUT /api/roles/:roleId/permissions` — upserts grants into `role_permissions`
+  (`role_id`, `permission_id`, `is_allowed`). Unknown codes are ignored, so a
+  forged payload can never mint a permission (fail closed).
+- `hasPermissionCode()` reads the same `role_permissions` rows, so the server
+  authorization boundary and the editor operate on one source of truth.
+- A page reload / session restart re-reads the persisted rows — nothing is
+  reconstructed from client state.
+
+Exact DB fields:
+
+| Table | Fields |
+| --- | --- |
+| `permissions` | `permission_code`, `module_name`, `action_name`, `is_active` |
+| `role_permissions` | `role_id` → `roles.id`, `permission_id` → `permissions.id`, `is_allowed` |
+| `roles` | `menu_access` (JSONB), `data_visibility`, `actions` (JSONB), `feature_permissions` (JSONB) |
+
+### Admin behavior
+
+- `ADMIN` / `SUPERADMIN` bypass every `hasPermissionCode` check and see every
+  sidebar item regardless of stored grants.
+- Role permission **writes** are `requireAdmin`-gated.
+- `GET /roles/:roleId/permissions` is read for any authenticated admin editing
+  a role.
+
+---
+
 ## Backward compatibility
 
 - All existing internal permission keys are unchanged, so previously saved
@@ -140,7 +228,14 @@ data scope.
 
 ## Regression coverage
 
-Source-guard tests live in `server/tests/role-feature-access-alignment.test.ts`
-and assert the items above (dead dashboard toggles removed, Daily Workbench
-added and routed, labels renamed with keys preserved, `leads.edit` workbench
-mutation boundary, data visibility scopes, and this document's existence).
+- `server/tests/role-feature-access-alignment.test.ts` — source guards:
+  dead dashboard toggles removed, Daily Workbench added + routed + fail-closed,
+  labels renamed with keys preserved, the canonical action matrix exposed and
+  independently toggled, `leads.edit` workbench mutation boundary, data
+  visibility scopes, and this document's existence.
+- `server/tests/role-action-permissions-integration.test.ts` — DB-backed
+  (PGlite) checks that `PUT /roles/:roleId/permissions` persists to
+  `role_permissions`, `GET` reads them back, `hasPermissionCode` reflects them,
+  actions are independent (revoke Edit ≠ revoke View; grant View ≠ grant Edit),
+  unknown/malformed codes fail closed, writes are admin-gated, and ADMIN keeps
+  its bypass.

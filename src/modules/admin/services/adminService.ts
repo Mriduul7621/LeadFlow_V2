@@ -1,4 +1,4 @@
-import { RolePermission, Team, User, Permissions } from '../../shared/types';
+import { RolePermission, Team, User, Permissions, RolePermissionGrant } from '../../shared/types';
 import { toast } from 'sonner';
 import { userService } from '../../users/services/userService';
 import { apiRequest, ApiError } from '../../shared/api/http';
@@ -120,7 +120,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
 export function ensureFeaturePermissions(role: RolePermission): RolePermission {
   const defaults: Record<string, Record<string, boolean>> = {
     dashboard: { view: true },
-    workbench: { view: true },
+    // Daily Workbench is a newly introduced feature (PR #27/28). It must
+    // default FAIL-CLOSED so existing custom/restricted roles do not
+    // silently gain access just because their record predates the feature.
+    // ADMIN/SUPERADMIN still get full access via the explicit bypass below;
+    // an admin must grant /workbench to non-admin roles explicitly.
+    workbench: { view: false },
     lead_generate: { view: true, create: true },
     lead_upload: { view: true, upload: true, delete: true },
     lead_tracking: { view: true, status_update: true },
@@ -286,6 +291,30 @@ export const adminService = {
     // Server confirmed the deletion: the session role/menu cache is stale.
     invalidateRoleMenuSessionCache();
     return true;
+  },
+
+  // --- CANONICAL ROLE ACTION PERMISSIONS (permissions × role_permissions) ---
+  // The granular action layer Admin edits in Role Feature Access. Persisted
+  // server-side (NOT localStorage-only) and enforced by hasPermissionCode().
+  async getRolePermissions(roleId: string): Promise<RolePermissionGrant[]> {
+    const body = await apiRequest<{ success?: boolean; data: RolePermissionGrant[] }>(
+      `/api/roles/${encodeURIComponent(roleId)}/permissions`
+    );
+    return Array.isArray(body?.data) ? body.data : [];
+  },
+
+  async saveRolePermissions(roleId: string, grants: Array<{ code: string; allowed: boolean }>): Promise<void> {
+    await apiRequest(`/api/roles/${encodeURIComponent(roleId)}/permissions`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ permissions: grants }),
+    });
+    // The saved grants change what the signed-in users of this role may do:
+    // invalidate the session-scoped permission sheet so the next check sees
+    // the new grants.
+    const user = useAuthStore.getState().user;
+    if (user?.id) invalidateSessionCache(`userPermissions:${user.id}`);
+    invalidateRoleMenuSessionCache();
   },
 
   // --- TEAMS WORKSPACE ---

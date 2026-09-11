@@ -2394,6 +2394,99 @@ router.delete('/roles/:roleId', requireAuth, requireAdmin, async (req, res) => {
 });
 
 /* ====================================================================
+   CANONICAL ROLE ACTION PERMISSIONS (permissions × role_permissions)
+   --------------------------------------------------------------------
+   The granular action model edited in Role Feature Access. Codes are the
+   canonical permission codes seeded by migration 025 (`permissions`);
+   grants are persisted in `role_permissions` (migration 026) and are the
+   same rows `hasPermissionCode()` enforces server-side. Reads list every
+   canonical code with its effective allowance; writes upsert only codes
+   that already exist in `permissions` — unknown codes are ignored so a
+   forged payload can never mint a permission (fail closed).
+==================================================================== */
+
+router.get('/roles/:roleId/permissions', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) return sendJson(res, 200, { success: true, data: [] });
+  try {
+    const pool = getPool();
+    // Reads must never manufacture a role row: a plain lookup (no
+    // resolveRoleId side effect) returns 404 for an unknown role.
+    const roleResult = await pool.query(
+      'SELECT id FROM roles WHERE UPPER(role_code) = UPPER($1) OR id::text = $1 LIMIT 1',
+      [req.params.roleId]
+    );
+    const roleId = roleResult.rows[0]?.id;
+    if (!roleId) return sendJson(res, 404, { success: false, message: 'Role not found' });
+    const result = await pool.query(
+      `SELECT p.permission_code, p.module_name, p.action_name,
+              COALESCE(rp.is_allowed, FALSE) AS is_allowed
+       FROM permissions p
+       LEFT JOIN role_permissions rp ON rp.permission_id = p.id AND rp.role_id = $1
+       ORDER BY p.module_name, p.action_name, p.permission_code`,
+      [roleId]
+    );
+    return sendJson(res, 200, {
+      success: true,
+      data: result.rows.map((r: any) => ({
+        code: r.permission_code,
+        module: r.module_name,
+        action: r.action_name,
+        allowed: r.is_allowed === true,
+      })),
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission fetch failed' });
+  }
+});
+
+router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, res) => {
+  const grants = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    return sendJson(res, 200, { success: true, message: 'Role permissions saved (demo mode)' });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const roleResult = await client.query(
+      'SELECT id FROM roles WHERE UPPER(role_code) = UPPER($1) OR id::text = $1 LIMIT 1',
+      [req.params.roleId]
+    );
+    const roleId = roleResult.rows[0]?.id;
+    if (!roleId) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 404, { success: false, message: 'Role not found' });
+    }
+    for (const grant of grants) {
+      const code = clean(grant?.code || grant?.permissionCode);
+      if (!code) continue;
+      // Only canonical, existing permission codes may be granted. Unknown
+      // codes are skipped (never invented) — fail closed by construction.
+      const perm = await client.query('SELECT id FROM permissions WHERE permission_code = $1', [code]);
+      if (!perm.rows[0]) continue;
+      await client.query(
+        `INSERT INTO role_permissions (role_id, permission_id, is_allowed, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT (role_id, permission_id) DO UPDATE SET
+           is_allowed = EXCLUDED.is_allowed,
+           updated_at = NOW()`,
+        [roleId, perm.rows[0].id, grant.allowed === true]
+      );
+    }
+    await client.query('COMMIT');
+    return sendJson(res, 200, { success: true, message: 'Role permissions saved' });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission save failed' });
+  } finally {
+    client.release();
+  }
+});
+
+/* ====================================================================
    FINE PERMISSIONS (per-role module/action matrix)
 ==================================================================== */
 

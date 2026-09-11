@@ -124,7 +124,7 @@ export function usePermissions() {
     if (serverPermissions && Object.keys(serverPermissions).length > 0) {
       const permissionModule = featureId === 'dashboard' || featureId === 'workbench' || featureId === 'daily_workbench'
         ? 'dashboard'
-        : featureId === 'lead_generate' || featureId === 'lead_upload' || featureId === 'lead_tracking' || featureId === 'all_leads'
+        : featureId === 'lead_generate' || featureId === 'lead_upload' || featureId === 'lead_upl_gen' || featureId === 'lead_tracking' || featureId === 'all_leads'
           ? 'leads'
           : featureId === 'team_progress' || featureId === 'team_management'
             ? 'teams'
@@ -136,17 +136,36 @@ export function usePermissions() {
                   ? 'reports'
                   : featureId;
 
+      // Legacy compound action keys must resolve to their canonical server
+      // action so the granular role grants (leads.*) actually gate the UI.
+      const COMPOUND_ACTION_TO_CODE: Record<string, string> = {
+        upload_raw_csv_xlsx: 'import',
+        upload_excel_csv: 'import',
+        bulk_generate_crm_leads: 'create',
+        capture_new_leads: 'create',
+        save_draft_leads: 'create',
+        delete_destroy_leads: 'delete',
+        export_raw_xlsx: 'export',
+        reassign_global_leads: 'assign',
+        reassign_own_leads: 'assign',
+        perform_status_transitions: 'edit',
+        status_update: 'edit',
+        record_followup_logs: 'edit',
+      };
+
       const action = actionKey.startsWith('view') || actionKey.startsWith('explore') || actionKey.startsWith('monitor') || actionKey.startsWith('visualize') || actionKey.startsWith('evaluate')
         ? 'view'
         : ['create', 'edit', 'delete', 'approve', 'reject', 'assign', 'transfer', 'import', 'export', 'download', 'print'].includes(actionKey)
           ? actionKey
-          : featureId === 'lead_upload'
-            ? 'import'
-            : featureId === 'lead_generate'
-              ? 'create'
-              : featureId === 'lead_tracking' || featureId === 'all_leads'
-                ? 'view'
-                : 'view';
+          : COMPOUND_ACTION_TO_CODE[actionKey]
+            ? COMPOUND_ACTION_TO_CODE[actionKey]
+            : featureId === 'lead_upload' || featureId === 'lead_upl_gen'
+              ? 'import'
+              : featureId === 'lead_generate'
+                ? 'create'
+                : featureId === 'lead_tracking' || featureId === 'all_leads'
+                  ? 'view'
+                  : 'view';
 
       const permissionCode = `${permissionModule}.${action}`;
       if (serverPermissions[permissionCode] !== undefined) {
