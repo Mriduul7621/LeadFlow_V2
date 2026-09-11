@@ -36,6 +36,7 @@ import {
   readSessionCache,
   writeSessionCache,
 } from '../modules/shared/api/sessionCache';
+import { markCriticalStartupSettled, waitForCriticalStartup } from '../modules/shared/api/startupPriority';
 // Source-guard preservation: role menu visibility still driven by
 // `menuAccess` override (dynamic) with static `roles.includes` fallback.
 // The single check `isItemVisible` + `visibleSections` + `userRoleNormalized === 'ADMIN'` bypass must remain.
@@ -243,7 +244,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       return inFlight;
     };
     refreshNotifsRef.current = fetchNotifs;
-    if (!cached) void fetchNotifs();
+    // Tier 3: do not compete with GET /api/dashboard on first login.
+    // Panel-open and the 60 s refresh still call fetchNotifs directly.
+    if (!cached) {
+      void waitForCriticalStartup().then(() => {
+        if (stopped) return;
+        void fetchNotifs();
+      });
+    }
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void fetchNotifs();
@@ -258,6 +266,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isNotifOpen) void refreshNotifsRef.current();
   }, [isNotifOpen]);
+
+  useEffect(() => {
+    // Non-dashboard routes have no KPI-critical request to wait for.
+    // Release deferred startup reads immediately so they cannot hang.
+    if (location.pathname !== '/') markCriticalStartupSettled();
+  }, [location.pathname]);
 
   const syncNotifications = (next: SystemNotification[]) => {
     if (!user) return;

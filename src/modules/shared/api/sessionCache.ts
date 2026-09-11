@@ -58,9 +58,28 @@ export function invalidateSessionCache(key: string): void {
   entries.delete(key);
 }
 
+/**
+ * Extra in-memory caches (e.g. metadataService's per-type index) that
+ * must die with the session. Registered by the modules that own them
+ * so authStore does not import those modules (no cycles).
+ */
+const clearHandlers: Array<() => void> = [];
+
+/** Register a same-tick handler that runs whenever the session cache is cleared. */
+export function registerSessionCacheClearHandler(handler: () => void): void {
+  clearHandlers.push(handler);
+}
+
 /** Clear EVERY entry. Called on logout: nothing may cross user boundaries. */
 export function clearSessionCache(): void {
   entries.clear();
+  for (const handler of clearHandlers) {
+    try {
+      handler();
+    } catch {
+      // Logout must never fail because a cache helper threw.
+    }
+  }
 }
 
 /**
@@ -68,5 +87,5 @@ export function clearSessionCache(): void {
  * the auth state); tests need a clean slate between cases.
  */
 export function resetSessionCacheForTests(): void {
-  entries.clear();
+  clearSessionCache();
 }

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { User } from '../../shared/types';
 import { clearSessionCache } from '../../shared/api/sessionCache';
 import { clearCoalescing } from '../../shared/api/coalesce';
+import { resetStartupPriority } from '../../shared/api/startupPriority';
 
 /**
  * authStore.ts
@@ -65,6 +66,8 @@ export const useAuthStore = create<AuthState>()(
         // In-flight read coalescing belongs to the session too: a request
         // started for the signed-out user must not be joined by the next one.
         clearCoalescing();
+        // First-dashboard sequencing must restart for the next login.
+        resetStartupPriority();
         // `isInitialized` is deliberately preserved: logging out is a settled
         // state, and re-running validation after a logout is how a page ends
         // up in a redirect loop.

@@ -2,6 +2,27 @@ import { User } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { extractLoginPayload } from '../../auth/services/loginContract';
+import { useAuthStore } from '../../auth/store/authStore';
+import { coalesceGet } from '../../shared/api/coalesce';
+import {
+  readSessionCache,
+  writeSessionCache,
+  invalidateSessionCache,
+} from '../../shared/api/sessionCache';
+
+/** Short-lived session TTL for the users reference list (same window as roles). */
+const USERS_REFERENCE_TTL_MS = 5 * 60 * 1000;
+
+function usersSessionKey(): string | null {
+  const id = useAuthStore.getState().user?.id;
+  return id ? `users:${id}` : null;
+}
+
+/** Drop the session-scoped users list after a confirmed user/admin mutation. */
+function invalidateUsersReferenceCache(): void {
+  const key = usersSessionKey();
+  if (key) invalidateSessionCache(key);
+}
 
 /**
  * userService.ts
@@ -61,6 +82,7 @@ export const userService = {
       body: JSON.stringify(user),
     });
     cacheUser(saved);
+    invalidateUsersReferenceCache();
     return saved;
   },
 
@@ -72,6 +94,7 @@ export const userService = {
     });
     if (saved) {
       localDb.updateUser(userId, { ...saved, password: undefined });
+      invalidateUsersReferenceCache();
       return saved;
     }
     return null;
@@ -101,9 +124,19 @@ export const userService = {
   },
 
   async getAllUsers(): Promise<User[]> {
+    // GET read only: session-scoped reuse + in-flight coalescing. Never
+    // used for dashboard KPI / follow-up / scheduled-activity data.
+    const sessionKey = usersSessionKey();
+    if (sessionKey) {
+      const cached = readSessionCache<User[]>(sessionKey);
+      if (cached && Date.now() - cached.fetchedAt <= USERS_REFERENCE_TTL_MS) {
+        return cached.value;
+      }
+    }
     try {
-      const cloudUsers = await apiRequest<User[]>('/api/users');
+      const cloudUsers = await coalesceGet('/api/users', () => apiRequest<User[]>('/api/users'));
       cacheUsers(cloudUsers);
+      if (sessionKey) writeSessionCache(sessionKey, cloudUsers);
       return cloudUsers;
     } catch (err) {
       // Offline / server-down fallback: return the read-only cache. Auth
@@ -122,10 +155,11 @@ export const userService = {
   async deleteUser(userId: string): Promise<void> {
     await apiRequest(`/api/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
     localDb.deleteUser(userId);
+    invalidateUsersReferenceCache();
   },
 
   async resetPassword(userId: string, password: string): Promise<{ success: boolean }> {
-    return apiRequest<{ success: boolean }>(
+    const result = await apiRequest<{ success: boolean }>(
       `/api/users/${encodeURIComponent(userId)}/reset-password`,
       {
         method: 'POST',
@@ -133,6 +167,8 @@ export const userService = {
         body: JSON.stringify({ password }),
       }
     );
+    invalidateUsersReferenceCache();
+    return result;
   },
 
   /**

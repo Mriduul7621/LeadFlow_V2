@@ -13,6 +13,7 @@ import { ApiError } from '../../shared/api/http';
 import { activateSession, loginWithCredentials } from '../services/authFlow';
 import { User, UserRole } from '../../shared/types';
 import { preloadLeadStatuses, invalidateLeadStatusCache } from '../../workflow/utils/leadStatusMeta';
+import { waitForCriticalStartup } from '../../shared/api/startupPriority';
 
 function detectRoleFromEmployeeId(empId: string): UserRole {
   const norm = empId.trim().toUpperCase();
@@ -111,11 +112,14 @@ export default function Login() {
   const warmUpAfterAuthentication = (user: User) => {
     localDb.createUser(user);
     invalidateLeadStatusCache();
-    return preloadLeadStatuses().then(
-      () => undefined,
-      err => {
-        console.warn('[auth] Lead-status preload failed; default statuses stay in use.', err);
-      }
+    // Tier 3: GET /api/options must not join the first-dashboard burst.
+    return waitForCriticalStartup().then(() =>
+      preloadLeadStatuses().then(
+        () => undefined,
+        err => {
+          console.warn('[auth] Lead-status preload failed; default statuses stay in use.', err);
+        }
+      )
     );
   };
 
