@@ -24,10 +24,20 @@ import { useAuthStore } from '../store/authStore';
 
 export type AdminAccess = 'granted' | 'denied';
 
+/**
+ * The ONLY roles that may see or open the diagnostics feature. Shared by
+ * the route gate (isAdminRole) AND the sidebar entry (AppLayout) so the
+ * two can never drift apart. 'SUPERADMIN' is a server-side system role
+ * (server/authz.ts, production.routes.ts treat it like ADMIN); it is
+ * deliberately NOT added to the UserRole enum — that would change
+ * ALL_ROLES and therefore the menu visibility of every other entry.
+ */
+export const DIAGNOSTICS_ADMIN_ROLES: readonly string[] = ['ADMIN', 'SUPERADMIN'];
+
 /** ADMIN/SUPERADMIN are the only roles allowed to open diagnostics. */
 export function isAdminRole(role: string | undefined | null): boolean {
   const normalized = String(role ?? '').trim().toUpperCase();
-  return normalized === 'ADMIN' || normalized === 'SUPERADMIN';
+  return DIAGNOSTICS_ADMIN_ROLES.includes(normalized);
 }
 
 /** Pure decision, so the gate rule is directly testable. */

@@ -40,12 +40,14 @@ import {
 // `menuAccess` override (dynamic) with static `roles.includes` fallback.
 // The single check `isItemVisible` + `visibleSections` + `userRoleNormalized === 'ADMIN'` bypass must remain.
 import { resolveMenuVisibility } from './menuVisibility';
+import { DIAGNOSTICS_ADMIN_ROLES } from '../modules/auth/components/AdminRoute';
 
 interface MenuItem {
   label: string;
   icon: any;
   path: string;
-  roles: UserRole[];
+  /** Role names (case-insensitive match in resolveMenuVisibility). */
+  roles: string[];
 }
 
 interface MenuSection {
@@ -125,11 +127,11 @@ const menuSections: MenuSection[] = [
     labelKey: 'navSectionSystem',
     items: [
       { label: 'Settings', icon: Settings, path: '/settings', roles: ALL_ROLES },
-      // TEMPORARY admin-only diagnostics entry. Visibility falls back to
-      // roles.includes (ADMIN only) via resolveMenuVisibility, and the
-      // route itself is gated by AdminRoute — non-admins can neither see
-      // nor open it.
-      { label: 'Performance Diagnostics', icon: Gauge, path: '/settings/performance-diagnostics', roles: [UserRole.ADMIN] },
+      // TEMPORARY admin-only diagnostics entry. Roles come from the SAME
+      // constant as the AdminRoute gate (ADMIN/SUPERADMIN), so sidebar
+      // visibility and route access can never drift apart. Non-admins can
+      // neither see nor open it.
+      { label: 'Performance Diagnostics', icon: Gauge, path: '/settings/performance-diagnostics', roles: [...DIAGNOSTICS_ADMIN_ROLES] },
     ],
   },
 ];

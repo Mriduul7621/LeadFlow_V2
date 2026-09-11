@@ -30,8 +30,11 @@
  *   session identity is observed the buffer is wiped before anything is
  *   recorded, so a new authenticated user can never inherit the previous
  *   user's diagnostics.
- * - A store watcher clears the buffer on logout (authStore transitions
- *   to unauthenticated). authStore.ts itself stays untouched.
+ * - A store watcher handles auth transitions WITHOUT touching authStore:
+ *   logout clears EVERYTHING; a fresh login clears everything EXCEPT the
+ *   just-completed POST /api/auth/login of the new session (renumbered to
+ *   request #1), so the fresh-login diagnostic the admin is testing for
+ *   stays visible while no prior-session data can carry over.
  *
  * Timing: performance.now() before the real fetch and after the
  * response/error — the request path is never delayed for instrumentation
@@ -162,6 +165,40 @@ function resetBuffer(scope: string): void {
   nextSeq = 1;
   sessionStartedAt = Date.now();
   bufferScope = scope;
+  touch();
+}
+
+/**
+ * Keep ONLY the most recent /api/auth/login entry (the request that just
+ * created this session) and drop everything else. Used on the login
+ * transition so the fresh-login diagnostic survives while no data from
+ * BEFORE the login (previous user's session, stale attempts) can carry
+ * over. The retained entry becomes request #1 of the fresh session.
+ */
+function retainOnlyFreshLogin(): void {
+  let keepId: number | null = null;
+  for (let i = order.length - 1; i >= 0; i--) {
+    const entry = entries.get(order[i]);
+    if (entry && entry.path.startsWith('/api/auth/login')) {
+      keepId = entry.id;
+      break;
+    }
+  }
+  for (const id of order.splice(0, order.length)) {
+    if (id !== keepId) entries.delete(id);
+  }
+  if (keepId !== null) {
+    const kept = entries.get(keepId);
+    if (kept) {
+      order.push(keepId);
+      kept.seq = 1;
+      kept.firstAfterLoad = true;
+      sessionStartedAt = kept.startedAt;
+    }
+  } else {
+    sessionStartedAt = Date.now();
+  }
+  nextSeq = order.length + 1;
   touch();
 }
 
@@ -535,11 +572,18 @@ function cap(text: string, maxLength: number): string {
 let authWatcherInstalled = false;
 
 /**
- * Clears diagnostics on ANY auth-store identity transition — logout
- * (button, idle timeout, server-rejected 401) AND login (a fresh
- * authenticated session must never see the previous session's data).
- * Also covers a user-id change between two authenticated states.
- * Reads state only — the auth/session flow itself is not modified.
+ * Clears diagnostics on identity transitions of the auth store. Reads
+ * state only — the auth/session flow itself is not modified.
+ *
+ * - logout (button, idle timeout, server-rejected 401): wipe EVERYTHING.
+ * - login (fresh sign-in): wipe everything EXCEPT the just-completed
+ *   POST /api/auth/login of THIS session, so the fresh-login diagnostic
+ *   the admin is testing for stays visible as request #1. Nothing from
+ *   before the login can survive this transition.
+ * - user id change between two authenticated states: wipe EVERYTHING.
+ *
+ * In every case the buffer is re-bound to the current session scope so
+ * the next ensureSessionScope() call cannot re-wipe the retained entry.
  */
 function ensureLogoutWatcher(): void {
   if (authWatcherInstalled) return;
@@ -552,8 +596,14 @@ function ensureLogoutWatcher(): void {
         state.isAuthenticated &&
         prevState.isAuthenticated &&
         String(state.user?.id ?? '') !== String(prevState.user?.id ?? '');
-      if (sessionEnded || sessionStarted || userChanged) {
+      if (sessionEnded || userChanged) {
         clearApiDiagnostics();
+        bufferScope = currentSessionScope();
+        return;
+      }
+      if (sessionStarted) {
+        retainOnlyFreshLogin();
+        bufferScope = currentSessionScope();
       }
     });
   } catch {

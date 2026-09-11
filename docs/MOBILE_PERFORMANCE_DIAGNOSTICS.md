@@ -16,7 +16,7 @@ available.
 | | |
 |---|---|
 | Route | `/settings/performance-diagnostics` |
-| Who can open it | `ADMIN` / `SUPERADMIN` only |
+| Who can open it | `ADMIN` / `SUPERADMIN` only (the route gate and the sidebar entry share one role source, so they can never drift apart) |
 | Data source | Client-side timing metadata collected from requests the app already makes |
 | Storage | **In-memory only** for the current app session — cleared on logout |
 | Server changes | **None** (no new endpoint, no DB schema change) |
@@ -36,15 +36,21 @@ URL is redirected to `/settings`.
 
 This is the most useful test for "is it slow for everyone or just after idle?"
 
-1. Open the diagnostics page first (so you know where it is).
-2. **Log out** completely (diagnostics are wiped on logout — that is by design).
-3. Log back in and **note the login feel** — the login request is recorded.
-4. Navigate to Dashboard, Workbench, Scheduled Activities / Follow-up Queue —
+The **login request itself is captured**: after a fresh sign-in,
+`POST /api/auth/login` is recorded as request **#1** of the new session
+(badged "1st after app load"), followed by `GET /api/auth/session` and every
+later request. Only the successful login attempt of the current session is
+kept — earlier failed attempts and everything from a previous session are
+wiped at the login/logout transitions.
+
+1. **Log out** completely (diagnostics are wiped on logout — that is by design).
+2. Log back in and **note the login feel** — the login request is request #1.
+3. Navigate to Dashboard, Workbench, Scheduled Activities / Follow-up Queue —
    one at a time, waiting for each page to finish.
-5. Return to Performance Diagnostics. Requests are numbered; the first request
-   after app load is badged **"1st after app load"**, everything after that is
-   a **subsequent request** (warm). Comparing a first request against a
-   subsequent request to the same endpoint tells you whether the slowness is a
+4. Return to Performance Diagnostics. Requests are numbered; the login request
+   is badged **"1st after app load"**, everything after that is a
+   **subsequent request** (warm). Comparing the login/session rows against
+   later rows to the same endpoint tells you whether the slowness is a
    first-hit effect or constant.
 
 > The panel never claims "cold start" or blames any infrastructure layer — it
@@ -103,9 +109,11 @@ metadata**:
   (including search terms) is replaced with `…`. A lead name typed into search
   can therefore never appear in the panel or the copied summary.
 - In-memory only: no PostgreSQL, no localStorage, no sessionStorage, no
-  network transmission. Cleared on **logout**, on **login**, on the **Clear
-  diagnostics** button, and whenever a **different authenticated session** is
-  detected — a new user can never inherit the previous user's diagnostics.
+  network transmission. Cleared on **logout**, on the **Clear diagnostics**
+  button, and whenever a **different authenticated session** is detected — a
+  new user can never inherit the previous user's diagnostics. (On a fresh
+  login only the login request of the NEW session is kept, as request #1 —
+  see the fresh-login test above.)
 
 These guarantees are enforced by tests in
 `server/tests/perf-diagnostics-source-guards.test.ts`.

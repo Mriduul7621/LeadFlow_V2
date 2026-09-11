@@ -152,8 +152,11 @@ describe('Diagnostics — admin-only access control', () => {
     assert.equal(gate.resolveAdminAccess('ADMIN'), 'granted');
     assert.equal(gate.resolveAdminAccess('SUPERADMIN'), 'granted');
     assert.equal(gate.resolveAdminAccess('admin'), 'granted', 'case-insensitive');
+    assert.equal(gate.isAdminRole('SUPERADMIN'), true, 'isAdminRole agrees with resolveAdminAccess for SUPERADMIN');
+    assert.equal(gate.isAdminRole('ADMIN'), true);
     for (const denied of ['RM', 'ASM', 'BDM', 'BE', 'BH', 'RO', 'user', '', undefined, null]) {
       assert.equal(gate.resolveAdminAccess(denied as any), 'denied', `${String(denied)} must be denied`);
+      assert.equal(gate.isAdminRole(denied as any), false, `isAdminRole denies ${String(denied)}`);
     }
   });
 
@@ -167,12 +170,16 @@ describe('Diagnostics — admin-only access control', () => {
     assert.ok(routeSlice.includes('<AdminRoute>'), 'route is wrapped in the ADMIN-only gate');
   });
 
-  it('J. non-admins are redirected by AdminRoute and the sidebar entry is admin-only', () => {
+  it('J. sidebar entry + route gate share ONE ADMIN/SUPERADMIN role source', () => {
     const gate = read('src/modules/auth/components/AdminRoute.tsx');
-    assert.ok(gate.includes('<Navigate to="/settings" replace />'), 'non-admins must be redirected, not shown an empty page');
+    assert.match(gate, /export const DIAGNOSTICS_ADMIN_ROLES: readonly string\[\] = \['ADMIN', 'SUPERADMIN'\];/, 'the shared role constant must exist');
+    assert.match(gate, /DIAGNOSTICS_ADMIN_ROLES\.includes\(normalized\)/, 'isAdminRole must decide via the shared constant');
 
     const layout = read('src/layouts/AppLayout.tsx');
-    assert.match(layout, /path:\s*'\/settings\/performance-diagnostics',\s*roles:\s*\[UserRole\.ADMIN\]/, 'sidebar entry must be visible to ADMIN only');
+    assert.match(layout, /import \{ DIAGNOSTICS_ADMIN_ROLES \} from '\.\.\/modules\/auth\/components\/AdminRoute';/, 'AppLayout must import the shared constant');
+    assert.match(layout, /path:\s*'\/settings\/performance-diagnostics',\s*roles:\s*\[\.\.\.DIAGNOSTICS_ADMIN_ROLES\]/, 'sidebar entry must use the same ADMIN/SUPERADMIN constant as the route gate');
+    // The non-admin redirect in the gate itself.
+    assert.ok(gate.includes('<Navigate to="/settings" replace />'), 'non-admins must be redirected, not shown an empty page');
   });
 
   it('K. the page itself re-checks the role before rendering anything', () => {
@@ -469,5 +476,159 @@ describe('Diagnostics — privacy guarantees', () => {
     // listener/patch API at all — the only wiring lives in lib/apiClient.ts.
     assert.equal(typeof (diag as any).patchFetch, 'undefined');
     assert.equal(typeof (diag as any).intercept, 'undefined');
+  });
+});
+
+/* ==================================================================== */
+/* 6. Fresh login + session capture (the real auth flow, no network)    */
+/* ==================================================================== */
+
+describe('Diagnostics — fresh login / session capture', () => {
+  it('U. SUPERADMIN and ADMIN both see the sidebar entry; non-admins do not (real menu rule)', async () => {
+    ensureStorageShim();
+    const gate = await import('../../src/modules/auth/components/AdminRoute.js');
+    const { resolveMenuVisibility } = await import('../../src/layouts/menuVisibility.js');
+
+    // The exact sidebar entry AppLayout renders (same shared constant).
+    const entry = { path: '/settings/performance-diagnostics', roles: [...gate.DIAGNOSTICS_ADMIN_ROLES] };
+    assert.deepEqual(entry.roles, ['ADMIN', 'SUPERADMIN']);
+
+    for (const role of ['ADMIN', 'SUPERADMIN', 'admin', 'superadmin']) {
+      assert.equal(resolveMenuVisibility(role, undefined, entry), true, `${role} must SEE the diagnostics entry`);
+      assert.equal(gate.resolveAdminAccess(role), 'granted', `${role} must be able to OPEN diagnostics`);
+    }
+    for (const role of ['RM', 'ASM', 'BDM', 'BE', 'BH', 'RO']) {
+      assert.equal(resolveMenuVisibility(role, undefined, entry), false, `${role} must NOT see the entry`);
+      assert.equal(gate.resolveAdminAccess(role), 'denied', `${role} must NOT be able to open diagnostics`);
+    }
+  });
+
+  it('V. fresh POST /api/auth/login is recorded exactly once and survives the login transition as request #1', async () => {
+    ensureStorageShim();
+    // Stub fetch BEFORE installing the app's patch (same order as main.tsx,
+    // where installAuthenticatedFetch() runs before anything renders).
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (input: any, init: any = {}) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (url.startsWith('/api/auth/login')) {
+        return new Response(
+          JSON.stringify({ success: true, data: { token: 'LOGIN-TEST-TOKEN', user: { id: 'diag-login-user', employeeId: 'EMP-LOGIN', name: 'Login Admin', role: 'ADMIN', email: 'x@example.com' } } }),
+          { status: 200, headers: { 'content-type': 'application/json', 'server-timing': 'total;dur=2600' } }
+        );
+      }
+      return new Response(JSON.stringify({ success: true, data: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'server-timing': 'total;dur=120' },
+      });
+    };
+
+    try {
+      const { installAuthenticatedFetch } = await import('../../src/lib/apiClient.js');
+      installAuthenticatedFetch();
+      const diag = await import('../../src/modules/shared/api/diagnostics.js');
+      const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
+      const authFlow = await import('../../src/modules/auth/services/authFlow.js');
+
+      useAuthStore.setState({ user: null, token: null, isAuthenticated: false, isInitialized: true } as any);
+      diag.clearApiDiagnostics();
+
+      // The real login submit path (Login.tsx -> loginWithCredentials).
+      const session = await authFlow.loginWithCredentials('EMP-LOGIN', 'whatever-password');
+      let list = diag.getApiDiagnostics();
+      assert.equal(list.length, 1, 'exactly ONE diagnostic row for the login request');
+      assert.equal(list[0].path, '/api/auth/login');
+      assert.equal(list[0].method, 'POST');
+      assert.equal(list[0].status, 200);
+      assert.equal(list[0].pending, false);
+      assert.equal(list[0].serverTiming, 'total;dur=2600');
+
+      // The real post-login activation (Login.tsx -> activateSession).
+      await authFlow.activateSession(session, { navigate: () => undefined });
+      assert.equal(useAuthStore.getState().isAuthenticated, true);
+      list = diag.getApiDiagnostics();
+      assert.equal(list.length, 1, 'the fresh login entry must SURVIVE the login transition');
+      assert.equal(list[0].path, '/api/auth/login', 'nothing from before the login was carried over');
+      assert.equal(list[0].seq, 1, 'the login request is request #1 of the fresh session');
+      assert.equal(list[0].firstAfterLoad, true, 'the login request is the first request of the fresh session');
+      assert.equal(diag.apiDiagnosticsCount(), 1, 'still exactly one row for the login (no duplicates)');
+
+      // Cold-start style validation + a later app request.
+      await fetch('/api/auth/session').then(r => r.json());
+      await fetch('/api/dashboard').then(r => r.json());
+      list = diag.getApiDiagnostics();
+      assert.equal(list.length, 3, 'session + dashboard add one row each (no duplicates)');
+      assert.equal(list.filter(e => e.path === '/api/auth/session').length, 1, 'GET /api/auth/session is recorded');
+      assert.equal(list.filter(e => e.path === '/api/auth/login').length, 1, 'login still appears exactly once');
+      assert.deepEqual(list.map(e => e.seq), [3, 2, 1], 'sequence continues cleanly after the retained login row');
+
+      // Privacy: neither the login token nor the submitted password appears.
+      const dump = JSON.stringify(list) + diag.buildDiagnosticsCopySummary();
+      assert.ok(!dump.includes('LOGIN-TEST-TOKEN'), 'token must never be stored/copied');
+      assert.ok(!dump.includes('whatever-password'), 'password must never be stored/copied');
+      assert.ok(diag.buildDiagnosticsCopySummary().includes('/api/auth/login'), 'copy summary includes the fresh login request');
+
+      useAuthStore.getState().logout();
+      assert.equal(diag.apiDiagnosticsCount(), 0, 'logout still wipes everything');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('W. one API request can never produce a duplicate diagnostic row', async () => {
+    ensureStorageShim();
+    const diag = await import('../../src/modules/shared/api/diagnostics.js');
+    const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
+    loginSession(useAuthStore, 'diag-user-w', 'token-w');
+    diag.clearApiDiagnostics();
+
+    const id = diag.recordApiRequestStart('/api/roles', 'GET');
+    assert.equal(diag.apiDiagnosticsCount(), 1);
+    const response = fakeResponse();
+    diag.recordApiRequestSettled(id, response, 400);
+    assert.equal(diag.apiDiagnosticsCount(), 1, 'settle updates the row, it does not add one');
+    diag.noteApiBodySettled(response);
+    diag.noteApiBodySettled(response); // duplicate body-settle call must be inert
+    assert.equal(diag.apiDiagnosticsCount(), 1, 'body-settled upgrades never add rows');
+    assert.equal(diag.getApiDiagnostics().filter(e => e.path === '/api/roles').length, 1);
+
+    diag.clearApiDiagnostics();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
+  });
+
+  it('X. login retains ONLY the fresh login request — prior sessions and failed attempts are gone', async () => {
+    ensureStorageShim();
+    const diag = await import('../../src/modules/shared/api/diagnostics.js');
+    const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
+
+    // Previous user's session leaves diagnostics behind...
+    loginSession(useAuthStore, 'diag-user-x-A', 'token-x-A');
+    diag.clearApiDiagnostics();
+    const a = diag.recordApiRequestStart('/api/dashboard', 'GET');
+    diag.recordApiRequestSettled(a, fakeResponse(), 500);
+    assert.equal(diag.apiDiagnosticsCount(), 1);
+
+    // ...then logs out (full wipe), and the next user fails a login attempt
+    // before succeeding.
+    useAuthStore.getState().logout();
+    assert.equal(diag.apiDiagnosticsCount(), 0);
+    const failedAttempt = diag.recordApiRequestStart('/api/auth/login', 'POST');
+    diag.recordApiRequestFailed(failedAttempt, 300, new Error('HTTP 401'));
+    const goodAttempt = diag.recordApiRequestStart('/api/auth/login', 'POST');
+    diag.recordApiRequestSettled(goodAttempt, fakeResponse(), 2600);
+    const strayAnon = diag.recordApiRequestStart('/api/metadata', 'GET');
+    diag.recordApiRequestSettled(strayAnon, fakeResponse(), 100);
+    assert.equal(diag.apiDiagnosticsCount(), 3);
+
+    // Successful sign-in of the NEXT user.
+    loginSession(useAuthStore, 'diag-user-x-B', 'token-x-B');
+    const list = diag.getApiDiagnostics();
+    assert.equal(list.length, 1, 'only the fresh login request survives');
+    assert.equal(list[0].id, goodAttempt, 'the SUCCESSFUL attempt is retained, not the failed one');
+    assert.equal(list[0].seq, 1, 'renumbered to request #1');
+    assert.equal(list[0].firstAfterLoad, true);
+    assert.ok(!JSON.stringify(list).includes('/api/dashboard'), 'previous session data is gone');
+
+    diag.clearApiDiagnostics();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
   });
 });
