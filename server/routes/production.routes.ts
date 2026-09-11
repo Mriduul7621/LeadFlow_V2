@@ -2405,7 +2405,7 @@ router.delete('/roles/:roleId', requireAuth, requireAdmin, async (req, res) => {
    forged payload can never mint a permission (fail closed).
 ==================================================================== */
 
-router.get('/roles/:roleId/permissions', requireAuth, async (req, res) => {
+router.get('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) return sendJson(res, 200, { success: true, data: [] });
   try {

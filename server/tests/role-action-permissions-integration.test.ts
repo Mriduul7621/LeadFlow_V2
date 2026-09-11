@@ -186,7 +186,7 @@ describe('Role Action Permissions — server persistence & enforcement', () => {
 
     const get = await request(app)
       .get('/api/roles/EMPLOYEE/permissions')
-      .set('Authorization', `Bearer ${employeeToken()}`);
+      .set('Authorization', `Bearer ${adminToken()}`);
     assert.equal(get.status, 200);
     const byCode: Record<string, boolean> = {};
     for (const row of get.body.data) byCode[row.code] = row.allowed;
@@ -271,6 +271,21 @@ describe('Role Action Permissions — server persistence & enforcement', () => {
       .set('Authorization', `Bearer ${employeeToken()}`)
       .send({ permissions: [{ code: 'leads.view', allowed: true }] });
     assert.equal(res.status, 403, 'non-admin must not write role permissions');
+  });
+
+  it('non-admin cannot GET the role permission matrix (403)', async () => {
+    const res = await request(app)
+      .get('/api/roles/EMPLOYEE/permissions')
+      .set('Authorization', `Bearer ${employeeToken()}`);
+    assert.equal(res.status, 403, 'ordinary users must not enumerate arbitrary role permissions');
+  });
+
+  it('admin can GET the role permission matrix (200)', async () => {
+    const res = await request(app)
+      .get('/api/roles/EMPLOYEE/permissions')
+      .set('Authorization', `Bearer ${adminToken()}`);
+    assert.equal(res.status, 200, 'admin must be able to load role permission grants');
+    assert.ok(Array.isArray(res.body.data), 'response must carry the grant list');
   });
 
   it('ADMIN keeps its bypass regardless of stored grants', async () => {

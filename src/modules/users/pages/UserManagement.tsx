@@ -515,7 +515,15 @@ export default function UserManagement() {
         code: i.code,
         allowed: !!roleFormActions[i.code],
       })));
-      await adminService.saveRolePermissions(slug, grants);
+      try {
+        await adminService.saveRolePermissions(slug, grants);
+      } catch (permErr) {
+        // Role metadata/config is already committed; the action grants are
+        // NOT. Report the partial failure honestly and keep the editor open
+        // so the admin can retry — never claim full success.
+        toast.error('Role settings were saved, but action permissions could not be saved. Please retry.');
+        return;
+      }
       toast.success('Role saved successfully.');
       setShowRoleForm(false);
       await loadData();

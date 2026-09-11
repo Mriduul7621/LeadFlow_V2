@@ -249,6 +249,37 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(prod.includes('requireAdmin'), 'role permission writes must be admin-gated');
   });
 
+  it('role permission matrix read is admin-gated (not just authenticated)', () => {
+    const prod = read('server/routes/production.routes.ts');
+    const getIdx = prod.indexOf("router.get('/roles/:roleId/permissions'");
+    assert.ok(getIdx >= 0, 'GET role permissions endpoint must exist');
+    const line = prod.slice(getIdx, getIdx + 120);
+    assert.ok(line.includes('requireAdmin'), 'GET role permissions must require admin (ordinary users must not enumerate role matrices)');
+  });
+
+  it('role save reports partial permission failure honestly and keeps editor open', () => {
+    const src = userMgmt();
+    assert.ok(
+      src.includes('Role settings were saved, but action permissions could not be saved. Please retry.'),
+      'partial permission failure must use the honest error message'
+    );
+    // The permission save is wrapped so its failure does not fall through to
+    // the generic "could not save" handler, and it does NOT close the editor
+    // or claim full success.
+    const saveIdx = src.indexOf('adminService.saveRole(payload)');
+    assert.ok(saveIdx >= 0, 'role save must call saveRole');
+    const slice = src.slice(saveIdx, saveIdx + 1400);
+    assert.ok(slice.includes('catch (permErr)'), 'permission save failure must be caught separately');
+    assert.ok(slice.indexOf('toast.error') < slice.indexOf("'Role saved successfully.'"), 'partial-failure error must precede the success toast');
+    // On partial failure the handler returns before closing the editor or
+    // announcing success, so the admin can retry.
+    const errIdx = slice.indexOf('toast.error(');
+    const successIdx = slice.indexOf('toast.success(');
+    const closeIdx = slice.indexOf('setShowRoleForm(false)');
+    assert.ok(errIdx >= 0 && errIdx < closeIdx, 'partial-failure branch must run before any editor close');
+    assert.ok(successIdx < 0 || errIdx < successIdx, 'error must be raised before any success toast');
+  });
+
   it('usePermissions resolves canonical lead actions from server permissions', () => {
     const p = permsHook();
     assert.ok(p.includes("'lead_upl_gen'"), 'lead_upl_gen must map to the leads module');
