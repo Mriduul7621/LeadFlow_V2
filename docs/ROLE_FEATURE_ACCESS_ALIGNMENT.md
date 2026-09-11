@@ -239,3 +239,28 @@ Exact DB fields:
   actions are independent (revoke Edit ≠ revoke View; grant View ≠ grant Edit),
   unknown/malformed codes fail closed, writes are admin-gated, and ADMIN keeps
   its bypass.
+
+---
+
+## Update — canonical separation (current model)
+
+This document's mapping above is the historical record. The **current**
+model separates the three layers and is specified in
+[`docs/ROLE_PERMISSION_MODEL.md`](./ROLE_PERMISSION_MODEL.md):
+
+- **Feature Access** is module/page visibility **only**. All action-like
+  sub-options (including `view_all_leads_tab`) were removed from the
+  editor. `All Leads` is now the standalone `all_leads` feature mapping to
+  `/leads/all`; on read it is backfilled from the legacy
+  `view_all_leads_tab` / `menuAccess['/leads/all']` so existing roles keep
+  their effective access.
+- **Action Permissions** are the canonical, server-enforced grants
+  (`permissions` × `role_permissions`), now covering Users, Roles,
+  Departments, Hierarchy & Teams and Settings in addition to Dashboard and
+  Leads.
+- The legacy sub-option keys are derived from the canonical grants on save
+  (compatibility mapping), so older client fallbacks keep working without
+  exposing duplicate toggles.
+- Daily Workbench mutation boundary is unchanged: complete/edit/cancel/
+  reschedule still gate on `canAccess('lead_tracking', 'edit')` →
+  `leads.edit` server enforcement.

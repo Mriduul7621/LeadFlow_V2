@@ -31,13 +31,20 @@ import { RolePermission, User } from '../../shared/types';
 
 
 /* ------------------------------------------------------------------ */
-/*  Feature metadata for role permissions (simplified labels)          */
+/*  Feature metadata for role permissions.                             */
+/*  FEATURE ACCESS = MODULE / PAGE VISIBILITY ONLY.                    */
+/*                                                                     */
+/*  Granular actions live exclusively in ACTION_PERMISSION_GROUPS      */
+/*  below (canonical, server-enforced). The legacy action-like         */
+/*  sub-options ("Create Leads", "Upload Excel File", "Update Lead     */
+/*  Status", the dept/role/user/hier child toggles,                    */
+/*  configure_parameters, …) were duplicates of canonical codes and    */
+/*  are no longer exposed.                                             */
 /* ------------------------------------------------------------------ */
 interface FeatureMeta {
   key: string;
   label: string;
   desc: string;
-  suboptions?: { key: string; label: string; desc: string }[];
 }
 
 const APP_FEATURES: FeatureMeta[] = [
@@ -69,28 +76,22 @@ const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'lead_tracking',
     label: 'Lead Tracking',
-    desc: 'View and update visible leads.',
-    suboptions: [
-      { key: 'status_update', label: 'Update Lead Status', desc: 'Allow changing lead statuses (also unlocks Daily Workbench complete/edit/cancel).' },
-      { key: 'view_all_leads_tab', label: 'All Leads', desc: 'Open the all-leads workspace; actual data scope still follows role visibility.' },
-    ],
+    desc: 'Open the lead tracking workspace; what the role can do inside it follows Action Permissions.',
   },
   {
     key: 'lead_generate',
     label: 'Add New Lead',
-    desc: 'Create new leads manually.',
-    suboptions: [
-      { key: 'create', label: 'Create Leads', desc: 'Allow creating new leads.' },
-    ],
+    desc: 'Open the manual lead creation page; creating leads is governed by the Leads Create action.',
   },
   {
     key: 'lead_upload',
     label: 'Bulk Upload',
-    desc: 'Import leads in bulk from supported files.',
-    suboptions: [
-      { key: 'upload', label: 'Upload Excel File', desc: 'Allow uploading lead spreadsheets.' },
-      { key: 'delete', label: 'Delete Campaign Leads', desc: 'Allow deleting entire campaign leads.' },
-    ],
+    desc: 'Open the bulk upload page; importing is governed by the Leads Import action.',
+  },
+  {
+    key: 'all_leads',
+    label: 'All Leads',
+    desc: 'Open the all-leads workspace; actual data scope still follows role visibility.',
   },
   { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.' },
   { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.' },
@@ -100,38 +101,12 @@ const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'user_management',
     label: 'Users',
-    desc: 'Manage users, roles and departments according to permissions.',
-    suboptions: [
-      { key: 'dept_view', label: 'View Departments', desc: 'Can view department list.' },
-      { key: 'dept_create', label: 'Add Departments', desc: 'Can create departments.' },
-      { key: 'dept_edit', label: 'Edit Departments', desc: 'Can edit departments.' },
-      { key: 'dept_delete', label: 'Delete Departments', desc: 'Can remove departments.' },
-      { key: 'role_view', label: 'View Roles', desc: 'Can view roles and permissions.' },
-      { key: 'role_create', label: 'Create Roles', desc: 'Can create custom roles.' },
-      { key: 'role_edit', label: 'Edit Roles', desc: 'Can modify roles.' },
-      { key: 'role_delete', label: 'Delete Roles', desc: 'Can delete custom roles.' },
-      { key: 'user_view', label: 'View Employees', desc: 'Can view employee list.' },
-      { key: 'user_create', label: 'Add Employees', desc: 'Can onboard new employees.' },
-      { key: 'user_edit', label: 'Edit Employees', desc: 'Can edit employee details.' },
-      { key: 'user_delete', label: 'Delete Employees', desc: 'Can remove employees.' },
-      { key: 'hier_view', label: 'View Hierarchy', desc: 'Can view reporting hierarchy.' },
-      { key: 'hier_create', label: 'Create Hierarchy', desc: 'Can add hierarchy levels.' },
-      { key: 'hier_edit', label: 'Edit Hierarchy', desc: 'Can modify hierarchy.' },
-      { key: 'hier_delete', label: 'Delete Hierarchy', desc: 'Can remove hierarchy levels.' },
-    ],
+    desc: 'Open the Users workspace (employees, departments, roles, hierarchy); administration actions follow Action Permissions.',
   },
   {
     key: 'settings_control',
     label: 'Settings',
-    desc: 'Manage profile, system configuration and metadata based on permissions.',
-    suboptions: [
-      { key: 'view_profile', label: 'Edit Profile', desc: 'Allow editing name and avatar.' },
-      { key: 'view_security', label: 'Change Password', desc: 'Allow changing password.' },
-      { key: 'view_notifications', label: 'Notification Settings', desc: 'Allow managing notifications.' },
-      { key: 'view_system', label: 'System Settings', desc: 'Allow changing system appearance.' },
-      { key: 'view_sync', label: 'System Connection', desc: 'Allow checking cloud database connection status.' },
-      { key: 'configure_parameters', label: 'Manage Parameters', desc: 'Allow adding/editing areas, products, campaigns.' },
-    ],
+    desc: 'Open Settings (profile, security, notifications, system); parameter management follows Action Permissions.',
   },
 ];
 
@@ -139,6 +114,10 @@ const APP_FEATURES: FeatureMeta[] = [
 /*  Canonical action permissions (permissions × role_permissions).     */
 /*  These are the granular, server-enforced action grants — separate   */
 /*  from feature/menu visibility (APP_FEATURES) and data visibility.   */
+/*                                                                     */
+/*  Every code below already exists in the `permissions` catalog       */
+/*  seeded by migration 025 — no code is invented here. Each mapped    */
+/*  action is enforced server-side (production.routes.ts).             */
 /* ------------------------------------------------------------------ */
 interface ActionPermissionMeta {
   code: string;
@@ -158,7 +137,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
     items: [
       { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },
       { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add New Lead).' },
-      { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench complete, edit, cancel and reschedule.' },
+      { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench and Task Calendar complete, edit, cancel and reschedule.' },
       { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (All Leads).' },
       { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
       { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
@@ -166,7 +145,55 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
       { code: 'leads.export', label: 'Export', desc: 'Export lead audit logs.' },
     ],
   },
+  {
+    module: 'Users',
+    items: [
+      { code: 'users.create', label: 'Create', desc: 'Onboard new employees.' },
+      { code: 'users.edit', label: 'Edit', desc: 'Edit employee details and activate/deactivate accounts. Password resets are administrator-only, and self-service password changes never require this.' },
+      { code: 'users.delete', label: 'Delete', desc: 'Remove employees.' },
+    ],
+  },
+  {
+    module: 'Roles',
+    items: [
+      { code: 'roles.manage', label: 'Manage Roles', desc: 'Create, update and delete roles.' },
+      { code: 'permissions.manage', label: 'Manage User Permission Overrides', desc: 'Set per-user permission overrides. Editing the role permission matrix stays admin-only.' },
+    ],
+  },
+  {
+    module: 'Departments',
+    items: [
+      { code: 'departments.manage', label: 'Manage', desc: 'Create, update and remove departments.' },
+    ],
+  },
+  {
+    module: 'Hierarchy & Teams',
+    items: [
+      { code: 'teams.manage', label: 'Manage Teams', desc: 'Create, update and remove teams.' },
+      { code: 'hierarchy.manage', label: 'Manage Reporting Hierarchy', desc: 'Change the company reporting ladder and manager assignments.' },
+    ],
+  },
+  {
+    module: 'Settings',
+    items: [
+      { code: 'settings.manage', label: 'Manage Parameters', desc: 'Manage metadata parameters (areas, products, campaigns, statuses). Self-service profile/password/notification settings follow the Settings module toggle, not this action.' },
+      { code: 'workflow.manage', label: 'Manage Workflow Rules', desc: 'Configure lead status transition rules (follow-up flow). Self-service password change and the forced first-login reset are NOT governed by this.' },
+    ],
+  },
 ];
+
+/* Which Feature Access module toggles keep each action group active.
+   Permissions are always STORED; when every mapped module is hidden the
+   editor marks the group inactive (visually disabled, grants preserved). */
+const ACTION_MODULE_FEATURE_KEYS: Record<string, string[]> = {
+  'Dashboard': ['dashboard'],
+  'Leads': ['lead_tracking', 'lead_generate', 'lead_upload', 'all_leads'],
+  'Users': ['user_management'],
+  'Roles': ['user_management'],
+  'Departments': ['user_management'],
+  'Hierarchy & Teams': ['user_management', 'team_progress'],
+  'Settings': ['settings_control'],
+};
 
 /* ================================================================== */
 /*  MAIN COMPONENT                                                     */
@@ -452,10 +479,10 @@ export default function UserManagement() {
     setRoleFormName('');
     setRoleFormSlug('');
     setRoleFormVisibility('Own');
+    // Feature Access starts as pure module visibility (view only).
     const defaults: Record<string, Record<string, boolean>> = {};
     APP_FEATURES.forEach(f => {
       defaults[f.key] = { view: false };
-      f.suboptions?.forEach(s => { defaults[f.key][s.key] = false; });
     });
     setRoleFormFeatures(defaults);
     // New roles start fail-closed on every canonical action (Admin grants
@@ -473,48 +500,66 @@ export default function UserManagement() {
 
     try {
       const isAdm = slug === 'admin' || slug === 'superadmin';
+      // Canonical action grants edited in the Action Permissions section.
+      // They are persisted to role_permissions (server-side) and are the
+      // single source of truth the server enforces.
+      const grants = ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => ({
+        code: i.code,
+        allowed: !!roleFormActions[i.code],
+      })));
+      const granted = (code: string) => grants.some(g => g.code === code && g.allowed);
+      const featureOn = (key: string) => !!roleFormFeatures?.[key]?.view;
+
       const payload: RolePermission = {
         roleId: slug,
         roleName: roleFormName.trim(),
         isCustom: selectedRole ? selectedRole.isCustom : true,
         menuAccess: {
-          '/': roleFormFeatures?.dashboard?.view ?? false,
-          '/workbench': roleFormFeatures?.workbench?.view ?? false,
-          '/leads/new': roleFormFeatures?.lead_generate?.view ?? false,
-          '/leads/upload': roleFormFeatures?.lead_upload?.view ?? false,
-          '/leads/all': roleFormFeatures?.lead_tracking?.view_all_leads_tab ?? false,
-          '/leads': roleFormFeatures?.lead_tracking?.view ?? false,
-          '/execution-intelligence': roleFormFeatures?.execution_intelligence?.view ?? false,
-          '/ncp-progress': roleFormFeatures?.ncp_progress?.view ?? false,
-          '/trend-charts': roleFormFeatures?.trend_charts?.view ?? false,
-          '/campaign-breakdown': roleFormFeatures?.campaign_breakdown?.view ?? false,
-          '/follow-up': roleFormFeatures?.follow_up_strategy?.view ?? false,
-          '/task-calendar': roleFormFeatures?.task_calendar?.view ?? false,
-          '/activities': roleFormFeatures?.activities?.view ?? false,
-          '/team': roleFormFeatures?.team_progress?.view ?? false,
-          '/users': roleFormFeatures?.user_management?.view ?? isAdm,
-          '/settings': roleFormFeatures?.settings_control?.view ?? isAdm,
+          '/': featureOn('dashboard'),
+          '/workbench': featureOn('workbench'),
+          '/leads/new': featureOn('lead_generate'),
+          '/leads/upload': featureOn('lead_upload'),
+          '/leads/all': featureOn('all_leads'),
+          '/leads': featureOn('lead_tracking'),
+          '/execution-intelligence': featureOn('execution_intelligence'),
+          '/ncp-progress': featureOn('ncp_progress'),
+          '/trend-charts': featureOn('trend_charts'),
+          '/campaign-breakdown': featureOn('campaign_breakdown'),
+          '/follow-up': featureOn('follow_up_strategy'),
+          '/task-calendar': featureOn('task_calendar'),
+          '/activities': featureOn('activities'),
+          '/team': featureOn('team_progress'),
+          '/users': featureOn('user_management') || isAdm,
+          '/settings': featureOn('settings_control') || isAdm,
         },
         dataVisibility: roleFormVisibility,
+        // Legacy `actions` JSONB, now derived from the canonical grants so
+        // the stored proxy values match what the server actually enforces.
         actions: {
-          view: roleFormFeatures?.lead_tracking?.view ?? true,
-          create: roleFormFeatures?.lead_generate?.create ?? false,
-          edit: roleFormFeatures?.lead_tracking?.status_update ?? false,
-          delete: roleFormFeatures?.lead_upload?.delete ?? false,
-          approve: roleFormFeatures?.lead_tracking?.status_update ?? false,
-          upload: roleFormFeatures?.lead_upload?.upload ?? false,
+          view: granted('leads.view') || featureOn('lead_tracking'),
+          create: granted('leads.create'),
+          edit: granted('leads.edit'),
+          delete: granted('leads.delete'),
+          approve: granted('leads.edit'),
+          upload: granted('leads.import'),
         },
-        featurePermissions: roleFormFeatures,
+        // Legacy compatibility mapping: featurePermissions keep the
+        // historical sub-option keys, derived from the canonical grants, so
+        // older client fallbacks (server permission sheet unavailable)
+        // preserve the same effective behaviour. The editor itself no
+        // longer exposes these duplicate toggles.
+        featurePermissions: {
+          ...Object.fromEntries(APP_FEATURES.map(f => [f.key, { view: featureOn(f.key) }])),
+          lead_generate: { view: featureOn('lead_generate'), create: granted('leads.create') },
+          lead_upload: { view: featureOn('lead_upload'), upload: granted('leads.import'), delete: granted('leads.delete') },
+          lead_tracking: { view: featureOn('lead_tracking'), status_update: granted('leads.edit') },
+        },
       };
 
       await adminService.saveRole(payload);
       // Persist the canonical action grants separately (role_permissions).
       // Only codes the server already knows are stored; unknown codes are
       // ignored server-side (fail closed).
-      const grants = ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => ({
-        code: i.code,
-        allowed: !!roleFormActions[i.code],
-      })));
       try {
         await adminService.saveRolePermissions(slug, grants);
       } catch (permErr) {
@@ -970,11 +1015,12 @@ export default function UserManagement() {
               </button>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Role basic info */}
+                {/* 1. Role basic info */}
                 <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
                   <h3 className="text-base font-semibold text-slate-800">
-                    {selectedRole ? 'Edit Role' : 'New Role'}
+                    1. Role Details
                   </h3>
+                  <p className="text-xs text-slate-400 -mt-2">{selectedRole ? 'Edit the role identity and save.' : 'Create a new role.'}</p>
 
                   <div>
                     <label className="text-sm font-medium text-slate-600 mb-1 block">Role Name</label>
@@ -1001,9 +1047,10 @@ export default function UserManagement() {
                     </div>
                   )}
 
-                  {/* Data visibility */}
+                  {/* 2. Data visibility */}
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-2 block">Data Visibility</label>
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">2. Data Visibility</label>
+                    <p className="text-xs text-slate-400 mb-2 -mt-1">Which records the role can access.</p>
                     <div className="grid grid-cols-2 gap-2">
                       {(['Own', 'DownTeam', 'FullTeam', 'Organization'] as const).map(scope => {
                         const desc = scope === 'Own' ? 'Only own data'
@@ -1038,114 +1085,111 @@ export default function UserManagement() {
                   </button>
                 </div>
 
-                {/* Feature permissions */}
-                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-                  <h3 className="text-base font-semibold text-slate-800">Feature Access</h3>
-                  <p className="text-sm text-slate-500">Enable pages and specific actions for this role.</p>
+                {/* 3. Feature permissions — module/page visibility only */}
+                <div className="lg:col-span-8 space-y-4">
+                  <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                    <h3 className="text-base font-semibold text-slate-800">3. Feature Access</h3>
+                    <p className="text-sm text-slate-500">
+                      Module and page visibility only. What the role can <em>do</em> inside a module
+                      is configured under Action Permissions below.
+                    </p>
 
-                  <div className="space-y-3">
-                    {APP_FEATURES.map(item => {
-                      const feat = roleFormFeatures[item.key] || { view: false };
-                      const isOn = !!feat.view;
-                      return (
-                        <div key={item.key} className={cn(
-                          "border rounded-lg overflow-hidden transition-all",
-                          isOn ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
-                        )}>
-                          <div className="p-3 flex items-center justify-between bg-slate-50/50">
-                            <div>
-                              <span className="text-sm font-medium text-slate-800">{item.label}</span>
-                              <p className="text-xs text-slate-400">{item.desc}</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newVal = !isOn;
-                                const updated = { ...feat, view: newVal };
-                                if (!newVal) {
-                                  Object.keys(updated).forEach(k => { if (k !== 'view') updated[k] = false; });
-                                }
-                                setRoleFormFeatures({ ...roleFormFeatures, [item.key]: updated });
-                              }}
-                              className={cn(
-                                "px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
-                                isOn
-                                  ? "bg-[#978C21] text-white border-[#978C21]"
-                                  : "bg-white text-slate-400 border-slate-200"
-                              )}
-                            >
-                              {isOn ? '✓ Enabled' : 'Disabled'}
-                            </button>
-                          </div>
-                          {isOn && item.suboptions && item.suboptions.length > 0 && (
-                            <div className="p-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              {item.suboptions.map(sub => {
-                                const isSubOn = !!feat[sub.key];
-                                return (
-                                  <label key={sub.key} className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-slate-50">
-                                    <input
-                                      type="checkbox"
-                                      checked={isSubOn}
-                                      onChange={() => {
-                                        setRoleFormFeatures({
-                                          ...roleFormFeatures,
-                                          [item.key]: { ...feat, [sub.key]: !isSubOn }
-                                        });
-                                      }}
-                                      className="mt-0.5 w-4 h-4 accent-[#978C21]"
-                                    />
-                                    <div>
-                                      <span className="text-xs font-medium text-slate-700">{sub.label}</span>
-                                      <p className="text-[10px] text-slate-400">{sub.desc}</p>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Action permissions (canonical, server-enforced) */}
-              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-                <div>
-                  <h3 className="text-base font-semibold text-slate-800">Action Permissions</h3>
-                  <p className="text-sm text-slate-500">
-                    Granular actions this role can perform. These are enforced by the server
-                    and persist to the database — separate from page visibility and data access.
-                  </p>
-                </div>
-                {ACTION_PERMISSION_GROUPS.map(group => (
-                  <div key={group.module} className="border border-slate-200 rounded-lg overflow-hidden">
-                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
-                      <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
-                    </div>
-                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {group.items.map(item => {
-                        const isOn = !!roleFormActions[item.code];
+                    <div className="space-y-3">
+                      {APP_FEATURES.map(item => {
+                        const feat = roleFormFeatures[item.key] || { view: false };
+                        const isOn = !!feat.view;
                         return (
-                          <label key={item.code} className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-slate-50">
-                            <input
-                              type="checkbox"
-                              checked={isOn}
-                              onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
-                              className="mt-0.5 w-4 h-4 accent-[#978C21]"
-                            />
-                            <div>
-                              <span className="text-xs font-medium text-slate-700">{item.label}</span>
-                              <p className="text-[10px] text-slate-400">{item.desc}</p>
-                              <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                          <div key={item.key} className={cn(
+                            "border rounded-lg overflow-hidden transition-all",
+                            isOn ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
+                          )}>
+                            <div className="p-3 flex items-center justify-between bg-slate-50/50">
+                              <div>
+                                <span className="text-sm font-medium text-slate-800">{item.label}</span>
+                                <p className="text-xs text-slate-400">{item.desc}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRoleFormFeatures({
+                                    ...roleFormFeatures,
+                                    [item.key]: { ...feat, view: !isOn },
+                                  });
+                                }}
+                                className={cn(
+                                  "px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
+                                  isOn
+                                    ? "bg-[#978C21] text-white border-[#978C21]"
+                                    : "bg-white text-slate-400 border-slate-200"
+                                )}
+                              >
+                                {isOn ? '✓ Enabled' : 'Disabled'}
+                              </button>
                             </div>
-                          </label>
+                          </div>
                         );
                       })}
                     </div>
                   </div>
-                ))}
+                </div>
+              </div>
+
+              {/* 4. Action permissions (canonical, server-enforced) */}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-800">4. Action Permissions</h3>
+                  <p className="text-sm text-slate-500">
+                    Granular actions this role can perform. These are enforced by the server
+                    and persist to the database — separate from page visibility and data access.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Feature Access controls whether the module is available. Action Permissions
+                    control what the role can do inside it.
+                  </p>
+                </div>
+                {ACTION_PERMISSION_GROUPS.map(group => {
+                  const featureKeys = ACTION_MODULE_FEATURE_KEYS[group.module] || [];
+                  const groupActive = featureKeys.length === 0 || featureKeys.some(k => !!roleFormFeatures?.[k]?.view);
+                  return (
+                    <div key={group.module} className={cn(
+                      "border rounded-lg overflow-hidden transition-all",
+                      groupActive ? "border-slate-200" : "border-slate-200 opacity-60"
+                    )}>
+                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
+                        {!groupActive && (
+                          <span className="text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                            Module hidden in Feature Access — the role can't reach these actions in the UI. Grants stay saved and still apply at the API.
+                          </span>
+                        )}
+                      </div>
+                      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {group.items.map(item => {
+                          const isOn = !!roleFormActions[item.code];
+                          return (
+                            <label key={item.code} className={cn(
+                              "flex items-start gap-2 p-2 rounded-md",
+                              groupActive ? "cursor-pointer hover:bg-slate-50" : "cursor-not-allowed"
+                            )}>
+                              <input
+                                type="checkbox"
+                                checked={isOn}
+                                disabled={!groupActive}
+                                onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
+                                className="mt-0.5 w-4 h-4 accent-[#978C21] disabled:opacity-50"
+                              />
+                              <div>
+                                <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                                <p className="text-[10px] text-slate-400">{item.desc}</p>
+                                <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1473,7 +1517,7 @@ export default function UserManagement() {
                   />
                   <p className="text-xs text-slate-400">
                     {editingUser
-                      ? "Enter a new password to reset. The employee will be required to change it on next login."
+                      ? "Enter a new password to reset (administrators only). The employee will be required to change it on next login."
                       : "A temporary password will be auto-generated if left blank. The employee must change it on first login."}
                   </p>
                 </div>

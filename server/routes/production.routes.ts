@@ -153,6 +153,57 @@ function callerIsAdmin(req: any): boolean {
   return role === 'ADMIN' || role === 'SUPERADMIN';
 }
 
+/**
+ * requireAuth + canonical permission grant (permissions × role_permissions
+ * × user_permissions, resolved through hasPermissionCode).
+ *
+ * Semantics (fail closed everywhere):
+ *   - unauthenticated                    -> 401
+ *   - caller not resolvable              -> 403
+ *   - ADMIN / SUPERADMIN                 -> allowed (bypass inside
+ *                                           hasPermissionCode — behavior
+ *                                           identical to the previous
+ *                                           requireAdmin gate)
+ *   - permission definition missing      -> deny
+ *   - no explicit grant row              -> deny
+ *   - database failure                   -> deny (503)
+ *   - unknown permission code            -> deny
+ *
+ * Used for the administration mutations that map 1:1 to canonical action
+ * codes exposed in the Roles & Access editor (users.create, users.edit,
+ * users.delete, roles.manage, permissions.manage, departments.manage,
+ * teams.manage, hierarchy.manage, settings.manage). Capability is granted
+ * ONLY by an explicit canonical grant row — never by a Feature Access
+ * menu toggle.
+ */
+function requirePermissionCode(permissionCode: string) {
+  return async (req: any, res: any, next: any): Promise<void> => {
+    if (!req.currentUser) {
+      res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
+      return;
+    }
+    try {
+      const caller = await getCallerDbInfo(req);
+      if (!caller) {
+        res.status(403).json({ success: false, message: 'Your account was not found. Please log in again.' });
+        return;
+      }
+      if (!(await hasPermissionCode(caller, permissionCode))) {
+        res.status(403).json({
+          success: false,
+          message: 'You do not have permission to perform this action.',
+          permission: permissionCode,
+        });
+        return;
+      }
+      next();
+    } catch (error: any) {
+      console.error(`Permission gate failed for ${permissionCode}:`, error?.message || error);
+      res.status(503).json({ success: false, message: 'Authorization service unavailable.' });
+    }
+  };
+}
+
 /** True when `ref` identifies the authenticated caller (uuid, employee id or email). */
 function isSelfRef(req: any, ref: any): boolean {
   if (!req.currentUser || ref == null) return false;
@@ -1670,7 +1721,7 @@ async function validateUserPayload(payload: any, excludeUserId?: string): Promis
   return null;
 }
 
-router.post('/users', requireAuth, requireAdmin, async (req, res) => {
+router.post('/users', requireAuth, requirePermissionCode('users.create'), async (req, res) => {
   const payload = req.body || {};
   const fullName = clean(payload.fullName || payload.name);
   const employeeId = clean(payload.employeeId || payload.employee_id).toUpperCase();
@@ -1819,8 +1870,18 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
+router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async (req, res) => {
   const payload = req.body || {};
+
+  // Credential boundary (security fix): the editor's Users → Edit action
+  // grants employee-detail edits, NOT password resets. The inline password
+  // field on this route would otherwise let a users.edit holder reset
+  // another account's password through the side door. Reject it for
+  // non-admin callers; admins keep the previous behavior (and also have
+  // POST /users/:id/reset-password).
+  if (payload.password && String(payload.password).length > 0 && !callerIsAdmin(req)) {
+    return sendJson(res, 403, { success: false, message: 'Password reset is restricted to administrators.' });
+  }
 
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
@@ -2016,7 +2077,7 @@ router.put('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     if (isSelfRef(req, req.params.id)) {
@@ -2069,6 +2130,12 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// Credential boundary (security fix): the migration-025 catalog has NO
+// dedicated password-reset / credential-management code, and none may be
+// invented here. Admin password reset therefore stays ADMIN-only via the
+// pre-existing requireAdmin guard — generic users.edit must never be able
+// to set another account's password. (Self-service password change is
+// POST /auth/change-password and never requires any admin capability.)
 router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
   const password = String(req.body?.password || '');
   if (password.length < 5) {
@@ -2130,7 +2197,7 @@ router.get('/users/:id/permissions', requireAuth, requireSelfOrAdmin('id'), asyn
   }
 });
 
-router.put('/users/:id/permissions', requireAuth, requireAdmin, async (req, res) => {
+router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permissions.manage'), async (req, res) => {
   const overrides = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
@@ -2222,7 +2289,7 @@ router.get('/departments', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/departments', requireAuth, requireAdmin, async (req, res) => {
+router.post('/departments', requireAuth, requirePermissionCode('departments.manage'), async (req, res) => {
   const payload = req.body || {};
   const name = clean(payload.name || payload.departmentName || payload.department_name);
   if (!name) return sendJson(res, 400, { success: false, message: 'Department name is required' });
@@ -2270,7 +2337,7 @@ router.post('/departments', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/departments/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/departments/:id', requireAuth, requirePermissionCode('departments.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const idx = fallbackDepartments.findIndex(d => d.id === req.params.id || d.code === req.params.id);
@@ -2313,7 +2380,7 @@ router.get('/roles', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/roles', requireAuth, requireAdmin, async (req, res) => {
+router.post('/roles', requireAuth, requirePermissionCode('roles.manage'), async (req, res) => {
   const payload = req.body || {};
   const roleIdRaw = clean(payload.roleId || payload.role_code || payload.code);
   const roleName = clean(payload.roleName || payload.role_name || payload.name);
@@ -2369,7 +2436,7 @@ router.post('/roles', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/roles/:roleId', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/roles/:roleId', requireAuth, requirePermissionCode('roles.manage'), async (req, res) => {
   const roleIdRaw = req.params.roleId;
   if (/^admin$/i.test(roleIdRaw)) {
     return sendJson(res, 400, { success: false, message: 'The Super Admin system role cannot be deleted.' });
@@ -2700,7 +2767,7 @@ router.get('/teams', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/teams', requireAuth, requireAdmin, async (req, res) => {
+router.post('/teams', requireAuth, requirePermissionCode('teams.manage'), async (req, res) => {
   const payload = req.body || {};
   const name = clean(payload.name || payload.teamName || payload.team_name);
   if (!name) return sendJson(res, 400, { success: false, message: 'Team name is required' });
@@ -2763,7 +2830,7 @@ router.post('/teams', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/teams/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/teams/:id', requireAuth, requirePermissionCode('teams.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     return sendJson(res, 200, { success: true, message: 'Team deleted (demo mode)' });
@@ -2794,7 +2861,7 @@ router.get('/hierarchies', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/hierarchies', requireAuth, requireAdmin, async (req, res) => {
+router.post('/hierarchies', requireAuth, requirePermissionCode('hierarchy.manage'), async (req, res) => {
   const payload = req.body || {};
   const layers = Array.isArray(payload.layers) ? payload.layers : [];
 
@@ -2827,7 +2894,7 @@ router.post('/hierarchies', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/hierarchies/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/hierarchies/:id', requireAuth, requirePermissionCode('hierarchy.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const idx = fallbackHierarchies.findIndex(h => h.id === req.params.id || h.departmentId === req.params.id);
@@ -2867,7 +2934,7 @@ router.get('/hierarchy-config', requireAuth, async (_req, res) => {
   }
 });
 
-router.put('/hierarchy-config', requireAuth, requireAdmin, async (req, res) => {
+router.put('/hierarchy-config', requireAuth, requirePermissionCode('hierarchy.manage'), async (req, res) => {
   const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
   if (assignments.length === 0) {
     return sendJson(res, 400, { success: false, message: 'assignments[] with { roleId, level } entries is required.' });
@@ -2991,7 +3058,7 @@ router.get('/metadata-types', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/metadata-types', requireAuth, requireAdmin, async (req, res) => {
+router.post('/metadata-types', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const { key, label, description } = req.body || {};
   const normalizedKey = String(key || label || '').trim().replace(/\s+/g, '_');
   if (!normalizedKey || !label) {
@@ -3019,7 +3086,7 @@ router.post('/metadata-types', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/metadata-types/:key', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/metadata-types/:key', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const idx = fallbackStore.metadataTypes.findIndex(item => item.key === req.params.key);
@@ -3051,7 +3118,7 @@ router.get('/options', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/options', requireAuth, requireAdmin, async (req, res) => {
+router.post('/options', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const payload = req.body || {};
   const type = clean(payload.type || payload.fieldKey).slice(0, 100);
   const value = clean(payload.value || payload.optionValue);
@@ -3074,7 +3141,7 @@ router.post('/options', requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await getPool().query(
       `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
-       VALUES ($1, $2, $3, COALESCE($4, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM options o WHERE o.field_key = $1)), FALSE, $5, $6, NOW(), NOW())
+       VALUES ($1, $2, $3, COALESCE($4, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM options o WHERE o.field_key = $1::varchar)), FALSE, $5, $6, NOW(), NOW())
        ON CONFLICT (field_key, option_value) DO UPDATE SET
          option_label = EXCLUDED.option_label,
          is_active = EXCLUDED.is_active,
@@ -3089,7 +3156,7 @@ router.post('/options', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/options/:type/:value', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/options/:type/:value', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.options = fallbackStore.options.filter(o => !(o.type === req.params.type && o.value === req.params.value));
@@ -3107,7 +3174,7 @@ router.delete('/options/:type/:value', requireAuth, requireAdmin, async (req, re
   }
 });
 
-router.post('/options/reorder', requireAuth, requireAdmin, async (req, res) => {
+router.post('/options/reorder', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : [];
   if (orderedIds.length === 0) {
     return sendJson(res, 400, { error: 'No option order supplied' });
@@ -3150,7 +3217,7 @@ router.get('/workflow-rules', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/workflow-rules', requireAuth, requireAdmin, async (req, res) => {
+router.post('/workflow-rules', requireAuth, requirePermissionCode('workflow.manage'), async (req, res) => {
   const payload = req.body || {};
   const status = clean(payload.status);
   if (!status) return sendJson(res, 400, { error: 'Status is required' });
@@ -3196,7 +3263,7 @@ router.post('/workflow-rules', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/workflow-rules/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/workflow-rules/:id', requireAuth, requirePermissionCode('workflow.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const idx = fallbackStore.workflowRules.findIndex(rule => rule.id === req.params.id || rule.status === req.params.id);

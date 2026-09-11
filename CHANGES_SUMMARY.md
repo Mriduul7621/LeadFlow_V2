@@ -342,3 +342,24 @@ dead code হিসেবে পুরো ফোল্ডার সরানো 
 
 
 
+---
+
+## Canonical Role Action Permissions (complete separation)
+
+The Roles & Access editor now cleanly separates the three permission layers:
+
+- **Data Visibility** (Own / DownTeam / FullTeam / Organization) — unchanged.
+- **Feature Access** — module/page visibility only (the `All Leads` toggle is
+  now standalone; all action-like child toggles removed from the editor).
+- **Action Permissions** — the canonical, server-enforced grant matrix
+  (`permissions` × `role_permissions`), now covering Users, Roles,
+  Departments, Hierarchy & Teams and Settings in addition to Dashboard and
+  Leads. Administration mutations are gated by
+  `requirePermissionCode(...)` (ADMIN/SUPERADMIN bypass, fail closed);
+  existing custom roles gain nothing automatically. Password resets stay
+  administrator-only (`requireAdmin`): the catalog has no dedicated
+  password-reset code, so `users.edit` can edit employee details but can
+  never set another account's password (including via the inline password
+  field on user edit).
+
+Details: `docs/ROLE_PERMISSION_MODEL.md`.

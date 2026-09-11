@@ -92,7 +92,7 @@ describe('Role Feature Access — source guards', () => {
     const saveIdx = src.indexOf('menuAccess: {');
     assert.ok(saveIdx >= 0, 'menuAccess must be constructed on save');
     const slice = src.slice(saveIdx, saveIdx + 800);
-    assert.ok(slice.includes("'/workbench': roleFormFeatures?.workbench?.view"), '/workbench must be driven by workbench.view');
+    assert.ok(slice.includes("'/workbench': featureOn('workbench')"), '/workbench must be driven by the workbench module toggle');
   });
 
   it('adminService maps workbench to /workbench and defaults it fail-closed', () => {
@@ -110,15 +110,20 @@ describe('Role Feature Access — source guards', () => {
 
   it('legacy labels are renamed to current sidebar names (internal keys preserved)', () => {
     const block = appFeaturesBlock();
-    // New current names present
-    for (const label of ['Performance', 'Trends', 'Campaigns', 'Follow-up Queue', 'Team', 'Users', 'Add New Lead', 'System Connection']) {
+    // New current names present. NOTE: 'System Connection' was the label of
+    // the settings_control.view_sync SUB-OPTION and is intentionally gone
+    // with the rest of the action-like child toggles.
+    for (const label of ['Performance', 'Trends', 'Campaigns', 'Follow-up Queue', 'Team', 'Users', 'Add New Lead']) {
       assert.ok(block.includes(`label: '${label}'`), `must use current label '${label}'`);
     }
     // Legacy visible labels removed
     for (const legacy of ["'Execution Intelligence'", "'Trend Charts'", "'Campaign Breakdown'", "'Follow-up Strategy'", "'Team Progress'", "'Lead Generation'", "'Sync Settings'"]) {
       assert.ok(!block.includes(legacy), `legacy label ${legacy} must be renamed`);
     }
-    // Internal keys preserved (not blindly renamed)
+    // Internal keys preserved (not blindly renamed). NOTE: `view_sync` was a
+    // settings_control SUB-OPTION key and is intentionally gone — the editor
+    // no longer exposes action-like child toggles (the self-service key now
+    // lives only in usePermissions' SELF_SERVICE_SETTINGS_KEYS mapping).
     for (const key of [
       "'execution_intelligence'",
       "'trend_charts'",
@@ -129,7 +134,6 @@ describe('Role Feature Access — source guards', () => {
       "'lead_generate'",
       "'lead_tracking'",
       "'settings_control'",
-      "'view_sync'",
     ]) {
       assert.ok(block.includes(key), `internal key ${key} must be preserved`);
     }
@@ -152,6 +156,7 @@ describe('Role Feature Access — source guards', () => {
       'lead_tracking',
       'lead_generate',
       'lead_upload',
+      'all_leads',
       'execution_intelligence',
       'ncp_progress',
       'trend_charts',
@@ -165,10 +170,16 @@ describe('Role Feature Access — source guards', () => {
 
   it('All Leads stays a view control and does not claim data-scope authority', () => {
     const block = appFeaturesBlock();
-    assert.ok(block.includes("'view_all_leads_tab'"), 'internal key view_all_leads_tab must be preserved');
+    // All Leads is now a standalone top-level module toggle (previously the
+    // view_all_leads_tab sub-option of lead_tracking).
+    assert.ok(block.includes("key: 'all_leads'"), 'all_leads must be a top-level feature key');
     assert.ok(block.includes('All Leads'), 'visible label All Leads must exist');
     // Menu/route access must never be conflated with server data visibility.
     assert.ok(block.includes('data scope still follows role visibility'), 'All Leads description must defer data scope to role visibility');
+    const src = userMgmt();
+    const saveIdx = src.indexOf('menuAccess: {');
+    const slice = src.slice(saveIdx, saveIdx + 800);
+    assert.ok(slice.includes("'/leads/all': featureOn('all_leads')"), '/leads/all must be driven by the all_leads module toggle');
   });
 
   it('dataVisibility scopes are preserved in the editor', () => {
@@ -176,7 +187,8 @@ describe('Role Feature Access — source guards', () => {
     for (const scope of ["'Own'", "'DownTeam'", "'FullTeam'", "'Organization'"]) {
       assert.ok(src.includes(scope), `dataVisibility scope ${scope} must remain`);
     }
-    assert.ok(src.includes("roleFormFeatures?.lead_tracking?.status_update"), 'lead status update (leads.edit proxy) must remain mapped in save payload');
+    // The legacy leads.edit proxy is now derived from the canonical grant.
+    assert.ok(src.includes("edit: granted('leads.edit')"), 'legacy actions.edit must be derived from the canonical leads.edit grant');
   });
 
   it('Daily Workbench mutations still gate on lead_tracking edit (leads.edit), not workbench view', () => {
