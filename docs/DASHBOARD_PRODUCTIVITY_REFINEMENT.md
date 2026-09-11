@@ -38,7 +38,7 @@ and creating a decision-oriented CRM workspace.
 - **Conversion Rate** — `converted / totalLeads * 100`, safe `0.0%` when total = 0
 - **Collected NCP** — `custom_fields.collectedNCP` aggregated across visible leads
 - **Projected NCP** — `leads.expected_premium` / `custom_fields.projectedNCP` aggregated
-- **Active Leads** — total minus Converted minus Not Interested; sub-caption shows pipeline-locked count
+- **Active Leads** — `metrics.activeLeads`; sub-caption passes through `metrics.pipelineLocked ?? 0` as “{pipelineLocked} Pipeline Locked” (never derived from active leads)
 - **Overdue Follow-ups** — `followUpCounts.overdue` from server follow-up queue
 
 **Removed from top snapshot (moved deliberately):**
@@ -57,7 +57,7 @@ and creating a decision-oriented CRM workspace.
 
 | Day | Metrics | Items |
 |-----|---------|-------|
-| **Today** | - total activities<br>- Calls count<br>- Meetings count<br>- Follow-ups count<br>- Tasks count | Ordered list by scheduled time / urgency (max 6 items each of follow-ups and scheduled activities) |
+| **Today** | - total activities<br>- Calls count<br>- Meetings count<br>- Follow-ups count<br>- Tasks count | One unified list ordered by existing due/scheduled timestamps; all loaded rows appear once in a bounded, scrollable list |
 | **Tomorrow** | same structure | same structure |
 
 **Data sources (server-authoritative, no `getLeads()` fetch):**
@@ -71,10 +71,23 @@ and creating a decision-oriented CRM workspace.
 - Activity type: CALL, MEETING, FOLLOW_UP, TASK
 - Lead/prospect name
 - Activity title/agenda
-- Priority (if available)
-- Current lead status (only if adds value)
+- Current lead status for follow-up queue items
 
-**Avoids:** repeating top-level Follow-up Health cards
+**Counting and de-duplication:**
+
+- Calls / Meetings / Follow-ups / Tasks and the day total all count the same
+  normalized, loaded rows that the list renders; these are not global KPI totals.
+- Exact repeated IDs are removed within each source before counting and rendering.
+- Queue `id` identifies a lead (code or ID); scheduled activity `id` identifies a
+  separate planned activity. The loaded contracts do **not** expose a shared
+  follow-up/activity ID or item-level linkage. Matching a lead, name or timestamp
+  is not proof of duplication, so cross-source items remain distinct. No heuristic
+  de-duplication, invented linkage fields, or extra fetches are introduced.
+- `dailyLoading` controls per-day skeletons during initial loading and refresh;
+  empty messages and zero summaries are shown only after loading has settled.
+
+**Avoids:** the second “Scheduled Activities” rendering block and repeating
+top-level Follow-up Health cards
 
 ### 4. Sales Pipeline — Primary Stage Distribution
 
@@ -107,7 +120,8 @@ merged into Pipeline; otherwise the redundant section is gone.
 - 3 compact metrics: Overdue / Due Today / Upcoming
 - Overdue share ratio: `overdue / all follow-ups` (calculated only when both values
   are available from the same authoritative dashboard response)
-- Clear CTA to Follow-up Queue (`/follow-up`)
+- Clear CTA to Follow-up Queue (`/follow-up`); the Overdue card preserves the
+  `/follow-up?bucket=overdue` deep link removed from Needs Attention
 
 **Data:** uses `followUpCounts` from dashboard server response only. No fabricated
 completion rates, discipline scores, SLA scores, or trends.
@@ -118,15 +132,19 @@ completion rates, discipline scores, SLA scores, or trends.
 
 **Current signals (authoritative only):**
 
-- **Untouched Leads** → links to `/leads`
-- **Overdue Follow-ups** → links to `/follow-up?bucket=overdue`
+- **Untouched Leads** → `statusCounts.Untouched`, links to `/leads`
+- No Overdue Follow-ups row here: the high-level exception stays in Executive
+  Snapshot and its operational context stays in Follow-up Discipline.
 
-**Presentation:** compact rows, each linking to the relevant existing screen.
+**Presentation:** one compact, full-width row linking to the existing screen.
+Only `NeedsAttentionSection` remains; the unused `NeedsAttention` duplicate,
+unused empty-state helper, imports and superseded computations are removed from
+`Dashboard.tsx`.
 
 **Excluded (future PRs):** lead scoring, AI risk, manager attention score, stale-lead
 heuristics, fabricated priority.
 
-**Placeholder:** "Additional attention rules coming in a later phase."
+No speculative attention-rule placeholder is displayed.
 
 ### 7. Performance Insights — Only When Useful
 
@@ -289,35 +307,29 @@ the data is truly available and the change is small and correct.
 
 ## Tests / Regression Guards
 
-Added focused tests proving:
+Added 26 focused regressions in
+`server/tests/dashboard-productivity-refinement.test.ts`:
 
-- Executive Snapshot does not contain redundant Untouched / Due Today / Converted cards
-- Total Leads remains
-- Conversion Rate remains
-- Collected NCP remains
-- Projected NCP remains
-- Active Leads remains
-- Overdue metric uses accurate label matching actual data
-- Today exists
-- Tomorrow exists
-- CALL exists
-- MEETING exists
-- FOLLOW_UP exists
-- TASK exists
-- Today/Tomorrow does not call getLeads()
-- Pipeline remains canonical statusCounts-driven
-- Converted remains visible in Pipeline
-- Separate Lead Status Distribution is removed if redundant
-- Follow-up Discipline uses authoritative followUpCounts
-- Needs Attention uses only real authoritative signals
-- No fabricated trend/delta/score
-- Empty Trend/Team sections do not waste large space
-- Task Calendar is last
-- Unified date filter remains
-- PR #19 performance guards remain green
-- PR #21 scheduled activity tests remain green
-- PR #22 English-only/header/date/design guards remain green
-- RBAC/menuAccess tests remain green
+- Real React rendering with imported History and all four activity-type icons
+- Dashboard-only TypeScript diagnostics with unused-local/parameter checks
+- Pipeline Locked receives `metrics.pipelineLocked ?? 0`, independent of active leads
+- Today and Tomorrow each show their own Calls / Meetings / Follow-ups / Tasks counts
+- Every scheduled/queue row renders once, preserves links/badges, and is ordered by time
+- Exact source-ID duplicates are removed; no lead/name/time heuristic merging
+- All loaded rows remain available beyond six items per source
+- Daily-loading and refresh skeletons cannot show false empty messages or zero counts
+- Needs Attention contains only Untouched Leads; overdue queue navigation is preserved
+- `rounded-[10px]` replaces the typo on the Add Lead action
+- No full lead fetch or additional daily requests
+- Final section order is preserved with Task Calendar last
+- Existing date controls/default/query mapping, plus Dhaka date behavior in three
+  browser timezones, February/leap-year caps and year rollover
+
+The existing Step 5B loader guard now ends at `loadDailyExecution` instead of the
+removed `formattedDateRange` variable; its server-authority assertion is unchanged.
+PR #19 performance, PR #21 scheduled activity, and PR #22 English-only/design/date
+suites remain part of the full test run, alongside authentication, RBAC, visibility,
+import, follow-up and dashboard API integration coverage.
 
 Run:
 
@@ -327,6 +339,20 @@ npx tsc --noEmit
 npm run build
 npm run verify:serverless
 ```
+
+### Verification — 2026-09-11
+
+| Command | Result |
+|---------|--------|
+| `npm test -- --run` | Passed: 312 tests across 24 suites, 0 failures/skips (includes 26 new focused tests and the PR #19/#21/#22 guards) |
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; Vite reports a non-blocking chunk-size warning above 500 kB |
+| `npm run verify:serverless` | Passed: all 8 checks in production DB-unconfigured mode |
+
+No `DATABASE_URL` was configured for the serverless smoke test, so it verifies
+compiled ESM boot, routes, authentication protection, and honest 503 responses
+without a database—not a live hosted PostgreSQL deployment. The full test suite
+also exercises the existing PGlite-backed integration coverage.
 
 ## Intentionally Hidden / Unavailable Analytics
 
@@ -353,19 +379,22 @@ npm run verify:serverless
 - No full lead list fetch for dashboard KPIs or Today/Tomorrow panel
 - Follow-up queue and scheduled-activities are individually paged (default limit 50/100)
 - Date-range filtering uses server-computed boundaries (no client-side derivation of totals)
-- Skeletons shown while metrics load; explicit error/empty states on failure
+- Metrics skeletons and independent Today/Tomorrow skeletons while daily execution
+  loads; existing dashboard error handling is preserved
 - Refresh action reloads only what's needed (dashboard data + daily execution)
 
 ## No Fabricated Metrics Policy
 
 The dashboard UI is intentionally honest: if a metric is not available from the
 server-authoritative `GET /api/dashboard` or `GET /api/leads/follow-ups` endpoints, it
-does not appear. No client-side derivation, no default fallbacks, no fabricated growth
-percentages or scores. The only computed values are:
+does not appear. No fabricated growth percentages or scores. KPI values are passed
+through from the dashboard response with the existing nullish zero fallback while
+unavailable. The presentation computations are limited to:
 
 - Conversion rate = `converted / totalLeads * 100` (safe `0.0%` when total = 0)
 - Overdue share = `overdue / all` (only when both values come from the same dashboard response)
 - Percentage of total per pipeline stage (derived from statusCounts + totalLeads)
+- Per-day type counts and totals from the already-loaded, exact-ID-unique activity rows
 
 All other values are passed through exactly as provided by the server.
 

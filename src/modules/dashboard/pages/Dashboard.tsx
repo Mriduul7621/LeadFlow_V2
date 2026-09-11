@@ -5,7 +5,7 @@ import {
   Inbox,
   Clock,
   AlertTriangle,
-  CheckCircle,
+  History,
   TrendingUp,
   Banknote,
   Percent,
@@ -15,7 +15,6 @@ import {
   ChevronRight,
   CalendarClock,
   ArrowRight,
-  Info,
   Phone,
   Video,
   ClipboardCheck,
@@ -99,7 +98,7 @@ interface ResolvedRange {
   display: string;
 }
 
-function resolveRange(period: PeriodKey, customStart?: string, customEnd?: string): ResolvedRange {
+export function resolveRange(period: PeriodKey, customStart?: string, customEnd?: string): ResolvedRange {
   const dhakaNow = getDhakaNow();
   const y = dhakaNow.getFullYear();
   const m = dhakaNow.getMonth();
@@ -211,18 +210,6 @@ function SectionHeading({ title, desc, action }: { title: string; desc?: string;
   );
 }
 
-function EmptyState({ icon: Icon, title, note }: { icon: React.ComponentType<{ className?: string }>; title: string; note?: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center text-center py-12 px-6 bg-[#FFFCF8] border border-dashed border-stone-200 rounded-[12px]">
-      <div className="w-11 h-11 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-300 mb-3 shadow-sm">
-        <Icon className="w-5 h-5" />
-      </div>
-      <p className="text-[12px] font-bold text-stone-600">{title}</p>
-      {note && <p className="text-[12px] text-stone-400 font-medium mt-2 max-w-sm leading-relaxed">{note}</p>}
-    </div>
-  );
-}
-
 function SkeletonCard() {
   return (
     <div className="bg-white rounded-[12px] border border-stone-100 p-5 min-h-[118px] animate-pulse" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
@@ -233,13 +220,13 @@ function SkeletonCard() {
 }
 
 // ---- Follow-up Discipline compact card -----------------------------
-function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: number; dueToday: number; upcoming: number; total: number }) {
+export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: number; dueToday: number; upcoming: number; total: number }) {
   const overdueShare = total > 0 ? Math.round((overdue / total) * 100) : 0;
   return (
     <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
       <SectionHeading title="Follow-up Discipline" />
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
+        <Link to="/follow-up?bucket=overdue" className="rounded-[12px] border p-5 flex items-center justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-150">
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-red-600" />
             <div>
@@ -248,7 +235,7 @@ function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: n
             </div>
           </div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">{overdueShare}% share</span>
-        </div>
+        </Link>
         <div className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
           <div className="flex items-center gap-3">
             <Clock className="w-5 h-5 text-amber-600" />
@@ -277,138 +264,71 @@ function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: n
   );
 }
 
-// ---- Needs Attention compact rows ----------------------------------
-function NeedsAttention({ untouched, overdueFollowUps }: { untouched: number; overdueFollowUps: number }) {
-  return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading title="Needs Attention" />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Link
-          to="/leads"
-          className="rounded-[12px] border border-stone-100 p-5 hover:border-[#978C21]/30 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-        >
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-400 shadow-sm">
-              <Inbox className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-stone-800">Untouched Leads</p>
-              <p className="text-[12px] text-stone-400">Leads with no engagement yet</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-black text-brand-text">{formatCount(untouched)}</p>
-            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Tracking</span>
-          </div>
-        </Link>
-        <Link
-          to="/follow-up?bucket=overdue"
-          className="rounded-[12px] border border-stone-100 p-5 hover:border-red-200 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-        >
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-[10px] bg-red-50 border border-red-200 flex items-center justify-center text-red-500">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-stone-800">Overdue Follow-ups</p>
-              <p className="text-[12px] text-stone-400">Follow-ups past due date</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-black text-red-600">{formatCount(overdueFollowUps)}</p>
-            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Overdue Queue</span>
-          </div>
-        </Link>
-      </div>
-      <p className="flex items-center gap-2 text-[12px] text-stone-400 mt-4 border-t border-stone-100 pt-4">
-        <Info className="w-3.5 h-3.5 shrink-0" /> Additional attention rules coming in a later phase.
-      </p>
-    </section>
-  );
+// ---- Today & Tomorrow panel -----------------------------------------
+const ACTIVITY_TYPES = ['call', 'meeting', 'follow_up', 'task'] as const;
+const ACTIVITY_META = {
+  call: { label: 'Call', summary: 'Calls', icon: Phone, tone: 'bg-sky-50 border-sky-200 text-sky-700' },
+  meeting: { label: 'Meeting', summary: 'Meetings', icon: Video, tone: 'bg-amber-50 border-amber-200 text-amber-700' },
+  follow_up: { label: 'Follow-up', summary: 'Follow-ups', icon: History, tone: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
+  task: { label: 'Task', summary: 'Tasks', icon: ClipboardCheck, tone: 'bg-purple-50 border-purple-200 text-purple-700' },
+};
+
+interface DailyActivity {
+  key: string;
+  leadId: string;
+  activityType: ScheduledActivity['activityType'];
+  scheduledAt: string;
+  name: string;
+  title?: string | null;
+  leadStatus?: string | null;
 }
 
-// ---- Today & Tomorrow panel -----------------------------------------
-function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled, tomorrowScheduled }: {
+function getDailyActivities(followUps: FollowUpQueueItem[], scheduled: ScheduledActivity[]): DailyActivity[] {
+  const activities: DailyActivity[] = [
+    ...followUps.map((item): DailyActivity => ({
+      key: `follow-up:${item.id}`,
+      leadId: item.id,
+      activityType: 'follow_up',
+      scheduledAt: item.nextFollowUpAt,
+      name: item.prospectName || item.customerName || 'Follow-up',
+      leadStatus: item.currentStatus,
+    })),
+    ...scheduled.map((item): DailyActivity => ({
+      key: `scheduled:${item.id}`,
+      leadId: item.leadId,
+      activityType: item.activityType,
+      scheduledAt: item.scheduledAt,
+      name: item.leadCustomerName || item.title || ACTIVITY_META[item.activityType].label,
+      title: item.title,
+    })),
+  ];
+
+  // Exact IDs only, namespaced by source: queue IDs identify leads, whereas
+  // scheduled_activities IDs identify independent planned activities. Neither
+  // loaded contract supplies an item-level link between the two, so matching
+  // lead IDs, names or due times cannot safely collapse cross-source follow-ups.
+  const uniqueActivities = new Map(activities.map((item) => [item.key, item]));
+  const time = (item: DailyActivity) => {
+    const timestamp = new Date(item.scheduledAt).getTime();
+    return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+  };
+  return [...uniqueActivities.values()].sort((a, b) => time(a) - time(b));
+}
+
+export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled, tomorrowScheduled, dailyLoading }: {
   todayFollowUps: FollowUpQueueItem[];
   tomorrowFollowUps: FollowUpQueueItem[];
   todayScheduled: ScheduledActivity[];
   tomorrowScheduled: ScheduledActivity[];
+  dailyLoading: boolean;
 }) {
-  const dhakaToday = getDhakaTodayYmd();
-  const tomorrowYmd = (() => {
-    const base = parseYmdToDate(dhakaToday)!;
-    const next = new Date(base);
-    next.setDate(base.getDate() + 1);
-    return formatYmd(next);
-  })();
-
-  const renderActivityList = (items: FollowUpQueueItem[], title: string) => {
-    if (items.length === 0 && title === 'Today' && todayScheduled.length === 0) return null;
-    if (items.length === 0 && title === 'Tomorrow' && tomorrowScheduled.length === 0) return null;
-    return (
-      <div className="space-y-3">
-        {items.slice(0, 6).map((item) => (
-          <Link
-            key={item.id}
-            to={`/leads/${encodeURIComponent(item.id)}`}
-            className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-[#FFFCF8] hover:shadow-sm transition-all duration-150 group"
-          >
-            <div className="w-9 h-9 rounded-[10px] bg-[#FDFBF7] border border-stone-100 flex items-center justify-center shrink-0 group-hover:bg-white">
-              <History className="w-4 h-4 text-stone-400 group-hover:text-[#978C21]" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-stone-800 truncate">{item.prospectName || item.customerName}</p>
-              <p className="text-[11px] text-stone-400">
-                Follow-up · {formatDhakaDue(item.nextFollowUpAt)}
-              </p>
-            </div>
-            <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border shrink-0', getLeadStatusColorClasses(item.currentStatus))}>
-              {item.currentStatus}
-            </span>
-          </Link>
-        ))}
-        {(title === 'Today' ? todayScheduled : tomorrowScheduled).slice(0, 6).map((sa) => {
-          const typeKey = String(sa.activityType).toLowerCase();
-          const typeLabel =
-            typeKey === 'call' ? 'Call' : typeKey === 'meeting' ? 'Meeting' : typeKey === 'task' ? 'Task' : 'Follow-up';
-          const Icon =
-            typeKey === 'call' ? Phone : typeKey === 'meeting' ? Video : typeKey === 'task' ? ClipboardCheck : CalendarClock;
-          const tone =
-            typeKey === 'meeting'
-              ? 'bg-amber-50 border-amber-200 text-amber-700'
-              : typeKey === 'call'
-                ? 'bg-sky-50 border-sky-200 text-sky-700'
-                : typeKey === 'task'
-                  ? 'bg-purple-50 border-purple-200 text-purple-700'
-                  : 'bg-emerald-50 border-emerald-200 text-emerald-700';
-          return (
-            <Link
-              key={sa.id}
-              to={`/leads/${encodeURIComponent(sa.leadId)}`}
-              className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-white hover:shadow-sm transition-all duration-150 group"
-            >
-              <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', tone)}>
-                <Icon className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-stone-800 truncate">{sa.leadCustomerName || sa.title || typeLabel}</p>
-                <p className="text-[11px] text-stone-400">
-                  {typeLabel} · {formatDhakaDue(sa.scheduledAt)}
-                  {sa.title ? ` · ${sa.title}` : ''}
-                </p>
-              </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border shrink-0 bg-stone-50 border-stone-200 text-stone-600">
-                {typeLabel}
-              </span>
-            </Link>
-          );
-        })}
-      </div>
-    );
-  };
+  const groups = [
+    { label: 'Today', items: getDailyActivities(todayFollowUps, todayScheduled) },
+    { label: 'Tomorrow', items: getDailyActivities(tomorrowFollowUps, tomorrowScheduled) },
+  ];
 
   return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+    <section aria-busy={dailyLoading} className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
       <SectionHeading
         title="Today & Tomorrow"
         desc="Planned activities for today and tomorrow"
@@ -420,68 +340,76 @@ function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled,
       />
 
       <div className="space-y-8">
-        {[
-          { label: 'Today', followUps: todayFollowUps, scheduled: todayScheduled },
-          { label: 'Tomorrow', followUps: tomorrowFollowUps, scheduled: tomorrowScheduled },
-        ].map((group) => (
-          <div key={group.label}>
+        {groups.map((group) => (
+          <section key={group.label} aria-label={group.label}>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-[11px] font-black uppercase tracking-widest text-stone-400">{group.label}</p>
-              <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2 py-0.5 rounded-full border border-stone-100">
-                {group.followUps.length + group.scheduled.length}
-              </span>
+              <h3 className="text-[11px] font-black uppercase tracking-widest text-stone-400">{group.label}</h3>
+              {!dailyLoading && (
+                <span aria-label={`${group.items.length} activities`} className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2 py-0.5 rounded-full border border-stone-100">
+                  {formatCount(group.items.length)}
+                </span>
+              )}
             </div>
-            {group.followUps.length === 0 && group.scheduled.length === 0 ? (
-              <div className="rounded-[12px] border border-dashed border-stone-200 px-4 py-6 text-[13px] text-stone-400 text-center bg-[#FFFCF8]">
-                {group.label === 'Today' ? 'No activities scheduled for today' : 'No activities scheduled for tomorrow'}
+            {dailyLoading ? (
+              <div role="status" aria-label={`Loading ${group.label.toLowerCase()} activities`} className="space-y-3 animate-pulse">
+                <span className="sr-only">Loading {group.label.toLowerCase()} activities...</span>
+                <div className="h-10 bg-stone-100 rounded-[10px]" aria-hidden="true" />
+                <div className="h-16 bg-stone-100 rounded-[10px]" aria-hidden="true" />
+                <div className="h-16 bg-stone-100 rounded-[10px]" aria-hidden="true" />
               </div>
             ) : (
-              <div className="space-y-2">
-                {renderActivityList(group.followUps, group.label)}
-                {group.scheduled.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-stone-100">
-                    <p className="text-[11px] font-black uppercase tracking-widest text-stone-400">Scheduled Activities</p>
-                    {group.scheduled.slice(0, 6).map((sa) => {
-                      const typeKey = String(sa.activityType).toLowerCase();
-                      const typeLabel =
-                        typeKey === 'call' ? 'Call' : typeKey === 'meeting' ? 'Meeting' : typeKey === 'task' ? 'Task' : 'Follow-up';
-                      const Icon =
-                        typeKey === 'call' ? Phone : typeKey === 'meeting' ? Video : typeKey === 'task' ? ClipboardCheck : CalendarClock;
-                      const tone =
-                        typeKey === 'meeting'
-                          ? 'bg-amber-50 border-amber-200 text-amber-700'
-                          : typeKey === 'call'
-                            ? 'bg-sky-50 border-sky-200 text-sky-700'
-                            : typeKey === 'task'
-                              ? 'bg-purple-50 border-purple-200 text-purple-700'
-                              : 'bg-emerald-50 border-emerald-200 text-emerald-700';
+              <>
+                <dl aria-label={`${group.label} activity counts`} className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                  {ACTIVITY_TYPES.map((type) => (
+                    <div key={type} className="flex items-center justify-between gap-2 rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-3 py-2">
+                      <dt className="text-[11px] font-semibold text-stone-500">{ACTIVITY_META[type].summary}</dt>
+                      <dd className="text-sm font-bold text-brand-text">{formatCount(group.items.filter((item) => item.activityType === type).length)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {group.items.length === 0 ? (
+                  <div className="rounded-[12px] border border-dashed border-stone-200 px-4 py-6 text-[13px] text-stone-400 text-center bg-[#FFFCF8]">
+                    {group.label === 'Today' ? 'No activities scheduled for today' : 'No activities scheduled for tomorrow'}
+                  </div>
+                ) : (
+                  <ol aria-label={`${group.label} activities`} className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                    {group.items.map((item) => {
+                      const { label, icon: Icon, tone } = ACTIVITY_META[item.activityType];
                       return (
-                        <Link
-                          key={sa.id}
-                          to={`/leads/${encodeURIComponent(sa.leadId)}`}
-                          className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-white hover:shadow-sm transition-all duration-150 group"
-                        >
-                          <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', tone)}>
-                            <Icon className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-semibold text-stone-800 truncate">{sa.leadCustomerName || sa.title || typeLabel}</p>
-                            <p className="text-[11px] text-stone-400">
-                              {typeLabel} · {formatDhakaDue(sa.scheduledAt)}
-                              {sa.title ? ` · ${sa.title}` : ''}
-                            </p>
-                          </div>
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border shrink-0 bg-stone-50 border-stone-200 text-stone-600">
-                            {typeLabel}
-                          </span>
-                        </Link>
+                        <li key={item.key}>
+                          <Link
+                            to={`/leads/${encodeURIComponent(item.leadId)}`}
+                            className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-[#FFFCF8] hover:shadow-sm transition-all duration-150 group"
+                          >
+                            <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', tone)}>
+                              <Icon className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-stone-800 truncate">{item.name}</p>
+                              <p className="text-[11px] text-stone-400">
+                                {label} · {formatDhakaDue(item.scheduledAt)}
+                                {item.title ? ` · ${item.title}` : ''}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap justify-end gap-1 max-w-[40%]">
+                              <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', tone)}>
+                                {label}
+                              </span>
+                              {item.leadStatus && (
+                                <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', getLeadStatusColorClasses(item.leadStatus))}>
+                                  {item.leadStatus}
+                                </span>
+                              )}
+                            </div>
+                          </Link>
+                        </li>
                       );
                     })}
-                  </div>
+                  </ol>
                 )}
-              </div>
+              </>
             )}
-          </div>
+          </section>
         ))}
       </div>
     </section>
@@ -519,12 +447,13 @@ function SalesPipeline({ statusCounts, totalLeads }: { statusCounts: Record<stri
 }
 
 // ---- Executive Snapshot ---------------------------------------------
-function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, projectedNCP, activeLeads, overdueFollowUps }: {
+export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, projectedNCP, activeLeads, pipelineLocked, overdueFollowUps }: {
   totalLeads: number;
   conversionRate: string;
   collectedNCP: string;
   projectedNCP: string;
   activeLeads: number;
+  pipelineLocked: number;
   overdueFollowUps: number;
 }) {
   return (
@@ -535,7 +464,7 @@ function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, projected
         <KpiCard label="Conversion Rate" value={conversionRate} icon={Percent} variant="slate" />
         <KpiCard label="Collected NCP" value={collectedNCP} icon={Banknote} variant="emerald" />
         <KpiCard label="Projected NCP" value={projectedNCP} icon={TrendingUp} variant="olive" />
-        <KpiCard label="Active Leads" value={formatCount(activeLeads)} icon={Layers} variant="blue" sub={`${formatCount(activeLeads > 0 ? 0 : 0)} Pipeline Locked`} />
+        <KpiCard label="Active Leads" value={formatCount(activeLeads)} icon={Layers} variant="blue" sub={`${pipelineLocked} Pipeline Locked`} />
       </div>
       {/* Overdue Follow-ups shown as a compact callout under the KPI grid */}
       <div className="mt-4 rounded-[12px] border border-red-200 bg-red-50 p-4">
@@ -608,11 +537,11 @@ function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date
 }
 
 // ---- Needs Attention ------------------------------------------------
-function NeedsAttentionSection({ untouched, overdueFollowUps }: { untouched: number; overdueFollowUps: number }) {
+export function NeedsAttentionSection({ untouched }: { untouched: number }) {
   return (
     <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
       <SectionHeading title="Needs Attention" />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <Link
           to="/leads"
           className="rounded-[12px] border border-stone-100 p-5 hover:border-[#978C21]/30 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
@@ -631,28 +560,7 @@ function NeedsAttentionSection({ untouched, overdueFollowUps }: { untouched: num
             <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Tracking</span>
           </div>
         </Link>
-        <Link
-          to="/follow-up?bucket=overdue"
-          className="rounded-[12px] border border-stone-100 p-5 hover:border-red-200 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-        >
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-[10px] bg-red-50 border border-red-200 flex items-center justify-center text-red-500">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-stone-800">Overdue Follow-ups</p>
-              <p className="text-[12px] text-stone-400">Follow-ups past due date</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-black text-red-600">{formatCount(overdueFollowUps)}</p>
-            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Overdue Queue</span>
-          </div>
-        </Link>
       </div>
-      <p className="flex items-center gap-2 text-[12px] text-stone-400 mt-4 border-t border-stone-100 pt-4">
-        <Info className="w-3.5 h-3.5 shrink-0" /> Additional attention rules coming in a later phase.
-      </p>
     </section>
   );
 }
@@ -786,15 +694,6 @@ export default function Dashboard() {
   const statusCounts = metrics?.statusCounts ?? {};
   const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
-
-  const pipelineStages = PIPELINE_STAGES.map((stage) => {
-    const count = Number((statusCounts as any)[stage] || 0);
-    const pct = totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0;
-    return { stage, count, pct };
-  });
-
-  const distribution = (metrics?.campaignStats ?? []).filter((row) => row && typeof row.name === 'string');
-  const distributionMax = Math.max(1, ...distribution.map((row) => Number(row.value) || 0));
 
   const refreshAll = () => {
     void loadDashboardData();
@@ -941,7 +840,7 @@ export default function Dashboard() {
               to="/leads/new"
               title="Add Lead"
               aria-label="Add Lead"
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-[10x] bg-[#978C21] text-white text-xs font-bold shadow-sm hover:bg-[#8a7f1e] focus:outline-none focus:ring-2 focus:ring-[#978C21]/30 transition-all duration-150"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-[10px] bg-[#978C21] text-white text-xs font-bold shadow-sm hover:bg-[#8a7f1e] focus:outline-none focus:ring-2 focus:ring-[#978C21]/30 transition-all duration-150"
             >
               <Plus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               <span className="hidden sm:inline">Add Lead</span>
@@ -1000,6 +899,7 @@ export default function Dashboard() {
             collectedNCP={formatMoney(metrics?.collected ?? 0)}
             projectedNCP={formatMoney(metrics?.projected ?? 0)}
             activeLeads={metrics?.activeLeads ?? 0}
+            pipelineLocked={metrics?.pipelineLocked ?? 0}
             overdueFollowUps={followUpCounts.overdue}
           />
 
@@ -1009,6 +909,7 @@ export default function Dashboard() {
             tomorrowFollowUps={tomorrowFollowUps}
             todayScheduled={todayScheduled}
             tomorrowScheduled={tomorrowScheduled}
+            dailyLoading={dailyLoading}
           />
 
           {/* ==== Sales Pipeline ==== */}
@@ -1023,10 +924,7 @@ export default function Dashboard() {
           />
 
           {/* ==== Needs Attention ==== */}
-          <NeedsAttentionSection
-            untouched={(statusCounts as any).Untouched}
-            overdueFollowUps={followUpCounts.overdue}
-          />
+          <NeedsAttentionSection untouched={statusCounts['Untouched'] ?? 0} />
 
           {/* ==== Performance Insights ==== */}
           <PerformanceInsights
