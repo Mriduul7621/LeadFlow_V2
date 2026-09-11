@@ -47,6 +47,7 @@ const REAL_ROUTES = [
   '/activities',
   '/task-calendar',
   '/follow-up',
+  '/workbench',
   '/leads',
   '/leads/new',
   '/leads/upload',
@@ -178,7 +179,7 @@ describe('Dashboard UX Step 5B — source guards', () => {
       '/', '/leads/new', '/leads', '/leads/upload', '/leads/all',
       '/follow-up', '/task-calendar', '/activities', '/leads/:id',
       '/users', '/team', '/execution-intelligence', '/ncp-progress',
-      '/trend-charts', '/campaign-breakdown', '/settings',
+      '/trend-charts', '/campaign-breakdown', '/settings', '/workbench',
     ];
     for (const p of protectedPaths) {
       const idx = app.indexOf(`path: '${p}'`);
