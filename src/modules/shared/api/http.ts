@@ -18,6 +18,7 @@
  */
 
 import { useAuthStore } from '../../auth/store/authStore';
+import { noteApiBodySettled } from './diagnostics';
 
 export class ApiError extends Error {
   status: number;
@@ -56,6 +57,11 @@ async function fetchAndHandle(path: string, init: RequestInit): Promise<any> {
   }
 
   const text = await response.text().catch(() => '');
+  // TEMPORARY read-only diagnostics (admin-only UI): upgrade the recorded
+  // timing to the body-inclusive total client duration now that the body
+  // has been read. Pure metadata bookkeeping — parsing, unwrapping, the
+  // error mapping and the 401 session flow below are untouched.
+  noteApiBodySettled(response);
   let body: any = null;
   if (text) {
     try {

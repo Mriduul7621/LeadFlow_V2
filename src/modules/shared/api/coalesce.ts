@@ -68,8 +68,12 @@ function tokenFingerprint(token: string): string {
  * layer and the apiClient token patch).
  *
  * Shape: `u:<user.id|anon>|t:<token-fingerprint|anon>`
+ *
+ * Exported for the (temporary, read-only) diagnostics recorder in
+ * ./diagnostics.ts so BOTH consumers derive session identity from ONE
+ * implementation — the raw token never leaves this function.
  */
-function currentSessionScope(): string {
+export function currentSessionScope(): string {
   const state = useAuthStore.getState();
   const uid = state.user?.id ? `u:${String(state.user.id)}` : 'u:anon';
   const tf = state.token ? `t:${tokenFingerprint(String(state.token))}` : 't:anon';

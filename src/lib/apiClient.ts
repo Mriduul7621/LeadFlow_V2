@@ -13,8 +13,37 @@
  * normal and the token will be attached automatically.
  */
 import { useAuthStore } from '../modules/auth/store/authStore';
+import {
+  recordApiRequestStart,
+  recordApiRequestSettled,
+  recordApiRequestFailed,
+  diagnosticsNowMs,
+} from '../modules/shared/api/diagnostics';
 
 let patched = false;
+
+/**
+ * TEMPORARY, READ-ONLY performance diagnostics wrapper (mobile latency
+ * troubleshooting — see docs/MOBILE_PERFORMANCE_DIAGNOSTICS.md).
+ *
+ * Wraps ONLY the settled promise of the REAL fetch: the Response/error is
+ * passed through untouched, nothing is awaited before the request fires,
+ * and the recorder receives just (url, method) at start plus safe
+ * response-header metadata at settle — never Authorization headers,
+ * tokens, request bodies, or response bodies.
+ */
+function instrumentedDiagnostics(pending: Promise<Response>, diagId: number, startedPerfMs: number): Promise<Response> {
+  return pending.then(
+    response => {
+      recordApiRequestSettled(diagId, response, diagnosticsNowMs() - startedPerfMs);
+      return response;
+    },
+    error => {
+      recordApiRequestFailed(diagId, diagnosticsNowMs() - startedPerfMs, error);
+      throw error;
+    }
+  );
+}
 
 export function installAuthenticatedFetch() {
   if (patched) return;
@@ -30,9 +59,14 @@ export function installAuthenticatedFetch() {
       return originalFetch(input, init);
     }
 
+    // Diagnostics FIRST-CLASS metadata: only the URL and HTTP method are
+    // recorded (the recorder cannot accept headers, tokens, or bodies).
+    const diagId = recordApiRequestStart(url, (init.method || (input instanceof Request ? input.method : 'GET') || 'GET'));
+    const startedPerfMs = diagnosticsNowMs();
+
     const token = useAuthStore.getState().token;
     if (!token) {
-      return originalFetch(input, init);
+      return instrumentedDiagnostics(originalFetch(input, init), diagId, startedPerfMs);
     }
 
     const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
@@ -40,6 +74,6 @@ export function installAuthenticatedFetch() {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return originalFetch(input, { ...init, headers });
+    return instrumentedDiagnostics(originalFetch(input, { ...init, headers }), diagId, startedPerfMs);
   };
 }
