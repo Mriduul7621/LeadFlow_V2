@@ -59,11 +59,14 @@ async function loadAllOptions(forceRefresh = false): Promise<DropdownOption[]> {
   return all;
 }
 
-// Per-type in-memory index dies with the session (no cross-user reuse).
-registerSessionCacheClearHandler(() => {
+function clearMetadataSessionCaches(): void {
   typesCache = null;
   valuesCache = {};
-});
+}
+
+// Per-type in-memory index dies with the session (no cross-user reuse).
+// Named function so HMR re-register is a Set no-op.
+registerSessionCacheClearHandler(clearMetadataSessionCaches);
 
 function isOfflineError(err: unknown): boolean {
   // status 0 = network failure; >=500 = server/database unavailable.

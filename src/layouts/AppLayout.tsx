@@ -36,7 +36,7 @@ import {
   readSessionCache,
   writeSessionCache,
 } from '../modules/shared/api/sessionCache';
-import { markCriticalStartupSettled, waitForCriticalStartup } from '../modules/shared/api/startupPriority';
+import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
 // Source-guard preservation: role menu visibility still driven by
 // `menuAccess` override (dynamic) with static `roles.includes` fallback.
 // The single check `isItemVisible` + `visibleSections` + `userRoleNormalized === 'ADMIN'` bypass must remain.
@@ -245,9 +245,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     };
     refreshNotifsRef.current = fetchNotifs;
     // Tier 3: do not compete with GET /api/dashboard on first login.
+    // Wait on the SHELL gate (not first-dashboard-critical): a first
+    // visit to /workbench /users /leads must still fetch the bell, but
+    // must not pretend the later first Dashboard KPI already ran.
     // Panel-open and the 60 s refresh still call fetchNotifs directly.
     if (!cached) {
-      void waitForCriticalStartup().then(() => {
+      void waitForShellStartup().then(() => {
         if (stopped) return;
         void fetchNotifs();
       });
@@ -268,9 +271,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [isNotifOpen]);
 
   useEffect(() => {
-    // Non-dashboard routes have no KPI-critical request to wait for.
-    // Release deferred startup reads immediately so they cannot hang.
-    if (location.pathname !== '/') markCriticalStartupSettled();
+    // Non-dashboard routes have no KPI request. Release SHELL waiters
+    // (notifications / options) so they cannot hang — but do NOT mark
+    // first-dashboard-critical. The later first Dashboard load of this
+    // session must still sequence GET /api/dashboard ahead of today/
+    // upcoming / scheduled.
+    if (location.pathname !== '/') markShellStartupSettled();
   }, [location.pathname]);
 
   const syncNotifications = (next: SystemNotification[]) => {

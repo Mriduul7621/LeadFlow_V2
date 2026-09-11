@@ -15,56 +15,115 @@
  * refresh, lead-status warm-up) start AFTER that, with no setTimeout
  * and no global fetch queue.
  *
+ * Two independent gates (must not share one `settled` flag):
+ *
+ *   1. First-dashboard-critical (`waitForCriticalStartup`)
+ *      Settled ONLY when GET /api/dashboard of this authenticated
+ *      session has finished (success OR failure). Today/upcoming
+ *      follow-ups wait on this. A visit to /workbench, /users, /leads
+ *      MUST NOT mark it — otherwise the later first Dashboard load
+ *      would start follow-ups concurrently with the KPI request.
+ *
+ *   2. Shell / non-dashboard readiness (`waitForShellStartup`)
+ *      Notifications and options warm-up wait here so they do not
+ *      hang when the first protected route is not Dashboard. AppLayout
+ *      marks this on any path other than `/`. The first Dashboard KPI
+ *      settle also marks it (so landing on `/` still defers them).
+ *
+ * After the first Dashboard critical request of the session settles,
+ * later Dashboard revisits resolve immediately (no re-sequencing,
+ * no deadlock). Logout resets BOTH gates.
+ *
  * Rules:
  * - No timers, no sleeps, no global serialization of business requests.
- * - Waiters resolve the instant critical startup settles (success OR
- *   failure) — a failed KPI load must not pin follow-ups forever.
- * - Logout resets the gate so the next session sequences again.
- * - Non-dashboard routes mark settled immediately (there is no KPI
- *   request to wait for, so deferred reads must not hang).
+ * - Waiters resolve the instant their gate settles — a failed KPI load
+ *   must not pin follow-ups forever.
+ * - Logout drops in-flight waiters (not resolved) so they cannot fetch
+ *   under the next user's token.
  *
  * Marker for post-deploy mobile comparison (Performance Diagnostics):
  *   STARTUP_CRITICAL = GET /api/dashboard
  */
 
-let settled = false;
-let waiters: Array<() => void> = [];
+let dashboardSettled = false;
+let dashboardWaiters: Array<() => void> = [];
 
-/** True once the critical first-dashboard request has settled (or there is none). */
-export function isCriticalStartupSettled(): boolean {
-  return settled;
-}
+let shellSettled = false;
+let shellWaiters: Array<() => void> = [];
 
-/**
- * Release every waiter. Idempotent: a second call is a no-op so a
- * dashboard unmount and a non-dashboard route effect can both fire.
- */
-export function markCriticalStartupSettled(): void {
-  if (settled) return;
-  settled = true;
+function release(waiters: Array<() => void>): void {
   const pending = waiters;
-  waiters = [];
   for (const resolve of pending) resolve();
 }
 
+/** True once THIS session's first GET /api/dashboard has settled. */
+export function isCriticalStartupSettled(): boolean {
+  return dashboardSettled;
+}
+
+/** True once shell waiters (notifications / options) may proceed. */
+export function isShellStartupSettled(): boolean {
+  return shellSettled;
+}
+
 /**
- * Resolve when critical startup has settled. Already-settled callers
- * get a resolved promise (refresh / later navigation never block).
+ * Release first-dashboard waiters. Idempotent. Also unblocks the shell
+ * gate: a Dashboard landing is the critical path those waiters were
+ * deferring for. AppLayout must NEVER call this on non-`/` routes.
+ */
+export function markCriticalStartupSettled(): void {
+  if (!dashboardSettled) {
+    dashboardSettled = true;
+    const pending = dashboardWaiters;
+    dashboardWaiters = [];
+    release(pending);
+  }
+  markShellStartupSettled();
+}
+
+/**
+ * Unblock notifications / options without claiming the first Dashboard
+ * KPI has run. Used by AppLayout on every path other than `/`.
+ */
+export function markShellStartupSettled(): void {
+  if (shellSettled) return;
+  shellSettled = true;
+  const pending = shellWaiters;
+  shellWaiters = [];
+  release(pending);
+}
+
+/**
+ * Resolve when THIS session's first GET /api/dashboard has settled.
+ * Already-settled callers (later Dashboard revisits) get a resolved
+ * promise so they never deadlock.
  */
 export function waitForCriticalStartup(): Promise<void> {
-  if (settled) return Promise.resolve();
+  if (dashboardSettled) return Promise.resolve();
   return new Promise<void>(resolve => {
-    waiters.push(resolve);
+    dashboardWaiters.push(resolve);
   });
 }
 
 /**
- * Called on logout so the next login re-enters the first-dashboard
- * sequence. In-flight waiters from the signed-out session are dropped
- * (not resolved) — those callers belong to unmounting components and
- * must not start fetches under the next user's token.
+ * Resolve when shell chrome may fetch. Settled by a non-dashboard
+ * route OR by the first Dashboard KPI — whichever happens first.
+ */
+export function waitForShellStartup(): Promise<void> {
+  if (shellSettled) return Promise.resolve();
+  return new Promise<void>(resolve => {
+    shellWaiters.push(resolve);
+  });
+}
+
+/**
+ * Called on logout so the next login re-enters first-dashboard
+ * sequencing. In-flight waiters from the signed-out session are
+ * dropped (not resolved).
  */
 export function resetStartupPriority(): void {
-  settled = false;
-  waiters = [];
+  dashboardSettled = false;
+  shellSettled = false;
+  dashboardWaiters = [];
+  shellWaiters = [];
 }

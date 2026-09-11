@@ -73,13 +73,22 @@ describe('Performance Phase 3 — critical vs deferred startup', () => {
     assert.ok(!full.includes('setTimeout'), 'Dashboard must not introduce setTimeout delays');
 
     const layout = read('src/layouts/AppLayout.tsx');
-    assert.ok(layout.includes('waitForCriticalStartup()'), 'notification first-fetch must wait for critical readiness');
-    assert.ok(layout.includes("location.pathname !== '/'"), 'non-dashboard routes must release the gate so waiters cannot hang');
+    assert.ok(layout.includes('waitForShellStartup()'), 'notification first-fetch waits on the shell gate, not first-dashboard-critical');
+    assert.ok(!layout.includes('waitForCriticalStartup'), 'AppLayout must not wait on first-dashboard-critical (that would hang on /workbench)');
+    assert.ok(layout.includes('markShellStartupSettled()'), 'non-dashboard routes release SHELL waiters so they cannot hang');
+    assert.ok(!layout.includes('markCriticalStartupSettled'), 'non-dashboard routes must NOT mark the future first Dashboard as completed');
+    assert.ok(layout.includes("location.pathname !== '/'"), 'non-dashboard routes must release the shell gate so waiters cannot hang');
 
     const login = read('src/modules/auth/pages/Login.tsx');
-    assert.ok(login.includes('waitForCriticalStartup()'), 'lead-status /api/options warm-up must wait for critical readiness');
+    assert.ok(login.includes('waitForShellStartup()'), 'lead-status /api/options warm-up waits on the shell gate');
+    assert.ok(!login.includes('waitForCriticalStartup'), 'login warm-up must not wait on first-dashboard-critical (would hang on a non-dashboard first route)');
     const warm = login.slice(login.indexOf('warmUpAfterAuthentication'));
-    assert.ok(warm.indexOf('localDb.createUser') < warm.indexOf('waitForCriticalStartup'), 'local cache write stays immediate; only the network warm-up waits');
+    assert.ok(warm.indexOf('localDb.createUser') < warm.indexOf('waitForShellStartup'), 'local cache write stays immediate; only the network warm-up waits');
+
+    const gate = read('src/modules/shared/api/startupPriority.ts');
+    assert.ok(gate.includes('let dashboardSettled'), 'first-dashboard-critical is its own flag');
+    assert.ok(gate.includes('let shellSettled'), 'shell readiness is a separate flag');
+    assert.ok(gate.includes('STARTUP_CRITICAL = GET /api/dashboard'));
   });
 
   it('C. follow-up bucket reads stay server-authoritative and are not replaced by bucket=all', () => {
@@ -196,40 +205,183 @@ function loginSession(store: any, userId: string, employeeId: string, token: str
 }
 
 describe('Performance Phase 3 — startupPriority behavior', () => {
-  it('J. waiters block until mark; a second mark is a no-op; reset drops waiters', async () => {
+  async function loadGate() {
+    const mod = await import('../../src/modules/shared/api/startupPriority.js');
+    mod.resetStartupPriority();
+    return mod;
+  }
+
+  it('J. login → Dashboard: sequencing applies (follow-ups wait for KPI; shell waits too)', async () => {
     const {
       waitForCriticalStartup,
+      waitForShellStartup,
       markCriticalStartupSettled,
       isCriticalStartupSettled,
+      isShellStartupSettled,
       resetStartupPriority,
-    } = await import('../../src/modules/shared/api/startupPriority.js');
-    resetStartupPriority();
-    assert.equal(isCriticalStartupSettled(), false);
+    } = await loadGate();
 
-    let released = 0;
-    const p1 = waitForCriticalStartup().then(() => { released += 1; });
-    const p2 = waitForCriticalStartup().then(() => { released += 1; });
-    await new Promise(r => setTimeout(r, 15));
-    assert.equal(released, 0, 'waiters must not run before critical readiness');
     assert.equal(isCriticalStartupSettled(), false);
+    assert.equal(isShellStartupSettled(), false);
+
+    let daily = 0;
+    let shell = 0;
+    const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
+    const shellP = waitForShellStartup().then(() => { shell += 1; });
+    await new Promise(r => setTimeout(r, 15));
+    assert.equal(daily, 0, 'today/upcoming must not start before GET /api/dashboard settles');
+    assert.equal(shell, 0, 'notifications/options must not join the first-dashboard burst');
+
+    markCriticalStartupSettled(); // Dashboard KPI finally (success)
+    await Promise.all([dailyP, shellP]);
+    assert.equal(daily, 1);
+    assert.equal(shell, 1);
+    assert.equal(isCriticalStartupSettled(), true);
+    assert.equal(isShellStartupSettled(), true);
+    resetStartupPriority();
+  });
+
+  it('J2. login → Workbench → Dashboard: first Dashboard STILL sequences', async () => {
+    const {
+      waitForCriticalStartup,
+      waitForShellStartup,
+      markCriticalStartupSettled,
+      markShellStartupSettled,
+      isCriticalStartupSettled,
+      isShellStartupSettled,
+      resetStartupPriority,
+    } = await loadGate();
+
+    // AppLayout on /workbench: shell may proceed, first-dashboard must not.
+    markShellStartupSettled();
+    assert.equal(isShellStartupSettled(), true);
+    assert.equal(isCriticalStartupSettled(), false, 'Workbench must not mark first-dashboard complete');
+
+    let notif = false;
+    await waitForShellStartup().then(() => { notif = true; });
+    assert.equal(notif, true, 'notifications/options must not hang on a non-dashboard first route');
+
+    let daily = 0;
+    const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
+    await new Promise(r => setTimeout(r, 15));
+    assert.equal(daily, 0, 'later first Dashboard load must still wait for GET /api/dashboard');
 
     markCriticalStartupSettled();
-    await Promise.all([p1, p2]);
-    assert.equal(released, 2);
+    await dailyP;
+    assert.equal(daily, 1);
+    resetStartupPriority();
+  });
+
+  it('J3. cold reload on /users → Dashboard: first Dashboard STILL sequences', async () => {
+    const {
+      waitForCriticalStartup,
+      waitForShellStartup,
+      markCriticalStartupSettled,
+      markShellStartupSettled,
+      isCriticalStartupSettled,
+      resetStartupPriority,
+    } = await loadGate();
+
+    markShellStartupSettled(); // AppLayout on /users
+    await waitForShellStartup();
+    assert.equal(isCriticalStartupSettled(), false);
+
+    let daily = 0;
+    const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
+    await new Promise(r => setTimeout(r, 15));
+    assert.equal(daily, 0, 'cold reload on /users must not skip first-dashboard sequencing');
+
+    markCriticalStartupSettled();
+    await dailyP;
+    assert.equal(daily, 1);
+    resetStartupPriority();
+  });
+
+  it('J4. Dashboard → other route → Dashboard: later revisit does not deadlock', async () => {
+    const {
+      waitForCriticalStartup,
+      waitForShellStartup,
+      markCriticalStartupSettled,
+      markShellStartupSettled,
+      isCriticalStartupSettled,
+      resetStartupPriority,
+    } = await loadGate();
+
+    markCriticalStartupSettled(); // first Dashboard KPI of the session
     assert.equal(isCriticalStartupSettled(), true);
 
-    markCriticalStartupSettled();
-    const p3 = await waitForCriticalStartup();
-    assert.equal(p3, undefined, 'already-settled wait returns immediately');
+    markShellStartupSettled(); // navigate to /leads (no-op; already settled)
+    await waitForShellStartup();
+    await waitForCriticalStartup(); // later Dashboard revisit: must resolve, not hang
 
+    const again = await Promise.race([
+      waitForCriticalStartup().then(() => 'ok'),
+      new Promise<string>(r => setTimeout(() => r('deadlock'), 30)),
+    ]);
+    assert.equal(again, 'ok', 'a later Dashboard revisit in the same session must not re-wait');
     resetStartupPriority();
-    assert.equal(isCriticalStartupSettled(), false);
-    let late = false;
-    void waitForCriticalStartup().then(() => { late = true; });
-    await new Promise(r => setTimeout(r, 10));
-    assert.equal(late, false, 'reset must not resolve leftover waiters under a new session');
+  });
+
+  it('J5. failure of GET /api/dashboard still releases dependent reads', async () => {
+    const {
+      waitForCriticalStartup,
+      waitForShellStartup,
+      markCriticalStartupSettled,
+      resetStartupPriority,
+    } = await loadGate();
+
+    // Source: Dashboard KPI `finally` calls mark even after the catch.
+    const { kpi } = dashboardLoaders();
+    const finallyIdx = kpi.indexOf('finally');
+    assert.ok(finallyIdx >= 0, 'KPI loader must use finally');
+    assert.ok(kpi.indexOf('markCriticalStartupSettled()', finallyIdx) > finallyIdx, 'failure path still marks settled');
+    assert.ok(kpi.includes("setError('Dashboard data could not be loaded.')"));
+
+    let daily = 0;
+    let shell = 0;
+    const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
+    const shellP = waitForShellStartup().then(() => { shell += 1; });
+    markCriticalStartupSettled(); // finally after catch
+    await Promise.all([dailyP, shellP]);
+    assert.equal(daily, 1, 'a failed KPI must not pin today/upcoming forever');
+    assert.equal(shell, 1, 'a failed KPI must not pin notifications/options forever');
+    resetStartupPriority();
+  });
+
+  it('J6. logout/login resets first-dashboard AND shell state', async () => {
+    const {
+      waitForCriticalStartup,
+      waitForShellStartup,
+      markCriticalStartupSettled,
+      isCriticalStartupSettled,
+      isShellStartupSettled,
+      resetStartupPriority,
+    } = await loadGate();
+
     markCriticalStartupSettled();
-    await waitForCriticalStartup();
+    assert.equal(isCriticalStartupSettled(), true);
+    assert.equal(isShellStartupSettled(), true);
+
+    let leaked = false;
+    const pending = waitForCriticalStartup(); // already settled — this one resolves
+    await pending;
+
+    resetStartupPriority(); // logout of a session that had already sequenced
+    assert.equal(isCriticalStartupSettled(), false);
+    assert.equal(isShellStartupSettled(), false);
+
+    void waitForCriticalStartup().then(() => { leaked = true; });
+    void waitForShellStartup().then(() => { leaked = true; });
+    await new Promise(r => setTimeout(r, 15));
+    assert.equal(leaked, false, 'logout must drop in-flight waiters and require the next session to sequence again');
+
+    let nextDaily = 0;
+    const nextP = waitForCriticalStartup().then(() => { nextDaily += 1; });
+    await new Promise(r => setTimeout(r, 15));
+    assert.equal(nextDaily, 0, 'the next login must re-apply first-dashboard sequencing');
+    markCriticalStartupSettled();
+    await nextP;
+    assert.equal(nextDaily, 1);
     resetStartupPriority();
   });
 });

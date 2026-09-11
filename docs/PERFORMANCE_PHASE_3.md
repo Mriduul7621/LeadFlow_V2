@@ -87,7 +87,8 @@ cold reload :  GET /api/auth/session            (startup gate — unchanged)
 login       :  POST /api/auth/login
              → navigate '/'
              → localDb.createUser (no network)
-             → GET /api/options WAITING on critical settle
+             → GET /api/options WAITING on shell settle
+               (shell settle = first Dashboard KPI, or a non-`/` route)
 
 layout mount (parallel with Tier 1, not deferred — menu / Add Lead):
              GET /api/roles                         (session-cached, coalesced)
@@ -96,6 +97,7 @@ layout mount (parallel with Tier 1, not deferred — menu / Add Lead):
 Tier 1 — critical:
              GET /api/dashboard?…                   (KPI shell)
              ↳ markCriticalStartupSettled()
+                (also marks shell settled)
 
 Tier 2 — after critical settles:
              GET /api/leads/follow-ups?bucket=today
@@ -103,16 +105,22 @@ Tier 2 — after critical settles:
 
 Tier 3 — after follow-ups settle:
              GET /api/scheduled-activities (today..tomorrow)
-             GET /api/notifications/users/:emp           (was waiting on critical)
-             GET /api/options                            (lead-status warm-up)
+             GET /api/notifications/users/:emp           (was waiting on SHELL)
+             GET /api/options                            (lead-status warm-up, SHELL)
 
 After daily settles (unchanged Phase 2):
              embedded Task Calendar chunk + 90-day window
 ```
 
-Non-dashboard first route (cold reload on `/workbench`, etc.):
-`AppLayout` marks critical settled immediately so notifications / options
-warm-up cannot hang.
+Non-dashboard first route (cold reload on `/workbench`, `/users`, `/leads`,
+etc.): `AppLayout` marks **shell** settled immediately so notifications /
+options cannot hang. It does **not** mark first-dashboard-critical. The
+later first Dashboard load of that session still runs GET `/api/dashboard`
+before today/upcoming follow-ups.
+
+After that first Dashboard KPI of the session settles, later Dashboard
+revisits skip the first-login sequence (no deadlock). Logout resets both
+gates.
 
 ---
 
@@ -151,19 +159,24 @@ warm-up cannot hang.
 
 ## 4. Changes made
 
-### 4.1 Critical vs noncritical sequencing — `startupPriority.ts`
+### 4.1 Two gates — `startupPriority.ts`
 
-New tiny gate (`src/modules/shared/api/startupPriority.ts`):
+`src/modules/shared/api/startupPriority.ts` keeps **two independent
+flags** (one module-global `settled` boolean is not enough: marking it
+on `/workbench` would skip sequencing on the later first Dashboard):
 
-- `waitForCriticalStartup()` / `markCriticalStartupSettled()` /
-  `resetStartupPriority()`
+| Gate | Waiters | Marked by | Not marked by |
+|---|---|---|---|
+| **First-dashboard-critical** `waitForCriticalStartup` | Dashboard today/upcoming follow-ups | Dashboard KPI `finally` (success **or** failure) | AppLayout on `/workbench`, `/users`, `/leads`, … |
+| **Shell** `waitForShellStartup` | First notification fetch, login options warm-up | AppLayout on any path other than `/`, **and** the first Dashboard KPI settle | — |
+
 - **No `setTimeout`, no global fetch queue, no serialization of all
   business requests.**
-- Dashboard KPI `finally` marks settled (success *or* failure, so
-  waiters cannot hang).
-- `AppLayout` marks settled immediately on any path other than `/`.
-- Logout resets the gate (waiters from the old session are dropped,
-  not resolved — they must not fetch under the next token).
+- Later Dashboard revisits in the same session resolve immediately
+  (the first KPI of the session already ran).
+- Logout (`resetStartupPriority`) clears **both** gates and drops
+  in-flight waiters (not resolved — they must not fetch under the next
+  token).
 
 ### 4.2 Dashboard daily execution
 
@@ -310,8 +323,9 @@ tied to the same 45 s cliff.
 - **Vercel cold start + remote Postgres RTT** still sit inside
   Server-Timing (~1.6 s on the recorded dashboard). Out of scope.
 - If a future route is mounted at `/` that is not the Dashboard, the
-  gate would wait for a KPI load that never runs — today `/` **is**
-  Dashboard; non-`/` paths already release the gate.
+  first-dashboard-critical gate would wait for a KPI load that never
+  runs — today `/` **is** Dashboard. Non-`/` paths release only the
+  **shell** gate; they no longer pretend the first Dashboard already ran.
 - Users/options 5-minute TTL can be up to 5 minutes behind another
   admin’s edits in a different tab. Same trade as roles. Mutations in
   *this* session invalidate immediately.

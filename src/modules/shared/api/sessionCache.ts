@@ -63,11 +63,11 @@ export function invalidateSessionCache(key: string): void {
  * must die with the session. Registered by the modules that own them
  * so authStore does not import those modules (no cycles).
  */
-const clearHandlers: Array<() => void> = [];
+const clearHandlers = new Set<() => void>();
 
-/** Register a same-tick handler that runs whenever the session cache is cleared. */
+/** Register a same-tick handler that runs whenever the session cache is cleared. Set so HMR / double-register is a no-op. */
 export function registerSessionCacheClearHandler(handler: () => void): void {
-  clearHandlers.push(handler);
+  clearHandlers.add(handler);
 }
 
 /** Clear EVERY entry. Called on logout: nothing may cross user boundaries. */
