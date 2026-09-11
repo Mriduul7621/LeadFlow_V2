@@ -158,6 +158,23 @@ export const userService = {
     invalidateUsersReferenceCache();
   },
 
+  /**
+   * POST /api/auth/change-required-password — forced first-login password
+   * change. Self-only: the server derives the caller from the session, so
+   * this never requires `users.edit`, an admin role, or Settings Feature
+   * Access — and can never target another user. Returns the authoritative
+   * updated profile (with `mustChangePassword: false`) for the store.
+   */
+  async changeRequiredPassword(newPassword: string): Promise<User> {
+    const saved = await apiRequest<User>('/api/auth/change-required-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword }),
+    });
+    cacheUser(saved);
+    return saved;
+  },
+
   async resetPassword(userId: string, password: string): Promise<{ success: boolean }> {
     const result = await apiRequest<{ success: boolean }>(
       `/api/users/${encodeURIComponent(userId)}/reset-password`,
