@@ -281,6 +281,33 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
     }
   });
 
+  it('links all three Follow-up Discipline metrics to their queue buckets with native keyboard access and unchanged counts/share', () => {
+    const buckets = [['overdue', 'Overdue'], ['today', 'Due Today'], ['upcoming', 'Upcoming']] as const;
+    const scenarios = [
+      { props: { overdue: 9, dueToday: 2, upcoming: 3, total: 14 }, counts: ['9', '2', '3'], share: '64% share' },
+      { props: { overdue: 1200, dueToday: 345, upcoming: 56, total: 1601 }, counts: ['1,200', '345', '56'], share: '75% share' },
+      { props: { overdue: 0, dueToday: 0, upcoming: 0, total: 0 }, counts: ['0', '0', '0'], share: '0% share' },
+    ];
+    for (const { props, counts, share } of scenarios) {
+      const html = render(React.createElement(FollowUpDiscipline, props));
+      const links = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)];
+      assert.equal(links.length, 4, 'three metric links plus the existing full-queue link');
+      buckets.forEach(([bucket, label], index) => {
+        const matches = links.filter(([, attributes]) => attributes.includes(`href="/follow-up?bucket=${bucket}"`));
+        assert.equal(matches.length, 1, `${label} must link to its authoritative bucket exactly once`);
+        const [, attributes, content] = matches[0];
+        assert.match(content, new RegExp(`>${label}</p>`));
+        assert.match(content, new RegExp(`>${counts[index]}</p>`));
+        // Real anchors with href retain native Tab/Enter behavior and the app's
+        // existing focus-visible outline; no disabling or focus suppression.
+        assert.doesNotMatch(attributes, /tabindex="-1"|aria-disabled="true"|role="button"|outline-none/i);
+        if (bucket === 'overdue') assert.ok(content.includes(`>${share}</span>`));
+      });
+      assert.equal(links.filter(([, attributes]) => attributes.includes('href="/follow-up"')).length, 1);
+      assert.equal((html.match(/% share/g) || []).length, 1);
+    }
+  });
+
   it('keeps Overdue in Executive Snapshot and Follow-up Discipline, not Needs Attention', () => {
     const snapshot = render(React.createElement(ExecutiveSnapshot, snapshotProps));
     const discipline = render(React.createElement(FollowUpDiscipline, { overdue: 9, dueToday: 2, upcoming: 3, total: 14 }));

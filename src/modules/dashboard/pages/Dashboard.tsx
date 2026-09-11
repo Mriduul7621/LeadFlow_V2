@@ -236,7 +236,7 @@ export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { ove
           </div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">{overdueShare}% share</span>
         </Link>
-        <div className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
+        <Link to="/follow-up?bucket=today" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
           <div className="flex items-center gap-3">
             <Clock className="w-5 h-5 text-amber-600" />
             <div>
@@ -244,8 +244,8 @@ export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { ove
               <p className="text-2xl font-black text-amber-600 mt-1">{formatCount(dueToday)}</p>
             </div>
           </div>
-        </div>
-        <div className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
+        </Link>
+        <Link to="/follow-up?bucket=upcoming" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
           <div className="flex items-center gap-3">
             <CalendarClock className="w-5 h-5 text-blue-600" />
             <div>
@@ -253,7 +253,7 @@ export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { ove
               <p className="text-2xl font-black text-blue-600 mt-1">{formatCount(upcoming)}</p>
             </div>
           </div>
-        </div>
+        </Link>
       </div>
       <div className="mt-4 text-right">
         <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
