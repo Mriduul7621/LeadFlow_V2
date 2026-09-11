@@ -44,22 +44,40 @@ const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
-    desc: 'Home page analytics and KPIs.',
+    desc: 'View performance summary, pipeline, follow-up discipline and daily execution.',
+  },
+  {
+    key: 'workbench',
+    label: 'Daily Workbench',
+    desc: "Manage today's calls, meetings, follow-ups and tasks from one execution workspace.",
+  },
+  {
+    key: 'activities',
+    label: 'Activities',
+    desc: 'View lead activity history and execution records.',
+  },
+  {
+    key: 'task_calendar',
+    label: 'Task Calendar',
+    desc: 'View and manage scheduled calls, meetings, follow-ups and tasks.',
+  },
+  {
+    key: 'follow_up_strategy',
+    label: 'Follow-up Queue',
+    desc: 'View overdue, today and upcoming follow-ups.',
+  },
+  {
+    key: 'lead_tracking',
+    label: 'Lead Tracking',
+    desc: 'View and update visible leads.',
     suboptions: [
-      { key: 'view_calls_stats', label: 'Contact & Meeting Stats', desc: 'Show call and meeting counts on dashboard.' },
-      { key: 'view_pipeline_ncp', label: 'Pipeline & NCP Figures', desc: 'Show pipeline volumes and targets.' },
-      { key: 'view_division_table', label: 'Division Performance Table', desc: 'Show regional division statistics.' },
-      { key: 'view_ncp_chart', label: 'NCP Collection Chart', desc: 'Show collected vs projected chart.' },
-      { key: 'view_trend_chart', label: 'Campaign Trend Chart', desc: 'Show daily campaign trends.' },
-      { key: 'view_campaign_pie', label: 'Campaign Breakdown Chart', desc: 'Show campaign pie chart.' },
-      { key: 'view_critical_alerts', label: 'Critical Alerts', desc: 'Show alerts panel on dashboard.' },
-      { key: 'view_agent_table', label: 'Agent Rankings', desc: 'Show agent performance table.' },
-      { key: 'view_task_calendar', label: 'Task Calendar', desc: 'Show task calendar on dashboard.' },
+      { key: 'status_update', label: 'Update Lead Status', desc: 'Allow changing lead statuses (also unlocks Daily Workbench complete/edit/cancel).' },
+      { key: 'view_all_leads_tab', label: 'All Leads', desc: 'Open the all-leads workspace; actual data scope still follows role visibility.' },
     ],
   },
   {
     key: 'lead_generate',
-    label: 'Lead Generation',
+    label: 'Add New Lead',
     desc: 'Create new leads manually.',
     suboptions: [
       { key: 'create', label: 'Create Leads', desc: 'Allow creating new leads.' },
@@ -68,33 +86,21 @@ const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'lead_upload',
     label: 'Bulk Upload',
-    desc: 'Upload leads via Excel.',
+    desc: 'Import leads in bulk from supported files.',
     suboptions: [
       { key: 'upload', label: 'Upload Excel File', desc: 'Allow uploading lead spreadsheets.' },
       { key: 'delete', label: 'Delete Campaign Leads', desc: 'Allow deleting entire campaign leads.' },
     ],
   },
-  {
-    key: 'lead_tracking',
-    label: 'Lead Tracking',
-    desc: 'View and update lead statuses.',
-    suboptions: [
-      { key: 'status_update', label: 'Update Lead Status', desc: 'Allow changing lead statuses.' },
-      { key: 'view_all_leads_tab', label: 'All Leads Tab', desc: 'Show All Leads in sidebar menu.' },
-    ],
-  },
-  { key: 'execution_intelligence', label: 'Execution Intelligence', desc: 'View execution dashboard.' },
-  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View NCP collection tracking.' },
-  { key: 'trend_charts', label: 'Trend Charts', desc: 'View performance charts.' },
-  { key: 'campaign_breakdown', label: 'Campaign Breakdown', desc: 'View campaign details.' },
-  { key: 'follow_up_strategy', label: 'Follow-up Strategy', desc: 'View follow-up lists.' },
-  { key: 'task_calendar', label: 'Task Calendar', desc: 'View monthly task calendar.' },
-  { key: 'activities', label: 'Activities', desc: 'View today and tomorrow activity list.' },
-  { key: 'team_progress', label: 'Team Progress', desc: 'View team hierarchy and members.' },
+  { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.' },
+  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.' },
+  { key: 'trend_charts', label: 'Trends', desc: 'View available performance trend analytics.' },
+  { key: 'campaign_breakdown', label: 'Campaigns', desc: 'View campaign-level lead performance.' },
+  { key: 'team_progress', label: 'Team', desc: 'View reporting hierarchy and team information.' },
   {
     key: 'user_management',
-    label: 'User Management',
-    desc: 'Manage employees, roles and departments.',
+    label: 'Users',
+    desc: 'Manage users, roles and departments according to permissions.',
     suboptions: [
       { key: 'dept_view', label: 'View Departments', desc: 'Can view department list.' },
       { key: 'dept_create', label: 'Add Departments', desc: 'Can create departments.' },
@@ -117,14 +123,47 @@ const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'settings_control',
     label: 'Settings',
-    desc: 'Access to system settings and configuration.',
+    desc: 'Manage profile, system configuration and metadata based on permissions.',
     suboptions: [
       { key: 'view_profile', label: 'Edit Profile', desc: 'Allow editing name and avatar.' },
       { key: 'view_security', label: 'Change Password', desc: 'Allow changing password.' },
       { key: 'view_notifications', label: 'Notification Settings', desc: 'Allow managing notifications.' },
       { key: 'view_system', label: 'System Settings', desc: 'Allow changing system appearance.' },
-      { key: 'view_sync', label: 'Sync Settings', desc: 'Allow manual sync and DB check.' },
+      { key: 'view_sync', label: 'System Connection', desc: 'Allow checking cloud database connection status.' },
       { key: 'configure_parameters', label: 'Manage Parameters', desc: 'Allow adding/editing areas, products, campaigns.' },
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ */
+/*  Canonical action permissions (permissions × role_permissions).     */
+/*  These are the granular, server-enforced action grants — separate   */
+/*  from feature/menu visibility (APP_FEATURES) and data visibility.   */
+/* ------------------------------------------------------------------ */
+interface ActionPermissionMeta {
+  code: string;
+  label: string;
+  desc: string;
+}
+
+const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] }[] = [
+  {
+    module: 'Dashboard',
+    items: [
+      { code: 'dashboard.view', label: 'View', desc: 'Open the Dashboard (performance summary, pipeline, follow-up discipline, daily execution).' },
+    ],
+  },
+  {
+    module: 'Leads',
+    items: [
+      { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },
+      { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add New Lead).' },
+      { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench complete, edit, cancel and reschedule.' },
+      { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (All Leads).' },
+      { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
+      { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
+      { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Bulk Upload).' },
+      { code: 'leads.export', label: 'Export', desc: 'Export lead audit logs.' },
     ],
   },
 ];
@@ -176,6 +215,7 @@ export default function UserManagement() {
   const [roleFormSlug, setRoleFormSlug] = useState('');
   const [roleFormVisibility, setRoleFormVisibility] = useState<'Own' | 'DownTeam' | 'FullTeam' | 'Organization'>('Own');
   const [roleFormFeatures, setRoleFormFeatures] = useState<Record<string, Record<string, boolean>>>({});
+  const [roleFormActions, setRoleFormActions] = useState<Record<string, boolean>>({});
   const [showRoleForm, setShowRoleForm] = useState(false);
 
   // ---- Hierarchy (company-wide reporting ladder) states ----
@@ -394,6 +434,17 @@ export default function UserManagement() {
     setRoleFormSlug(role.roleId);
     setRoleFormVisibility((role.dataVisibility as any) || 'Own');
     setRoleFormFeatures(role.featurePermissions || {});
+    setRoleFormActions({});
+    // Load the canonical action grants for this role (server-authoritative,
+    // persisted in role_permissions — never reconstructed from localStorage).
+    adminService
+      .getRolePermissions(role.roleId)
+      .then(grants => {
+        const map: Record<string, boolean> = {};
+        grants.forEach(g => { map[g.code] = g.allowed; });
+        setRoleFormActions(map);
+      })
+      .catch(() => setRoleFormActions({}));
   };
 
   const handleNewRole = () => {
@@ -407,6 +458,11 @@ export default function UserManagement() {
       f.suboptions?.forEach(s => { defaults[f.key][s.key] = false; });
     });
     setRoleFormFeatures(defaults);
+    // New roles start fail-closed on every canonical action (Admin grants
+    // each action explicitly).
+    const actions: Record<string, boolean> = {};
+    ACTION_PERMISSION_GROUPS.forEach(g => g.items.forEach(i => { actions[i.code] = false; }));
+    setRoleFormActions(actions);
     setShowRoleForm(true);
   };
 
@@ -423,6 +479,7 @@ export default function UserManagement() {
         isCustom: selectedRole ? selectedRole.isCustom : true,
         menuAccess: {
           '/': roleFormFeatures?.dashboard?.view ?? false,
+          '/workbench': roleFormFeatures?.workbench?.view ?? false,
           '/leads/new': roleFormFeatures?.lead_generate?.view ?? false,
           '/leads/upload': roleFormFeatures?.lead_upload?.view ?? false,
           '/leads/all': roleFormFeatures?.lead_tracking?.view_all_leads_tab ?? false,
@@ -451,6 +508,22 @@ export default function UserManagement() {
       };
 
       await adminService.saveRole(payload);
+      // Persist the canonical action grants separately (role_permissions).
+      // Only codes the server already knows are stored; unknown codes are
+      // ignored server-side (fail closed).
+      const grants = ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => ({
+        code: i.code,
+        allowed: !!roleFormActions[i.code],
+      })));
+      try {
+        await adminService.saveRolePermissions(slug, grants);
+      } catch (permErr) {
+        // Role metadata/config is already committed; the action grants are
+        // NOT. Report the partial failure honestly and keep the editor open
+        // so the admin can retry — never claim full success.
+        toast.error('Role settings were saved, but action permissions could not be saved. Please retry.');
+        return;
+      }
       toast.success('Role saved successfully.');
       setShowRoleForm(false);
       await loadData();
@@ -1035,6 +1108,44 @@ export default function UserManagement() {
                     })}
                   </div>
                 </div>
+              </div>
+
+              {/* Action permissions (canonical, server-enforced) */}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-800">Action Permissions</h3>
+                  <p className="text-sm text-slate-500">
+                    Granular actions this role can perform. These are enforced by the server
+                    and persist to the database — separate from page visibility and data access.
+                  </p>
+                </div>
+                {ACTION_PERMISSION_GROUPS.map(group => (
+                  <div key={group.module} className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {group.items.map(item => {
+                        const isOn = !!roleFormActions[item.code];
+                        return (
+                          <label key={item.code} className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-slate-50">
+                            <input
+                              type="checkbox"
+                              checked={isOn}
+                              onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
+                              className="mt-0.5 w-4 h-4 accent-[#978C21]"
+                            />
+                            <div>
+                              <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                              <p className="text-[10px] text-slate-400">{item.desc}</p>
+                              <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

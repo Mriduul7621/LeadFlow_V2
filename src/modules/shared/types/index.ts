@@ -118,6 +118,23 @@ export interface Permissions {
   }>;
 }
 
+/**
+ * A single canonical action permission, sourced from the server's
+ * `permissions` table and persisted per-role in `role_permissions`.
+ * This is the granular, server-enforced action layer (separate from
+ * menu/feature visibility and data visibility).
+ */
+export interface RolePermissionGrant {
+  /** Canonical permission code, e.g. 'leads.edit'. */
+  code: string;
+  /** Module name, e.g. 'Leads'. */
+  module: string;
+  /** Action name, e.g. 'EDIT'. */
+  action: string;
+  /** Effective allowance for the role. */
+  allowed: boolean;
+}
+
 export interface Team {
   id: string;
   name: string;
