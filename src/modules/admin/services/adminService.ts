@@ -119,6 +119,9 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
 ];
 
 export function ensureFeaturePermissions(role: RolePermission): RolePermission {
+  // Feature Access is MODULE / PAGE VISIBILITY ONLY ({ view } per feature).
+  // Granular actions live in the canonical permission layer
+  // (permissions × role_permissions) and are never stored here.
   const defaults: Record<string, Record<string, boolean>> = {
     dashboard: { view: true },
     // Daily Workbench is a newly introduced feature (PR #27/28). It must
@@ -127,33 +130,23 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
     // ADMIN/SUPERADMIN still get full access via the explicit bypass below;
     // an admin must grant /workbench to non-admin roles explicitly.
     workbench: { view: false },
-    lead_generate: { view: true, create: true },
-    lead_upload: { view: true, upload: true, delete: true },
-    lead_tracking: { view: true, status_update: true },
+    activities: { view: true },
+    task_calendar: { view: true },
+    follow_up_strategy: { view: true },
+    lead_tracking: { view: true },
+    lead_generate: { view: true },
+    lead_upload: { view: true },
+    // All Leads defaults FAIL-CLOSED for roles with no legacy signal; the
+    // backfill below seeds it from the pre-existing view_all_leads_tab /
+    // menuAccess['/leads/all'] so existing roles keep their effective access.
+    all_leads: { view: false },
     execution_intelligence: { view: true },
     ncp_progress: { view: true },
     trend_charts: { view: true },
     campaign_breakdown: { view: true },
-    follow_up_strategy: { view: true },
-    task_calendar: { view: true },
-    activities: { view: true },
     team_progress: { view: true },
-    user_management: {
-      view: true,
-      dept_view: true, dept_create: true, dept_edit: true, dept_delete: true,
-      role_view: true, role_create: true, role_edit: true, role_delete: true,
-      user_view: true, user_create: true, user_edit: true, user_delete: true,
-      hier_view: true, hier_create: true, hier_edit: true, hier_delete: true
-    },
-    settings_control: {
-      view: true,
-      view_profile: true,
-      view_security: true,
-      view_notifications: true,
-      view_system: true,
-      view_sync: true,
-      configure_parameters: true
-    }
+    user_management: { view: true },
+    settings_control: { view: true }
   };
 
   const roleIdUpper = (role.roleId || '').toUpperCase();
@@ -168,13 +161,15 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
         });
       });
     } else {
-      // Dynamically initialize values according to role menuAccess & actions boundaries
+      // Dynamically initialize values according to role menuAccess boundaries:
+      // every feature is a page toggle driven by its route's menu access.
       Object.keys(f).forEach(feat => {
         let route = '';
         if (feat === 'dashboard') route = '/';
         else if (feat === 'workbench') route = '/workbench';
         else if (feat === 'lead_generate') route = '/leads/new';
         else if (feat === 'lead_upload') route = '/leads/upload';
+        else if (feat === 'all_leads') route = '/leads/all';
         else if (feat === 'lead_tracking') route = '/leads';
         else if (feat === 'execution_intelligence') route = '/execution-intelligence';
         else if (feat === 'ncp_progress') route = '/ncp-progress';
@@ -189,29 +184,6 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
 
         const isRouteEnabled = role.menuAccess?.[route] ?? false;
         f[feat].view = isRouteEnabled;
-
-        Object.keys(f[feat]).forEach(subK => {
-          if (subK === 'view') return;
-          if (feat === 'lead_generate' && subK === 'create') {
-            f[feat][subK] = role.actions?.create ?? false;
-          } else if (feat === 'lead_upload' && subK === 'upload') {
-            f[feat][subK] = role.actions?.upload ?? false;
-          } else if (feat === 'lead_upload' && subK === 'delete') {
-            f[feat][subK] = role.actions?.delete ?? false;
-          } else if (feat === 'lead_tracking' && subK === 'status_update') {
-            f[feat][subK] = role.actions?.edit ?? false;
-          } else if (feat === 'user_management') {
-            f[feat][subK] = false;
-          } else if (feat === 'settings_control') {
-            if (subK === 'configure_parameters' || subK === 'view_sync') {
-              f[feat][subK] = (roleIdUpper === 'ADMIN' || roleIdUpper === 'SUPERADMIN' || roleIdUpper === 'ADMINISTRATOR');
-            } else {
-              f[feat][subK] = isRouteEnabled;
-            }
-          } else {
-            f[feat][subK] = isRouteEnabled;
-          }
-        });
       });
     }
     role.featurePermissions = f;
@@ -221,10 +193,26 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
       if (!f[featK]) {
         f[featK] = { ...defaults[featK] };
       } else {
+        // Merge preserves any legacy sub-option keys already stored for the
+        // role (they are no longer exposed in the editor but must not be
+        // silently wiped by a metadata read).
         f[featK] = { ...defaults[featK], ...f[featK] };
       }
     });
     role.featurePermissions = f;
+  }
+
+  // Legacy compatibility backfill: "All Leads" used to be the
+  // `view_all_leads_tab` sub-option stored inside lead_tracking. It is now
+  // the standalone `all_leads` feature. Seed it from the strongest legacy
+  // signal WITHOUT silently enabling it — a role that had the tab off (or
+  // has no signal at all) stays off.
+  const storedFeaturePermissions = role.featurePermissions as Record<string, Record<string, boolean>>;
+  if (roleIdUpper !== 'ADMIN' && roleIdUpper !== 'SUPERADMIN' && roleIdUpper !== 'ADMINISTRATOR'
+      && storedFeaturePermissions.all_leads?.view === undefined) {
+    const legacyTab = storedFeaturePermissions.lead_tracking?.view_all_leads_tab;
+    const fromMenu = role.menuAccess?.['/leads/all'];
+    storedFeaturePermissions.all_leads = { view: legacyTab ?? fromMenu ?? false };
   }
 
   return role;

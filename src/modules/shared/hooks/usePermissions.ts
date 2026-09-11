@@ -126,6 +126,16 @@ export function usePermissions() {
     }
 
     if (serverPermissions && Object.keys(serverPermissions).length > 0) {
+      // Self-service Settings sections (profile, password, notifications,
+      // system appearance, connection) are Feature-Access-driven page UX:
+      // no mounted endpoint is permission-gated by them, so they must not
+      // fail closed against canonical codes that do not exist. They fall
+      // through to the role-matrix check below (module visibility). This is
+      // NOT admin capability: a non-admin toggling these can only see their
+      // own settings sections, and the server keeps enforcing self-service
+      // boundaries (own-password change) independently of any permission.
+      const SELF_SERVICE_SETTINGS_KEYS = ['view_profile', 'view_security', 'view_notifications', 'view_system', 'view_sync'];
+      if (!SELF_SERVICE_SETTINGS_KEYS.includes(actionKey)) {
       const permissionModule = featureId === 'dashboard' || featureId === 'workbench' || featureId === 'daily_workbench'
         ? 'dashboard'
         : featureId === 'lead_generate' || featureId === 'lead_upload' || featureId === 'lead_upl_gen' || featureId === 'lead_tracking' || featureId === 'all_leads'
@@ -155,6 +165,10 @@ export function usePermissions() {
         perform_status_transitions: 'edit',
         status_update: 'edit',
         record_followup_logs: 'edit',
+        // Settings metadata/parameter management resolves to the canonical
+        // settings.manage grant (enforced server-side on metadata mutations).
+        configure_global_metadata: 'manage',
+        configure_parameters: 'manage',
       };
 
       const action = actionKey.startsWith('view') || actionKey.startsWith('explore') || actionKey.startsWith('monitor') || actionKey.startsWith('visualize') || actionKey.startsWith('evaluate')
@@ -177,6 +191,7 @@ export function usePermissions() {
       }
 
       return false;
+      }
     }
 
     // 2. Identify the active clearance level's security attributes
