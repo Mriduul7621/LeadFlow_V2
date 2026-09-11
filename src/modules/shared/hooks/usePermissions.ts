@@ -1,6 +1,7 @@
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission } from '../types';
 import { readSessionCache, writeSessionCache } from '../api/sessionCache';
+import { coalesceGet } from '../api/coalesce';
 import { ROLES_CACHE_CHANGED_EVENT } from '../utils/localCacheEvents';
 import { useEffect, useState } from 'react';
 
@@ -73,7 +74,10 @@ export function usePermissions() {
       }
 
       try {
-        const response = await fetch(`/api/users/${encodeURIComponent(user.id)}/permissions`);
+        // GET read: many pages mount usePermissions on the same tick and a
+        // TTL expiry can overlap a remount — share one round-trip.
+        const permPath = `/api/users/${encodeURIComponent(user.id)}/permissions`;
+        const response = await coalesceGet(permPath, () => fetch(permPath));
         if (!response.ok) {
           setServerPermissions(null);
           return;

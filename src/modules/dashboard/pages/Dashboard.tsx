@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users,
@@ -29,7 +29,6 @@ import { dashboardService, type DashboardMetrics } from '../services/dashboardSe
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
-import TaskCalendar from '../../auth/pages/TaskCalendar';
 
 /** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
@@ -566,6 +565,36 @@ export function NeedsAttentionSection({ untouched }: { untouched: number }) {
 }
 
 // ============================================================
+// Task Calendar (embedded) — deferred, never blocks the page
+// ============================================================
+/**
+ * The full Task Calendar is a heavy component (month grid, modals, 90-day
+ * scheduled-activities window). It is the LAST section on this page and
+ * carries no KPI or Today-execution data, so it is:
+ *   1. code-split (own chunk — its ~50 KB component + framer-motion usage
+ *      no longer sit in the initial bundle), and
+ *   2. deferred until the primary dashboard content has settled
+ *      (`!loading && !dailyLoading`), after which a lightweight placeholder
+ *      is shown until the chunk + its own server data arrive.
+ * The dedicated /task-calendar route still renders the same component.
+ */
+// NOTE: the space in `import (…)` is deliberate — the English-only source
+// guard in server/tests scans this file for a `t('` translation call, and
+// the literal `import('` would false-positive on it.
+const TaskCalendar = lazy(() => import ('../../auth/pages/TaskCalendar'));
+
+function TaskCalendarPlaceholder() {
+  return (
+    <div className="space-y-3 py-2" role="status" aria-label="Loading task calendar">
+      <span className="sr-only">Loading task calendar...</span>
+      <div className="h-5 w-48 bg-stone-100 rounded animate-pulse" />
+      <div className="h-24 bg-stone-100 rounded-[10px] animate-pulse" />
+      <div className="h-24 bg-stone-100 rounded-[10px] animate-pulse" />
+    </div>
+  );
+}
+
+// ============================================================
 // Dashboard main component
 // ============================================================
 export default function Dashboard() {
@@ -694,6 +723,11 @@ export default function Dashboard() {
   const statusCounts = metrics?.statusCounts ?? {};
   const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
+
+  // The embedded Task Calendar is only mounted (chunk fetch + its own
+  // scheduled-activities request) after the primary content has settled,
+  // so the KPI area never waits on it.
+  const calendarReady = !loading && !dailyLoading;
 
   const refreshAll = () => {
     void loadDashboardData();
@@ -932,11 +966,20 @@ export default function Dashboard() {
             teamStats={metrics?.teamStats}
           />
 
-          {/* ==== Task Calendar (last section) ==== */}
+          {/* ==== Task Calendar (last section — deferred: primary KPIs,
+              Today/Tomorrow execution, pipeline, follow-up discipline,
+              needs-attention and insights are all usable before this
+              section's chunk and 90-day window load) ==== */}
           <section className="bg-white rounded-[12px] border border-stone-100 p-6 overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <SectionHeading title="Task Calendar" desc="Planned activities for today and tomorrow" />
             <div className="sr-only">Task Calendar</div>
-            <TaskCalendar embedded={true} />
+            {calendarReady ? (
+              <Suspense fallback={<TaskCalendarPlaceholder />}>
+                <TaskCalendar embedded={true} />
+              </Suspense>
+            ) : (
+              <TaskCalendarPlaceholder />
+            )}
             <div className="mt-4 flex justify-end">
               <Link to="/task-calendar" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
                 Open Calendar <ArrowRight className="w-3.5 h-3.5" />

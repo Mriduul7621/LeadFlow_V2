@@ -4,6 +4,7 @@ import { userService } from '../../users/services/userService';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { emitRolesCacheChanged } from '../../shared/utils/localCacheEvents';
 import { invalidateSessionCache } from '../../shared/api/sessionCache';
+import { coalesceGet } from '../../shared/api/coalesce';
 import { useAuthStore } from '../../auth/store/authStore';
 
 const KEYS = {
@@ -247,7 +248,10 @@ export const adminService = {
   // --- ROLES & PERMISSIONS WORKSPACE ---
   async getRoles(): Promise<RolePermission[]> {
     try {
-      const cloudRoles = await apiRequest<RolePermission[]>('/api/roles');
+      // GET read: AppLayout reads roles on every remount; a StrictMode
+      // double-effect (or a remount racing the first response) must not
+      // double the round-trip.
+      const cloudRoles = await coalesceGet('/api/roles', () => apiRequest<RolePermission[]>('/api/roles'));
       const sorted = [...cloudRoles].sort((a, b) => {
         if (String(a.roleId).toUpperCase() === 'ADMIN') return -1;
         if (String(b.roleId).toUpperCase() === 'ADMIN') return 1;

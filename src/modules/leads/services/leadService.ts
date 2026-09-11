@@ -5,6 +5,7 @@ import { userService } from '../../users/services/userService';
 import { notificationService } from '../../notifications/services/notificationService';
 import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, ApiError } from '../../shared/api/http';
+import { coalesceGet } from '../../shared/api/coalesce';
 import { toast } from 'sonner';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
@@ -376,7 +377,10 @@ export const leadService = {
     if (params?.offset != null) qs.set('offset', String(params.offset));
     if (params?.includeTerminal) qs.set('includeTerminal', 'true');
     const path = `/api/leads/follow-ups${qs.toString() ? `?${qs.toString()}` : ''}`;
-    const data = await apiRequest<FollowUpQueueResult>(path);
+    // GET read: the Dashboard fires today+upcoming, and a StrictMode
+    // double-effect (or a quick Dashboard→Workbench round trip) can re-issue
+    // the same bucket while the first is in flight — share one round-trip.
+    const data = await coalesceGet(path, () => apiRequest<FollowUpQueueResult>(path));
     return data;
   },
 

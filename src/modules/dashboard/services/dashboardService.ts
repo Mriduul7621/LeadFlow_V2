@@ -7,6 +7,7 @@
  */
 
 import { apiRequest } from '../../shared/api/http';
+import { coalesceGet } from '../../shared/api/coalesce';
 
 export interface DashboardFollowUpCounts {
   overdue: number;
@@ -169,7 +170,9 @@ export const dashboardService = {
     if (query.startDate) qs.set('startDate', query.startDate);
     if (query.endDate) qs.set('endDate', query.endDate);
     const path = `/api/dashboard${qs.toString() ? `?${qs.toString()}` : ''}`;
-    const data = await apiRequest<DashboardMetrics>(path);
+    // GET read: concurrent identical requests (StrictMode double-effect,
+    // refresh while a load is in flight) share one round-trip.
+    const data = await coalesceGet(path, () => apiRequest<DashboardMetrics>(path));
     if (!data || typeof data !== 'object') {
       throw new Error('Dashboard response was empty.');
     }

@@ -1,6 +1,7 @@
 import { SystemNotification } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
 import { apiRequest, ApiError } from '../../shared/api/http';
+import { coalesceGet } from '../../shared/api/coalesce';
 
 /**
  * notificationService.ts
@@ -24,7 +25,10 @@ function syncCacheForUser(userId: string, cloud: SystemNotification[]): void {
 export const notificationService = {
   async getNotifications(user_Id: string): Promise<SystemNotification[]> {
     try {
-      const cloudNotifs = await apiRequest<SystemNotification[]>(`/api/notifications/users/${encodeURIComponent(user_Id)}`);
+      const path = `/api/notifications/users/${encodeURIComponent(user_Id)}`;
+      // GET read: AppLayout may double-fire this (StrictMode / remount race
+      // before the session cache is written) — share one round-trip.
+      const cloudNotifs = await coalesceGet(path, () => apiRequest<SystemNotification[]>(path));
       syncCacheForUser(user_Id, cloudNotifs);
       return cloudNotifs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     } catch (err) {
