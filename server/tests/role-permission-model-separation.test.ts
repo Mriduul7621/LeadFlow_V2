@@ -214,9 +214,19 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
       "router.delete('/permissions/:roleId', requireAuth, requireAdmin,",
       "router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin,",
       "router.post('/leads/clear-all', requireAuth, requireAdmin,",
+      // No dedicated password-reset code exists in the migration-025
+      // catalog, so the admin reset endpoint must stay requireAdmin —
+      // generic users.edit must never grant password resets.
+      "router.post('/users/:id/reset-password', requireAuth, requireAdmin,",
     ]) {
       assert.ok(src.includes(route), `${route} must stay admin-gated`);
     }
+    // The inline password field on PUT /users/:id must be rejected for
+    // non-admin callers (no side-door reset through the edit endpoint).
+    const putIdx = src.indexOf("router.put('/users/:id'");
+    const putBlock = src.slice(putIdx, src.indexOf("if (!useDb())", putIdx));
+    assert.ok(/payload\.password[\s\S]*!callerIsAdmin\(req\)/.test(putBlock), 'PUT /users/:id must reject inline password changes for non-admins');
+    assert.ok(putBlock.includes("restricted to administrators"), 'the rejection must be explicit, not silent');
   });
 
   it('7. Self-service password change is NOT modeled as users.edit', () => {
@@ -226,16 +236,20 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     const line = src.slice(idx, idx + 160);
     assert.ok(line.includes('requireAuth'), 'change-password must require authentication');
     assert.ok(!line.includes('users.edit') && !line.includes('requirePermissionCode'), 'self-service password change must never require users.edit');
-    // The dedicated admin reset endpoint IS canonical-gated (users.edit).
-    const resetIdx = src.indexOf("router.post('/users/:id/reset-password'");
-    assert.ok(src.slice(resetIdx, resetIdx + 160).includes("requirePermissionCode('users.edit')"), 'admin reset must be canonical-gated');
+    // The admin reset endpoint is NOT canonical-gated: no dedicated
+    // password-reset code exists in the catalog, so it stays admin-only
+    // (asserted in test 6's requireAdmin retention list).
   });
 
   it('8. Dependency rule: hidden modules mark action groups inactive (grants preserved)', () => {
     const src = userMgmt();
     assert.ok(src.includes('const ACTION_MODULE_FEATURE_KEYS'), 'module→group activity mapping must exist');
     assert.ok(src.includes('disabled={!groupActive}'), 'inactive groups must disable the checkboxes visually');
-    assert.ok(src.includes('grants stay saved but have no effect'), 'the UI must state that saved grants are preserved');
+    // The wording must stay accurate: hiding a module only removes UI reach.
+    // It must NOT claim grants "have no effect" — the API still enforces
+    // saved grants regardless of Feature Access.
+    assert.ok(src.includes("the role can't reach these actions in the UI. Grants stay saved and still apply at the API."), 'the UI must state accurately that grants are preserved and still enforced at the API');
+    assert.ok(!src.includes('have no effect'), 'the UI must not claim hidden-module grants have no effect');
     // Toggling one action never mutates its siblings.
     assert.ok(src.includes('setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })'), 'each action must toggle independently');
   });

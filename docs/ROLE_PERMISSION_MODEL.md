@@ -85,10 +85,10 @@ every code below is enforced server-side on the mounted router.
 | Leads | Import | `leads.import` | `POST /leads/bulk` (bulk upload) |
 | Leads | Export | `leads.export` | UI export gating — export is a **client-side download** over visibility-filtered data; no dedicated server export endpoint exists |
 | Users | Create | `users.create` | `POST /api/users` |
-| Users | Edit | `users.edit` | `PUT /api/users/:id` (details, activate/deactivate via status), `POST /api/users/:id/reset-password` (admin reset) |
+| Users | Edit | `users.edit` | `PUT /api/users/:id` (employee details, activate/deactivate via status; inline password changes are rejected for non-admin callers) |
 | Users | Delete | `users.delete` | `DELETE /api/users/:id` |
 | Roles | Manage Roles | `roles.manage` | `POST /api/roles` (create/update), `DELETE /api/roles/:roleId` |
-| Roles | Manage Permissions | `permissions.manage` | `PUT /api/users/:id/permissions` (per-user overrides) |
+| Roles | Manage User Permission Overrides | `permissions.manage` | `PUT /api/users/:id/permissions` (per-user overrides) |
 | Departments | Manage | `departments.manage` | `POST /api/departments`, `DELETE /api/departments/:id` |
 | Hierarchy & Teams | Manage Teams | `teams.manage` | `POST /api/teams`, `DELETE /api/teams/:id` |
 | Hierarchy & Teams | Manage Reporting Hierarchy | `hierarchy.manage` | `POST /api/hierarchies`, `DELETE /api/hierarchies/:id`, `PUT /api/hierarchy-config` |
@@ -122,8 +122,13 @@ grant, so exposing them would create dead controls):
 **Still admin-only (`requireAdmin`, no canonical toggle):** the role
 permission matrix itself (`GET`/`PUT /api/roles/:roleId/permissions`), the
 legacy fine-permission matrix (`POST/DELETE /api/permissions*`),
-`DELETE /leads/campaign/:campaign` and `POST /leads/clear-all`. Granting
-Feature Access or any action never reaches these.
+`DELETE /leads/campaign/:campaign`, `POST /leads/clear-all`, and **admin
+password reset** (`POST /api/users/:id/reset-password`, plus the inline
+password field on `PUT /api/users/:id`). The migration-025 catalog contains
+no dedicated password-reset / credential-management permission and none was
+invented — so generic `users.edit` can edit employee details but can never
+set another account's password. Granting Feature Access or any action never
+reaches these admin-only capabilities.
 
 ---
 
@@ -188,9 +193,12 @@ available. Action Permissions control what the role can do inside it."*
 
 Dependency rule: when every module mapped to an action group is hidden in
 Feature Access, the group is dimmed, its checkboxes are disabled
-**visually**, and a note explains that grants stay saved but have no
-effect. Saved grants are never deleted, and toggling one action never
-mutates its siblings. `Edit` never auto-grants `View`.
+**visually**, and a note states the exact semantics: the role cannot reach
+these actions in the UI, the grants stay saved, and they **still apply at
+the API** (Feature Access is presentation-level; it never weakens or
+removes server-side enforcement). Saved grants are never deleted, and
+toggling one action never mutates its siblings. `Edit` never auto-grants
+`View`.
 
 ## 8. Example roles
 
@@ -232,9 +240,11 @@ admin-only.
   target to be inside the caller's data-visibility scope.
 - Admin autonomy guards unchanged: the last active administrator cannot be
   demoted/deactivated; an admin cannot lock themselves out.
-- Self-service password change (`POST /auth/change-password`) is
-  self-or-admin only and is **not** modeled as `users.edit`. Admin reset
-  (`POST /users/:id/reset-password`) requires `users.edit`.
+- Password changes never ride on `users.edit`. Self-service change
+  (`POST /auth/change-password`) is self-or-admin only; admin reset
+  (`POST /users/:id/reset-password` and the inline password field on
+  `PUT /users/:id`) is `requireAdmin`-only, because the catalog has no
+  dedicated password-reset code (none invented).
 - Per-user permission overrides require `permissions.manage`; the role
   permission matrix (role-level grants) remains admin-only.
 - Partial-failure honesty: if role metadata saves but the canonical grant
@@ -250,6 +260,9 @@ admin-only.
   reads get role-scoped variants.
 - `leads.export`: consider a server-side export endpoint so the export
   action is enforced where the bytes are produced.
+- Introduce a dedicated canonical password-reset / credential-management
+  permission (new migration) so the admin reset can move off
+  `requireAdmin` onto an explicitly grantable code.
 - Audit log reads (`GET /api/audit-logs`) remain authenticated-user on the
   mounted router; `audit.view` exists in the catalog for tightening later.
 - Manager Attention / Lead Quality — out of scope.

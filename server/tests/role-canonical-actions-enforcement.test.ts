@@ -7,12 +7,18 @@
  *
  *   - Non-admin with NO grants is rejected (403) on every protected
  *     mutation exposed by the editor: users.create / users.edit /
- *     users.delete / users.reset-password / permissions.manage /
- *     departments.manage / roles.manage / teams.manage /
- *     hierarchy.manage / settings.manage / workflow.manage.
+ *     users.delete / permissions.manage / departments.manage /
+ *     roles.manage / teams.manage / hierarchy.manage / settings.manage /
+ *     workflow.manage.
  *   - Granting exactly one canonical code enables exactly its action
  *     (independence: users.create does not enable users.delete, etc.).
- *   - ADMIN keeps its bypass with zero stored grants.
+ *   - Credential boundary: users.edit can edit employee details but can
+ *     NEVER reset another user's password — neither via the dedicated
+ *     reset endpoint (admin-only requireAdmin; the migration-025 catalog
+ *     has no dedicated password-reset code and none was invented) nor via
+ *     an inline password field on PUT /users/:id.
+ *   - ADMIN / SUPERADMIN keep the admin password reset and their bypass
+ *     with zero stored grants.
  *   - Unknown codes stay fail-closed and are never invented.
  *   - Existing custom roles gain nothing automatically (no grants seeded).
  *
@@ -42,10 +48,12 @@ describe('Canonical action permissions — server enforcement on mounted routes'
   let officerRoleId = '';
   let officerUserId = '';
   let adminUserId = '';
+  let superUserId = '';
   let targetUserId = '';
   let departmentId = '';
 
   const adminToken = () => signToken({ id: adminUserId, employeeId: 'ADMIN1', role: 'ADMIN', email: 'admin@test.com', name: 'Admin' });
+  const superToken = () => signToken({ id: superUserId, employeeId: 'SUPER1', role: 'SUPERADMIN', email: 'super@test.com', name: 'Super Admin' });
   const officerToken = () => signToken({ id: officerUserId, employeeId: 'OFF1', role: 'OFFICER', email: 'off1@test.com', name: 'Officer' });
 
   /** Grant canonical codes to the OFFICER role through the editor's own API. */
@@ -251,7 +259,11 @@ describe('Canonical action permissions — server enforcement on mounted routes'
       `INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('OFFICER', 'Officer', 99, 'Own') RETURNING id`
     );
     officerRoleId = officerRole.rows[0].id;
+    const superRole = await pool.query(
+      `INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility) VALUES ('SUPERADMIN', 'Super Administrator', 0, 'Organization') RETURNING id`
+    );
     assert.ok(adminRole.rows[0].id);
+    assert.ok(superRole.rows[0].id);
 
     // The OFFICER role starts with NO canonical grants (fail-closed default
     // for existing custom roles — nothing is seeded by the deployment).
@@ -264,6 +276,13 @@ describe('Canonical action permissions — server enforcement on mounted routes'
       [adminRole.rows[0].id]
     );
     adminUserId = adminUser.rows[0].id;
+
+    const superUser = await pool.query(
+      `INSERT INTO users (employee_id, full_name, email, password, role_id, is_active)
+       VALUES ('SUPER1', 'Super Admin', 'super@test.com', 'x', $1, true) RETURNING id`,
+      [superRole.rows[0].id]
+    );
+    superUserId = superUser.rows[0].id;
 
     const officer = await pool.query(
       `INSERT INTO users (employee_id, full_name, email, password, role_id, is_active)
@@ -309,7 +328,7 @@ describe('Canonical action permissions — server enforcement on mounted routes'
 
     const resetPw = await request(app).post(`/api/users/${targetUserId}/reset-password`).set(auth)
       .send({ password: 'newpassword1' });
-    assert.equal(resetPw.status, 403, 'admin password reset must be enforced');
+    assert.equal(resetPw.status, 403, 'admin password reset must stay admin-gated');
 
     const deleteUser = await request(app).delete(`/api/users/${targetUserId}`).set(auth);
     assert.equal(deleteUser.status, 403, 'users.delete must be enforced');
@@ -370,19 +389,45 @@ describe('Canonical action permissions — server enforcement on mounted routes'
     assert.equal(deleteUser.status, 403, 'users.create must not enable users.delete');
   });
 
-  it('users.edit enables editing and admin password reset (activate/deactivate via status) but not delete', async () => {
+  it('users.edit enables editing employee details but NOT password resets or delete', async () => {
     await grant([{ code: 'users.edit', allowed: true }]);
+    const officerAuth = { Authorization: `Bearer ${officerToken()}` };
 
-    const editUser = await request(app).put(`/api/users/${targetUserId}`).set('Authorization', `Bearer ${officerToken()}`)
+    // users.edit CAN edit employee details.
+    const editUser = await request(app).put(`/api/users/${targetUserId}`).set(officerAuth)
       .send({ designation: 'Senior Officer' });
     assert.equal(editUser.status, 200, `users.edit grant must enable editing: ${JSON.stringify(editUser.body)}`);
 
-    const resetPw = await request(app).post(`/api/users/${targetUserId}/reset-password`).set('Authorization', `Bearer ${officerToken()}`)
+    // users.edit alone CANNOT reset another user's password (dedicated endpoint).
+    const resetPw = await request(app).post(`/api/users/${targetUserId}/reset-password`).set(officerAuth)
       .send({ password: 'newpassword1' });
-    assert.equal(resetPw.status, 200, 'admin reset follows users.edit');
+    assert.equal(resetPw.status, 403, 'admin password reset must never follow from users.edit');
 
-    const deleteUser = await request(app).delete(`/api/users/${targetUserId}`).set('Authorization', `Bearer ${officerToken()}`);
+    // ...and CANNOT do it through the inline password field on the edit endpoint.
+    const pwViaEdit = await request(app).put(`/api/users/${targetUserId}`).set(officerAuth)
+      .send({ designation: 'Senior Officer', password: 'sidechannelpw' });
+    assert.equal(pwViaEdit.status, 403, 'inline password on PUT /users/:id must be rejected for non-admins');
+    // The stored password must be untouched by the rejected request.
+    const after = await pool.query('SELECT password FROM users WHERE id = $1', [targetUserId]);
+    assert.notEqual(after.rows[0].password, 'sidechannelpw', 'password value must be untouched');
+
+    const deleteUser = await request(app).delete(`/api/users/${targetUserId}`).set(officerAuth);
     assert.equal(deleteUser.status, 403, 'users.edit must not enable users.delete');
+  });
+
+  it('ADMIN and SUPERADMIN can still perform the admin password reset', async () => {
+    const resetPw = await request(app).post(`/api/users/${targetUserId}/reset-password`).set('Authorization', `Bearer ${adminToken()}`)
+      .send({ password: 'adminresetpw1' });
+    assert.equal(resetPw.status, 200, `ADMIN keeps the admin password reset: ${JSON.stringify(resetPw.body)}`);
+
+    const superPw = await request(app).post(`/api/users/${targetUserId}/reset-password`).set('Authorization', `Bearer ${superToken()}`)
+      .send({ password: 'superresetpw1' });
+    assert.equal(superPw.status, 200, `SUPERADMIN keeps the admin password reset: ${JSON.stringify(superPw.body)}`);
+
+    // ADMIN also keeps the inline password field on the edit endpoint.
+    const pwViaEdit = await request(app).put(`/api/users/${targetUserId}`).set('Authorization', `Bearer ${adminToken()}`)
+      .send({ designation: 'Admin Edited', password: 'admininlinepw' });
+    assert.equal(pwViaEdit.status, 200, 'ADMIN keeps the inline password field on PUT /users/:id');
   });
 
   it('revoking users.edit fails editing closed again (independent persistence)', async () => {

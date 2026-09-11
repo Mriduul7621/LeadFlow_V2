@@ -1873,6 +1873,16 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
 router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async (req, res) => {
   const payload = req.body || {};
 
+  // Credential boundary (security fix): the editor's Users → Edit action
+  // grants employee-detail edits, NOT password resets. The inline password
+  // field on this route would otherwise let a users.edit holder reset
+  // another account's password through the side door. Reject it for
+  // non-admin callers; admins keep the previous behavior (and also have
+  // POST /users/:id/reset-password).
+  if (payload.password && String(payload.password).length > 0 && !callerIsAdmin(req)) {
+    return sendJson(res, 403, { success: false, message: 'Password reset is restricted to administrators.' });
+  }
+
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const existing = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
@@ -2120,7 +2130,13 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
   }
 });
 
-router.post('/users/:id/reset-password', requireAuth, requirePermissionCode('users.edit'), async (req, res) => {
+// Credential boundary (security fix): the migration-025 catalog has NO
+// dedicated password-reset / credential-management code, and none may be
+// invented here. Admin password reset therefore stays ADMIN-only via the
+// pre-existing requireAdmin guard — generic users.edit must never be able
+// to set another account's password. (Self-service password change is
+// POST /auth/change-password and never requires any admin capability.)
+router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
   const password = String(req.body?.password || '');
   if (password.length < 5) {
     return sendJson(res, 400, { success: false, message: 'Password must be at least 5 characters' });

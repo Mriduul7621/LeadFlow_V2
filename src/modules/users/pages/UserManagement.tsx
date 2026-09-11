@@ -149,7 +149,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
     module: 'Users',
     items: [
       { code: 'users.create', label: 'Create', desc: 'Onboard new employees.' },
-      { code: 'users.edit', label: 'Edit', desc: 'Edit employee details, activate/deactivate accounts and perform admin password resets. Self-service password changes never require this.' },
+      { code: 'users.edit', label: 'Edit', desc: 'Edit employee details and activate/deactivate accounts. Password resets are administrator-only, and self-service password changes never require this.' },
       { code: 'users.delete', label: 'Delete', desc: 'Remove employees.' },
     ],
   },
@@ -157,7 +157,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
     module: 'Roles',
     items: [
       { code: 'roles.manage', label: 'Manage Roles', desc: 'Create, update and delete roles.' },
-      { code: 'permissions.manage', label: 'Manage Permissions', desc: 'Set per-user permission overrides. Editing the role permission matrix stays admin-only.' },
+      { code: 'permissions.manage', label: 'Manage User Permission Overrides', desc: 'Set per-user permission overrides. Editing the role permission matrix stays admin-only.' },
     ],
   },
   {
@@ -1159,7 +1159,7 @@ export default function UserManagement() {
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
                         {!groupActive && (
                           <span className="text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                            Module hidden in Feature Access — grants stay saved but have no effect
+                            Module hidden in Feature Access — the role can't reach these actions in the UI. Grants stay saved and still apply at the API.
                           </span>
                         )}
                       </div>
@@ -1517,7 +1517,7 @@ export default function UserManagement() {
                   />
                   <p className="text-xs text-slate-400">
                     {editingUser
-                      ? "Enter a new password to reset. The employee will be required to change it on next login."
+                      ? "Enter a new password to reset (administrators only). The employee will be required to change it on next login."
                       : "A temporary password will be auto-generated if left blank. The employee must change it on first login."}
                   </p>
                 </div>
