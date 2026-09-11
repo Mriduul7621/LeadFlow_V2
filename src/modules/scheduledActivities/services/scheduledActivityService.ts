@@ -69,6 +69,14 @@ export interface ScheduledActivityListResult {
   pagination?: { limit: number; offset: number; total: number };
 }
 
+/** Authoritative "Completed Today" payload from GET /api/scheduled-activities/completed-today. */
+export interface ScheduledCompletedTodayResult {
+  count: number;
+  timezone: string;
+  todayDate: string;
+  bounds: { todayStart: string; tomorrowStart: string };
+}
+
 function toQuery(params: ScheduledActivityListParams): string {
   const q = new URLSearchParams();
   if (params.from) q.set('from', params.from);
@@ -115,6 +123,16 @@ export const scheduledActivityService = {
 
   async getById(id: string): Promise<ScheduledActivity> {
     return apiRequest<ScheduledActivity>(`/api/scheduled-activities/${encodeURIComponent(id)}`);
+  },
+
+  /**
+   * Daily Workbench — authoritative "Completed Today" count.
+   * Counts scheduled activities whose server-stamped completed_at falls
+   * inside today's Asia/Dhaka business day within the caller's visibility.
+   * Single bounded request via the shared authenticated layer.
+   */
+  async completedToday(): Promise<ScheduledCompletedTodayResult> {
+    return apiRequest<ScheduledCompletedTodayResult>('/api/scheduled-activities/completed-today');
   },
 
   async getByLead(leadId: string): Promise<ScheduledActivity[]> {

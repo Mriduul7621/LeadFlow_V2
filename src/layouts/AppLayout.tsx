@@ -11,6 +11,7 @@ import {
   LogOut,
   Calendar,
   Clock,
+  ListTodo,
   Menu,
   X,
   Bell,
@@ -85,6 +86,7 @@ const menuSections: MenuSection[] = [
     key: 'mywork',
     labelKey: 'navSectionMyWork',
     items: [
+      { label: 'Daily Workbench', icon: ListTodo, path: '/workbench', roles: ALL_ROLES },
       { label: 'Activities', icon: Clock, path: '/activities', roles: ALL_ROLES },
       { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: ALL_ROLES },
       { label: 'Follow-up Queue', icon: History, path: '/follow-up', roles: ALL_ROLES },

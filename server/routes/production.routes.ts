@@ -6333,6 +6333,76 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
 });
 
 /* ------------------------------------------------------------------
+   GET /scheduled-activities/completed-today — Daily Workbench
+   Authoritative "Completed Today" count: scheduled activities whose
+   SERVER-stamped completed_at falls inside today's Asia/Dhaka business
+   day, within the caller's lead visibility (Own/DownTeam/FullTeam/
+   Organization — identical clause to GET /scheduled-activities).
+   Read-only; no fabrication and no client-side status mutation counts.
+   MUST be registered BEFORE /scheduled-activities/:id (literal route).
+------------------------------------------------------------------- */
+router.get('/scheduled-activities/completed-today', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view scheduled activities.' });
+    }
+    const bounds = getDhakaBusinessDayBounds(new Date());
+    const visibility = await resolveCallerVisibility(caller);
+    const payload = (count: number) => ({
+      count,
+      timezone: BUSINESS_TIMEZONE,
+      todayDate: bounds.todayDate,
+      bounds: { todayStart: bounds.todayStartIso, tomorrowStart: bounds.tomorrowStartIso },
+    });
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      const leadById = new Map((fallbackStore.leads || []).map((l: any) => [String(l.id), l]));
+      const count = ((fallbackStore as any).scheduledActivities || []).filter((sa: any) => {
+        if (String(sa.status || '').toLowerCase() !== 'completed') return false;
+        const c = sa.completedAt || sa.completed_at;
+        if (!c) return false;
+        const t = new Date(c).getTime();
+        if (!(t >= bounds.todayStart.getTime() && t < bounds.tomorrowStart.getTime())) return false;
+        const lead = leadById.get(String(sa.leadId || sa.lead_id));
+        if (!lead || (lead as any).is_deleted === true) return false;
+        if (!visibility.all) {
+          const assigned = String((lead as any).assignedTo || '').toUpperCase();
+          if (!assigned || !visEmp.includes(assigned)) return false;
+        }
+        return true;
+      }).length;
+      return sendJson(res, 200, { success: true, data: payload(count) });
+    }
+    const pool = getPool();
+    const params: any[] = [bounds.todayStartIso, bounds.tomorrowStartIso];
+    const where: string[] = [
+      'l.is_deleted = FALSE',
+      "LOWER(sa.status) = 'completed'",
+      'sa.completed_at IS NOT NULL',
+      'sa.completed_at >= $1::timestamp',
+      'sa.completed_at < $2::timestamp',
+    ];
+    if (!visibility.all) {
+      params.push(visibility.userIds, visibility.employeeIds);
+      const pUser = params.length - 1;
+      const pEmp = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+    }
+    const countRes = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${where.join(' AND ')}`,
+      params
+    );
+    return sendJson(res, 200, { success: true, data: payload(Number(countRes.rows[0]?.cnt || 0)) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Completed-today fetch failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
    GET /scheduled-activities/:id — single item, visibility enforced
 ------------------------------------------------------------------- */
 router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
