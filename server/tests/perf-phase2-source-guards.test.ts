@@ -169,7 +169,7 @@ describe('Performance Phase 2 — GET coalescing wiring', () => {
   it('H. the shared startup reads are coalesced by URL key', async () => {
     const coalesce = read('src/modules/shared/api/coalesce.ts');
     assert.ok(coalesce.includes('export function coalesceGet'), 'coalesceGet must exist');
-    assert.ok(coalesce.includes('inFlight.delete(key)'), 'entries must be dropped on settlement (no persistence)');
+    assert.ok(coalesce.includes('inFlight.delete(scopedKey)'), 'entries must be dropped on settlement (no persistence)');
 
     const checks: Array<[string, RegExp, string]> = [
       [
@@ -223,40 +223,91 @@ describe('Performance Phase 2 — GET coalescing wiring', () => {
 });
 
 /* ==================================================================== */
-/* 4. Coalescing behavior (pure, no network)                            */
+/* 4. Coalescing behavior (session-scoped, pure, no network)            */
 /* ==================================================================== */
 
-describe('Performance Phase 2 — coalesceGet behavior', () => {
-  it('J. concurrent identical GETs collapse to one call; different keys do not', async () => {
+/**
+ * Minimal localStorage shim — installed BEFORE the first dynamic import
+ * so the zustand persist middleware (pulled in via coalesce -> authStore)
+ * has a storage target in Node.
+ */
+function ensureStorageShim() {
+  if ((globalThis as any).localStorage) return;
+  const map = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (map.has(k) ? map.get(k) : null),
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear(),
+    key: (i: number) => [...map.keys()][i] ?? null,
+    get length() { return map.size; },
+  };
+  (globalThis as any).window = globalThis;
+}
+
+/** Set the store to an authenticated session (same shape as login). */
+function loginSession(store: any, userId: string, employeeId: string, name: string, token: string) {
+  store.setState({
+    user: { id: userId, employeeId, name, role: 'ADMIN' } as any,
+    token,
+    isAuthenticated: true,
+    isInitialized: true,
+  });
+}
+
+describe('Performance Phase 2 — coalesceGet behavior (session-scoped)', () => {
+  it('J. same URL + same session collapses to one call; same URL + different session does NOT', async () => {
+    ensureStorageShim();
     const { coalesceGet, clearCoalescing } = await import('../../src/modules/shared/api/coalesce.js');
+    const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
     clearCoalescing();
 
-    let calls = 0;
-    const slow = () =>
+    // Session A
+    loginSession(useAuthStore, 'user-a', 'EMPA', 'A', 'token-a-1');
+    let aCalls = 0;
+    const slowA = () =>
       new Promise<number>(resolve => {
-        calls += 1;
+        aCalls += 1;
         setTimeout(() => resolve(42), 25);
       });
+    const [a1, a2] = await Promise.all([coalesceGet('/api/x', slowA), coalesceGet('/api/x', slowA)]);
+    assert.equal(aCalls, 1, 'two concurrent identical reads in the SAME session must share one request');
+    assert.deepEqual([a1, a2], [42, 42], 'both waiters get the same result');
 
-    const [a, b] = await Promise.all([coalesceGet('/api/x', slow), coalesceGet('/api/x', slow)]);
-    assert.equal(calls, 1, 'two concurrent identical reads must share one request');
-    assert.deepEqual([a, b], [42, 42], 'both waiters get the same result');
+    // Session B, same URL, while A's request is still in flight: must be
+    // a SEPARATE request (session-boundary guarantee).
+    loginSession(useAuthStore, 'user-b', 'EMPB', 'B', 'token-b-1');
+    let bCalls = 0;
+    const slowB = () =>
+      new Promise<number>(resolve => {
+        bCalls += 1;
+        setTimeout(() => resolve(7), 5);
+      });
+    const b1 = await coalesceGet('/api/x', slowB);
+    assert.equal(bCalls, 1, 'a different authenticated session must never join session A in-flight request');
+    assert.equal(b1, 7);
 
+    // Different query in the same session is still a separate request
+    // (path/query distinction preserved).
     let other = 0;
     const otherFn = () =>
       new Promise<number>(resolve => {
         other += 1;
-        setTimeout(() => resolve(7), 5);
+        setTimeout(() => resolve(9), 5);
       });
     const c = await coalesceGet('/api/x?other=1', otherFn);
     assert.equal(other, 1);
-    assert.equal(c, 7, 'a different URL (query included) must be a separate request');
+    assert.equal(c, 9, 'a different URL (query included) must be a separate request');
     clearCoalescing();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
   });
 
-  it('K. nothing is cached after settlement — the next call is a fresh request', async () => {
+  it('K. nothing is cached after settlement — the next call in the same session is a fresh request', async () => {
+    ensureStorageShim();
     const { coalesceGet, clearCoalescing } = await import('../../src/modules/shared/api/coalesce.js');
+    const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
     clearCoalescing();
+    loginSession(useAuthStore, 'user-k', 'EMPK', 'K', 'token-k-1');
 
     let calls = 0;
     const fn = () =>
@@ -267,13 +318,17 @@ describe('Performance Phase 2 — coalesceGet behavior', () => {
     const first = await coalesceGet('/api/y', fn);
     assert.equal(first, 1);
     const second = await coalesceGet('/api/y', fn);
-    assert.equal(second, 2, 'after the first settled, a new request must be issued (no stale reuse)');
+    assert.equal(second, 2, 'after the first settled, a new request must be issued (no stale reuse, no TTL)');
     clearCoalescing();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
   });
 
-  it('L. a failure reaches every waiter and the key is released for a retry', async () => {
+  it('L. a failure fans out to every same-session waiter and the key is released for a retry', async () => {
+    ensureStorageShim();
     const { coalesceGet, clearCoalescing } = await import('../../src/modules/shared/api/coalesce.js');
+    const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
     clearCoalescing();
+    loginSession(useAuthStore, 'user-l', 'EMPPL', 'L', 'token-l-1');
 
     let calls = 0;
     const failing = () => {
@@ -286,7 +341,7 @@ describe('Performance Phase 2 — coalesceGet behavior', () => {
     const p2 = coalesceGet('/api/fail', failing).catch((e: Error) => e.message);
     const [m1, m2] = await Promise.all([p1, p2]);
     assert.equal(calls, 1, 'the failing request was issued once');
-    assert.deepEqual([m1, m2], ['boom', 'boom'], 'both waiters observe the failure');
+    assert.deepEqual([m1, m2], ['boom', 'boom'], 'both same-session waiters observe the failure');
 
     // The key must be free again — a subsequent call retries (fresh request).
     let retryCalls = 0;
@@ -298,59 +353,77 @@ describe('Performance Phase 2 — coalesceGet behavior', () => {
     assert.equal(r, 'ok');
     assert.equal(retryCalls, 1, 'after a settled failure the key must not block a retry');
     clearCoalescing();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
   });
 });
 
 /* ==================================================================== */
-/* 5. Logout hygiene for session-scoped client state                    */
+/* 5. Logout/login hygiene for session-scoped coalescing                */
 /* ==================================================================== */
 
-describe('Performance Phase 2 — logout clears coalescing + session cache', () => {
-  it('M. logout drops in-flight coalesced entries (no cross-session sharing)', async () => {
-    // localStorage shim so the zustand persist middleware is happy.
-    const map = new Map<string, string>();
-    (globalThis as any).localStorage = {
-      getItem: (k: string) => (map.has(k) ? map.get(k) : null),
-      setItem: (k: string, v: string) => void map.set(k, String(v)),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-      key: (i: number) => [...map.keys()][i] ?? null,
-      get length() { return map.size; },
-    };
-    (globalThis as any).window = globalThis;
-
-    const { coalesceGet } = await import('../../src/modules/shared/api/coalesce.js');
+describe('Performance Phase 2 — coalescing never crosses user/session boundaries', () => {
+  it('M. logout/login cannot join the prior session’s in-flight request', async () => {
+    ensureStorageShim();
+    const { coalesceGet, clearCoalescing } = await import('../../src/modules/shared/api/coalesce.js');
     const { useAuthStore } = await import('../../src/modules/auth/store/authStore.js');
+    clearCoalescing();
 
-    // Start an in-flight read for user "alice".
-    let resolveFetch: (v: number) => void = () => undefined;
-    const inFlightPromise = coalesceGet('/api/roles', () =>
-      new Promise<number>(resolve => {
-        resolveFetch = resolve;
-      })
-    );
-
-    useAuthStore.setState({
-      user: { id: 'alice', employeeId: 'ALICE', name: 'Alice', role: 'ADMIN' } as any,
-      token: 'token-alice',
-      isAuthenticated: true,
-      isInitialized: true,
+    // Session "alice" starts a still-in-flight read.
+    loginSession(useAuthStore, 'alice', 'ALICE', 'Alice', 'token-alice-1');
+    let aliceCalls = 0;
+    let resolveAlice: (v: number) => void = () => undefined;
+    const aliceRequest = coalesceGet('/api/roles', () => {
+      aliceCalls += 1;
+      return new Promise<number>(resolve => {
+        resolveAlice = resolve;
+      });
     });
 
+    // Alice logs out; "bob" signs in. Bob's identical read must NOT join
+    // alice's in-flight request — it must be a fresh request.
     useAuthStore.getState().logout();
-
-    // The next session's identical read must NOT join alice's request.
-    // (If logout() had not cleared the in-flight map, coalesceGet below
-    // would return alice's still-pending promise and this test would hang.)
-    let nextSessionCalls = 0;
-    const nextRead = coalesceGet('/api/roles', () => {
-      nextSessionCalls += 1;
+    loginSession(useAuthStore, 'bob', 'BOB', 'Bob', 'token-bob-1');
+    let bobCalls = 0;
+    const bobRead = coalesceGet('/api/roles', () => {
+      bobCalls += 1;
       return Promise.resolve(1);
     });
-    await nextRead;
-    assert.equal(nextSessionCalls, 1, 'post-logout read must be a fresh request, not a join of the old session');
-    resolveFetch(0);
-    await inFlightPromise;
+    await bobRead;
+    assert.equal(bobCalls, 1, 'a different user’s read must be a fresh request');
+    assert.equal(aliceCalls, 1, 'alice’s original request was issued exactly once');
+
+    // Alice signs in AGAIN (same user id, new token — a NEW session).
+    // The prior session's request is still in flight; the re-login must
+    // STILL not join it (token fingerprint changes the session scope).
+    useAuthStore.getState().logout();
+    loginSession(useAuthStore, 'alice', 'ALICE', 'Alice', 'token-alice-2');
+    let alice2Calls = 0;
+    const alice2Read = coalesceGet('/api/roles', () => {
+      alice2Calls += 1;
+      return Promise.resolve(2);
+    });
+    await alice2Read;
+    assert.equal(alice2Calls, 1, 'a re-login (even of the same user) must not join the prior session’s in-flight request');
+
+    // The original request settles independently for alice's first session.
+    resolveAlice(0);
+    const settled = await aliceRequest;
+    assert.equal(settled, 0, 'the prior session’s request still resolves for its own waiter');
+    assert.equal(aliceCalls, 1, 'the prior session’s request was never re-issued by later sessions');
+
+    clearCoalescing();
+    useAuthStore.setState({ user: null, token: null, isAuthenticated: false } as any);
+  });
+
+  it('M2. the coalescing key includes the session identity, never the raw token', () => {
+    const src = read('src/modules/shared/api/coalesce.ts');
+    assert.ok(src.includes('currentSessionScope'), 'scope derivation must exist');
+    assert.ok(src.includes('tokenFingerprint'), 'token must be reduced to a fingerprint');
+    assert.ok(/scopedKey\s*=\s*`[^`]*::\$\{key\}`/.test(src), 'in-flight key must be <sessionScope>::<url>');
+    // The raw token must never be concatenated into a key or logged.
+    const keyExpr = src.slice(src.indexOf('function currentSessionScope'));
+    assert.ok(!/`[^`]*\$\{\s*(state\.)?token\s*\}[^`]*`/.test(keyExpr), 'raw token must not appear in the key');
+    assert.ok(!src.includes('console.log'), 'no logging of key/scope');
   });
 });
 

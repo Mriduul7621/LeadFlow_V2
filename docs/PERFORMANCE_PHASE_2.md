@@ -159,13 +159,32 @@ identical reads.
 
 ### 4.3 In-flight GET coalescing — new `src/modules/shared/api/coalesce.ts`
 
-- `coalesceGet(key, fn)`: concurrent callers of the **same URL** share
-  one in-flight request; the key (full path + query) is dropped the
-  instant the request settles (success *or* failure) — so nothing is
-  cached across requests, failures reach every waiter, and the next call
-  is a fresh request. TTLs/invalidation remain the domain of Phase 1's
-  `sessionCache` — this only collapses duplicates of the *same logical
-  request* while it is in flight.
+- `coalesceGet(key, fn)`: concurrent callers of the **same URL in the
+  same authenticated session** share one in-flight request. The in-flight
+  map is keyed by **`<sessionScope>::<requestUrl>`**, where
+  `sessionScope` is derived on *every* call from the live auth store
+  (the same single source of truth the http layer and the `apiClient`
+  token patch already use):
+    - `u:<user.id|anon>` — the authenticated user id, and
+    - `t:<token-fingerprint|anon>` — a short **non-cryptographic FNV-1a
+      32-bit fingerprint (base36, ~7 chars)** of the current session
+      token. The raw token never appears in the key, in logs, or in any
+      debug output.
+  Two requests are joined **only** when they belong to the same
+  authenticated session, so a request started under user A can never be
+  joined by user B, and a logout + login (even of the *same* user, who
+  then holds a new token) starts a fresh scope and cannot join the prior
+  session's in-flight request. Unauthenticated calls collapse to one
+  stable anonymous scope (the six coalesced readers are all behind
+  `requireAuth` anyway). The URL portion keeps the full path + query, so
+  path/query distinctions are preserved exactly.
+- The entry is dropped the instant the request settles (success *or*
+  failure) — so nothing is cached across requests, there is **no TTL and
+  no result caching**, failures reach every same-session waiter, and the
+  next call is a fresh request. TTLs/invalidation remain the domain of
+  Phase 1's `sessionCache` — this only collapses duplicates of the *same
+  logical request* in the *same session* while it is in flight. Nothing
+  is persisted anywhere (in-memory, per page load).
 - Applied to exactly six shared **read** paths (GET only — no mutation
   goes through it):
   | Reader | Coalesced URL |
@@ -186,11 +205,14 @@ identical reads.
   - No authorization semantics change: the permission sheet still has
     its 5-minute TTL and is invalidated by the override-save flow and
     logout; coalescing only joins concurrent requests for the *same*
-    user's own data.
-- **Logout hygiene**: `authStore.logout` now also calls
-  `clearCoalescing()`, so a read started for the signed-out user can
-  never be joined by the next session's request (behaviorally asserted
-  in `perf-phase2-source-guards.test.ts` M).
+    user's own data, within the *same* session.
+- **Logout hygiene (defense in depth)**: `authStore.logout` also calls
+  `clearCoalescing()`, dropping any still-in-flight entries for the
+  signed-out user. With session-scoped keys a fresh session gets a new
+  scope even if an entry were somehow still around, so the two
+  mechanisms independently prevent a stale in-flight read from being
+  joined across sessions (behaviorally asserted in
+  `perf-phase2-source-guards.test.ts` M / M2).
 
 ### 4.4 Serverless cold-start kick-off — `api/index.ts`
 
@@ -226,13 +248,19 @@ identical reads.
 - **Lazy routes cannot bypass RBAC.** The `ProtectedRoute` gate and the
   server `requireAuth` + permission guards run exactly as before; a lazy
   chunk is only fetched for a route the gate already released.
-- **Coalescing is read-only and in-flight-only.** No new authorization
-  state is stored anywhere; the map holds at most one pending promise
-  per URL and is emptied on settlement and on logout. A revoked
-  permission can never persist via coalescing (there is no result
-  reuse across requests), and the permission sheet's existing
-  TTL/invalidation (5 min; invalidated on override save + logout) is
-  untouched.
+- **Coalescing is read-only, in-flight-only, and session-scoped.** No
+  new authorization state is stored anywhere; the map holds at most one
+  pending promise per `<sessionScope>::<url>` and is emptied on
+  settlement and on logout. The scope is derived from the live auth
+  store (`user.id` + a short FNV-1a **fingerprint** of the token — the
+  raw token is never stored, logged, or exposed), so an in-flight read
+  can only ever be joined by the *same authenticated session*: a
+  different user cannot join it, and a logout + re-login (even of the
+  same user, now holding a new token) starts a fresh scope and cannot
+  join the prior session's request. A revoked permission can never
+  persist via coalescing (there is no result reuse across requests), and
+  the permission sheet's existing TTL/invalidation (5 min; invalidated
+  on override save + logout) is untouched.
 - **bcrypt cost unchanged** (79 ms of the 85 ms warm login) —
   deliberately kept.
 - The `sameProfile`/`lastLogin`-exclusion profile-compare (Phase 1) that
@@ -381,13 +409,18 @@ Supabase dataset before touching indexes — no blind index additions).
 
 ## Verification (all green on this branch)
 
-- `npm test -- --run` — **399/399, 0 fail** (baseline 386 + 14 new Phase
+- `npm test -- --run` — **400/400, 0 fail** (baseline 386 + 15 new Phase
   2 guards in `server/tests/perf-phase2-source-guards.test.ts` — lazy
-  routes, deferred calendar, GET-only coalescing, behavioral
-  coalescing/logout tests, serverless kick-off — the +13 vs +14
-  difference is node:test's TAP accounting of suite vs file entries);
-  all Phase 1 `perf-latency-hardening` guards, auth-flow, RBAC,
-  dashboard, workbench, follow-up and scheduled-activity suites green.
+  routes, deferred calendar, GET-only session-scoped coalescing,
+  behavioral coalescing + session-boundary tests, serverless kick-off;
+  node:test's TAP accounting of suite vs file entries can make the
+  top-level count read 400 or 401 for the same run); all Phase 1
+  `perf-latency-hardening` guards, auth-flow, RBAC, dashboard,
+  workbench, follow-up and scheduled-activity suites green. (Note:
+  `lead-followup-queue-integration` is affected by a pre-existing
+  node:test parallel-runner serialization flake — "Unable to
+  deserialize cloned data" — that also occurs on unmodified `main`; it
+  passes 19/19 in isolation and in clean full-suite runs.)
 - `npx tsc --noEmit` — clean.
 - `npm run build` — succeeds; initial JS 1,962 kB → 653 kB (see §6).
 - `npm run verify:serverless` — all checks pass with the module-scope
@@ -396,7 +429,12 @@ Supabase dataset before touching indexes — no blind index additions).
 - New guards assert: lazy (not eager) route imports; Login stays static;
   Suspense lives inside the ProtectedRoute shell; the embedded calendar
   is lazy + deferred + still rendered `embedded`; coalescing is wired to
-  the six GET readers and to **no** mutation; coalesce behavior
-  (collapse / per-key / no persistence / failure fan-out / retry after
-  failure); logout clears coalesced in-flight state; serverless kick-off
-  precedes dispatch and stays memoized.
+  the six GET readers and to **no** mutation; session-scoped coalesce
+  behavior — same URL + same session collapses to one request, same URL
+  + **different authenticated session is a separate request**, logout +
+  re-login (even of the same user, new token) cannot join the prior
+  session's in-flight request, failures fan out within a session, retry
+  after failure is fresh; the in-flight key is
+  `<sessionScope>::<url>` with a token **fingerprint** (raw token never
+  in the key, never logged); logout clears coalesced in-flight state;
+  serverless kick-off precedes dispatch and stays memoized.
