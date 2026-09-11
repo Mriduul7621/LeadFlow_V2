@@ -5,7 +5,7 @@ import {
   Inbox,
   Clock,
   AlertTriangle,
-  CheckCircle,
+  History,
   TrendingUp,
   Banknote,
   Percent,
@@ -15,14 +15,12 @@ import {
   ChevronRight,
   CalendarClock,
   ArrowRight,
-  Info,
-  History,
-  Plus,
   Phone,
   Video,
   ClipboardCheck,
-  ChevronDown,
   CalendarDays,
+  ChevronDown,
+  Plus,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -33,29 +31,14 @@ import { scheduledActivityService, type ScheduledActivity } from '../../schedule
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import TaskCalendar from '../../auth/pages/TaskCalendar';
 
-/**
+/** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
- * ------------------------------------------------------------------
- * Every KPI, pipeline and follow-up figure on this page binds ONLY to the
- * server-authoritative GET /api/dashboard response (PostgreSQL + Asia/Dhaka
- * + Own/DownTeam/FullTeam/Organization visibility). Client lead lists are
- * never used as a source for authoritative totals.
- *
- * The "Today & Tomorrow" panel is server-authoritative:
- *   - Follow-ups come from the server follow-up queue (GET /api/leads/follow-ups)
- *   - Calls & meetings come from the server scheduled_activities table
- *     (GET /api/scheduled-activities?from=&to=, Asia/Dhaka) — the calendar
- *     and this panel never fetch the full lead list.
- *
- * Intentionally deferred (see docs/DASHBOARD_UX_STEP5B.md, docs/SCHEDULED_ACTIVITIES.md):
- *  - real trend time-series endpoint
- *  - canonical team performance
- *  - advanced "needs attention" rules / lead scoring
- */
+ * Server-authoritative: every KPI, pipeline and follow-up figure binds
+ * ONLY to GET /api/dashboard (PostgreSQL + Asia/Dhaka + visibility).
+ * Client lead lists are never used as a source for authoritative totals.
+ * ------------------------------------------------------------- */
 
-// ------------------------------------------------------------------
-// Dhaka business time helpers (Asia/Dhaka is UTC+6, no DST)
-// ------------------------------------------------------------------
+// ---- Dhaka business time helpers ---------------------------------
 function getDhakaNow(): Date {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
 }
@@ -105,10 +88,7 @@ function formatDhakaDue(iso: string): string {
   }
 }
 
-// ------------------------------------------------------------------
-// Date filter: Today / WTD / MTD / LMTD / YTD / Custom / All Time
-// WTD = Week to Date, MTD = Month to Date, LMTD = Last Month to Date (same elapsed days), YTD = Year to Date
-// ------------------------------------------------------------------
+// ---- Date filter: Today / WTD / MTD / LMTD / YTD / Custom / All ----
 type PeriodKey = 'TODAY' | 'WTD' | 'MTD' | 'LMTD' | 'YTD' | 'CUSTOM' | 'ALL';
 
 interface ResolvedRange {
@@ -118,7 +98,7 @@ interface ResolvedRange {
   display: string;
 }
 
-function resolveRange(period: PeriodKey, customStart?: string, customEnd?: string): ResolvedRange {
+export function resolveRange(period: PeriodKey, customStart?: string, customEnd?: string): ResolvedRange {
   const dhakaNow = getDhakaNow();
   const y = dhakaNow.getFullYear();
   const m = dhakaNow.getMonth();
@@ -151,7 +131,7 @@ function resolveRange(period: PeriodKey, customStart?: string, customEnd?: strin
   }
   if (period === 'YTD') {
     const startYmd = formatYmd(new Date(y, 0, 1));
-    return { label: period, startYmd, endYmd: todayYmd, display: formatShortRange(startYmd, todayYmd) };
+    return { label: period, startYmd: startYmd, endYmd: todayYmd, display: formatShortRange(startYmd, todayYmd) };
   }
   if (period === 'CUSTOM') {
     const s = customStart && parseYmdToDate(customStart) ? customStart : formatYmd(new Date(y, m, 1));
@@ -161,6 +141,7 @@ function resolveRange(period: PeriodKey, customStart?: string, customEnd?: strin
   return { label: period, startYmd: null, endYmd: null, display: 'All time' };
 }
 
+// ---- Pipeline stages ------------------------------------------------
 const PIPELINE_STAGES = [
   'Untouched',
   'Contacted',
@@ -229,18 +210,6 @@ function SectionHeading({ title, desc, action }: { title: string; desc?: string;
   );
 }
 
-function EmptyState({ icon: Icon, title, note }: { icon: React.ComponentType<{ className?: string }>; title: string; note?: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center text-center py-12 px-6 bg-[#FFFCF8] border border-dashed border-stone-200 rounded-[12px]">
-      <div className="w-11 h-11 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-300 mb-3 shadow-sm">
-        <Icon className="w-5 h-5" />
-      </div>
-      <p className="text-[12px] font-bold text-stone-600">{title}</p>
-      {note && <p className="text-[12px] text-stone-400 font-medium mt-2 max-w-sm leading-relaxed">{note}</p>}
-    </div>
-  );
-}
-
 function SkeletonCard() {
   return (
     <div className="bg-white rounded-[12px] border border-stone-100 p-5 min-h-[118px] animate-pulse" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
@@ -250,6 +219,355 @@ function SkeletonCard() {
   );
 }
 
+// ---- Follow-up Discipline compact card -----------------------------
+export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: number; dueToday: number; upcoming: number; total: number }) {
+  const overdueShare = total > 0 ? Math.round((overdue / total) * 100) : 0;
+  return (
+    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Follow-up Discipline" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Link to="/follow-up?bucket=overdue" className="rounded-[12px] border p-5 flex items-center justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-150">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-600" />
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest text-red-600">Overdue</p>
+              <p className="text-2xl font-black text-red-600 mt-1">{formatCount(overdue)}</p>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">{overdueShare}% share</span>
+        </Link>
+        <Link to="/follow-up?bucket=today" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
+          <div className="flex items-center gap-3">
+            <Clock className="w-5 h-5 text-amber-600" />
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest text-amber-600">Due Today</p>
+              <p className="text-2xl font-black text-amber-600 mt-1">{formatCount(dueToday)}</p>
+            </div>
+          </div>
+        </Link>
+        <Link to="/follow-up?bucket=upcoming" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
+          <div className="flex items-center gap-3">
+            <CalendarClock className="w-5 h-5 text-blue-600" />
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest text-blue-600">Upcoming</p>
+              <p className="text-2xl font-black text-blue-600 mt-1">{formatCount(upcoming)}</p>
+            </div>
+          </div>
+        </Link>
+      </div>
+      <div className="mt-4 text-right">
+        <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
+          <History className="w-3.5 h-3.5" /> Open Full Queue <ArrowRight className="w-3.5 h-3.5" />
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+// ---- Today & Tomorrow panel -----------------------------------------
+const ACTIVITY_TYPES = ['call', 'meeting', 'follow_up', 'task'] as const;
+const ACTIVITY_META = {
+  call: { label: 'Call', summary: 'Calls', icon: Phone, tone: 'bg-sky-50 border-sky-200 text-sky-700' },
+  meeting: { label: 'Meeting', summary: 'Meetings', icon: Video, tone: 'bg-amber-50 border-amber-200 text-amber-700' },
+  follow_up: { label: 'Follow-up', summary: 'Follow-ups', icon: History, tone: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
+  task: { label: 'Task', summary: 'Tasks', icon: ClipboardCheck, tone: 'bg-purple-50 border-purple-200 text-purple-700' },
+};
+
+interface DailyActivity {
+  key: string;
+  leadId: string;
+  activityType: ScheduledActivity['activityType'];
+  scheduledAt: string;
+  name: string;
+  title?: string | null;
+  leadStatus?: string | null;
+}
+
+function getDailyActivities(followUps: FollowUpQueueItem[], scheduled: ScheduledActivity[]): DailyActivity[] {
+  const activities: DailyActivity[] = [
+    ...followUps.map((item): DailyActivity => ({
+      key: `follow-up:${item.id}`,
+      leadId: item.id,
+      activityType: 'follow_up',
+      scheduledAt: item.nextFollowUpAt,
+      name: item.prospectName || item.customerName || 'Follow-up',
+      leadStatus: item.currentStatus,
+    })),
+    ...scheduled.map((item): DailyActivity => ({
+      key: `scheduled:${item.id}`,
+      leadId: item.leadId,
+      activityType: item.activityType,
+      scheduledAt: item.scheduledAt,
+      name: item.leadCustomerName || item.title || ACTIVITY_META[item.activityType].label,
+      title: item.title,
+    })),
+  ];
+
+  // Exact IDs only, namespaced by source: queue IDs identify leads, whereas
+  // scheduled_activities IDs identify independent planned activities. Neither
+  // loaded contract supplies an item-level link between the two, so matching
+  // lead IDs, names or due times cannot safely collapse cross-source follow-ups.
+  const uniqueActivities = new Map(activities.map((item) => [item.key, item]));
+  const time = (item: DailyActivity) => {
+    const timestamp = new Date(item.scheduledAt).getTime();
+    return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+  };
+  return [...uniqueActivities.values()].sort((a, b) => time(a) - time(b));
+}
+
+export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled, tomorrowScheduled, dailyLoading }: {
+  todayFollowUps: FollowUpQueueItem[];
+  tomorrowFollowUps: FollowUpQueueItem[];
+  todayScheduled: ScheduledActivity[];
+  tomorrowScheduled: ScheduledActivity[];
+  dailyLoading: boolean;
+}) {
+  const groups = [
+    { label: 'Today', items: getDailyActivities(todayFollowUps, todayScheduled) },
+    { label: 'Tomorrow', items: getDailyActivities(tomorrowFollowUps, tomorrowScheduled) },
+  ];
+
+  return (
+    <section aria-busy={dailyLoading} className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading
+        title="Today & Tomorrow"
+        desc="Planned activities for today and tomorrow"
+        action={
+          <Link to="/task-calendar" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
+            <CalendarIcon className="w-3.5 h-3.5" /> Open Calendar <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        }
+      />
+
+      <div className="space-y-8">
+        {groups.map((group) => (
+          <section key={group.label} aria-label={group.label}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[11px] font-black uppercase tracking-widest text-stone-400">{group.label}</h3>
+              {!dailyLoading && (
+                <span aria-label={`${group.items.length} activities`} className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2 py-0.5 rounded-full border border-stone-100">
+                  {formatCount(group.items.length)}
+                </span>
+              )}
+            </div>
+            {dailyLoading ? (
+              <div role="status" aria-label={`Loading ${group.label.toLowerCase()} activities`} className="space-y-3 animate-pulse">
+                <span className="sr-only">Loading {group.label.toLowerCase()} activities...</span>
+                <div className="h-10 bg-stone-100 rounded-[10px]" aria-hidden="true" />
+                <div className="h-16 bg-stone-100 rounded-[10px]" aria-hidden="true" />
+                <div className="h-16 bg-stone-100 rounded-[10px]" aria-hidden="true" />
+              </div>
+            ) : (
+              <>
+                <dl aria-label={`${group.label} activity counts`} className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                  {ACTIVITY_TYPES.map((type) => (
+                    <div key={type} className="flex items-center justify-between gap-2 rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-3 py-2">
+                      <dt className="text-[11px] font-semibold text-stone-500">{ACTIVITY_META[type].summary}</dt>
+                      <dd className="text-sm font-bold text-brand-text">{formatCount(group.items.filter((item) => item.activityType === type).length)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {group.items.length === 0 ? (
+                  <div className="rounded-[12px] border border-dashed border-stone-200 px-4 py-6 text-[13px] text-stone-400 text-center bg-[#FFFCF8]">
+                    {group.label === 'Today' ? 'No activities scheduled for today' : 'No activities scheduled for tomorrow'}
+                  </div>
+                ) : (
+                  <ol aria-label={`${group.label} activities`} className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                    {group.items.map((item) => {
+                      const { label, icon: Icon, tone } = ACTIVITY_META[item.activityType];
+                      return (
+                        <li key={item.key}>
+                          <Link
+                            to={`/leads/${encodeURIComponent(item.leadId)}`}
+                            className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-[#FFFCF8] hover:shadow-sm transition-all duration-150 group"
+                          >
+                            <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', tone)}>
+                              <Icon className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-stone-800 truncate">{item.name}</p>
+                              <p className="text-[11px] text-stone-400">
+                                {label} · {formatDhakaDue(item.scheduledAt)}
+                                {item.title ? ` · ${item.title}` : ''}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap justify-end gap-1 max-w-[40%]">
+                              <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', tone)}>
+                                {label}
+                              </span>
+                              {item.leadStatus && (
+                                <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', getLeadStatusColorClasses(item.leadStatus))}>
+                                  {item.leadStatus}
+                                </span>
+                              )}
+                            </div>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </>
+            )}
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ---- Sales Pipeline -------------------------------------------------
+function SalesPipeline({ statusCounts, totalLeads }: { statusCounts: Record<string, number>; totalLeads: number }) {
+  const pipelineStages = PIPELINE_STAGES.map((stage) => {
+    const count = Number((statusCounts as any)[stage] || 0);
+    const pct = totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0;
+    return { stage, count, pct };
+  });
+
+  return (
+    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Sales Pipeline" desc="Track leads across each sales stage" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        {pipelineStages.map((s, i) => (
+          <div key={s.stage} className="relative bg-[#FFFCF8] border border-stone-100 rounded-[12px] p-3 hover:bg-white hover:shadow-sm transition-all duration-150">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black uppercase tracking-wider text-stone-500 truncate">{s.stage}</span>
+              {i < pipelineStages.length - 1 && <ChevronRight className="hidden lg:block w-3.5 h-3.5 text-stone-300 shrink-0" />}
+            </div>
+            <p className="text-2xl font-black text-brand-text mt-2 leading-none">{formatCount(s.count)}</p>
+            <div className="h-1.5 bg-stone-200 rounded-full mt-3 overflow-hidden">
+              <div className="h-full bg-[#978C21] rounded-full transition-all duration-500" style={{ width: `${s.pct}%` }} />
+            </div>
+            <p className="text-[10px] font-semibold text-stone-400 mt-2">{s.pct}% of leads</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ---- Executive Snapshot ---------------------------------------------
+export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, projectedNCP, activeLeads, pipelineLocked, overdueFollowUps }: {
+  totalLeads: number;
+  conversionRate: string;
+  collectedNCP: string;
+  projectedNCP: string;
+  activeLeads: number;
+  pipelineLocked: number;
+  overdueFollowUps: number;
+}) {
+  return (
+    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Executive Snapshot" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+        <KpiCard label="Total Leads" value={formatCount(totalLeads)} icon={Users} variant="blue" />
+        <KpiCard label="Conversion Rate" value={conversionRate} icon={Percent} variant="slate" />
+        <KpiCard label="Collected NCP" value={collectedNCP} icon={Banknote} variant="emerald" />
+        <KpiCard label="Projected NCP" value={projectedNCP} icon={TrendingUp} variant="olive" />
+        <KpiCard label="Active Leads" value={formatCount(activeLeads)} icon={Layers} variant="blue" sub={`${pipelineLocked} Pipeline Locked`} />
+      </div>
+      {/* Overdue Follow-ups shown as a compact callout under the KPI grid */}
+      <div className="mt-4 rounded-[12px] border border-red-200 bg-red-50 p-4">
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="w-4 h-4 text-red-500" />
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-widest text-red-600">Overdue Follow-ups</p>
+            <p className="text-2xl font-black text-red-600 mt-1">{formatCount(overdueFollowUps)}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---- Performance Insights -------------------------------------------
+function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date: string; value: number }> | undefined; teamStats: Array<{ team: string; assigned: number; collected: number; projected: number }> | undefined }) {
+  return (
+    <div className="space-y-4">
+      {/* Trend section - compact unavailable state when no data */}
+      {(trendData ?? []).length > 0 ? (
+        <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <SectionHeading title="Trend" desc="Historical lead volume over time" />
+          <div className="space-y-2">
+            {(trendData ?? []).map((point) => (
+              <div key={point.date} className="flex items-center justify-between border-b border-stone-50 py-2">
+                <span className="text-xs text-stone-500">{point.date}</span>
+                <span className="text-sm font-bold text-brand-text">{formatCount(point.value)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <div className="text-center py-8">
+          <AlertTriangle className="w-6 h-6 text-stone-300 mx-auto mb-3 opacity-50" />
+          <p className="text-[12px] text-stone-500">No trend data available</p>
+        </div>
+      )}
+
+      {/* Team Performance - compact or hidden */}
+      {(teamStats ?? []).length > 0 ? (
+        <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <SectionHeading title="Team Performance" desc="Team metrics for the selected period" />
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#FFFCF8] text-[11px] font-black text-stone-500 uppercase tracking-widest border-b border-stone-100">
+                <tr>
+                  <th className="px-4 py-3">Team</th>
+                  <th className="px-4 py-3 text-center">Assigned</th>
+                  <th className="px-4 py-3 text-center">Collected NCP</th>
+                  <th className="px-4 py-3 text-center">Projected NCP</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-50">
+                {(teamStats ?? []).map((row) => (
+                  <tr key={row.team}>
+                    <td className="px-4 py-3 font-semibold text-stone-700">{row.team}</td>
+                    <td className="px-4 py-3 text-center text-stone-500">{formatCount(row.assigned)}</td>
+                    <td className="px-4 py-3 text-center text-stone-500">{formatMoney(row.collected)}</td>
+                    <td className="px-4 py-3 text-center text-stone-500">{formatMoney(row.projected)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+// ---- Needs Attention ------------------------------------------------
+export function NeedsAttentionSection({ untouched }: { untouched: number }) {
+  return (
+    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Needs Attention" />
+      <div className="grid grid-cols-1 gap-4">
+        <Link
+          to="/leads"
+          className="rounded-[12px] border border-stone-100 p-5 hover:border-[#978C21]/30 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-400 shadow-sm">
+              <Inbox className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-stone-800">Untouched Leads</p>
+              <p className="text-[12px] text-stone-400">Leads with no engagement yet</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-black text-brand-text">{formatCount(untouched)}</p>
+            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Tracking</span>
+          </div>
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+// ============================================================
+// Dashboard main component
+// ============================================================
 export default function Dashboard() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
@@ -315,9 +633,6 @@ export default function Dashboard() {
     }
   }, [user, period, customStart, customEnd]);
 
-  const formattedDateRange = resolved.display;
-  // aria-label="Add Lead" — literal retained for Dashboard UX Step 5B source guard
-
   const loadDailyExecution = useCallback(async () => {
     if (!user) return;
     setDailyLoading(true);
@@ -335,6 +650,7 @@ export default function Dashboard() {
         leadService.getFollowUpQueue({ bucket: 'upcoming', limit: 50 }),
         scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 }),
       ]);
+
       setTodayFollowUps(todayRes.items ?? []);
       const tomorrowStartMs = new Date(upcomingRes.bounds.tomorrowStart).getTime();
       const tomorrowEndMs = tomorrowStartMs + 86_400_000;
@@ -344,6 +660,7 @@ export default function Dashboard() {
           return t >= tomorrowStartMs && t < tomorrowEndMs;
         }),
       );
+
       const isDhakaDate = (iso: string, ymd: string): boolean => {
         try {
           const d = new Date(iso);
@@ -353,6 +670,7 @@ export default function Dashboard() {
           return false;
         }
       };
+
       setTodayScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, dhakaToday)));
       setTomorrowScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, tomorrowYmd)));
     } catch {
@@ -376,15 +694,6 @@ export default function Dashboard() {
   const statusCounts = metrics?.statusCounts ?? {};
   const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
-
-  const pipelineStages = PIPELINE_STAGES.map((stage) => {
-    const count = Number((statusCounts as any)[stage] || 0);
-    const pct = totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0;
-    return { stage, count, pct };
-  });
-
-  const distribution = (metrics?.campaignStats ?? []).filter((row) => row && typeof row.name === 'string');
-  const distributionMax = Math.max(1, ...distribution.map((row) => Number(row.value) || 0));
 
   const refreshAll = () => {
     void loadDashboardData();
@@ -582,290 +891,51 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-            <KpiCard label="Total Leads" value={formatCount(totalLeads)} icon={Users} variant="blue" />
-            <KpiCard label="Untouched" value={formatCount((statusCounts as any).Untouched)} icon={Inbox} variant="olive" />
-            <KpiCard label="Due Today" value={formatCount(followUpCounts.today)} icon={Clock} variant="orange" sub="Follow-ups due" />
-            <KpiCard label="Overdue" value={formatCount(followUpCounts.overdue)} icon={AlertTriangle} variant="red" sub="Overdue follow-ups" />
-            <KpiCard label="Converted" value={formatCount(metrics?.converted ?? 0)} icon={CheckCircle} variant="emerald" />
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            <KpiCard label="Projected NCP" value={formatMoney(metrics?.projected ?? 0)} icon={TrendingUp} variant="olive" />
-            <KpiCard label="Collected NCP" value={formatMoney(metrics?.collected ?? 0)} icon={Banknote} variant="emerald" />
-            <KpiCard label="Conversion Rate" value={metrics?.conversionRate || '0.0%'} icon={Percent} variant="slate" />
-            <KpiCard label="Active Leads" value={formatCount(metrics?.activeLeads ?? 0)} icon={Layers} variant="blue" sub={`${formatCount(metrics?.pipelineLocked ?? 0)} Pipeline Locked`} />
-          </div>
+          {/* ==== Executive Snapshot ==== */}
+          <ExecutiveSnapshot
+            totalLeads={totalLeads}
+            conversionRate={metrics?.conversionRate || '0.0%'}
+            collectedNCP={formatMoney(metrics?.collected ?? 0)}
+            projectedNCP={formatMoney(metrics?.projected ?? 0)}
+            activeLeads={metrics?.activeLeads ?? 0}
+            pipelineLocked={metrics?.pipelineLocked ?? 0}
+            overdueFollowUps={followUpCounts.overdue}
+          />
 
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Sales Pipeline" desc="Track leads across each sales stage" />
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-              {pipelineStages.map((s, i) => (
-                <div key={s.stage} className="relative bg-[#FFFCF8] border border-stone-100 rounded-[12px] p-3 hover:bg-white hover:shadow-sm transition-all duration-150">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-stone-500 truncate">{s.stage}</span>
-                    {i < pipelineStages.length - 1 && <ChevronRight className="hidden lg:block w-3.5 h-3.5 text-stone-300 shrink-0" />}
-                  </div>
-                  <p className="text-2xl font-black text-brand-text mt-2 leading-none">{formatCount(s.count)}</p>
-                  <div className="h-1.5 bg-stone-200 rounded-full mt-3 overflow-hidden">
-                    <div className="h-full bg-[#978C21] rounded-full transition-all duration-500" style={{ width: `${s.pct}%` }} />
-                  </div>
-                  <p className="text-[10px] font-semibold text-stone-400 mt-2">{s.pct}% of leads</p>
-                </div>
-              ))}
-            </div>
-          </section>
+          {/* ==== Today & Tomorrow ==== */}
+          <TodayTomorrowPanel
+            todayFollowUps={todayFollowUps}
+            tomorrowFollowUps={tomorrowFollowUps}
+            todayScheduled={todayScheduled}
+            tomorrowScheduled={tomorrowScheduled}
+            dailyLoading={dailyLoading}
+          />
 
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading
-              title="Today & Tomorrow"
-              desc="Planned activities for today and tomorrow"
-              action={
-                <Link to="/task-calendar" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-                  <CalendarIcon className="w-3.5 h-3.5" /> Open Calendar <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
-              }
-            />
+          {/* ==== Sales Pipeline ==== */}
+          <SalesPipeline statusCounts={statusCounts} totalLeads={totalLeads} />
 
-            {dailyLoading ? (
-              <div className="space-y-3">
-                <div className="h-12 bg-stone-100 rounded animate-pulse" />
-                <div className="h-12 bg-stone-100 rounded animate-pulse" />
-              </div>
-            ) : (
-              <div className="space-y-8">
-                {[
-                  { label: 'Today', followUps: todayFollowUps, scheduled: todayScheduled },
-                  { label: 'Tomorrow', followUps: tomorrowFollowUps, scheduled: tomorrowScheduled },
-                ].map((group) => (
-                  <div key={group.label}>
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-[11px] font-black uppercase tracking-widest text-stone-400">{group.label}</p>
-                      <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2 py-0.5 rounded-full border border-stone-100">{group.followUps.length + group.scheduled.length}</span>
-                    </div>
-                    {group.followUps.length === 0 && group.scheduled.length === 0 ? (
-                      <div className="rounded-[12px] border border-dashed border-stone-200 px-4 py-6 text-[13px] text-stone-400 text-center bg-[#FFFCF8]">
-                        {group.label === 'Today' ? 'No activities scheduled for today' : 'No activities scheduled for tomorrow'}
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {group.followUps.slice(0, 6).map((item) => (
-                          <Link
-                            key={item.id}
-                            to={`/leads/${encodeURIComponent(item.id)}`}
-                            className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-[#FFFCF8] hover:shadow-sm transition-all duration-150 group"
-                          >
-                            <div className="w-9 h-9 rounded-[10px] bg-[#FDFBF7] border border-stone-100 flex items-center justify-center shrink-0 group-hover:bg-white">
-                              <History className="w-4 h-4 text-stone-400 group-hover:text-[#978C21]" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-semibold text-stone-800 truncate">{item.prospectName || item.customerName}</p>
-                              <p className="text-[11px] text-stone-400">
-                                Follow-up · {formatDhakaDue(item.nextFollowUpAt)}
-                              </p>
-                            </div>
-                            <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border shrink-0', getLeadStatusColorClasses(item.currentStatus))}>
-                              {item.currentStatus}
-                            </span>
-                          </Link>
-                        ))}
-                        {group.scheduled.slice(0, 6).map((sa) => {
-                          const typeKey = String(sa.activityType).toLowerCase();
-                          const typeLabel =
-                            typeKey === 'call' ? 'Call' : typeKey === 'meeting' ? 'Meeting' : typeKey === 'task' ? 'Task' : 'Follow-up';
-                          const Icon =
-                            typeKey === 'call' ? Phone : typeKey === 'meeting' ? Video : typeKey === 'task' ? ClipboardCheck : CalendarClock;
-                          const tone =
-                            typeKey === 'meeting'
-                              ? 'bg-amber-50 border-amber-200 text-amber-700'
-                              : typeKey === 'call'
-                                ? 'bg-sky-50 border-sky-200 text-sky-700'
-                                : typeKey === 'task'
-                                  ? 'bg-purple-50 border-purple-200 text-purple-700'
-                                  : 'bg-emerald-50 border-emerald-200 text-emerald-700';
-                          return (
-                            <Link
-                              key={sa.id}
-                              to={`/leads/${encodeURIComponent(sa.leadId)}`}
-                              className="flex items-center gap-3 px-4 py-3 rounded-[10px] border border-stone-100 hover:border-[#978C21]/30 hover:bg-white hover:shadow-sm transition-all duration-150 group"
-                            >
-                              <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', tone)}>
-                                <Icon className="w-4 h-4" />
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-semibold text-stone-800 truncate">{sa.leadCustomerName || sa.title || typeLabel}</p>
-                                <p className="text-[11px] text-stone-400">
-                                  {typeLabel} · {formatDhakaDue(sa.scheduledAt)}
-                                  {sa.title ? ` · ${sa.title}` : ''}
-                                </p>
-                              </div>
-                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border shrink-0 bg-stone-50 border-stone-200 text-stone-600">
-                                {typeLabel}
-                              </span>
-                            </Link>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+          {/* ==== Follow-up Discipline ==== */}
+          <FollowUpDiscipline
+            overdue={followUpCounts.overdue}
+            dueToday={followUpCounts.today}
+            upcoming={followUpCounts.upcoming}
+            total={followUpCounts.all}
+          />
 
-          <section className="space-y-4">
-            <SectionHeading title="Follow-up Health" desc="Monitor overdue, due today and upcoming follow-ups" />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {[
-                { label: 'Overdue', count: followUpCounts.overdue, bucket: 'overdue', tone: 'text-red-700 border-red-200 bg-red-50/50', icon: AlertTriangle },
-                { label: 'Due Today', count: followUpCounts.today, bucket: 'today', tone: 'text-amber-700 border-amber-200 bg-amber-50/50', icon: Clock },
-                { label: 'Upcoming', count: followUpCounts.upcoming, bucket: 'upcoming', tone: 'text-blue-700 border-blue-200 bg-blue-50/50', icon: CalendarClock },
-              ].map((card) => (
-                <Link
-                  key={card.bucket}
-                  to={`/follow-up?bucket=${card.bucket}`}
-                  className={cn('rounded-[12px] border p-5 flex items-center justify-between group transition-all duration-150 hover:shadow-md hover:-translate-y-0.5', card.tone)}
-                >
-                  <div className="flex items-center gap-4">
-                    <card.icon className="w-6 h-6" />
-                    <div>
-                      <p className="text-[11px] font-black uppercase tracking-widest">{card.label}</p>
-                      <p className="text-3xl font-black leading-none mt-1">{formatCount(card.count)}</p>
-                    </div>
-                  </div>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider opacity-70 group-hover:opacity-100">
-                    View <ChevronRight className="w-3.5 h-3.5" />
-                  </span>
-                </Link>
-              ))}
-            </div>
-            <div className="flex justify-end">
-              <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-                <History className="w-3.5 h-3.5" /> Open Full Queue <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-            </div>
-          </section>
+          {/* ==== Needs Attention ==== */}
+          <NeedsAttentionSection untouched={statusCounts['Untouched'] ?? 0} />
 
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Needs Attention" desc="Leads requiring immediate action" />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Link
-                to="/leads"
-                className="rounded-[12px] border border-stone-100 p-5 hover:border-[#978C21]/30 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-400 shadow-sm">
-                    <Inbox className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-stone-800">Untouched Leads</p>
-                    <p className="text-[12px] text-stone-400">Leads with no engagement yet</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-2xl font-black text-brand-text">{formatCount((statusCounts as any).Untouched)}</p>
-                  <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Tracking</span>
-                </div>
-              </Link>
-              <Link
-                to="/follow-up?bucket=overdue"
-                className="rounded-[12px] border border-stone-100 p-5 hover:border-red-200 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-[10px] bg-red-50 border border-red-200 flex items-center justify-center text-red-500">
-                    <AlertTriangle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-stone-800">Overdue Follow-ups</p>
-                    <p className="text-[12px] text-stone-400">Follow-ups past due date</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-2xl font-black text-red-600">{formatCount(followUpCounts.overdue)}</p>
-                  <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Overdue Queue</span>
-                </div>
-              </Link>
-            </div>
-            <p className="flex items-center gap-2 text-[12px] text-stone-400 mt-4 border-t border-stone-100 pt-4">
-              <Info className="w-3.5 h-3.5 shrink-0" />
-              Additional attention rules coming in a later phase.
-            </p>
-          </section>
+          {/* ==== Performance Insights ==== */}
+          <PerformanceInsights
+            trendData={metrics?.trendData}
+            teamStats={metrics?.teamStats}
+          />
 
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Trend" desc="Historical lead volume over time" />
-            {(metrics?.trendData ?? []).length === 0 ? (
-              <EmptyState icon={TrendingUp} title="No trend data available" note="Trend data is not available for the selected period" />
-            ) : (
-              <div className="space-y-2">
-                {(metrics?.trendData ?? []).map((point) => (
-                  <div key={point.date} className="flex items-center justify-between border-b border-stone-50 py-2">
-                    <span className="text-xs text-stone-500">{point.date}</span>
-                    <span className="text-sm font-bold text-brand-text">{formatCount(point.value)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <span className="hidden">No trend data available</span>
-          </section>
-
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Team Performance" desc="Team metrics for the selected period" />
-            {(metrics?.teamStats ?? []).length === 0 ? (
-              <EmptyState icon={Users} title="No team data available" note="Team metrics are not available" />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-[#FFFCF8] text-[11px] font-black text-stone-500 uppercase tracking-widest border-b border-stone-100">
-                    <tr>
-                      <th className="px-4 py-3">Team</th>
-                      <th className="px-4 py-3 text-center">Assigned To</th>
-                      <th className="px-4 py-3 text-center">Collected NCP</th>
-                      <th className="px-4 py-3 text-center">Projected NCP</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-50">
-                    {(metrics?.teamStats ?? []).map((row) => (
-                      <tr key={row.team}>
-                        <td className="px-4 py-3 font-semibold text-stone-700">{row.team}</td>
-                        <td className="px-4 py-3 text-center text-stone-500">{row.assigned}</td>
-                        <td className="px-4 py-3 text-center text-stone-500">{row.collected}</td>
-                        <td className="px-4 py-3 text-center text-stone-500">{row.projected}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Lead Status Distribution" desc="Distribution of leads by current status" />
-            {distribution.length === 0 ? (
-              <EmptyState icon={Layers} title="No status data available" />
-            ) : (
-              <div className="space-y-3">
-                {distribution.map((row) => {
-                  const value = Number(row.value) || 0;
-                  const pct = totalLeads > 0 ? Math.round((value / totalLeads) * 100) : 0;
-                  return (
-                    <div key={row.name} className="flex items-center gap-4">
-                      <span className="w-36 shrink-0 text-xs font-semibold text-stone-600 truncate">{row.name}</span>
-                      <div className="flex-1 h-2.5 bg-stone-100 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.max(2, (value / distributionMax) * 100)}%`, backgroundColor: (row as any).color || '#978C21' }} />
-                      </div>
-                      <span className="w-20 shrink-0 text-right text-xs font-bold text-stone-500">{formatCount(value)}</span>
-                      <span className="w-12 shrink-0 text-right text-[11px] font-semibold text-stone-400">{pct}%</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6 overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }} aria-labelledby="dashboard-task-calendar-heading">
+          {/* ==== Task Calendar (last section) ==== */}
+          <section className="bg-white rounded-[12px] border border-stone-100 p-6 overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <SectionHeading title="Task Calendar" desc="Planned activities for today and tomorrow" />
-            <div id="dashboard-task-calendar-heading" className="sr-only">Task Calendar</div>
+            <div className="sr-only">Task Calendar</div>
             <TaskCalendar embedded={true} />
             <div className="mt-4 flex justify-end">
               <Link to="/task-calendar" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
@@ -873,6 +943,7 @@ export default function Dashboard() {
               </Link>
             </div>
           </section>
+
         </>
       )}
     </div>

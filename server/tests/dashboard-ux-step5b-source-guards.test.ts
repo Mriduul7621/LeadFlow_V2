@@ -64,9 +64,9 @@ const REAL_ROUTES = [
 function dashboardLoadBody(): string {
   const page = DASHBOARD();
   const start = page.indexOf('const loadDashboardData');
-  const end = page.indexOf('const formattedDateRange');
+  const end = page.indexOf('const loadDailyExecution');
   assert.ok(start >= 0, 'loadDashboardData missing');
-  assert.ok(end > start, 'formattedDateRange must appear after loadDashboardData');
+  assert.ok(end > start, 'loadDailyExecution must appear after loadDashboardData');
   return page.slice(start, end);
 }
 
