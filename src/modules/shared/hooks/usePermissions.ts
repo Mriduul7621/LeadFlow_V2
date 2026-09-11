@@ -122,7 +122,7 @@ export function usePermissions() {
     }
 
     if (serverPermissions && Object.keys(serverPermissions).length > 0) {
-      const permissionModule = featureId === 'dashboard'
+      const permissionModule = featureId === 'dashboard' || featureId === 'workbench' || featureId === 'daily_workbench'
         ? 'dashboard'
         : featureId === 'lead_generate' || featureId === 'lead_upload' || featureId === 'lead_tracking' || featureId === 'all_leads'
           ? 'leads'
@@ -221,6 +221,8 @@ export function usePermissions() {
       follow_up_strategy: ['/follow-up'],
       task_calendar: ['/task-calendar'],
       activities: ['/activities'],
+      workbench: ['/workbench'],
+      daily_workbench: ['/workbench'],
       analytics: ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'],
       team_management: ['/team'],
       user_management: ['/users'],
