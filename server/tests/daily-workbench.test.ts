@@ -188,6 +188,90 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(wb.includes('lead_tracking') && wb.includes('edit'), 'should gate on lead_tracking edit');
   });
 
+  it('dashboard.view alone does NOT expose Complete/Cancel/Edit/Reschedule', () => {
+    const wb = stripComments(workbench());
+    // The mutation gating must NOT include dashboard.view
+    assert.ok(!wb.includes("canAccess('dashboard', 'view')") || !wb.includes('canEditScheduled'), 'dashboard.view must not be in mutation gating');
+    // Ensure canEditScheduled definition does NOT contain dashboard
+    const editIdx = wb.indexOf('canEditScheduled');
+    assert.ok(editIdx >= 0, 'canEditScheduled must be defined');
+    const editSlice = wb.slice(editIdx, editIdx + 500);
+    assert.ok(!editSlice.includes('dashboard'), 'canEditScheduled must not include dashboard');
+    assert.ok(!editSlice.includes('lead_generate'), 'canEditScheduled must not include lead_generate (unless proven)');
+  });
+
+  it('correct existing edit permission DOES expose those actions', () => {
+    const wb = workbench();
+    // Must use lead_tracking edit which maps to leads.edit server boundary
+    assert.ok(wb.includes("canAccess('lead_tracking', 'edit')"), 'must gate on lead_tracking edit');
+    // And actions must be rendered when canEditScheduled true
+    assert.ok(wb.includes('canEditScheduled') && wb.includes('Complete'), 'Complete button must be gated by canEditScheduled');
+    assert.ok(wb.includes('canEditScheduled') && wb.includes('Cancel'), 'Cancel button must be gated');
+    assert.ok(wb.includes('canEditScheduled') && wb.includes('Edit / Reschedule'), 'Edit must be gated');
+  });
+
+  it('lack of edit permission still allows Open Lead where visibility permits', () => {
+    const wb = workbench();
+    // Open Lead link must be outside canEditScheduled guard
+    const openLeadIdx = wb.indexOf('Open Lead');
+    assert.ok(openLeadIdx >= 0, 'Open Lead must exist');
+    // Ensure Open Lead appears in selectedItem section outside only edit guard
+    const quickActionsIdx = wb.indexOf('Quick Actions');
+    assert.ok(quickActionsIdx >= 0, 'Quick Actions section must exist');
+    const qaSlice = wb.slice(quickActionsIdx, quickActionsIdx + 2000);
+    // Open Lead should be present before edit-guarded block or independently
+    assert.ok(qaSlice.includes('Open Lead'), 'Quick Actions must contain Open Lead');
+    // The scheduled actions block is inside canEditScheduled, but Open Lead is outside that inner block (or also outside)
+    // Check that Open Lead Link exists in main queue rows too (always visible)
+    assert.ok(wb.includes('/leads/${encodeURIComponent(item.leadId)}'), 'queue rows must have Open link regardless of edit permission');
+  });
+
+  it('server remains final authorization boundary', () => {
+    const prod = read('server/routes/production.routes.ts');
+    assert.ok(prod.includes("hasPermissionCode(caller, 'leads.edit')"), 'server must check leads.edit for scheduled mutations');
+    assert.ok(prod.includes('/scheduled-activities/:id/complete'), 'server must have complete endpoint with authz');
+    assert.ok(prod.includes('/scheduled-activities/:id/cancel'), 'server must have cancel endpoint with authz');
+    assert.ok(prod.includes('PUT /scheduled-activities/:id') || prod.includes("router.put('/scheduled-activities/:id'"), 'server must have update endpoint with authz');
+    const wb = workbench();
+    assert.ok(wb.includes('scheduledActivityService.complete') && wb.includes('scheduledActivityService.cancel') && wb.includes('scheduledActivityService.update'), 'client must use existing services, server is final boundary');
+  });
+
+  it('Completed Today successful empty response shows 0', () => {
+    const wb = workbench();
+    // When fulfilled, we set completedToday to filtered list — empty list yields 0
+    assert.ok(wb.includes('setCompletedToday(todayCompleted)'), 'must set completedToday on success');
+    // Summary must show 0 when not unavailable
+    assert.ok(wb.includes("String(summary.completedToday)") || wb.includes('completedToday'), 'summary must derive from completedToday length');
+    // The card rendering for unavailable is separate; ensure 0 path exists
+    assert.ok(wb.includes('Scheduled completed'), 'subtext for success must be Scheduled completed');
+  });
+
+  it('Completed Today request failure shows unavailable, not 0', () => {
+    const wb = workbench();
+    assert.ok(wb.includes('completedTodayError'), 'must have completedTodayError state');
+    assert.ok(wb.includes('Completed summary unavailable') || wb.includes('Unavailable'), 'must have unavailable handling');
+    // Must show — when unavailable
+    assert.ok(wb.includes("'—'") || wb.includes('"—"') || wb.includes('—'), 'must show em dash when unavailable');
+    // Must NOT set completedToday to 0 as success; must differentiate
+    const compFailIdx = wb.indexOf('completedRes.status ===');
+    assert.ok(compFailIdx >= 0, 'must check completedRes status');
+    const failSlice = wb.slice(compFailIdx, compFailIdx + 1500);
+    assert.ok(failSlice.includes('setCompletedTodayError'), 'failure must set error, not just empty array');
+    assert.ok(failSlice.includes('setCompletedToday([])'), 'failure sets empty list but with error flag');
+    // Ensure summary uses unavailable flag to render — and Unavailable subtext
+    assert.ok(wb.includes('completedTodayUnavailable'), 'summary must track unavailable');
+    assert.ok(wb.includes('Unavailable'), 'must have Unavailable subtext');
+  });
+
+  it('primary workbench still loads if completed-summary request fails', () => {
+    const wb = workbench();
+    // completed failure should not set main error
+    assert.ok(wb.includes('Do not treat completed fetch failure as fatal'), 'must document non-fatal');
+    assert.ok(wb.includes('followUpAllRes.status ===') && wb.includes('scheduledRangeRes.status ==='), 'primary failure check must only consider follow-ups + scheduled, not completed');
+    // Ensure followUpError and scheduledError are separate from completed error
+    assert.ok(wb.includes('followUpError') && wb.includes('scheduledError') && wb.includes('completedTodayError'), 'must have separate error states');
+  });
+
   it('loading state does not show false empty state', () => {
     const wb = workbench();
     assert.ok(wb.includes('loading') && wb.includes('Skeleton') || wb.includes('animate-pulse'), 'must show skeletons while loading');

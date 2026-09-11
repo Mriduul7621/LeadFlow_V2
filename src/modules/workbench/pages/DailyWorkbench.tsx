@@ -250,6 +250,7 @@ export default function DailyWorkbench() {
   const [scheduledToday, setScheduledToday] = useState<ScheduledActivity[]>([]);
   const [scheduledTomorrow, setScheduledTomorrow] = useState<ScheduledActivity[]>([]);
   const [completedToday, setCompletedToday] = useState<ScheduledActivity[]>([]);
+  const [completedTodayError, setCompletedTodayError] = useState<string | null>(null);
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -259,7 +260,13 @@ export default function DailyWorkbench() {
   const [editing, setEditing] = useState<ScheduledActivity | null>(null);
   const [editForm, setEditForm] = useState<{ title: string; scheduledAt: string; remarks: string }>({ title: '', scheduledAt: '', remarks: '' });
 
-  const canEditScheduled = canAccess('lead_tracking', 'edit') || canAccess('lead_generate', 'edit') || canAccess('dashboard', 'view');
+  // Permission: scheduled activity mutations (Complete/Cancel/Edit/Reschedule)
+  // Server boundary is `leads.edit` (checked in production.routes.ts for
+  // POST /scheduled-activities/:id/complete, /cancel, PUT /:id, DELETE /:id).
+  // UI mapping is lead_tracking.edit -> leads.edit (via usePermissions
+  // featurePathMapping + permissionModule mapping). Dashboard view must NOT
+  // grant mutation capability. No new permission architecture.
+  const canEditScheduled = canAccess('lead_tracking', 'edit');
 
   const todayYmd = useMemo(() => getDhakaTodayYmd(), []);
   const tomorrowYmd = useMemo(() => {
@@ -276,6 +283,7 @@ export default function DailyWorkbench() {
     setError(null);
     setFollowUpError(null);
     setScheduledError(null);
+    setCompletedTodayError(null);
     try {
       // Bounded authoritative sources: follow-ups + scheduled activities
       // No full lead list fetch, no N+1.
@@ -331,6 +339,7 @@ export default function DailyWorkbench() {
       }
 
       // Completed today: from completed list, filter completedAt today
+      // Must differentiate success-empty (show 0) vs failure (show unavailable, not 0)
       if (completedRes.status === 'fulfilled') {
         const comp = completedRes.value || [];
         const todayCompleted = comp.filter(a => {
@@ -339,9 +348,12 @@ export default function DailyWorkbench() {
           return isDhakaYmd(iso, todayYmd);
         });
         setCompletedToday(todayCompleted);
+        setCompletedTodayError(null);
       } else {
         setCompletedToday([]);
+        setCompletedTodayError('Completed summary unavailable');
         // Do not treat completed fetch failure as fatal — it's optional summary
+        // Primary workbench (follow-ups + scheduled) must still load.
       }
 
       if (followUpAllRes.status === 'rejected' && scheduledRangeRes.status === 'rejected') {
@@ -394,8 +406,9 @@ export default function DailyWorkbench() {
       followUpsToday: followUpsTodayCount,
       tasksToday,
       completedToday: completedToday.length,
+      completedTodayUnavailable: !!completedTodayError,
     };
-  }, [overdueFollowUps, scheduledToday, todayFollowUps, completedToday]);
+  }, [overdueFollowUps, scheduledToday, todayFollowUps, completedToday, completedTodayError]);
 
   const tomorrowSummary = useMemo(() => {
     const calls = scheduledTomorrow.filter(a => (a.activityType || (a as any).activity_type) === 'call').length;
@@ -421,10 +434,11 @@ export default function DailyWorkbench() {
       if (updated && updated.id) {
         // Remove from today's pending list efficiently
         setScheduledToday(prev => prev.filter(s => s.id !== item.id));
-        // Add to completed today if completed today
+        // Add to completed today if completed today — and clear unavailable state if it was set
         const compAt = (updated as any).completedAt || (updated as any).completed_at;
         if (compAt && isDhakaYmd(compAt, todayYmd)) {
           setCompletedToday(prev => [...prev, updated as ScheduledActivity]);
+          setCompletedTodayError(null);
         }
       } else {
         setScheduledToday(prev => prev.filter(s => s.id !== item.id));
@@ -606,7 +620,13 @@ export default function DailyWorkbench() {
               <SummaryCard label="Meetings Today" value={String(summary.meetingsToday)} icon={Video} variant="orange" />
               <SummaryCard label="Follow-ups Today" value={String(summary.followUpsToday)} icon={History} variant="emerald" />
               <SummaryCard label="Tasks Today" value={String(summary.tasksToday)} icon={ClipboardCheck} variant="olive" />
-              <SummaryCard label="Completed Today" value={String(summary.completedToday)} icon={CheckCircle2} variant="slate" sub="Scheduled completed" />
+              <SummaryCard
+                label="Completed Today"
+                value={summary.completedTodayUnavailable ? '—' : String(summary.completedToday)}
+                icon={CheckCircle2}
+                variant="slate"
+                sub={summary.completedTodayUnavailable ? 'Unavailable' : 'Scheduled completed'}
+              />
             </div>
           </section>
 

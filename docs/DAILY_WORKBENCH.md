@@ -102,7 +102,12 @@ Semantics v1:
 - Does NOT count arbitrary lead status updates, historical imported rows, or client-side status changes.
 - Lead_activities bulk count would require new endpoint; deferred to keep change minimal. If needed, future extension could add `GET /api/activities/completed-today` with visibility.
 
-If completed fetch fails, summary shows 0 but does not hide other data; error is not silent zero for primary sources.
+Failure handling (must not fail to zero):
+- Success with no items → card shows `0` with subtext `Scheduled completed`.
+- Request failure → card shows `—` with subtext `Unavailable`, not `0`. Primary workbench (follow-ups + scheduled today) still loads; failure is not fatal.
+- After a successful Complete mutation, unavailable state clears and item is added to completed list if completed today.
+
+If completed fetch fails, summary shows unavailable but does not hide other data; error is not silent zero for primary sources.
 
 ## Tomorrow Preview
 Lightweight counts at bottom:
@@ -147,8 +152,8 @@ Uses PR #22 English-only design system:
 
 ## Permission Behavior
 - Sidebar: ALL_ROLES static fallback, dynamic `menuAccess['/workbench']` override if configured, ADMIN bypass preserved.
-- Page actions: `canAccess('lead_tracking','edit')` gates Complete/Cancel/Edit; server still enforces `leads.edit` and visibility.
-- Follow-up Open Lead uses existing Lead360 which already enforces visibility.
+- Page actions: `canAccess('lead_tracking','edit')` ONLY gates Complete/Cancel/Edit/Reschedule. Server final boundary is `leads.edit` (checked in `production.routes.ts` for POST `/scheduled-activities/:id/complete`, `/cancel`, PUT `/:id`, DELETE `/:id`). `dashboard.view` alone MUST NOT expose mutation buttons; `lead_generate.edit` is not sufficient. UI hides mutation buttons when lacking edit permission, but server remains security boundary.
+- Follow-up Open Lead uses existing Lead360 which already enforces visibility. Open Lead remains allowed when visibility permits even without edit permission.
 
 ## Asia/Dhaka Semantics
 - Today/tomorrow YMD via `toLocaleDateString('en-CA', {timeZone:'Asia/Dhaka'})`
