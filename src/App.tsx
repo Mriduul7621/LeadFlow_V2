@@ -1,31 +1,71 @@
-import React from 'react';
-import { 
-  createBrowserRouter, 
-  RouterProvider, 
-  Navigate 
+import React, { Suspense, lazy } from 'react';
+import {
+  createBrowserRouter,
+  RouterProvider,
+  Navigate
 } from 'react-router-dom';
-import Dashboard from './modules/dashboard/pages/Dashboard';
-import FollowUpStrategy from './modules/leads/pages/FollowUpStrategy';
-import LeadGenerate from './modules/leads/pages/LeadGenerate';
-import LeadList from './modules/leads/pages/LeadList';
-import LeadUpload from './modules/leads/pages/LeadUpload';
-import AllLeads from './modules/leads/pages/AllLeads';
 import Login from './modules/auth/pages/Login';
-import Settings from './modules/settings/pages/Settings';
-import TeamHierarchy from './modules/hierarchy/pages/TeamHierarchy';
-import UserManagement from './modules/users/pages/UserManagement';
-import ExecutionIntelligence from './modules/dashboard/pages/ExecutionIntelligence';
-import NcpProgress from './modules/dashboard/pages/NcpProgress';
-import TrendCharts from './modules/dashboard/pages/TrendCharts';
-import CampaignBreakdown from './modules/dashboard/pages/CampaignBreakdown';
-import TaskCalendar from './modules/auth/pages/TaskCalendar';
-import Lead360 from './modules/leads/pages/Lead360';
-import Activities from './modules/leads/pages/Activities';
-import DailyWorkbench from './modules/workbench/pages/DailyWorkbench';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import { Toaster } from 'sonner';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
+
+/**
+ * Route-level code splitting (Performance Phase 2)
+ * ------------------------------------------------------------------
+ * Every feature page is loaded with `React.lazy` so the production build
+ * emits one chunk per route. The login page and the app shell therefore
+ * never download or parse the code of pages the user will not visit
+ * (recharts, xlsx, the full calendar, admin tables, ...). Login stays a
+ * STATIC import on purpose: it is the only unauthenticated route and it
+ * must render without any chunk round-trip.
+ *
+ * Security is untouched: every authenticated route still renders through
+ * the same `ProtectedRoute` gate (server-confirmed session before any
+ * business data), and the gate's children are wrapped in a Suspense
+ * boundary that lives INSIDE `AppLayout` - so while a route chunk is
+ * streaming in, the sidebar/header stay visible and only the content
+ * area shows a compact placeholder. No full-screen spinner per
+ * navigation, no route behavior change.
+ */
+const Dashboard = lazy(() => import('./modules/dashboard/pages/Dashboard'));
+const LeadGenerate = lazy(() => import('./modules/leads/pages/LeadGenerate'));
+const LeadList = lazy(() => import('./modules/leads/pages/LeadList'));
+const LeadUpload = lazy(() => import('./modules/leads/pages/LeadUpload'));
+const AllLeads = lazy(() => import('./modules/leads/pages/AllLeads'));
+const FollowUpStrategy = lazy(() => import('./modules/leads/pages/FollowUpStrategy'));
+const TaskCalendar = lazy(() => import('./modules/auth/pages/TaskCalendar'));
+const Activities = lazy(() => import('./modules/leads/pages/Activities'));
+const DailyWorkbench = lazy(() => import('./modules/workbench/pages/DailyWorkbench'));
+const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
+const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
+const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
+const ExecutionIntelligence = lazy(() => import('./modules/dashboard/pages/ExecutionIntelligence'));
+const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
+const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
+const CampaignBreakdown = lazy(() => import('./modules/dashboard/pages/CampaignBreakdown'));
+const Settings = lazy(() => import('./modules/settings/pages/Settings'));
+
+/**
+ * Compact content-level fallback for the lazy route pages. Intentionally
+ * small (no spinner choreography, no full-screen takeover): it renders in
+ * the `<main>` area below the sticky header, so the app shell stays
+ * usable while the route chunk loads.
+ */
+function RouteFallback() {
+  return (
+    <div className="space-y-4" role="status" aria-label="Loading page">
+      <div className="h-9 w-60 bg-stone-100 rounded-[10px] animate-pulse" />
+      <div className="h-44 bg-stone-100 rounded-[12px] animate-pulse" />
+      <div className="h-28 bg-stone-100 rounded-[12px] animate-pulse" />
+    </div>
+  );
+}
+
+/** One Suspense boundary per route page: suspends only the content area. */
+function LazyPage({ page }: { page: React.ReactElement }) {
+  return <Suspense fallback={<RouteFallback />}>{page}</Suspense>;
+}
 
 const router = createBrowserRouter([
   {
@@ -34,75 +74,75 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    element: <ProtectedRoute><Dashboard /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<Dashboard />} /></ProtectedRoute>,
   },
   {
     path: '/leads/new',
-    element: <ProtectedRoute><LeadGenerate /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<LeadGenerate />} /></ProtectedRoute>,
   },
   {
     path: '/leads',
-    element: <ProtectedRoute><LeadList /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<LeadList />} /></ProtectedRoute>,
   },
   {
     path: '/leads/upload',
-    element: <ProtectedRoute><LeadUpload /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<LeadUpload />} /></ProtectedRoute>,
   },
   {
     path: '/leads/all',
-    element: <ProtectedRoute><AllLeads /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<AllLeads />} /></ProtectedRoute>,
   },
   {
     path: '/follow-up',
-    element: <ProtectedRoute><FollowUpStrategy /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<FollowUpStrategy />} /></ProtectedRoute>,
   },
   {
     path: '/task-calendar',
-    element: <ProtectedRoute><TaskCalendar /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<TaskCalendar />} /></ProtectedRoute>,
   },
   {
     path: '/activities',
-    element: <ProtectedRoute><Activities /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<Activities />} /></ProtectedRoute>,
   },
   {
     path: '/workbench',
-    element: <ProtectedRoute><DailyWorkbench /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<DailyWorkbench />} /></ProtectedRoute>,
   },
   {
     path: '/leads/:id',
-    element: <ProtectedRoute><Lead360 /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<Lead360 />} /></ProtectedRoute>,
   },
   {
     path: '/users',
-    element: <ProtectedRoute><UserManagement /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<UserManagement />} /></ProtectedRoute>,
   },
   {
     path: '/team',
-    element: <ProtectedRoute><TeamHierarchy /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<TeamHierarchy />} /></ProtectedRoute>,
   },
   {
     path: '/execution-intelligence',
-    element: <ProtectedRoute><ExecutionIntelligence /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<ExecutionIntelligence />} /></ProtectedRoute>,
   },
   {
     path: '/ncp-progress',
-    element: <ProtectedRoute><NcpProgress /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<NcpProgress />} /></ProtectedRoute>,
   },
   {
     path: '/trend-charts',
-    element: <ProtectedRoute><TrendCharts /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<TrendCharts />} /></ProtectedRoute>,
   },
   {
     path: '/campaign-breakdown',
-    element: <ProtectedRoute><CampaignBreakdown /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<CampaignBreakdown />} /></ProtectedRoute>,
   },
   {
     path: '/settings',
-    element: <ProtectedRoute><Settings /></ProtectedRoute>,
+    element: <ProtectedRoute><LazyPage page={<Settings />} /></ProtectedRoute>,
   },
   {
     path: '*',
-    element: <Navigate to="/" replace />,
+    element: <Navigate to="/" replace />
   }
 ]);
 

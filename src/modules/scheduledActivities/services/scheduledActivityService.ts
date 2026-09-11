@@ -1,4 +1,5 @@
 import { apiRequest, apiRequestEnvelope } from '../../shared/api/http';
+import { coalesceGet } from '../../shared/api/coalesce';
 
 /**
  * scheduledActivityService.ts — Step 5C
@@ -88,7 +89,12 @@ async function fetchScheduledPage(qs: string, params: ScheduledActivityListParam
   // Single-request helper via shared authenticated layer — preserves EXACT
   // auth (Authorization via lib/apiClient), 401/session handling, base URL
   // and error mapping from http.ts while keeping the pagination envelope.
-  const body: any = await apiRequestEnvelope<ScheduledActivity[]>(`/api/scheduled-activities${qs}`);
+  // The list read is coalesced: concurrent identical window requests
+  // (StrictMode double-effect, embedded calendar + dedicated route on the
+  // same tick) share one round-trip. Mutations below are NOT coalesced.
+  const body: any = await coalesceGet(`/api/scheduled-activities${qs}`, () =>
+    apiRequestEnvelope<ScheduledActivity[]>(`/api/scheduled-activities${qs}`)
+  );
   if (body && body.success === true && Array.isArray(body.data)) {
     return { items: body.data as ScheduledActivity[], pagination: body.pagination || { limit: params.limit || 50, offset: params.offset || 0, total: body.data.length } };
   }

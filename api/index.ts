@@ -96,6 +96,19 @@ async function loadRoutes(): Promise<express.Router> {
   return routesLoading;
 }
 
+// Serverless cold start: kick off DB init + router load as soon as the
+// module is evaluated, instead of on the first request. On Vercel the
+// function container boots, evaluates this module, and only then starts
+// dispatching requests — so the (several-seconds) migration check and the
+// production-router import now overlap container warm-up and network time
+// to the first request, instead of sitting on that request's critical
+// path. `loadRoutes` is memoized: the first request still awaits the SAME
+// promise (no second init, no changed dispatch order, no new 404s). The
+// `.catch` keeps the kick-off from becoming an unhandled rejection — a
+// cold-start failure is still surfaced on the first request, exactly as
+// before.
+void loadRoutes().catch(() => undefined);
+
 // Dispatch /api/* into the lazily-loaded production router. Calling the router
 // directly (instead of app.use inside the loader) keeps the 404 handler below
 // as the true last resort.
