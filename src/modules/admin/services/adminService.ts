@@ -96,6 +96,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
     isCustom: false,
     menuAccess: {
       '/': true,
+      '/workbench': true,
       '/leads/new': true,
       '/leads/upload': true,
       '/leads/all': true,
@@ -118,18 +119,8 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermission[] = [
 
 export function ensureFeaturePermissions(role: RolePermission): RolePermission {
   const defaults: Record<string, Record<string, boolean>> = {
-    dashboard: {
-      view: true,
-      view_calls_stats: true,
-      view_pipeline_ncp: true,
-      view_division_table: true,
-      view_ncp_chart: true,
-      view_trend_chart: true,
-      view_campaign_pie: true,
-      view_critical_alerts: true,
-      view_agent_table: true,
-      view_task_calendar: true
-    },
+    dashboard: { view: true },
+    workbench: { view: true },
     lead_generate: { view: true, create: true },
     lead_upload: { view: true, upload: true, delete: true },
     lead_tracking: { view: true, status_update: true },
@@ -175,6 +166,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
       Object.keys(f).forEach(feat => {
         let route = '';
         if (feat === 'dashboard') route = '/';
+        else if (feat === 'workbench') route = '/workbench';
         else if (feat === 'lead_generate') route = '/leads/new';
         else if (feat === 'lead_upload') route = '/leads/upload';
         else if (feat === 'lead_tracking') route = '/leads';
