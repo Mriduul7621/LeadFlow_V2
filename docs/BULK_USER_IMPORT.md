@@ -91,16 +91,20 @@
   - `normalizeEmployeeId`, `normalizeEmail`, `generateTempPassword` (crypto secure, 10 chars, avoids ambiguous), `validatePasswordPolicy`, `parseMustChangePassword` (default TRUE), `parseStatus`, `normalizeUserBulkRow`, `buildReferenceMaps`, `resolveRole/Dept/Team`, `validateBulkRows`.
   - ReferenceMaps built from bulk queries (no N+1).
 
-- `server/routes/production.routes.ts` (modified):
+- `server/routes/production.routes.ts` (modified, hardened 2026-09-12):
   - `POST /api/users/bulk/validate`: auth, permission check (canCreate or canEdit), bulk load roles/depts/teams/users, build maps, validate, return preview.
-  - `POST /api/users/bulk/commit`: auth, permission check, bulk load, revalidate, then transaction with savepoints:
+  - `POST /api/users/bulk/commit` — **row-atomicity hardened**:
     - `BEGIN`
-    - Loop rows: `SAVEPOINT bulk_row_i`, try create/update, `RELEASE` on success, `ROLLBACK TO SAVEPOINT` on failure, collect errors.
-    - Two-phase manager linking: after first pass, batch manager IDs known, second loop updates `manager_id` for same-batch managers via `SAVEPOINT bulk_mgr_i`.
-    - `recomputeReportingChains()` once after batch (avoids N+1).
-    - `COMMIT` with partial success preferred (validated rows succeed even if others fail).
+    - **Original state capture:** For all update rows, `SELECT * FROM users WHERE id = ANY($1)` inside txn before mutation, stored in `originalUserMap` for restore.
+    - **Phase A (profile/org without manager):** Loop validRows with `SAVEPOINT bulk_row_i`. For Create: generate password if blank (`generated=true`), hash, INSERT with `manager_id=NULL`. For Update: UPDATE profile/org fields only, keep manager_id unchanged. On failure: `ROLLBACK TO SAVEPOINT`, add to `failedEmpIds`, remove credential, collect error.
+    - **Build empToIdMap** after Phase A (`SELECT id, employee_id FROM users`) for same-batch resolution.
+    - **Phase B (manager linking with row-atomicity):** For each succeeded row, `SAVEPOINT bulk_mgr_i`, resolve managerId from `empToIdMap`, check `failedEmpIds` (if manager failed, throw), call `validateReportingLink` (active, level, same-dept, cycle). On success: `UPDATE manager_id`, RELEASE. On failure: `ROLLBACK TO SAVEPOINT`, then **compensating action** in new savepoint `bulk_rollback_i`: if Create → `DELETE FROM users WHERE id=...` and remove from `empToIdMap`; if Update → restore original row (full_name, email, phone, role_id, dept, team, manager_id, designation, is_active, account_status, must_change_password). Remove credential, decrement created/updated, increment failed, add error with `Manager link failed: ...`, add to `failedEmpIds`.
+    - **Cascade loop:** While changed, find succeeded rows whose `managerInput` is in `failedEmpIds`, rollback similarly (DELETE or RESTORE), remove credential, add error `Manager dependency failed...`. Up to 10 iterations for transitive chains.
+    - **Final successful set:** Counters recomputed from `succeededRows` map (`finalCreated`, `finalUpdated`, `finalFailed = total - created - updated - skipped`). Credentials filtered to only generated (`generated=true`) and final successful creates.
+    - **recomputeReportingChains() once** after final successful set established, before COMMIT. If recompute fails, ROLLBACK and 500.
+    - `COMMIT`
     - Audit: batch-level `audit_logs` entry with fileName, mode, totals, actor, no plaintext passwords/hashes/workbook binary.
-    - Credentials: generated or supplied temp passwords returned once in response `credentials[]` (employeeId, email, temporaryPassword, mustChangePassword), hashed in DB, not stored plaintext, not logged.
+    - Credentials: **hardened** — only server-generated temporary passwords returned one-time in `credentials[]` (employeeId, fullName, temporaryPassword, mustChangePassword). Operator-supplied passwords are NOT echoed back. Hashed in DB, never stored plaintext, never logged.
     - Notifications: created for new users if `notifications` table exists (optional).
 
 **Client files:**
@@ -116,22 +120,26 @@
 
 - `src/modules/users/pages/UserManagement.tsx` (modified): Added secondary button "Bulk Import Users" (Upload icon, white border) next to primary Add Employee (#978C21), state `showBulkImport`, renders `UserBulkImportModal` with `onCompleted` → `loadData()` refresh.
 
-## 5. Transaction & Idempotency
+## 5. Transaction & Idempotency (Hardened Row-Atomicity)
 
 - **Bulk ref loads:** roles, departments, teams, existing users loaded once, maps built, no per-row N+1.
-- **Savepoints:** `SAVEPOINT bulk_row_${i}` per row, `ROLLBACK TO SAVEPOINT` on row failure, `RELEASE` on success → partial success preferred, one row failure doesn't abort batch.
-- **Two-phase manager linking:** First phase creates users with managerId for existing managers only; second phase updates manager_id for same-batch managers after all IDs known (order irrelevant).
-- **Reporting chains:** `recomputeReportingChains()` called once after batch, not per row.
+- **Savepoints:** `SAVEPOINT bulk_row_${i}` per row for Phase A, `SAVEPOINT bulk_mgr_${i}` for Phase B, `SAVEPOINT bulk_rollback_${i}` and `bulk_cascade_*` for compensating actions. `ROLLBACK TO SAVEPOINT` on row failure, `RELEASE` on success → partial success preferred, one row failure doesn't abort batch.
+- **Two-phase manager linking (order-independent, preserved):** First phase creates users with `manager_id=NULL` (or preserved for updates); second phase updates `manager_id` for same-batch managers after all IDs known (order irrelevant). **Row-atomicity:** If Phase B fails, Phase A changes for that row are undone via compensating DELETE (creates) or RESTORE (updates).
+- **Original state capture:** Before Phase A, all update targets fetched (`SELECT ... WHERE id = ANY`) into `originalUserMap` for exact restore on manager-link failure.
+- **Failed manager cascade:** `failedEmpIds` set tracks all invalid + Phase A failures + Phase B failures. After Phase B, loop finds succeeded rows whose `managerInput` is in `failedEmpIds`, rolls them back (DELETE/RESTORE), removes credential, increments failed. Transitive closure up to 10 iterations.
+- **Counters match DB:** Final counters (`finalCreated`, `finalUpdated`, `finalFailed`) recomputed from final `succeededRows` map after all rollbacks/cascades, not from intermediate counts. `errors[]` includes validation + Phase A + Phase B + cascade errors.
+- **Credentials match final set:** `createdCredentials` map holds only generated passwords (`generated=true`). On any rollback, entry deleted. Final response returns only credentials for final successful creates.
+- **Reporting chains:** `recomputeReportingChains()` called **once after final successful set established**, before COMMIT. Guarantees chain reflects only committed rows, not rolled-back ones.
 - **Idempotency:** Employee ID UNIQUE constraint in PostgreSQL; CREATE ONLY second attempt fails for same ID, CREATE+UPDATE updates.
 - **Audit:** Batch-level metadata (fileName, mode, totals, actor, timestamp) in `audit_logs` if table exists, no plaintext passwords/hashes.
 
-## 6. Password & Credential Handling
+## 6. Password & Credential Handling (Hardened)
 
-- **New users:** If `Temporary Password` blank → generate securely via `crypto.randomBytes` (10 chars, alphanumeric excluding ambiguous). If supplied → validate ≥6 chars.
+- **New users:** If `Temporary Password` blank → generate securely via `crypto.randomBytes` (10 chars, alphanumeric excluding ambiguous), `generated=true`. If supplied → validate ≥6 chars, `generated=false`.
 - **Hashing:** Server-side `bcrypt.hash(plain, 10)`, never stored plaintext, never logged.
 - **Must Change Password:** Default TRUE via `parseMustChangePassword`, persisted to `must_change_password`, integrates with PR33 forced flow (`/api/auth/change-required-password`).
 - **Existing users:** Password NEVER changed via bulk update; warning emitted, admin reset remains dedicated ADMIN-only flow (`/api/users/:id/reset-password`).
-- **Credentials one-time:** Returned once in commit response `credentials[]`, client shows copy/download with warning "one-time, will not be shown again". Not retrievable via GET `/api/users`, not in audit/logs.
+- **Credentials one-time, hardened:** Returned once in commit response `credentials[]`, **only for server-generated temporary passwords** (`generated=true`). Operator-supplied passwords are **not echoed back** (security hardening: avoid returning operator-known secrets, reduce exposure). Client shows copy/download with warning "one-time, will not be shown again". Not retrievable via GET `/api/users`, not in audit/logs. Failed rows never return credentials (removed on rollback).
 - **Status:** Uses canonical `is_active`/`account_status` model, default Active.
 
 ## 7. Manager Resolution (Detailed)
@@ -183,9 +191,9 @@
 **Preserved:**
 - PostgreSQL authoritative, auth/session flow, PR32 RBAC, PR33 forced password, PR34 Lead Workspace, Data Visibility, reporting hierarchy, role/dept/team storage, manual create/edit behavior, PR29-31 perf, PR30 diagnostics.
 
-## 11. Tests (1-34 + Extras)
+## 11. Tests (1-34 + Extras + Hardening 35-43)
 
-All 37 tests in `bulk-user-import.test.ts` pass (total suite 535 pass):
+All 46 tests in `bulk-user-import.test.ts` pass (total suite now ~544 pass):
 
 1. Template workbook has required headers (server enforces via validation)
 2. Reference values populated from authoritative DB (roles, depts resolve)
@@ -218,8 +226,8 @@ All 37 tests in `bulk-user-import.test.ts` pass (total suite 535 pass):
 29. Feature Access alone never authorizes (403)
 30. Must Change Password defaults to TRUE
 31. Must Change Password persists + integrates with forced flow (`/api/auth/change-required-password` 200)
-32. Supplied temporary password hashed, not plaintext (bcrypt compare)
-33. Generated password returned once, not stored plaintext, not in GET, not in audit
+32. Supplied temporary password hashed, not plaintext (bcrypt compare) — **updated: hashed but not returned unless generated**
+33. Generated password returned once, not stored plaintext, not in GET, not in audit — **now only generated passwords returned**
 34. Existing user password NEVER changed via bulk update (hash unchanged, warning)
 
 Extras:
@@ -227,7 +235,18 @@ Extras:
 - Idempotency via Employee ID uniqueness (second CREATE ONLY fails, count 1)
 - Validated partial success with savepoints (2 created, 1 failed, both valid persist)
 
-Other suites: lead bulk import, scheduled activities, UI guards, RBAC, etc. all pass (535 total).
+Hardening (new, row-atomicity):
+- 35. Row-atomicity: new user whose manager fails validation is not committed (cascade) — creates duplicate MGR_FAIL, dependent EMP_DEP, all 3 fail, DB has 0, no credentials, error mentions manager dependency
+- 36. Row-atomicity: existing user update with manager-link failure is restored — creates EXIST002, tries update with failing manager chain, updated=0, failed=3, DB restored to original full_name/email/manager_id
+- 37. Failed row must not return credentials — invalid role row fails, valid row succeeds, credentials length 1, failed not in list
+- 38. Final counters must match actual committed DB state — 2 valid + 1 invalid → created 2 matches DB count; cascade case 0 created matches DB 0
+- 39. Partial-success: unrelated valid rows still commit when others fail — 2 valid, 1 invalid role → 2 created, 2 in DB
+- 40. Same-batch order independence still works for commit — EMP_ORD reports to MGR_ORD (manager after), 2 created, manager_id correct
+- 41. Cycle and self-manager still rejected at commit — self-manager fails, cycle fails
+- 42. Credential hardening: only generated passwords returned, operator-supplied not echoed — GEN_CRED1 generated returns credential, SUP_CRED1 supplied does not, both hashed, supplied password bcrypt compare works
+- 43. recomputeReportingChains after final successful set — reporting_chain populated for EMP_RC includes MGR_RC/CEO001
+
+Other suites: lead bulk import, scheduled activities, UI guards, RBAC, etc. all pass (544 total).
 
 ## 12. Deferred Work / Out of Scope
 

@@ -864,4 +864,205 @@ describe('Bulk User Import - Security & Provisioning', () => {
     const countRes: any = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE employee_id IN ('PART001', 'PART002')`);
     assert.equal(countRes.rows[0].c, 2, 'valid rows should persist even when one fails');
   });
+
+  // 35: Row-atomicity: new user with manager-link failure must NOT remain committed (cascade)
+  it('35. Row-atomicity: new user whose manager fails validation is not committed (cascade)', async () => {
+    // MGR_FAIL duplicate will be invalid, EMP_DEP depends on it
+    const rows = [
+      makeUserRow({ employeeId: 'MGR_FAIL', fullName: 'Fail Manager', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'dupfail@test.com', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'MGR_FAIL', fullName: 'Fail Manager Dup', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'dupfail@test.com', rowNumber: 2 }), // duplicate -> invalid
+      makeUserRow({ employeeId: 'EMP_DEP', fullName: 'Dependent Emp', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR_FAIL', rowNumber: 3 }),
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    // All should fail: 2 duplicates invalid + 1 cascade
+    assert.equal(commitRes.body.data.created, 0, JSON.stringify(commitRes.body.data));
+    assert.equal(commitRes.body.data.failed, 3);
+    // DB must have none of them
+    const dbRes: any = await pool.query(`SELECT employee_id FROM users WHERE employee_id IN ('MGR_FAIL', 'EMP_DEP')`);
+    assert.equal(dbRes.rows.length, 0, 'failed rows must not remain committed');
+    // No credentials for failed rows
+    assert.equal(commitRes.body.data.credentials.length, 0, 'failed row must not return credential');
+    // Errors must mention manager dependency
+    const hasMgrErr = commitRes.body.data.errors.some((e: any) => e.employeeId === 'EMP_DEP');
+    assert.ok(hasMgrErr, 'dependent row must have error');
+  });
+
+  // 36: Row-atomicity: existing user update with manager-link failure is restored
+  it('36. Row-atomicity: existing user update with manager-link failure is restored', async () => {
+    // Create existing user to update
+    const hash = await bcrypt.hash('OrigPass123', 10);
+    await pool.query(
+      `INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active, designation) VALUES ('EXIST002', 'Original Name', 'exist2@test.com', $1, $2, $3, $4, TRUE, 'Officer')`,
+      [hash, beRoleId, salesDeptId, managerUserId]
+    );
+    const beforeRes: any = await pool.query(`SELECT full_name, email, manager_id, designation FROM users WHERE employee_id = 'EXIST002'`);
+    const before = beforeRes.rows[0];
+
+    // Try to update EXIST002 to report to MGR_FAIL which is invalid duplicate
+    const rows = [
+      makeUserRow({ employeeId: 'MGR_FAIL2', fullName: 'Fail Mgr2', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'dupfail2@test.com', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'MGR_FAIL2', fullName: 'Fail Mgr2 Dup', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'dupfail2@test.com', rowNumber: 2 }),
+      makeUserRow({ employeeId: 'EXIST002', fullName: 'Hacked Name', email: 'exist2@test.com', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR_FAIL2', rowNumber: 3 }),
+    ];
+    const commitRes = await commitRows(rows, 'createAndUpdate');
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.updated, 0, 'update should have been rolled back');
+    assert.equal(commitRes.body.data.failed, 3);
+
+    const afterRes: any = await pool.query(`SELECT full_name, email, manager_id, designation FROM users WHERE employee_id = 'EXIST002'`);
+    assert.equal(afterRes.rows[0].full_name, before.full_name, 'existing user must be restored after manager-link failure');
+    assert.equal(afterRes.rows[0].email, before.email);
+    assert.equal(String(afterRes.rows[0].manager_id), String(before.manager_id));
+  });
+
+  // 37: Failed row no credentials
+  it('37. Failed row must not return credentials', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'CRED_FAIL', fullName: 'Cred Fail', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', temporaryPassword: '', rowNumber: 1 }),
+      makeUserRow({ employeeId: '', fullName: 'Invalid', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 2 }),
+    ];
+    // Make first row fail by duplicate email with second? Actually second invalid due to missing empId, first valid would succeed, so we need first to fail
+    // Instead make first row have invalid role to fail
+    const rows2 = [
+      makeUserRow({ employeeId: 'CRED_FAIL', fullName: 'Cred Fail', role: 'INVALID_ROLE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', temporaryPassword: '', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'CRED_OK', fullName: 'Cred Ok', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', temporaryPassword: '', rowNumber: 2 }),
+    ];
+    const commitRes = await commitRows(rows2);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 1);
+    assert.equal(commitRes.body.data.failed, 1);
+    assert.equal(commitRes.body.data.credentials.length, 1);
+    assert.equal(commitRes.body.data.credentials[0].employeeId, 'CRED_OK');
+    // Ensure failed row not in credentials
+    const hasFailedCred = commitRes.body.data.credentials.some((c: any) => c.employeeId === 'CRED_FAIL');
+    assert.equal(hasFailedCred, false);
+  });
+
+  // 38: Counters must match committed DB state
+  it('38. Final counters must match actual committed DB state', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'CNT001', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'CNT002', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 2 }),
+      makeUserRow({ employeeId: '', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 3 }), // invalid
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    const { created, failed } = commitRes.body.data;
+    assert.equal(created, 2);
+    assert.equal(failed, 1);
+
+    const dbCountRes: any = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE employee_id IN ('CNT001','CNT002')`);
+    assert.equal(dbCountRes.rows[0].c, created, 'created counter must match DB');
+
+    // Also test with cascade failure: manager fails -> dependent fails, counters reflect 0 created
+    const rowsCascade = [
+      makeUserRow({ employeeId: 'MGR_C1', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'c1@test.com', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'MGR_C1', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', email: 'c1@test.com', rowNumber: 2 }),
+      makeUserRow({ employeeId: 'EMP_C1', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR_C1', rowNumber: 3 }),
+    ];
+    const commitRes2 = await commitRows(rowsCascade);
+    assert.equal(commitRes2.body.data.created, 0);
+    assert.equal(commitRes2.body.data.failed, 3);
+    const dbCountRes2: any = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE employee_id IN ('MGR_C1','EMP_C1')`);
+    assert.equal(dbCountRes2.rows[0].c, 0);
+  });
+
+  // 39: Partial-success unrelated rows still commit
+  it('39. Partial-success: unrelated valid rows still commit when others fail', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'UNREL1', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'BAD1', role: 'INVALID_ROLE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 2 }),
+      makeUserRow({ employeeId: 'UNREL2', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', rowNumber: 3 }),
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 2);
+    assert.equal(commitRes.body.data.failed, 1);
+    const dbRes: any = await pool.query(`SELECT employee_id FROM users WHERE employee_id IN ('UNREL1','UNREL2') ORDER BY employee_id`);
+    assert.equal(dbRes.rows.length, 2);
+  });
+
+  // 40: Same-batch order independence still works after hardening
+  it('40. Same-batch order independence still works for commit', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'EMP_ORD', fullName: 'Emp Order', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR_ORD', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'MGR_ORD', fullName: 'Mgr Order', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', rowNumber: 2 }),
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 2, JSON.stringify(commitRes.body.data.errors));
+    const dbRes: any = await pool.query(`SELECT u.employee_id, m.employee_id AS mgr_emp FROM users u LEFT JOIN users m ON m.id = u.manager_id WHERE u.employee_id IN ('EMP_ORD','MGR_ORD')`);
+    assert.equal(dbRes.rows.length, 2);
+    const empRow = dbRes.rows.find((r: any) => r.employee_id === 'EMP_ORD');
+    assert.ok(empRow);
+    assert.equal(empRow.mgr_emp, 'MGR_ORD');
+  });
+
+  // 41: Cycle/self-manager intact after hardening
+  it('41. Cycle and self-manager still rejected at commit', async () => {
+    const selfRows = [makeUserRow({ employeeId: 'SELF_COMMIT', reportingManagerEmployeeId: 'SELF_COMMIT', rowNumber: 1 })];
+    const selfRes = await commitRows(selfRows);
+    assert.equal(selfRes.status, 200);
+    assert.equal(selfRes.body.data.failed, 1);
+    assert.equal(selfRes.body.data.created, 0);
+
+    const cycleRows = [
+      makeUserRow({ employeeId: 'CYC_A', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CYC_B', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'CYC_B', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CYC_A', rowNumber: 2 }),
+    ];
+    const cycleRes = await commitRows(cycleRows);
+    assert.equal(cycleRes.status, 200);
+    // Both should fail due to cycle or level
+    assert.ok(cycleRes.body.data.failed >= 1);
+  });
+
+  // 42: Credential hardening — only server-generated passwords returned
+  it('42. Credential hardening: only generated passwords returned, operator-supplied not echoed', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'GEN_CRED1', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', temporaryPassword: '', rowNumber: 1 }), // generated
+      makeUserRow({ employeeId: 'SUP_CRED1', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR001', temporaryPassword: 'OperatorPass123', rowNumber: 2 }), // supplied
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 2);
+    // Only generated should be in credentials
+    assert.equal(commitRes.body.data.credentials.length, 1, JSON.stringify(commitRes.body.data.credentials));
+    assert.equal(commitRes.body.data.credentials[0].employeeId, 'GEN_CRED1');
+    // Supplied password must NOT be echoed
+    const hasSupplied = commitRes.body.data.credentials.some((c: any) => c.employeeId === 'SUP_CRED1');
+    assert.equal(hasSupplied, false);
+
+    // Verify both users have hashed passwords
+    const dbRes: any = await pool.query(`SELECT employee_id, password FROM users WHERE employee_id IN ('GEN_CRED1','SUP_CRED1')`);
+    assert.equal(dbRes.rows.length, 2);
+    for (const r of dbRes.rows) {
+      assert.ok(r.password.startsWith('$2'));
+    }
+    // Verify operator password works but not returned
+    const supRow = dbRes.rows.find((r: any) => r.employee_id === 'SUP_CRED1');
+    const matches = await bcrypt.compare('OperatorPass123', supRow.password);
+    assert.equal(matches, true);
+  });
+
+  // 43: recomputeReportingChains only after final successful set
+  it('43. recomputeReportingChains after final successful set — reporting_chain populated', async () => {
+    const rows = [
+      makeUserRow({ employeeId: 'MGR_RC', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'EMP_RC', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'MGR_RC', rowNumber: 2 }),
+    ];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 2);
+
+    const dbRes: any = await pool.query(`SELECT employee_id, reporting_chain, manager_id FROM users WHERE employee_id IN ('MGR_RC','EMP_RC')`);
+    assert.equal(dbRes.rows.length, 2);
+    const empRc = dbRes.rows.find((r: any) => r.employee_id === 'EMP_RC');
+    assert.ok(empRc);
+    // reporting_chain should include manager chain
+    const chain = empRc.reporting_chain;
+    // chain is jsonb, could be array or stringified
+    const chainArr = Array.isArray(chain) ? chain : JSON.parse(chain || '[]');
+    assert.ok(chainArr.includes('MGR_RC') || chainArr.includes('CEO001') || chainArr.length > 0, `reporting_chain should be populated, got ${JSON.stringify(chainArr)}`);
+  });
 });
