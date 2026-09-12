@@ -295,7 +295,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                     <li>Template has 3 sheets: Users (import), Reference Values (valid roles/departments/teams), Instructions (rules).</li>
                     <li>Employee ID is primary — duplicates in file are errors. Email must be unique.</li>
                     <li>Role/Department/Team must exactly match database (case-insensitive). Unknown values are row errors.</li>
-                    <li>Reporting Manager resolved by Employee ID, supports same-batch managers, order irrelevant. Validates one-level-up same-dept.</li>
+                    <li>Reporting Manager resolved by Employee ID, supports same-batch managers, order irrelevant. Manager must hold a higher-authority role one or two levels up, subject to department and cycle rules.</li>
                     <li>Passwords: blank → server generates securely and returns once. Supplied passwords min 6 chars, hashed server-side.</li>
                     <li>Existing user passwords NEVER changed via bulk — use admin reset.</li>
                   </ul>

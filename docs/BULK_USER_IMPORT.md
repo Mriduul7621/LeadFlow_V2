@@ -12,7 +12,7 @@
 - **Users table** (`server/database/migrations/004_users.js` + 023/024): `employee_id` UNIQUE, `email` UNIQUE, `role_id`, `department_id`, `team_id`, `manager_id`, `must_change_password` BOOL, `is_active`/`account_status`, `password` bcrypt hash, `reporting_chain`/`subordinates` JSONB. Authoritative source remains PostgreSQL.
 - **Roles**: `role_code`, `role_name`, `hierarchy_level` (1=CEO/Admin, 2=Manager, 3=BE, 99=unassigned/custom), `is_active`, `data_visibility`, `menu_access`. No auto-create on typo.
 - **Departments/Teams**: canonical tables, `is_active` flag, referenced by `department_id`/`team_id`.
-- **Hierarchy validation**: existing `validateReportingLink` / `computeReportingChain` logic: Level-1 cannot have manager, Level 2+ requires manager, manager must be one level up (`role_level -1`), and except Level-1 must share same department. Reporting chain recomputed via `recomputeReportingChains`.
+- **Hierarchy validation**: existing `validateReportingLink` / `recomputeReportingChains` logic, now driven by the shared `validateReportingManagerCandidate` rule: Level-1 cannot have manager, Level 2+ requires manager, manager must hold a strictly higher-authority role one or two levels up (gap 1–2), and except Level-1 must share same department. Reporting chain recomputed via `recomputeReportingChains`.
 - **Auth/RBAC**: `authenticateToken` middleware, `hasPermissionCode` / `requirePermissionCode` checking `role_permissions` + `user_permissions`, Admin/Superadmin bypass per PR32. Feature Access (`menu_access`) alone never authorizes writes — verified in existing `users` routes.
 - **Password flow**: `bcryptjs` hashing server-side, `must_change_password` default FALSE for manual flow but bulk import defaults TRUE (integrates with PR33 `/api/auth/change-required-password`). Manual user create hashes password; bulk reuses same.
 - **Client**: `UserManagement.tsx` uses `orgService`, `adminService`, `sonner` toast. No existing bulk import. XLSX handled via `xlsx` (already used for LeadUpload). No localStorage cache for mutation paths.
@@ -42,7 +42,7 @@
 
 **Reference Values sheet:** Populated at download time from PostgreSQL authoritative data via `Promise.all([roles, departments, teams])`. Columns: Department Code, Department Name, Role Code, Role Name, Level, Team Code, Team Name, etc. Read-only guidance, not used for resolution (resolution uses DB at validation time).
 
-**Instructions sheet:** Explains identity (Employee ID primary), resolution (exact normalized match, no loose name matching), password rules (hashed, never stored plaintext, one-time return), modes (CREATE ONLY default vs CREATE+UPDATE), manager rules (same-batch order irrelevant, no self, no cycles, active only, hierarchy one-level-up same dept), dry-run behavior, credential one-time warning.
+**Instructions sheet:** Explains identity (Employee ID primary), resolution (exact normalized match, no loose name matching), password rules (hashed, never stored plaintext, one-time return), modes (CREATE ONLY default vs CREATE+UPDATE), manager rules (same-batch order irrelevant, no self, no cycles, active only, manager holds a higher-authority role one or two levels up, subject to department and cycle rules), dry-run behavior, credential one-time warning.
 
 ### Modes
 
@@ -74,7 +74,7 @@
   - Input normalized UPPER.
   - Self → error.
   - If in batch: `managerIsSameBatch=true`, managerId deferred to commit phase after batch creation, hierarchy validated against batch row's role/dept.
-  - Else existing DB: must exist, active, hierarchy validated (Level-1 cannot have manager, Level 2+ requires manager, manager level = roleLevel-1, same department unless manager Level-1).
+  - Else existing DB: must exist, active, hierarchy validated (Level-1 cannot have manager, Level 2+ requires manager, manager level is one or two levels up, same department unless manager Level-1).
   - Cycle detection: walks combined manager map (DB + batch overrides) with visited set, detects `A -> ... -> A`.
 - Returns `BulkPreviewResult`: totals, validRows, rowsToCreate/Update, errorRows, warningRows, rows array with action, isValid, errors, warnings, managerResolved, etc.
 
@@ -149,12 +149,12 @@
 - Self → error `cannot report to self`.
 - Cycle detection: DFS walk combined manager map (DB + batch overrides) with visited set, error `circular reporting chain`.
 - Active only: inactive manager → error `must be an active employee`.
-- Hierarchy rules preserved:
+- Hierarchy rules preserved (shared `validateReportingManagerCandidate`):
   - Level-1 (CEO/Admin) cannot have reporting manager.
   - Level 2+ requires manager.
-  - Manager must be one level up (`manager.hierarchy_level == user.hierarchy_level -1`).
+  - Manager must hold a strictly higher-authority role, one or two levels up (`gap = user.hierarchy_level - manager.hierarchy_level` must be 1 or 2).
   - Same department unless manager is Level-1 (CEO).
-- One level up same department preserved, no skip-level redesign.
+- Skip-level (gap 2) reporting supported; same-level, lower-level and gap > 2 rejected.
 
 ## 8. Permission Mapping
 
@@ -217,7 +217,10 @@ All 46 tests in `bulk-user-import.test.ts` pass (total suite now ~544 pass):
 20. Inactive manager → error
 21. Level-1 cannot have reporting manager
 22. Level 2+ requires reporting manager
-23. Manager must be one level up same department (level mismatch + dept mismatch)
+23. Skip-level (gap 2) manager allowed; same-level manager rejected
+23b. Manager more than two levels up rejected
+23c. Bulk commit accepts a two-level-up (skip-level) manager
+23d. Same-batch skip-level resolution works regardless of row order
 24. Dry run no DB mutation
 25. Dry run returns totals and row table
 26. Revalidation on commit — role deleted between validate and commit fails
@@ -250,7 +253,7 @@ Other suites: lead bulk import, scheduled activities, UI guards, RBAC, etc. all 
 
 ## 12. Deferred Work / Out of Scope
 
-- Flexible skip-level reporting redesign (intentionally not implemented, preserves current one-level-up same-dept model)
+- Dotted-line / secondary managers and multiple managers per employee (still out of scope; skip-level reporting via `users.manager_id` is implemented — see `docs/FLEXIBLE_REPORTING_HIERARCHY.md`)
 - Hierarchy redesign, auto-create roles/departments from typos (explicitly rejected)
 - Granular permission codes in import sheet (not exposed, uses Role/Department only)
 - New auth system, new data model for bulk users (uses same users table)

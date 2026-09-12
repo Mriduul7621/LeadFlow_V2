@@ -121,7 +121,8 @@ export const orgService = {
     return body.data;
   },
 
-  /** Reporting-manager candidates: one level up, same department. */
+  /** Reporting-manager candidates: one or two levels up, same department
+   *  (Level 1 / CEO candidates are department-agnostic). */
   async getReportingOptions(role: string, departmentId?: string): Promise<ReportingOption[]> {
     const query = new URLSearchParams({ role });
     if (departmentId) query.set('departmentId', departmentId);

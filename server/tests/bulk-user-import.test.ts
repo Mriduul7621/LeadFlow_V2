@@ -191,6 +191,7 @@ describe('Bulk User Import - Security & Provisioning', () => {
   let ceoRoleId: string;
   let managerRoleId: string;
   let beRoleId: string;
+  let sbeRoleId: string;
   let customRoleId: string;
 
   let salesDeptId: string;
@@ -250,6 +251,10 @@ describe('Bulk User Import - Security & Provisioning', () => {
     beRoleId = beRoleRes.rows[0].id;
     beRoleName = beRoleRes.rows[0].role_name;
 
+    // Level-4 role so skip-level tests can prove a >2 gap is rejected.
+    const sbeRoleRes: any = await pool.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility, is_active) VALUES ('SBE', 'Senior Business Executive', 4, 'Own', TRUE) RETURNING id`);
+    sbeRoleId = sbeRoleRes.rows[0].id;
+
     const customRoleRes: any = await pool.query(`INSERT INTO roles (role_code, role_name, hierarchy_level, data_visibility, is_active) VALUES ('OFFICER', 'Officer', 99, 'Own', TRUE) RETURNING id`);
     customRoleId = customRoleRes.rows[0].id;
 
@@ -303,7 +308,7 @@ describe('Bulk User Import - Security & Provisioning', () => {
     await pool.query(`DELETE FROM users WHERE employee_id NOT IN ('ADMIN001', 'CEO001', 'MGR001')`);
     await pool.query(`DELETE FROM audit_logs`);
     // Ensure roles active
-    await pool.query(`UPDATE roles SET is_active = TRUE WHERE role_code IN ('BE', 'MANAGER', 'CEO', 'ADMIN')`);
+    await pool.query(`UPDATE roles SET is_active = TRUE WHERE role_code IN ('BE', 'SBE', 'MANAGER', 'CEO', 'ADMIN')`);
     await pool.query(`UPDATE departments SET is_active = TRUE WHERE department_code IN ('SALES', 'HR')`);
   });
 
@@ -558,16 +563,15 @@ describe('Bulk User Import - Security & Provisioning', () => {
     assert.match(res.body.data.rows[0].errors.join(' '), /reporting manager is required/);
   });
 
-  // Test 23: Manager must be one level up same dept
-  it('23. Manager must be one level up same department', async () => {
-    // BE is level 3, manager is CEO level 1 -> should fail (needs level 2)
+  // Test 23: Skip-level (gap 2) allowed; same level rejected
+  it('23. Skip-level manager (gap 2) allowed; same-level rejected', async () => {
+    // BE is level 3, manager is CEO level 1 -> gap 2, now ALLOWED (skip-level)
     const rows = [makeUserRow({ employeeId: 'NEW001', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'CEO001' })];
     const res = await validateRows(rows);
     assert.equal(res.status, 200);
-    assert.equal(res.body.data.errorRows, 1);
-    assert.match(res.body.data.rows[0].errors.join(' '), /must hold a Level 2 role/);
+    assert.equal(res.body.data.errorRows, 0, JSON.stringify(res.body.data.rows[0].errors));
 
-    // Same level mismatch: BE reporting to BE should fail
+    // Same level mismatch: BE (3) reporting to BE (3) must fail
     const beMgrRes: any = await pool.query(
       `INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('BE_MGR', 'BE Mgr', 'bemgr@test.com', 'hashed', $1, $2, $3, TRUE) RETURNING id`,
       [beRoleId, salesDeptId, managerUserId]
@@ -576,7 +580,48 @@ describe('Bulk User Import - Security & Provisioning', () => {
     const res2 = await validateRows(rows2);
     assert.equal(res2.status, 200);
     assert.equal(res2.body.data.errorRows, 1);
+    assert.match(res2.body.data.rows[0].errors.join(' '), /strictly higher|Level 2 or 1/);
     await pool.query(`DELETE FROM users WHERE employee_id = 'BE_MGR'`);
+  });
+
+  // Test 23b: Manager gap > 2 rejected
+  it('23b. Manager more than two levels up is rejected', async () => {
+    // SBE is level 4, manager CEO is level 1 -> gap 3, must fail
+    const rows = [makeUserRow({ employeeId: 'NEW003', role: 'SBE', department: 'Sales', reportingManagerEmployeeId: 'CEO001' })];
+    const res = await validateRows(rows);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.errorRows, 1);
+    assert.match(res.body.data.rows[0].errors.join(' '), /strictly higher|Level 3 or 2/);
+  });
+
+  // Test 23c: Bulk commit accepts a two-level-up (skip-level) manager
+  it('23c. Bulk commit accepts two-level-up (skip-level) manager', async () => {
+    const rows = [makeUserRow({ employeeId: 'SKIP001', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'CEO001' })];
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 1, JSON.stringify(commitRes.body.data));
+    const dbRes: any = await pool.query(`SELECT m.employee_id AS mgr_emp FROM users u LEFT JOIN users m ON m.id = u.manager_id WHERE u.employee_id = 'SKIP001'`);
+    assert.equal(dbRes.rows[0].mgr_emp, 'CEO001');
+    await pool.query(`DELETE FROM users WHERE employee_id = 'SKIP001'`);
+  });
+
+  // Test 23d: Same-batch skip-level resolution order-independent
+  it('23d. Same-batch skip-level resolution works regardless of row order', async () => {
+    // SBE (4) reports to same-batch MANAGER (2) -> gap 2 (skip-level)
+    const rows = [
+      makeUserRow({ employeeId: 'SKIP_EMP', fullName: 'Skip Emp', role: 'SBE', department: 'Sales', reportingManagerEmployeeId: 'SKIP_MGR', rowNumber: 1 }),
+      makeUserRow({ employeeId: 'SKIP_MGR', fullName: 'Skip Mgr', role: 'MANAGER', department: 'Sales', reportingManagerEmployeeId: 'CEO001', rowNumber: 2 }),
+    ];
+    const res = await validateRows(rows);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.errorRows, 0, JSON.stringify(res.body.data.rows.map((r: any) => r.errors)));
+
+    const commitRes = await commitRows(rows);
+    assert.equal(commitRes.status, 200);
+    assert.equal(commitRes.body.data.created, 2, JSON.stringify(commitRes.body.data));
+    const dbRes: any = await pool.query(`SELECT u.employee_id, m.employee_id AS mgr_emp FROM users u LEFT JOIN users m ON m.id = u.manager_id WHERE u.employee_id IN ('SKIP_EMP','SKIP_MGR')`);
+    const empRow = dbRes.rows.find((r: any) => r.employee_id === 'SKIP_EMP');
+    assert.equal(empRow.mgr_emp, 'SKIP_MGR');
   });
 
   // Test 24: Dry run no mutation
