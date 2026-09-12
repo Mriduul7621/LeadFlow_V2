@@ -1,4 +1,4 @@
-import { Lead, LeadStatus, RolePermission, StatusHistoryEntry, User } from '../../shared/types';
+import { Lead, LeadQuality, LeadStatus, RolePermission, StatusHistoryEntry, User } from '../../shared/types';
 import { useAuthStore } from '../../auth/store/authStore';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
@@ -28,6 +28,8 @@ export interface FollowUpQueueItem {
   overdueDays?: number;
   dueState: 'overdue' | 'today' | 'upcoming' | string;
   latestActivity?: { status?: string; remarks?: string; createdAt?: string } | null;
+  /** Server-computed compact Lead Quality for this queue row's lead. */
+  leadQuality?: LeadQuality | null;
 }
 
 export interface FollowUpQueueResult {
@@ -392,6 +394,22 @@ export const leadService = {
       if (err instanceof ApiError && err.status === 404) return [];
       if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
       return [];
+    }
+  },
+
+  /**
+   * Full server-authoritative Lead Quality explanation for one lead
+   * (score, band, positive/negative factors, attention reasons).
+   * Single-lead read for details views — never called per row in a list.
+   */
+  async getLeadQuality(leadId: string): Promise<LeadQuality | null> {
+    try {
+      const quality = await apiRequest<LeadQuality>(`/api/leads/${encodeURIComponent(leadId)}/quality`);
+      return quality ?? null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      return null;
     }
   },
 

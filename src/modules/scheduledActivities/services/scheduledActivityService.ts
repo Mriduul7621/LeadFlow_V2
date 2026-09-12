@@ -1,5 +1,6 @@
 import { apiRequest, apiRequestEnvelope } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
+import type { LeadQuality } from '../../shared/types';
 
 /**
  * scheduledActivityService.ts — Step 5C
@@ -51,6 +52,8 @@ export interface ScheduledActivity {
   leadCustomerName?: string | null;
   leadMobile?: string | null;
   leadStatus?: string | null;
+  /** Server-computed compact Lead Quality for the parent lead. */
+  leadQuality?: LeadQuality | null;
 }
 
 export interface ScheduledActivityListParams {

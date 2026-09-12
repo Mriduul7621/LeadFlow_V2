@@ -174,6 +174,37 @@ export interface LeadDocument {
   date: string;
 }
 
+/**
+ * Lead Quality — server-authoritative, deterministic, explainable score.
+ * ------------------------------------------------------------------
+ * Computed ONLY on the server (server/utils/leadQuality.ts) from
+ * operational sales signals. The client NEVER reimplements the formula:
+ * list/queue payloads carry the compact { score, band } shape, while
+ * single-lead reads (Lead360, lead details, GET /api/leads/:id/quality)
+ * carry the full explanation (factors + attention reasons).
+ */
+export type LeadQualityBand =
+  | 'Hot'
+  | 'Warm'
+  | 'Developing'
+  | 'Cold'
+  | 'Converted'
+  | 'Not Interested';
+
+export interface LeadQualityFactor {
+  label: string;
+  points: number;
+}
+
+export interface LeadQuality {
+  score: number;
+  band: LeadQualityBand;
+  isTerminal?: boolean;
+  positiveFactors?: LeadQualityFactor[];
+  negativeFactors?: LeadQualityFactor[];
+  attentionReasons?: string[];
+}
+
 export interface Lead {
   id: string;
   creationDate: string;
@@ -223,6 +254,8 @@ export interface Lead {
   // Lead Timeline (Phase 4)
   assignmentHistory?: AssignmentHistoryEntry[];
   documents?: LeadDocument[];
+  /** Server-computed Lead Quality (compact on lists, full on details). */
+  leadQuality?: LeadQuality;
 }
 
 export interface FollowUp {

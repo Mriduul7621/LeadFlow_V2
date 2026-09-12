@@ -12,6 +12,8 @@ import { notificationService } from '../../notifications/services/notificationSe
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, SystemNotification } from '../../shared/types';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import LeadQualityBadge from '../components/LeadQualityBadge';
+import LeadQualityPanel from '../components/LeadQualityPanel';
 
 type TimelineEventType = 'status' | 'assignment' | 'document' | 'notification';
 
@@ -381,6 +383,7 @@ export default function Lead360() {
             <span className={cn("px-3 py-1.5 rounded-sm text-[10px] font-black uppercase tracking-widest border", getLeadStatusColorClasses(lead.currentStatus))}>
               {lead.currentStatus}
             </span>
+            <LeadQualityBadge quality={lead.leadQuality} />
           </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-50">
@@ -401,6 +404,13 @@ export default function Lead360() {
             <p className="text-[12px] font-black text-brand-text mt-1">{lead.creationDate ? new Date(lead.creationDate).toLocaleDateString() : '-'}</p>
           </div>
         </div>
+      </div>
+
+      {/* Lead Quality — server-authoritative explanation (score arrives with the lead record) */}
+      <div className="bg-white rounded-sm border border-slate-100 shadow-sm p-6">
+        <h3 className="text-sm font-black uppercase tracking-[0.14em] text-slate-700 mb-1">Lead Quality</h3>
+        <p className="text-[11px] text-slate-400 mb-4">Deterministic, explainable score computed on the server from operational sales signals — never demographics.</p>
+        <LeadQualityPanel quality={lead.leadQuality} />
       </div>
 
       {/* Scheduled Activities — server-authoritative calendar (Step 5C) */}
