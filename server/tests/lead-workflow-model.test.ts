@@ -107,4 +107,45 @@ describe('Lead workflow model', () => {
     assert.ok(server.includes('assignmentHistory'));
     assert.ok(workspace.includes('handleUpdateStatus'));
   });
+
+  it('aligns campaign purge UI policy with the admin-only server policy', () => {
+    const pool = read('src/modules/leads/pages/AllLeads.tsx');
+    const server = read('server/routes/production.routes.ts');
+    const workflowDocs = read('docs/LEAD_WORKFLOW_MODEL.md');
+    const permissionDocs = read('docs/ROLE_PERMISSION_MODEL.md');
+
+    assert.match(pool, /const canPurgeCampaign = isAdminRole/);
+    assert.doesNotMatch(pool, /canDelete\s*&&\s*isAdminRole/);
+    assert.match(pool, /Campaign purge is restricted to ADMIN\/SUPERADMIN/);
+
+    const purgeStart = server.indexOf("router.delete('/leads/campaign/:campaign'");
+    const purgeEnd = server.indexOf("router.post('/leads/clear-all'", purgeStart);
+    assert.ok(purgeStart >= 0 && purgeEnd > purgeStart);
+    const purgeRoute = server.slice(purgeStart, purgeEnd).replace(/\/\/.*$/gm, '');
+    assert.match(purgeRoute, /requireAuth, requireAdmin/);
+    assert.doesNotMatch(purgeRoute, /hasPermissionCode\(caller,\s*'leads\.delete'\)/);
+    assert.match(workflowDocs, /Campaign purge \| `requireAdmin` \(`ADMIN`\/`SUPERADMIN`\) only/);
+    assert.match(permissionDocs, /Campaign purge is intentionally separate/i);
+    assert.match(permissionDocs, /`DELETE \/leads\/campaign\/:campaign` remains `requireAdmin`/);
+  });
+
+  it('keeps transfer authorization distinct while preserving assignment and visibility boundaries', () => {
+    const server = read('server/routes/production.routes.ts');
+    const workflowDocs = read('docs/LEAD_WORKFLOW_MODEL.md');
+    const featureDocs = read('docs/ROLE_FEATURE_ACCESS_ALIGNMENT.md');
+
+    assert.match(server, /Normal assignment and unassignment require leads\.assign/);
+    assert.match(server, /const isExistingOwnerTransfer/);
+    assert.match(server, /isExistingOwnerTransfer \? \(canAssign \|\| canTransfer\)/);
+    assert.match(server, /Data Visibility\/assignment-scope check above succeeds/);
+
+    const bulkStart = server.indexOf("router.post('/leads/bulk'");
+    const bulkEnd = server.indexOf("router.get('/leads", bulkStart);
+    const bulk = server.slice(bulkStart, bulkEnd > bulkStart ? bulkEnd : undefined);
+    assert.match(bulk, /Reassigning an existing lead requires leads\.assign or leads\.transfer/);
+    assert.match(bulk, /Assigning or unassigning an existing lead requires the leads\.assign permission/);
+    assert.match(workflowDocs, /`leads\.assign OR leads\.transfer`/);
+    assert.match(workflowDocs, /`leads\.transfer` as the alternative gate/);
+    assert.match(featureDocs, /Existing-owner transfer alternative/);
+  });
 });

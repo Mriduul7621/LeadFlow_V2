@@ -80,8 +80,8 @@ every code below is enforced server-side on the mounted router.
 | Leads | Create | `leads.create` | `POST /leads`, `POST /leads/bulk` (with import) |
 | Leads | Edit | `leads.edit` | `POST /leads/:id/follow-up`; scheduled activities create/complete/cancel/edit/delete (Task Calendar + Daily Workbench); bulk import row updates |
 | Leads | Delete | `leads.delete` | `DELETE /leads/:id` (visibility + ownership still apply) |
-| Leads | Assign | `leads.assign` | Assignment targets on lead create / bulk import / reassign / scheduled-activity assignee |
-| Leads | Transfer | `leads.transfer` | Cross-scope lead ownership transfer |
+| Leads | Assign | `leads.assign` | Normal assignment, reassignment, and explicit unassignment on `POST /leads`; assigned rows in bulk import; scheduled-activity assignee |
+| Leads | Transfer | `leads.transfer` | Alternative gate for an existing-owner reassignment on `POST /leads` and bulk-import updates; server Data Visibility/target-scope checks still apply, so it never creates cross-scope access |
 | Leads | Import | `leads.import` | `POST /leads/bulk` (bulk upload) |
 | Leads | Export | `leads.export` | UI export gating — export is a **client-side download** over visibility-filtered data; no dedicated server export endpoint exists |
 | Users | Create | `users.create` | `POST /api/users` |
@@ -142,7 +142,7 @@ editor no longer exposes them, but compatibility is preserved:
 | `lead_generate.create` ("Create Leads") | `leads.create` grant | `roles.actions.create`, `featurePermissions.lead_generate.create` written on save |
 | `lead_upload.upload` ("Upload Excel File") | `leads.import` grant | `roles.actions.upload`, `featurePermissions.lead_upload.upload` |
 | `lead_tracking.status_update` ("Update Lead Status") | `leads.edit` grant | `roles.actions.edit`/`approve`, `featurePermissions.lead_tracking.status_update` |
-| `lead_upload.delete` ("Delete Campaign Leads") | (admin-only capability; no canonical code) | campaign delete stays `requireAdmin`; `featurePermissions.lead_upload.delete` mirrors `leads.delete` |
+| `lead_upload.delete` (legacy "Delete Campaign Leads" label) | (admin-only capability; no canonical code) | retained only as legacy metadata; campaign purge is `requireAdmin` (`ADMIN`/`SUPERADMIN`) and does not consult `leads.delete` |
 | `lead_tracking.view_all_leads_tab` | `all_leads` module toggle, backfilled on read from the stored sub-option or `menuAccess['/leads/all']` | `ensureFeaturePermissions()` legacy backfill |
 | `user_management.user_*/role_*/dept_*/hier_*` | canonical `users.*` / `roles.manage` / `permissions.manage` / `departments.manage` / `hierarchy.manage` | no longer written; stored values are ignored (they never had server enforcement for non-admins) |
 | `settings_control.view_*` (self-service) | Feature Access `settings_control` module toggle | `usePermissions` `SELF_SERVICE_SETTINGS_KEYS` bypass (see §7) |
@@ -237,7 +237,11 @@ admin-only.
   derived from the authenticated session; client-supplied values are
   sanitized (`FORBIDDEN_CUSTOM_KEYS`).
 - Lead security boundary unchanged: delete/assign/transfer also require the
-  target to be inside the caller's data-visibility scope.
+  target record and assignment target to be inside the caller's server-derived
+  Data Visibility scope. `leads.transfer` is not a visibility override.
+- Campaign purge is intentionally separate from the canonical lead action
+  matrix: `DELETE /leads/campaign/:campaign` remains `requireAdmin` and is
+  limited to ADMIN/SUPERADMIN, regardless of `leads.delete` grants.
 - Admin autonomy guards unchanged: the last active administrator cannot be
   demoted/deactivated; an admin cannot lock themselves out.
 - Password changes never ride on `users.edit`. Self-service change

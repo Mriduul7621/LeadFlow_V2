@@ -161,12 +161,17 @@ is a valid role configuration.
 | `leads.view` | Lead Workspace / Lead Pool directory | `hasPermissionCode(caller, 'leads.view')` |
 | `leads.create` | Add New Lead | `hasPermissionCode(caller, 'leads.create')` |
 | `leads.edit` | Lead status update + Daily Workbench Complete/Edit/Cancel/Reschedule | `hasPermissionCode(caller, 'leads.edit')` |
-| `leads.delete` | Lead Pool delete | `hasPermissionCode(caller, 'leads.delete')` |
-| `leads.assign` | Assign / reassign ownership | `hasPermissionCode(caller, 'leads.assign')` |
-| `leads.transfer` | Transfer ownership | `hasPermissionCode(caller, 'leads.transfer')` |
+| `leads.delete` | Lead Pool individual delete | `hasPermissionCode(caller, 'leads.delete')` |
+| `leads.assign` | Normal assign / reassign / unassign | `hasPermissionCode(caller, 'leads.assign')`; server also permits this grant for existing-owner transfers |
+| `leads.transfer` | Existing-owner transfer alternative | `hasPermissionCode(caller, 'leads.transfer')` on mounted update/import transfer paths; server visibility/target checks remain authoritative |
 | `leads.import` | Bulk Upload | `hasPermissionCode(caller, 'leads.import')` |
 | `leads.export` | Export audit logs | client gate (`all_leads.export_raw_xlsx`) — no server export endpoint exists |
 | `dashboard.view` | Dashboard | `hasPermissionCode(caller, 'dashboard.view')` |
+
+> Campaign purge is not the Lead Pool individual-delete action. The mounted
+> `DELETE /leads/campaign/:campaign` route remains `requireAdmin`, so only
+> ADMIN/SUPERADMIN can purge a campaign; it does not consult `leads.delete`.
+> Feature Access controls page visibility only and cannot weaken this boundary.
 
 > `leads.export` is a canonical code (migration `025_permissions`) and is
 > exposed and persisted for Admin to grant/revoke, but its only current

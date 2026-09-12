@@ -41,7 +41,9 @@ export default function AllLeads() {
   const canDelete = canAccess('all_leads', 'delete');
   const canExport = canAccess('all_leads', 'export');
   const isAdminRole = ['ADMIN', 'SUPERADMIN'].includes(String(userRole || '').toUpperCase());
-  const canPurgeCampaign = canDelete && isAdminRole;
+  // Campaign purge is an established admin-only capability (PR #32),
+  // separate from the canonical individual-delete action.
+  const canPurgeCampaign = isAdminRole;
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[] | null>(null);
@@ -177,7 +179,7 @@ export default function AllLeads() {
   // Handle campaign-wise deletion
   const handlePurgeCampaignLeads = async () => {
     if (!canPurgeCampaign) {
-      toast.error('Campaign purge requires admin access and the canonical leads.delete permission.');
+      toast.error('Campaign purge is restricted to ADMIN/SUPERADMIN.');
       return;
     }
     if (!targetCampaignToDelete) {

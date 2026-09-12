@@ -75,12 +75,12 @@ Feature Access controls whether a page is available in the UI. It does not grant
 | Create | `leads.create` | authenticated caller and create permission |
 | Operational status/follow-up edit | `leads.edit` | authenticated caller, accessible row, status/activity validation |
 | Demographic correction in Pool | `leads.edit` | authenticated caller, accessible row, field whitelist/normalization |
-| Assignment/reassignment/unassignment | `leads.assign` | resolved user reference, authorized assignment scope, assignment history |
-| Transfer-specific behavior | `leads.transfer` where a transfer-specific server path applies | remains distinct; not treated as generic Feature Access |
+| Assignment/reassignment/unassignment | `leads.assign` for normal assignment and every unassignment; existing-owner reassignment accepts `leads.assign OR leads.transfer` | resolved user reference, server-side Data Visibility/assignment-scope check, assignment history |
+| Transfer-specific behavior | `leads.transfer` as the alternative gate for an existing owner moved to another owner on the mounted generic `POST /leads` and bulk-import update paths | never grants visibility or bypasses target-scope checks; not treated as generic Feature Access |
 | Individual delete | `leads.delete` | authenticated caller, visible row, server-side delete check |
 | Export | `leads.export` | endpoint/action-specific export authorization |
-| Bulk import | `leads.import` and/or the established create/import contract | server validation, duplicate/history/date semantics |
-| Campaign purge | admin/server purge boundary plus `leads.delete` | secondary danger zone; never a page-level visibility bypass |
+| Bulk import | `leads.import` and/or the established create/import contract; assignment rules above still apply per row | server validation, duplicate/history/date semantics |
+| Campaign purge | `requireAdmin` (`ADMIN`/`SUPERADMIN`) only; no canonical action permission | `DELETE /leads/campaign/:campaign` is a secondary danger-zone control and never a page-level visibility bypass |
 
 The client uses role/permission state only to present or disable controls. It never impersonates ADMIN, supplies a broader role, or treats Feature Access as an action grant. Server visibility remains final for every list, detail, update, follow-up, scheduled activity, dashboard, and delete path.
 

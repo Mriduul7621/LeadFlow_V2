@@ -4201,9 +4201,11 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to assign leads to that user. Assignment is limited to your authorized scope.' });
     }
 
-    // leads.assign is the canonical gate for assignment/reassignment. The
-    // separate leads.transfer permission is preserved for transfer-specific
-    // server semantics and is not treated as generic edit access here.
+    // Normal assignment and unassignment require leads.assign. The
+    // established PR #32 distinction is preserved for an existing owner
+    // being moved to another owner: leads.transfer may authorize that
+    // transfer as an alternative, but only after the same server-side
+    // Data Visibility/assignment-scope check above succeeds.
     const existingAssignmentKey = existingLead
       ? (existingLead.assigned_to
         ? String(existingLead.assigned_to)
@@ -4214,10 +4216,20 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       : '';
     const assignmentChanged = Boolean(existingLead && existingAssignmentKey !== targetAssignmentKey);
     const createAssignmentToOther = Boolean(!existingLead && targetAssigned && targetAssigned.userId !== caller.id);
-    if (assignmentRequested && (assignmentChanged || createAssignmentToOther) && !(await hasPermissionCode(caller, 'leads.assign'))) {
-      perf.span('authz.permissions');
-      perf.finish(res);
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to assign or reassign this lead.' });
+    const isExistingOwnerTransfer = Boolean(
+      existingLead && assignmentRequested && assignmentChanged && existingAssignmentKey && targetAssignmentKey
+    );
+    if (assignmentRequested && (assignmentChanged || createAssignmentToOther)) {
+      const canAssign = await hasPermissionCode(caller, 'leads.assign');
+      const canTransfer = isExistingOwnerTransfer
+        ? await hasPermissionCode(caller, 'leads.transfer')
+        : false;
+      const authorized = isExistingOwnerTransfer ? (canAssign || canTransfer) : canAssign;
+      if (!authorized) {
+        perf.span('authz.permissions');
+        perf.finish(res);
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to assign, reassign, or transfer this lead.' });
+      }
     }
     perf.span('authz.permissions');
 
@@ -4639,9 +4651,9 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       // A blank "Assigned To" stays blank: unassigned lead (schema allows
       // it) - never a fake assignment to the importing user.
 
-      if (assigned && !canAssign) {
-        rowErrors.push('Assigning an imported lead requires the leads.assign permission');
-      }
+      // Assignment authorization is finalized after duplicate/existing-lead
+      // planning below: a transfer of an existing owner may use
+      // leads.transfer, while new assignment still requires leads.assign.
       if (assigned && !isAssignedToAllowed(assigned, visibility, caller)) {
         rowErrors.push(`Cannot assign to "${row.assignedTo}" - outside your authorized scope`);
       }
@@ -4792,18 +4804,28 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
     const batchByPhone = new Map<string, number>(); // normalized phone -> index in actions[]
 
     const planErrorsFor = (p: PlannedImportRow, existing: any | null): string | null => {
-      // Shared authorization checks for any action that touches an EXISTING lead.
-      if (!existing) return null;
+      // New assigned records and ordinary assignment require leads.assign.
+      if (!existing) {
+        return p.assigned && !canAssign
+          ? 'Assigning an imported lead requires the leads.assign permission'
+          : null;
+      }
       if (!isLeadAccessible(existing, visibility, caller)) {
         return 'Existing lead with this phone/email is outside your authorized scope';
       }
       if (!canEdit) return 'No permission to edit existing leads';
-      if (
-        existing.assigned_to && p.assigned &&
-        String(existing.assigned_to) !== String(p.assigned.userId) &&
-        !canAssign
-      ) {
-        return 'No permission to reassign an existing lead';
+
+      const existingOwner = existing.assigned_to ? String(existing.assigned_to) : '';
+      const targetOwner = p.assigned ? String(p.assigned.userId) : '';
+      const ownershipChanged = existingOwner !== targetOwner;
+      if (ownershipChanged) {
+        const isOwnerTransfer = Boolean(existingOwner && targetOwner);
+        const authorized = isOwnerTransfer ? (canAssign || canTransfer) : canAssign;
+        if (!authorized) {
+          return isOwnerTransfer
+            ? 'Reassigning an existing lead requires leads.assign or leads.transfer'
+            : 'Assigning or unassigning an existing lead requires the leads.assign permission';
+        }
       }
       return null;
     };
@@ -6106,12 +6128,8 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
 });
 
 router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req, res) => {
-  const caller = await getCallerDbInfo(req);
-  if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
-  const callerRole = normalizeRole(caller.role_code);
-  if (callerRole !== 'ADMIN' && callerRole !== 'SUPERADMIN' && !(await hasPermissionCode(caller, 'leads.delete'))) {
-    return sendJson(res, 403, { success: false, message: 'You do not have permission to purge campaign leads.' });
-  }
+  // Campaign purge intentionally remains the established PR #32
+  // ADMIN/SUPERADMIN-only capability. It is not a leads.delete action.
   const campaign = req.params.campaign;
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });

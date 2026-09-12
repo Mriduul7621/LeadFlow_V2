@@ -218,8 +218,18 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     delete process.env.DATABASE_URL;
   });
 
+  async function setUserPermission(userId: string, code: string, allowed: boolean) {
+    await pool.query(
+      `INSERT INTO user_permissions (user_id, permission_id, is_allowed)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, permission_id) DO UPDATE SET is_allowed = EXCLUDED.is_allowed`,
+      [userId, permIds[code], allowed]
+    );
+  }
+
   beforeEach(async () => {
     await pool.query(`DELETE FROM leads`);
+    await pool.query(`DELETE FROM user_permissions`);
   });
 
   it('A. Cross-user update: User B cannot update Lead A owned by User A - PG unchanged', async () => {
@@ -336,7 +346,124 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(pgNewLead.rows.length, 1);
   });
 
-  it('F. Actor spoofing: Payload with false assignedBy/createdBy etc is ignored, PG shows session user', async () => {
+  it('F. Campaign purge is admin-only even when a non-admin has leads.delete', async () => {
+    const tokenManager = signToken({ id: managerA.id, employeeId: managerA.employeeId, role: managerA.role, email: managerA.email });
+    const tokenAdmin = signToken({ id: adminUser.id, employeeId: adminUser.employeeId, role: adminUser.role, email: adminUser.email });
+
+    const inserted: any = await pool.query(
+      `INSERT INTO leads (customer_name, mobile, custom_fields)
+       VALUES ($1, $2, $3::jsonb)
+       RETURNING id`,
+      ['Purge candidate', '01700000011', JSON.stringify({ campaignName: 'Admin Only Campaign' })]
+    );
+    const leadId = inserted.rows[0].id;
+
+    const denied = await request(app)
+      .delete('/api/leads/campaign/Admin%20Only%20Campaign')
+      .set('Authorization', `Bearer ${tokenManager}`);
+    assert.equal(denied.status, 403);
+    const stillActive: any = await pool.query(`SELECT is_deleted FROM leads WHERE id = $1`, [leadId]);
+    assert.equal(stillActive.rows[0].is_deleted, false);
+
+    const purged = await request(app)
+      .delete('/api/leads/campaign/Admin%20Only%20Campaign')
+      .set('Authorization', `Bearer ${tokenAdmin}`);
+    assert.equal(purged.status, 200, JSON.stringify(purged.body));
+    assert.equal(purged.body.deleted, 1);
+    const softDeleted: any = await pool.query(`SELECT is_deleted, deleted_by FROM leads WHERE id = $1`, [leadId]);
+    assert.equal(softDeleted.rows[0].is_deleted, true);
+    assert.equal(softDeleted.rows[0].deleted_by, adminUser.id);
+  });
+
+  it('G. leads.assign controls normal reassignment and explicit unassignment', async () => {
+    const tokenManager = signToken({ id: managerA.id, employeeId: managerA.employeeId, role: managerA.role, email: managerA.email });
+    // Prove the normal path does not depend on leads.transfer.
+    await setUserPermission(managerA.id, 'leads.transfer', false);
+
+    const createRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenManager}`)
+      .send({ customerName: 'Assignment lifecycle', mobile: '01700000012' });
+    assert.equal(createRes.status, 200, JSON.stringify(createRes.body));
+    const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
+
+    const assignRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenManager}`)
+      .send({ id: leadCode, customerName: 'Assignment lifecycle', mobile: '01700000012', assignedTo: subordinateA.employeeId });
+    assert.equal(assignRes.status, 200, JSON.stringify(assignRes.body));
+
+    let rowResult: any = await pool.query(`SELECT assigned_to, assigned_at, assignment_history FROM leads WHERE lead_code = $1`, [leadCode]);
+    assert.equal(rowResult.rows[0].assigned_to, subordinateA.id);
+    assert.ok(rowResult.rows[0].assigned_at);
+
+    const unassignRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenManager}`)
+      .send({ id: leadCode, customerName: 'Assignment lifecycle', mobile: '01700000012', assignedTo: '' });
+    assert.equal(unassignRes.status, 200, JSON.stringify(unassignRes.body));
+
+    rowResult = await pool.query(`SELECT assigned_to, assigned_at, assignment_history FROM leads WHERE lead_code = $1`, [leadCode]);
+    assert.equal(rowResult.rows[0].assigned_to, null);
+    assert.equal(rowResult.rows[0].assigned_at, null);
+    const history = typeof rowResult.rows[0].assignment_history === 'string'
+      ? JSON.parse(rowResult.rows[0].assignment_history)
+      : rowResult.rows[0].assignment_history;
+    assert.ok(history.some((entry: any) => entry.note === 'Reassigned via API'));
+    assert.ok(history.some((entry: any) => entry.note === 'Unassigned via API'));
+  });
+
+  it('H. leads.transfer authorizes an existing-owner transfer without leads.assign', async () => {
+    const tokenSubordinate = signToken({ id: subordinateA.id, employeeId: subordinateA.employeeId, role: subordinateA.role, email: subordinateA.email });
+    const tokenManager = signToken({ id: managerA.id, employeeId: managerA.employeeId, role: managerA.role, email: managerA.email });
+    await setUserPermission(managerA.id, 'leads.assign', false);
+    await setUserPermission(managerA.id, 'leads.transfer', true);
+
+    const createRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenSubordinate}`)
+      .send({ customerName: 'Transfer candidate', mobile: '01700000013' });
+    assert.equal(createRes.status, 200, JSON.stringify(createRes.body));
+    const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
+
+    const transferRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenManager}`)
+      .send({ id: leadCode, customerName: 'Transfer candidate', mobile: '01700000013', assignedTo: managerA.employeeId });
+    assert.equal(transferRes.status, 200, JSON.stringify(transferRes.body));
+
+    const rowResult: any = await pool.query(`SELECT assigned_to, assignment_history FROM leads WHERE lead_code = $1`, [leadCode]);
+    assert.equal(rowResult.rows[0].assigned_to, managerA.id);
+    const history = typeof rowResult.rows[0].assignment_history === 'string'
+      ? JSON.parse(rowResult.rows[0].assignment_history)
+      : rowResult.rows[0].assignment_history;
+    assert.ok(history.some((entry: any) => entry.note === 'Reassigned via API'));
+  });
+
+  it('I. leads.transfer does not widen server Data Visibility', async () => {
+    const tokenSubordinate = signToken({ id: subordinateA.id, employeeId: subordinateA.employeeId, role: subordinateA.role, email: subordinateA.email });
+    const tokenManager = signToken({ id: managerA.id, employeeId: managerA.employeeId, role: managerA.role, email: managerA.email });
+    await setUserPermission(managerA.id, 'leads.assign', false);
+    await setUserPermission(managerA.id, 'leads.transfer', true);
+
+    const createRes = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenSubordinate}`)
+      .send({ customerName: 'Visibility transfer candidate', mobile: '01700000014' });
+    assert.equal(createRes.status, 200, JSON.stringify(createRes.body));
+    const leadCode = createRes.body.data.leadCode || createRes.body.data.lead_code || createRes.body.data.id;
+
+    const denied = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${tokenManager}`)
+      .send({ id: leadCode, customerName: 'Visibility transfer candidate', mobile: '01700000014', assignedTo: subordinateB.employeeId });
+    assert.equal(denied.status, 403);
+
+    const unchanged: any = await pool.query(`SELECT assigned_to FROM leads WHERE lead_code = $1`, [leadCode]);
+    assert.equal(unchanged.rows[0].assigned_to, subordinateA.id);
+  });
+
+  it('J. Actor spoofing: Payload with false assignedBy/createdBy etc is ignored, PG shows session user', async () => {
     const tokenA = signToken({ id: userA.id, employeeId: userA.employeeId, role: userA.role, email: userA.email });
 
     const spoofPayload = {
@@ -371,7 +498,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal((customFields as any).owner, undefined);
   });
 
-  it('G. Successful persistence: Create -> Update -> Delete flow verifies PG state', async () => {
+  it('K. Successful persistence: Create -> Update -> Delete flow verifies PG state', async () => {
     const tokenA = signToken({ id: userA.id, employeeId: userA.employeeId, role: userA.role, email: userA.email });
 
     const createRes = await request(app).post('/api/leads').set('Authorization', `Bearer ${tokenA}`).send({ customerName: 'Persist Lead', mobile: '01700000009', source: 'Test' });
@@ -402,7 +529,7 @@ describe('Lead API - Real PostgreSQL Integration', () => {
     assert.equal(deletedRow.updated_by, userA.id, 'updated_by must equal authenticated user UUID');
   });
 
-  it('Cache failure: API failure does NOT update local cache / PG', async () => {
+  it('L. Cache failure: API failure does NOT update local cache / PG', async () => {
     const tokenA = signToken({ id: userA.id, employeeId: userA.employeeId, role: userA.role, email: userA.email });
     const tokenB = signToken({ id: userB.id, employeeId: userB.employeeId, role: userB.role, email: userB.email });
 
