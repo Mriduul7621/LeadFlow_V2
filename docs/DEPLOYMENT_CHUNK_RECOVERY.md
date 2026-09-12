@@ -30,11 +30,12 @@ the wrong moment** — the routine cost of shipping, not an edge case.
 
 ## The fix — three layers, one guarded reload
 
-Reloading the document is the *whole* fix: a reload revalidates
-`index.html`, whose hashed chunk references are current again. What was
-missing is (a) recognizing this failure class, (b) triggering exactly one
-reload, and (c) degrading gracefully when even that can't work. All of it
-is framework-level recovery — zero changes to routes, auth, or server code.
+Reloading the document is the *whole* fix for stale chunks: a reload
+revalidates `index.html`, whose hashed chunk references are current
+again. What was missing is (a) recognizing this failure class, (b)
+triggering exactly one reload, and (c) degrading gracefully when even
+that can't work. All of it is framework-level recovery — zero changes to
+routes, auth, or server code.
 
 ### 1. `src/utils/chunkRecovery.ts` — detection + the guarded single reload
 
@@ -43,8 +44,7 @@ is framework-level recovery — zero changes to routes, auth, or server code.
   preload helper, and the "module served as `text/html`" MIME trap —
   including wrapped `PromiseRejectionEvent.reason` payloads.
   **Deliberately not matched:** bare `Failed to fetch`, HTTP 4xx/5xx API
-  errors, aborts — those keep flowing to their existing offline/retry
-  paths.
+  errors, aborts — those are not deployment failures.
 - `recoverFromChunkError()` performs **one** `location.reload()`, guarded
   by a cooldown marker in `sessionStorage` (in-memory fallback when
   storage is unavailable, e.g. privacy mode):
@@ -57,23 +57,32 @@ is framework-level recovery — zero changes to routes, auth, or server code.
     user intent bypasses the guard, and a manual reload revalidates
     `index.html`, so it always offers a real way forward.
 
-### 2. `ChunkErrorBoundary` — route content (the shell never dies)
+### 2. `ChunkErrorBoundary` — handles BOTH error categories explicitly
 
-`LazyPage` in `App.tsx` now wraps each route's `Suspense` boundary in
-`ChunkErrorBoundary`:
+Once a descendant throws, the boundary has caught the render error and
+the crashing child can never "just continue" — React needs a replacement
+tree either way. So `LazyPage` in `App.tsx` wraps each route's `Suspense`
+boundary in `ChunkErrorBoundary`, whose state distinguishes three phases
+(`normal` / `staleChunk` / `runtimeError`):
 
-- Chunk-shaped error → attempt the guarded auto-reload (state updates to
-  a compact recovery card for the instant before the reload lands).
-- Guard spent → render an explicit bilingual (**EN/BN**) "New version
-  available — Reload now" card inside the content area. The sidebar and
-  header stay intact and usable; nothing auto-retries behind the user's
-  back.
-- Any other error → `getDerivedStateFromError` returns `null`, so real
-  bugs are **not** swallowed and keep their pre-existing behavior.
+- **Stale chunk error** → exactly one **guarded auto-reload** (60 s
+  cooldown; loop-proof). If the guard is spent, the bilingual (**EN/BN**)
+  "New version available — Reload now" card renders inside the content
+  area; the sidebar and header stay intact and usable.
+- **Any other render error** → a **safe generic fallback UI** (title
+  "Something went wrong", a concise reassuring message, and user-held
+  actions: **Reload Application** and **Go to Dashboard** — the latter
+  hidden when the crash happened on the dashboard itself, where retrying
+  the same route isn't practical). Generic errors **never auto-reload** —
+  silently rebooting over a real bug would hide it. The fallback renders
+  fixed dictionary strings only: the raw exception text, stack, and any
+  tokens never reach the DOM (and are not logged — the repo has no
+  error-telemetry sink to send them to).
 
 ### 3. Global safety net — `installGlobalChunkRecovery()` in `main.tsx`
 
-Window-level listeners for failures that never reach a React boundary:
+Window-level listeners for chunk failures that never reach a React
+boundary:
 
 - `unhandledrejection` — dynamic imports outside the route tree.
 - `error` — script/module evaluation failures.
@@ -91,7 +100,7 @@ All paths funnel into the same guarded single reload.
 | Hard load with stale cached `index.html` | Blank page (stale entry script fails) | Capture-phase handler reloads once |
 | Reload didn't help (deploy broken / offline) | White screen, retry loop or dead end | Bilingual "Reload now" card; shell stays usable; no auto-retry loop |
 | Ordinary network blip / API 5xx / abort | Existing offline & retry handling | **Unchanged** — not matched as chunk errors |
-| Non-chunk runtime bug | Surfaces at root (no boundary) | **Unchanged** — boundary passes them through |
+| Generic render error (a real bug) | Whole app unmounted → white screen | Safe generic fallback: "Something went wrong" + Reload Application / Go to Dashboard; never auto-reloads; no stack/exception text exposed |
 
 ## What deliberately did **not** change
 
@@ -110,21 +119,25 @@ All paths funnel into the same guarded single reload.
 | File | Change |
 |---|---|
 | `src/utils/chunkRecovery.ts` | **New** — signature matching, guarded single reload, global installer |
-| `src/modules/shared/components/ChunkErrorBoundary.tsx` | **New** — route-level boundary + bilingual recovery card |
+| `src/modules/shared/components/ChunkErrorBoundary.tsx` | **New** — route-level boundary: guarded auto-recovery + recovery card for stale chunks, safe generic fallback (`GenericErrorFallback`) for other render errors |
 | `src/App.tsx` | `LazyPage` wraps `Suspense` in `ChunkErrorBoundary` (one-line wire-up) |
 | `src/main.tsx` | Installs the window-level safety net at startup |
-| `src/modules/shared/utils/translations.ts` | `newVersionTitle` / `newVersionBody` / `reloadNow` (EN + BN) |
-| `server/tests/chunk-recovery.test.ts` | **New** — behavior + wiring source guards |
+| `src/modules/shared/utils/translations.ts` | `newVersionTitle` / `newVersionBody` / `reloadNow` + `somethingWentWrongTitle` / `somethingWentWrongBody` / `reloadApplication` / `goDashboard` (EN + BN) |
+| `server/tests/chunk-recovery.test.ts` | **New** — behavior (incl. rendered-boundary tests) + wiring source guards |
 | `docs/DEPLOYMENT_CHUNK_RECOVERY.md` | **New** — this document |
 
 ## Verification
 
-- `npm run lint` (`tsc --noEmit`) — clean.
-- `tsx --test server/tests/chunk-recovery.test.ts` — signature matrix,
-  cooldown/loop-prevention behavior, sessionStorage persistence, and all
-  wiring source guards pass.
-- Full `npm test` suite and `npm run build` (route chunks unchanged)
-  pass.
+- `npx tsc --noEmit` — clean.
+- `npm test -- --run` — signature matrix, cooldown/loop-prevention,
+  rendered-boundary behavior (one guarded recovery per window; generic
+  errors never auto-recover and render the safe fallback with no error
+  leakage; healthy children render unchanged), and all wiring source
+  guards pass.
+- `npm run build` — route chunks unchanged.
+- `npm run verify:serverless` — serverless build shape intact.
+- `git diff --check` — clean.
 - Manual matrix: deploy → keep an old tab open → navigate (one silent
   reload); hard-reload with warmed cache; throttle to offline (recovery
-  card, no loop); Bengali locale renders the card in বাংলা.
+  card, no loop); throw a fake render error (generic fallback, correct
+  actions, nothing leaked); Bengali locale renders both cards in বাংলা.

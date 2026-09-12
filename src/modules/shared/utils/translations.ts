@@ -35,6 +35,12 @@ export const translations = {
     newVersionBody:
       "LeadFlow was just updated, and this page was loaded from the previous version. Reload to continue on the latest version.",
     reloadNow: "Reload now",
+    // Generic runtime-error fallback (ChunkErrorBoundary)
+    somethingWentWrongTitle: "Something went wrong",
+    somethingWentWrongBody:
+      "An unexpected error occurred while showing this page. Your data is safe — reloading the application usually resolves it.",
+    reloadApplication: "Reload Application",
+    goDashboard: "Go to Dashboard",
     save: "Save",
     cancel: "Cancel",
     delete: "Delete",
@@ -766,6 +772,12 @@ export const translations = {
     newVersionBody:
       "LeadFlow সবে আপডেট হয়েছে, আর এই পেজটি ছিল আগের ভার্সন থেকে লোড করা। সর্বশেষ ভার্সনে চালু থাকতে পেজটি রিফ্রেশ করুন।",
     reloadNow: "এখনই রিফ্রেশ করুন",
+    // Generic runtime-error fallback (ChunkErrorBoundary)
+    somethingWentWrongTitle: "কিছু একটা ভুল হয়েছে",
+    somethingWentWrongBody:
+      "এই পেজটি দেখানোর সময় অপ্রত্যাশিত একটা সমস্যা হয়েছে। আপনার ডেটা নিরাপদ — অ্যাপ্লিকেশন রিফ্রেশ করলেই সাধারণত সমাধান হয়ে যায়।",
+    reloadApplication: "অ্যাপ্লিকেশন রিফ্রেশ করুন",
+    goDashboard: "ড্যাশবোর্ডে ফিরে যান",
     view: "দেখুন",
     viewAll: "সব দেখুন",
     showAll: "সব দেখান",

@@ -9,22 +9,32 @@
  * nothing handled it and React unmounted the whole app (white screen
  * until a manual refresh).
  *
- * Two halves, mirroring the repo's test style:
+ * Three halves, mirroring the repo's test style:
  *   1. Behavior — `isChunkLoadError` signature matching (every browser
  *      dialect in, generic network/API failures out) and the guarded
- *      single-reload cooldown (loop prevention, force bypass, sessionStorage
- *      persistence across the reload).
- *   2. Source guards — the wiring must exist exactly where it was
+ *      single-reload cooldown (loop prevention, force bypass,
+ *      sessionStorage persistence across the reload).
+ *   2. Boundary behavior — the route error boundary is RENDERED (real
+ *      React, renderToStaticMarkup like auth-flow-integration): a
+ *      stale chunk error triggers exactly one guarded recovery; a
+ *      second one cannot loop; a GENERIC render error must never
+ *      auto-recover and gets the safe generic fallback instead (with
+ *      no raw error text/stack exposure); normal children render
+ *      unchanged.
+ *   3. Source guards — the wiring must exist exactly where it was
  *      promised: LazyPage wraps Suspense in ChunkErrorBoundary, main.tsx
- *      installs the window-level net, the boundary only handles chunk
- *      errors and reloads manually with force, the bilingual strings
- *      exist, and vercel.json still 404s missing /assets instead of
- *      serving index.html as a JS module.
+ *      installs the window-level net, the boundary distinguishes all
+ *      three phases and renders only fixed strings, the bilingual
+ *      strings exist, and vercel.json still 404s missing /assets
+ *      instead of serving index.html as a JS module.
  */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 
 import {
   isChunkLoadError,
@@ -32,6 +42,7 @@ import {
   recoverFromChunkError,
   _resetChunkRecoveryForTests,
 } from '../../src/utils/chunkRecovery.js';
+import ChunkErrorBoundary from '../../src/modules/shared/components/ChunkErrorBoundary';
 
 const ROOT = process.cwd();
 
@@ -39,8 +50,12 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 }
 
+/* ------------------------------------------------------------------ */
+/* Test doubles                                                        */
+/* ------------------------------------------------------------------ */
+
 /** Minimal window shim: sessionStorage map + counted location.reload(). */
-function ensureWindowShim() {
+function ensureWindowShim(pathname = '/leads') {
   const store = new Map<string, string>();
   let reloads = 0;
   (globalThis as any).window = {
@@ -50,11 +65,51 @@ function ensureWindowShim() {
       removeItem: (k: string) => void store.delete(k),
     },
     location: {
+      pathname,
       reload: () => void (reloads += 1),
     },
   };
   return { store, getReloads: () => reloads };
 }
+
+/** A healthy child used to prove unchanged rendering. */
+function HealthyChild(): React.ReactElement {
+  return React.createElement('div', null, 'LEADFLOWS-OK-CHILD');
+}
+
+/**
+ * Drive the boundary's real lifecycle the way React does during a
+ * client render: `getDerivedStateFromError` classifies, then the
+ * instance's `render()` produces the replacement tree (rendered here
+ * with renderToStaticMarkup inside the Router context the fallbacks
+ * use). renderToStaticMarkup itself never dispatches to boundaries —
+ * dispatching is React's client job, so the test drives the contract
+ * methods directly and asserts their observable side effects.
+ */
+function boundaryAfterError(error: unknown): ChunkErrorBoundary {
+  const boundary = new ChunkErrorBoundary({ children: null });
+  boundary.state = ChunkErrorBoundary.getDerivedStateFromError(error) as any;
+  return boundary;
+}
+
+function renderBoundaryTree(boundary: ChunkErrorBoundary, pathname = '/leads'): string {
+  return renderToStaticMarkup(
+    React.createElement(
+      MemoryRouter,
+      { initialEntries: [pathname] },
+      React.createElement(React.Fragment, null, boundary.render()),
+    ),
+  );
+}
+
+const CHUNK_ERROR = () =>
+  new TypeError(
+    'Failed to fetch dynamically imported module: https://app.test/assets/Dashboard-abc123.js',
+  );
+
+/* ==================================================================== */
+/* 1. isChunkLoadError signatures                                       */
+/* ==================================================================== */
 
 describe('Chunk recovery — isChunkLoadError signatures', () => {
   it('A. matches every known stale-dynamic-import dialect', () => {
@@ -93,6 +148,10 @@ describe('Chunk recovery — isChunkLoadError signatures', () => {
     }
   });
 });
+
+/* ==================================================================== */
+/* 2. Guarded single reload (utility behavior)                          */
+/* ==================================================================== */
 
 describe('Chunk recovery — guarded single reload', () => {
   let shim: ReturnType<typeof ensureWindowShim>;
@@ -146,11 +205,119 @@ describe('Chunk recovery — guarded single reload', () => {
 });
 
 /* ==================================================================== */
-/* Source guards — the wiring exists where it was promised              */
+/* 3. Boundary behavior — RENDERED through real React                   */
+/* ==================================================================== */
+
+describe('Chunk recovery — ChunkErrorBoundary behavior', () => {
+  let shim: ReturnType<typeof ensureWindowShim>;
+
+  beforeEach(() => {
+    shim = ensureWindowShim();
+    _resetChunkRecoveryForTests();
+  });
+
+  it('G. a normal child renders unchanged — no fallback, no recovery side effects', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        { initialEntries: ['/leads'] },
+        React.createElement(ChunkErrorBoundary, null, React.createElement(HealthyChild)),
+      ),
+    );
+    assert.ok(markup.includes('LEADFLOWS-OK-CHILD'), 'child content must render as-is');
+    assert.ok(!markup.includes('Something went wrong'), 'generic fallback must not appear');
+    assert.ok(!markup.includes('New version available'), 'chunk notice must not appear');
+    assert.equal(shim.getReloads(), 0, 'no reload for healthy children');
+    assert.equal(shim.store.has('lf:chunk-recovery'), false, 'no recovery marker written');
+  });
+
+  it('H. a NON-chunk render error never auto-recovers and renders the generic fallback', () => {
+    const thrown = new Error('SECRET-STACK_TOKEN=abc123 at UserController.java:42');
+
+    // React's dispatch: classify via getDerivedStateFromError, then hand
+    // the error to componentDidCatch.
+    const boundary = boundaryAfterError(thrown);
+    boundary.componentDidCatch(thrown);
+
+    assert.equal(shim.getReloads(), 0, 'generic render errors must NOT trigger recoverFromChunkError()');
+    assert.equal(shim.store.has('lf:chunk-recovery'), false, 'no recovery marker for generic errors');
+    assert.equal(shouldAttemptRecovery(5_000_000), true, 'auto recovery must remain armed after a generic error');
+
+    const markup = renderBoundaryTree(boundary);
+    assert.ok(markup.includes('Something went wrong'), 'generic fallback must render');
+    assert.ok(markup.includes('Reload Application'), 'fallback must offer Reload Application');
+    assert.ok(markup.includes('Go to Dashboard'), 'fallback must offer Go to Dashboard off the dashboard route');
+    assert.ok(!markup.includes('New version available'), 'chunk notice must not appear for generic errors');
+  });
+
+  it('I. the generic fallback exposes no raw error message/stack/tokens', () => {
+    const leak = 'SECRET-STACK_TOKEN=abc123 UserController.java:42';
+    const markup = renderBoundaryTree(boundaryAfterError(new Error(leak)));
+    assert.ok(!markup.includes('SECRET-STACK'), 'the exception text must never reach the DOM');
+    assert.ok(!markup.includes('UserController'), 'stack frame text must never reach the DOM');
+    assert.ok(!markup.includes('Error:'), 'no raw error prefix in the fallback');
+    // And the boundary source can only render fixed strings — no error
+    // interpolation, no console logging of the caught error.
+    const boundary = read('src/modules/shared/components/ChunkErrorBoundary.tsx');
+    for (const forbidden of ['error.message', 'error.stack', 'console.error', 'console.log', '{error}']) {
+      assert.ok(!boundary.includes(forbidden), `boundary must not contain ${forbidden}`);
+    }
+  });
+
+  it('J. a chunk error triggers exactly ONE guarded recovery and shows the notice', () => {
+    const thrown = CHUNK_ERROR();
+    const boundary = boundaryAfterError(thrown);
+    boundary.componentDidCatch(thrown);
+
+    assert.equal(shim.getReloads(), 1, 'exactly one automatic reload for the first chunk error');
+    assert.equal(shim.store.has('lf:chunk-recovery'), true, 'the cooldown marker is recorded');
+
+    const markup = renderBoundaryTree(boundary);
+    assert.ok(markup.includes('New version available'), 'recovery notice renders (for the instant before reload lands)');
+    assert.ok(markup.includes('Reload now'), 'the manual Reload now action is present');
+    assert.ok(!markup.includes('Something went wrong'), 'generic fallback must not appear for chunk errors');
+  });
+
+  it('K. a second chunk failure cannot loop — notice renders, no further auto reload', () => {
+    const first = boundaryAfterError(CHUNK_ERROR());
+    first.componentDidCatch(CHUNK_ERROR());
+    assert.equal(shim.getReloads(), 1);
+
+    // Fresh boundary instance = the tab recovered into a document that
+    // fails again. The guard (sessionStorage marker) must stand down.
+    const second = boundaryAfterError(CHUNK_ERROR());
+    second.componentDidCatch(CHUNK_ERROR());
+    assert.equal(shim.getReloads(), 1, 'NO second automatic reload — the loop is impossible');
+
+    const markup = renderBoundaryTree(second);
+    assert.ok(markup.includes('New version available'), 'the explicit recovery UI still shows');
+    assert.ok(markup.includes('Reload now'), 'the user-controlled action remains available');
+  });
+
+  it('K2. one boundary instance never auto-recovers twice, even if React re-reports', () => {
+    const boundary = boundaryAfterError(CHUNK_ERROR());
+    boundary.componentDidCatch(CHUNK_ERROR());
+    boundary.componentDidCatch(CHUNK_ERROR());
+    assert.equal(shim.getReloads(), 1, 'the instance-level once-guard holds');
+  });
+
+  it('L. on the dashboard route the generic fallback hides the (useless) dashboard action', () => {
+    // Simulate the browser being ON the dashboard (the fallback reads the
+    // real document URL, which BrowserRouter mirrors).
+    shim = ensureWindowShim('/');
+    const markup = renderBoundaryTree(boundaryAfterError(new Error('boom')), '/');
+    assert.ok(markup.includes('Something went wrong'), 'generic fallback renders on the dashboard too');
+    assert.ok(!markup.includes('Go to Dashboard'), 'navigating to the dashboard is not practical when already there');
+    assert.ok(markup.includes('Reload Application'), 'Reload Application is always offered');
+  });
+});
+
+/* ==================================================================== */
+/* 4. Wiring source guards                                              */
 /* ==================================================================== */
 
 describe('Chunk recovery — wiring source guards', () => {
-  it('G. LazyPage wraps its Suspense boundary in ChunkErrorBoundary (shell stays up)', () => {
+  it('M. LazyPage wraps its Suspense boundary in ChunkErrorBoundary (shell stays up)', () => {
     const app = read('src/App.tsx');
     assert.match(
       app,
@@ -165,14 +332,14 @@ describe('Chunk recovery — wiring source guards', () => {
       'the boundary must wrap the Suspense boundary so route chunk failures are caught');
   });
 
-  it('H. the route-splitting contract of Phase 2 is untouched', () => {
+  it('N. the route-splitting contract of Phase 2 is untouched', () => {
     const app = read('src/App.tsx');
     assert.match(app, /const\s+Dashboard\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\/modules\/dashboard\/pages\/Dashboard['"]\s*\)/,
       'lazy route declarations keep their exact shape (loader unwrapped)');
     assert.equal(app.split('lazy((').length - 1 >= 18, true, 'all feature pages remain lazy');
   });
 
-  it('I. main.tsx installs the global safety net after the authenticated fetch', () => {
+  it('O. main.tsx installs the global safety net after the authenticated fetch', () => {
     const main = read('src/main.tsx');
     const fetchInstall = main.indexOf('installAuthenticatedFetch()');
     const chunkInstall = main.indexOf('installGlobalChunkRecovery()');
@@ -181,19 +348,31 @@ describe('Chunk recovery — wiring source guards', () => {
     assert.ok(fetchInstall < chunkInstall, 'chunk recovery installs after the fetch patch');
   });
 
-  it('J. the boundary handles chunk errors only and reloads manually with force', () => {
+  it('P. the boundary distinguishes both error categories explicitly', () => {
     const boundary = read('src/modules/shared/components/ChunkErrorBoundary.tsx');
-    assert.ok(boundary.includes('getDerivedStateFromError'), 'must implement getDerivedStateFromError');
-    assert.ok(
-      /return\s+isChunkLoadError\(error\)\s*\?\s*\{\s*staleChunk:\s*true\s*\}\s*:\s*null/.test(boundary),
-      'non-chunk errors must return null (not be swallowed here)',
+    // Three explicit phases — a caught render error must ALWAYS produce a
+    // replacement tree; nothing "passes through" to the root.
+    assert.match(boundary, /type\s+BoundaryPhase\s*=\s*'normal'\s*\|\s*'staleChunk'\s*\|\s*'runtimeError'/);
+    assert.match(
+      boundary,
+      /getDerivedStateFromError[\s\S]*?isChunkLoadError\(error\)\s*\?\s*'staleChunk'\s*:\s*'runtimeError'/,
+      'getDerivedStateFromError must classify chunk vs generic errors',
     );
+    // Automatic recovery is gated to chunk errors ONLY.
+    const didCatch = boundary.slice(
+      boundary.indexOf('componentDidCatch'),
+      boundary.indexOf('handleManualReload(): void'),
+    );
+    assert.ok(didCatch.includes('!isChunkLoadError(error)'), 'componentDidCatch must bail out for non-chunk errors');
+    assert.ok(didCatch.includes('recoverFromChunkError()'), 'chunk errors must attempt the guarded reload');
+    // Manual actions keep their contract.
     assert.ok(boundary.includes('recoverFromChunkError({ force: true })'), 'manual reload must bypass the cooldown');
-    assert.ok(boundary.includes('role="alert"'), 'recovery notice must be an assertive live region');
-    assert.match(boundary, /import\s+\{\s*isChunkLoadError,\s*recoverFromChunkError\s*\}\s+from\s+['"]\.\.\/\.\.\/\.\.\/utils\/chunkRecovery['"]/);
+    assert.ok(boundary.includes("window.location.reload()"), 'generic fallback reloads directly (never via the chunk guard)');
+    // Both alerts are announced regions.
+    assert.equal(boundary.split('role="alert"').length >= 3, true, 'both fallbacks must be role="alert" regions');
   });
 
-  it('K. the recovery utility carries every browser signature and the reload guard', () => {
+  it('Q. the recovery utility carries every browser signature and the reload guard', () => {
     const util = read('src/utils/chunkRecovery.ts');
     for (const signature of [
       'failed to fetch dynamically imported module',
@@ -211,20 +390,37 @@ describe('Chunk recovery — wiring source guards', () => {
     assert.ok(/typeof\s+window\s*===\s*['"]undefined['"]/.test(util), 'must be SSR/node-safe');
   });
 
-  it('L. bilingual recovery strings exist (en + bn)', () => {
+  it('R. bilingual strings exist for both fallbacks (en + bn)', () => {
     const dict = read('src/modules/shared/utils/translations.ts');
+    // Chunk recovery card
     assert.match(dict, /newVersionTitle:\s*"New version available"/, 'en title');
     assert.match(dict, /newVersionBody:\s*"LeadFlow was just updated/, 'en body');
     assert.match(dict, /reloadNow:\s*"Reload now"/, 'en action');
     assert.match(dict, /newVersionTitle:\s*"নতুন ভার্সন এসেছে"/, 'bn title');
     assert.match(dict, /newVersionBody:\s*"LeadFlow সবে আপডেট হয়েছে/, 'bn body');
     assert.match(dict, /reloadNow:\s*"এখনই রিফ্রেশ করুন"/, 'bn action');
+    // Generic runtime fallback
+    assert.match(dict, /somethingWentWrongTitle:\s*"Something went wrong"/, 'en generic title');
+    assert.match(dict, /reloadApplication:\s*"Reload Application"/, 'en generic primary action');
+    assert.match(dict, /goDashboard:\s*"Go to Dashboard"/, 'en generic secondary action');
+    assert.match(dict, /somethingWentWrongTitle:\s*"কিছু একটা ভুল হয়েছে"/, 'bn generic title');
+    assert.match(dict, /reloadApplication:\s*"অ্যাপ্লিকেশন রিফ্রেশ করুন"/, 'bn generic primary action');
+    assert.match(dict, /goDashboard:\s*"ড্যাশবোর্ডে ফিরে যান"/, 'bn generic secondary action');
   });
 
-  it('M. vercel.json still serves /assets/* as files (404 when missing), never as index.html', () => {
+  it('S. vercel.json still serves /assets/* as files (404 when missing), never as index.html', () => {
     const cfg = JSON.parse(read('vercel.json')) as { routes: Array<{ src?: string; dest?: string }> };
     const assetRoute = cfg.routes.find((r) => r.src === '/assets/(.*)');
     assert.ok(assetRoute, 'the /assets route must exist');
     assert.equal(assetRoute.dest, '/assets/$1', 'missing assets must 404 — an HTML fallback here would turn stale chunks into MIME errors');
+  });
+
+  it('T. the docs describe the final contract (no stale pass-through claims)', () => {
+    const doc = read('docs/DEPLOYMENT_CHUNK_RECOVERY.md');
+    assert.ok(!doc.includes('passes them through'), 'the old pass-through claim must be gone');
+    assert.ok(!doc.includes('Surfaces at root'), 'the old surface-at-root claim must be gone');
+    assert.match(doc, /safe generic fallback/i, 'docs must describe the generic fallback');
+    assert.match(doc, /GenericErrorFallback/, 'docs must reference the generic fallback component');
+    assert.match(doc, /never auto-reload/i, 'docs must state that generic errors never auto-reload');
   });
 });
