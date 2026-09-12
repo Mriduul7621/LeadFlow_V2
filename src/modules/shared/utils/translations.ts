@@ -30,6 +30,11 @@ export const translations = {
     loading: "Loading...",
     success: "Success",
     error: "Error",
+    // Stale chunk recovery (post-deployment) — see utils/chunkRecovery.ts
+    newVersionTitle: "New version available",
+    newVersionBody:
+      "LeadFlow was just updated, and this page was loaded from the previous version. Reload to continue on the latest version.",
+    reloadNow: "Reload now",
     save: "Save",
     cancel: "Cancel",
     delete: "Delete",
@@ -756,6 +761,11 @@ export const translations = {
     upload: "আপলোড",
     refresh: "রিফ্রেশ",
     retry: "আবার চেষ্টা",
+    // Stale chunk recovery (post-deployment) — see utils/chunkRecovery.ts
+    newVersionTitle: "নতুন ভার্সন এসেছে",
+    newVersionBody:
+      "LeadFlow সবে আপডেট হয়েছে, আর এই পেজটি ছিল আগের ভার্সন থেকে লোড করা। সর্বশেষ ভার্সনে চালু থাকতে পেজটি রিফ্রেশ করুন।",
+    reloadNow: "এখনই রিফ্রেশ করুন",
     view: "দেখুন",
     viewAll: "সব দেখুন",
     showAll: "সব দেখান",
