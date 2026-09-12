@@ -8,6 +8,7 @@ import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import AdminRoute from './modules/auth/components/AdminRoute';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
+import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
 
@@ -66,9 +67,19 @@ function RouteFallback() {
   );
 }
 
-/** One Suspense boundary per route page: suspends only the content area. */
+/**
+ * One Suspense boundary per route page: suspends only the content area.
+ * The boundary is wrapped in ChunkErrorBoundary so that a lazy import
+ * failing AFTER a deployment (stale hashed chunk → rejection) recovers
+ * with one guarded reload instead of unmounting the app — see
+ * modules/shared/components/ChunkErrorBoundary.tsx.
+ */
 function LazyPage({ page }: { page: React.ReactElement }) {
-  return <Suspense fallback={<RouteFallback />}>{page}</Suspense>;
+  return (
+    <ChunkErrorBoundary>
+      <Suspense fallback={<RouteFallback />}>{page}</Suspense>
+    </ChunkErrorBoundary>
+  );
 }
 
 const router = createBrowserRouter([
