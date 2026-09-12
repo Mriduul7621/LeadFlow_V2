@@ -21,9 +21,10 @@
  *
  * Rules verified:
  *   1. One company-wide ladder (Level 1..N) configured by the admin.
- *   2. Every employee reports to exactly ONE manager one level up.
- *   3. Same-department managers only (exception: everyone at Level 2
- *      reports to the Level-1 CEO).
+ *   2. Every employee reports to exactly ONE manager whose role sits one
+ *      or two levels up (skip-level), same department unless Level-1 CEO.
+ *   3. Same-department managers only (exception: the Level-1 CEO is the
+ *      only cross-department link).
  *   4. Same-role employees in different branches cannot see each
  *      other's data (DownTeam = own subtree only).
  *   5. No reporting connection -> no data visibility.
@@ -235,8 +236,8 @@ async function main() {
     log('\nC. Reporting-link validation (must reject):');
     // Same-level manager
     await createUser(`BAD1${stamp}`, 'Bad Same Level', 'EXECUTIVE', retailDept, EXEC_X, 400);
-    // Manager two levels up
-    await createUser(`BAD2${stamp}`, 'Bad Two Levels', 'EXECUTIVE', retailDept, RETAIL_HEAD, 400);
+    // Manager three levels up (gap 3 > allowed 2)
+    await createUser(`BAD2${stamp}`, 'Bad Three Levels', 'EXECUTIVE', retailDept, CEO, 400);
     // Cross-department manager (Corporate manager for a Retail executive)
     await createUser(`BAD3${stamp}`, 'Bad Cross Dept', 'EXECUTIVE', retailDept, CORP_MGR, 400);
     // CEO with a manager
@@ -270,7 +271,11 @@ async function main() {
     await putExpect(EXEC_X, { designation: 'Executive (verified again)' }, 200, 'L4 field-only update keeps existing manager (accepted)');
     await putExpect(CEO, { managerId: RETAIL_HEAD }, 400, 'CEO with a manager (rejected)');
     await putExpect(MGR_A, { managerId: MGR_A }, 400, 'self-manager (rejected)');
-    await putExpect(EXEC_X, { managerId: RETAIL_HEAD }, 400, 'wrong-level manager L4 -> L2 (rejected)');
+    // Skip-level is allowed: L4 -> L2 (gap 2). Restore under MGR_A afterwards
+    // so later organogram assertions still see the original tree.
+    await putExpect(EXEC_X, { managerId: RETAIL_HEAD }, 200, 'skip-level manager L4 -> L2 (accepted)');
+    await putExpect(EXEC_X, { managerId: MGR_A }, 200, 'restore Executive X under Manager A (accepted)');
+    await putExpect(EXEC_X, { managerId: CEO }, 400, 'too-far-up manager L4 -> L1 (rejected)');
     await putExpect(EXEC_X, { managerId: CORP_MGR }, 400, 'cross-department manager (rejected)');
     // Inactive managers are not valid link targets.
     await putExpect(MGR_B, { status: 'Inactive' }, 200, 'deactivate Manager B (setup)');
@@ -280,11 +285,13 @@ async function main() {
     /* ---------------- 3. Reporting-options endpoint ---------------- */
     log('\nD. Reporting-options dropdown source:');
     const optsMgr = await req('GET', `/api/users/reporting-options?role=MANAGER&departmentId=${retailDept}`, { token: admin });
-    check('MANAGER in Retail sees only DEPT_HEAD (Retail Head) as candidate', optsMgr.status === 200 && optsMgr.json?.length === 1 && optsMgr.json[0].employeeId === RETAIL_HEAD, JSON.stringify(optsMgr.json?.map(o => o.employeeId)));
+    // MANAGER (L3) may report to DEPT_HEAD (L2, same dept) or CEO (L1, cross-dept).
+    check('MANAGER in Retail sees Retail Head + CEO as candidates', optsMgr.status === 200 && optsMgr.json?.length === 2 && optsMgr.json.some(o => o.employeeId === RETAIL_HEAD) && optsMgr.json.some(o => o.employeeId === CEO), JSON.stringify(optsMgr.json?.map(o => o.employeeId)));
     const optsCeo = await req('GET', `/api/users/reporting-options?role=CEO`, { token: admin });
     check('CEO has no candidates (Level 1)', optsCeo.status === 200 && optsCeo.json?.length === 0);
     const optsExec = await req('GET', `/api/users/reporting-options?role=EXECUTIVE&departmentId=${corpDept}`, { token: admin });
-    check('EXECUTIVE in Corporate sees only Corporate Manager', optsExec.status === 200 && optsExec.json?.length === 1 && optsExec.json[0].employeeId === CORP_MGR);
+    // EXECUTIVE (L4) may report to MANAGER (L3) or DEPT_HEAD (L2), both in Corporate.
+    check('EXECUTIVE in Corporate sees Corporate Manager + Corporate Head', optsExec.status === 200 && optsExec.json?.length === 2 && optsExec.json.some(o => o.employeeId === CORP_MGR) && optsExec.json.some(o => o.employeeId === CORP_HEAD), JSON.stringify(optsExec.json?.map(o => o.employeeId)));
 
     /* ---------------- 4. Organogram ---------------- */
     log('\nE. Auto-generated organogram:');

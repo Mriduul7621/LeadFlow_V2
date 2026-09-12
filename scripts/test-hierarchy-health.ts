@@ -129,21 +129,34 @@ console.log('\nC. Fully valid org -> nothing missing');
 
 console.log('\nD. Invalid manager relationship detection (after a level change)');
 {
-  // L2 employee now points at an L3 manager (manager is NOT one level up).
+  // L2 employee now points at an L3 manager (lower level -> invalid). The
+  // L3 -> L1 link is a valid skip-level gap (2) under the flexible rule.
   const wrongLevel = [
     user('CEO1', 'Alice CEO', 'CEO', 'D1', null),
-    user('T1', 'Tara Lead', 'TEAM_LEAD', 'D1', 'CEO1'),
+    user('T1', 'Tara Lead', 'TEAM_LEAD', 'D1', 'CEO1'), // L3 -> L1 = gap 2 (valid)
     user('M1', 'Bob Mgr', 'MANAGER', 'D1', 'T1'), // L2 reporting to L3 -> invalid
   ];
   const h = computeHierarchyHealth(wrongLevel, LM);
   check('Wrong-level manager flagged as invalid',
-    h.invalidLinks.some(l => l.employeeId === 'M1' && /Manager must be Level 1/i.test(l.reason)),
+    h.invalidLinks.some(l => l.employeeId === 'M1' && /must hold a Level 1 role/i.test(l.reason)),
     JSON.stringify(h.invalidLinks));
   // A user who HAS a (wrong) manager is "mis-assigned", not "managerless"; the
   // invalid link is surfaced separately and the user is NOT counted as missing.
   check('Wrong-level manager is NOT counted as "missing" (surfaced via invalidLinks)',
-    h.usersWithoutManager === 0 && h.invalidLinks.length === 2,
+    h.usersWithoutManager === 0 && h.invalidLinks.length === 1,
     `without=${h.usersWithoutManager} invalid=${h.invalidLinks.length}`);
+}
+{
+  // Skip-level (gap 2) is valid: L4 EMPLOYEE reports straight to L2 MANAGER.
+  const skipLevel = [
+    user('CEO1', 'Alice CEO', 'CEO', 'D1', null),
+    user('M1', 'Bob Manager', 'MANAGER', 'D1', 'CEO1'),
+    user('E1', 'Eve Employee', 'EMPLOYEE', 'D1', 'M1'), // L4 -> L2 = gap 2 (valid)
+  ];
+  const h = computeHierarchyHealth(skipLevel, LM);
+  check('Skip-level link (L4 -> L2) produces no invalid links',
+    h.invalidLinks.length === 0 && h.usersWithoutManager === 0,
+    JSON.stringify(h.invalidLinks));
 }
 {
   // Same-department rule: a correctly-levelled manager must be in the SAME
@@ -157,7 +170,7 @@ console.log('\nD. Invalid manager relationship detection (after a level change)'
   ];
   const h = computeHierarchyHealth(crossDept, LM);
   check('Cross-department manager flagged as invalid',
-    h.invalidLinks.some(l => l.employeeId === 'E1' && /different department/i.test(l.reason)),
+    h.invalidLinks.some(l => l.employeeId === 'E1' && /same department/i.test(l.reason)),
     JSON.stringify(h.invalidLinks));
   check('Cross-department manager is NOT counted as "missing" (surfaced via invalidLinks)',
     h.usersWithoutManager === 0,

@@ -325,7 +325,7 @@ export default function UserManagement() {
     }
     const formRoleLevel = (roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel ?? 0;
     if (formRoleLevel > 1 && formRoleLevel < 99 && !userForm.managerId) {
-      toast.error('Please select a reporting manager (one level up, same department).');
+      toast.error('Please select a reporting manager (one or two levels up, same department).');
       return;
     }
     if (formRoleLevel === 1 && userForm.managerId) {
@@ -1218,7 +1218,7 @@ export default function UserManagement() {
             <div>
               <h3 className="text-base font-semibold text-slate-800">Company Hierarchy Ladder</h3>
               <p className="text-sm text-slate-500">
-                One company-wide ladder — Level 1 is the CEO. Every other employee reports to a specific manager exactly one level up, within the same department.
+                One company-wide ladder — Level 1 is the CEO. Every other employee reports to a specific manager one or two levels up, within the same department.
               </p>
             </div>
             <button
@@ -1255,7 +1255,7 @@ export default function UserManagement() {
                         {invalid.length} reporting relationship{invalid.length === 1 ? '' : 's'} need correction. Your existing
                         manager assignments were <span className="font-semibold">not changed automatically</span> — open each
                         employee in the <span className="font-semibold">Employees</span> tab and set a valid reporting manager
-                        (one level up, same department).
+                        (one or two levels up, same department).
                       </p>
                       <ul className="mt-2 space-y-1 max-h-48 overflow-auto pr-1">
                         {invalid.map(link => (
@@ -1304,7 +1304,7 @@ export default function UserManagement() {
                     </div>
                     <div>
                       <div className="text-sm font-semibold text-slate-800">Level {level.level}</div>
-                      <div className="text-xs text-slate-400">{level.level === 1 ? 'CEO — top of the company' : `Reports to Level ${level.level - 1}`}</div>
+                      <div className="text-xs text-slate-400">{level.level === 1 ? 'CEO — top of the company' : level.level === 2 ? `Reports to Level ${level.level - 1}` : `Reports to Level ${level.level - 1} or ${level.level - 2}`}</div>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 flex-1">
@@ -1490,16 +1490,16 @@ export default function UserManagement() {
                         disabled={loadingManagers}
                         className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
                       >
-                        <option value="">{loadingManagers ? 'Loading managers…' : 'Select manager (one level up, same department)'}</option>
+                        <option value="">{loadingManagers ? 'Loading managers…' : 'Select manager (one or two levels up, same department)'}</option>
                         {managerOptions.map(o => (
                           <option key={o.employeeId} value={o.employeeId}>
-                            {o.fullName} ({o.employeeId}) — {o.roleName}
+                            {o.fullName} — {o.employeeId} — {o.roleName}{o.departmentName ? ` — ${o.departmentName}` : ''}
                           </option>
                         ))}
                       </select>
                     )}
                     <p className="text-xs text-slate-400 mt-1">
-                      The dropdown lists employees whose role is one level above this role, in the same department.
+                      The dropdown lists employees whose role is one or two levels above this role, in the same department (Level 1 crosses departments).
                     </p>
                   </div>
                   <div>

@@ -13,6 +13,12 @@
 
 import crypto from 'crypto';
 
+import {
+  UNASSIGNED_LEVEL,
+  validateReportingManagerCandidate,
+  reportingManagerRequiredError,
+} from '../utils/reportingRules.js';
+
 export const USER_BULK_MAX_ROWS = 1000;
 
 export type ImportMode = 'createOnly' | 'createAndUpdate';
@@ -113,7 +119,6 @@ export interface BulkPreviewResult {
 
 const EMPLOYEE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,29}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const UNASSIGNED_LEVEL = 99;
 
 function clean(value: any): string {
   return String(value == null ? '' : value).trim();
@@ -532,19 +537,18 @@ export function validateBulkRows(opts: {
             if (!mgrDeptRes.error) mgrDeptId = mgrDeptRes.dept.id;
           }
 
-          // Hierarchy validation for same-batch manager
+          // Hierarchy validation for same-batch manager (shared authority rule)
           if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL) {
             if (roleLevel === 1) {
               errors.push('A Level-1 (CEO) employee cannot have a reporting manager');
-            } else {
-              if (mgrRoleLevel !== undefined) {
-                if (mgrRoleLevel !== roleLevel - 1) {
-                  errors.push(`Invalid reporting manager: this role sits at Level ${roleLevel}, so the manager must hold a Level ${roleLevel - 1} role (manager is Level ${mgrRoleLevel})`);
-                }
-                if (mgrRoleLevel !== 1 && deptId && mgrDeptId && deptId !== mgrDeptId) {
-                  errors.push('Invalid reporting manager: the manager must belong to the same department');
-                }
-              }
+            } else if (mgrRoleLevel !== undefined) {
+              const candidateError = validateReportingManagerCandidate({
+                employeeLevel: roleLevel,
+                managerLevel: mgrRoleLevel,
+                employeeDepartmentId: deptId ?? null,
+                managerDepartmentId: mgrDeptId ?? null,
+              });
+              if (candidateError) errors.push(candidateError);
             }
           }
 
@@ -563,28 +567,32 @@ export function validateBulkRows(opts: {
             managerResolved = existingMgr.employee_id.toUpperCase();
             managerId = existingMgr.id;
 
-            // Hierarchy validation for existing manager
+            // Hierarchy validation for existing manager (shared authority rule)
             if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL) {
               if (roleLevel === 1) {
                 errors.push('A Level-1 (CEO) employee cannot have a reporting manager');
               } else {
-                const mgrLevel = existingMgr.hierarchy_level;
-                if (mgrLevel !== roleLevel - 1) {
-                  errors.push(`Invalid reporting manager: this role sits at Level ${roleLevel}, so the manager must hold a Level ${roleLevel - 1} role`);
-                }
-                if (mgrLevel !== 1 && deptId && existingMgr.department_id && deptId !== existingMgr.department_id) {
-                  errors.push('Invalid reporting manager: the manager must belong to the same department');
-                }
+                const candidateError = validateReportingManagerCandidate({
+                  employeeLevel: roleLevel,
+                  managerLevel: existingMgr.hierarchy_level,
+                  employeeDepartmentId: deptId ?? null,
+                  managerDepartmentId: existingMgr.department_id ?? null,
+                });
+                if (candidateError) errors.push(candidateError);
               }
             }
           }
         }
       }
     } else {
-      // No manager supplied
-      if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL && roleLevel !== 1) {
-        // In current model, Level 2+ requires manager
-        errors.push('A reporting manager is required: select the employee this person reports to (one level up, same department)');
+      // No manager supplied (shared required-rule)
+      if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL) {
+        const requiredError = reportingManagerRequiredError({
+          employeeLevel: roleLevel,
+          managerIsRequired: true,
+          hasManager: false,
+        });
+        if (requiredError) errors.push(requiredError);
       }
     }
 

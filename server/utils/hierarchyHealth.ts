@@ -9,15 +9,20 @@
  * BUSINESS RULE (single company-wide ladder, Level 1 = CEO):
  *   - Level 1 (CEO) is the organization ROOT. It MUST NOT require a
  *     reporting manager and must never be counted as "missing" one.
- *   - Every Level 2+ employee must have exactly one manager one level
- *     up, in the same department (the Level-1 CEO is the only
+ *   - Every Level 2+ employee must have exactly one manager one or two
+ *     levels up, in the same department (the Level-1 CEO is the only
  *     cross-department link).
  *   - "Missing reporting manager" counts ONLY Level 2+ employees.
  *
+ * The level + department authority rule is delegated to the shared pure
+ * helper `validateReportingManagerCandidate` (server/utils/reportingRules)
+ * so the health screen reports the exact same rule the write path enforces.
  * The function never mutates the input and never touches the database.
  */
 
-export const UNASSIGNED_LEVEL = 99;
+import { UNASSIGNED_LEVEL, validateReportingManagerCandidate } from './reportingRules.js';
+
+export { UNASSIGNED_LEVEL };
 
 export interface HierarchyUserRow {
   id: string;
@@ -97,7 +102,7 @@ export function computeHierarchyHealth(
       continue;
     }
 
-    // Level 2+ employees require exactly one manager one level above.
+    // Level 2+ employees require exactly one manager (one or two levels above).
     managerRequired++;
     if (!u.manager_id) {
       invalidLinks.push({
@@ -120,22 +125,17 @@ export function computeHierarchyHealth(
     }
 
     const managerLevel = levelForRole(levelByRoleCode, manager.role_code);
-    if (managerLevel !== level - 1) {
+    const candidateError = validateReportingManagerCandidate({
+      employeeLevel: level,
+      managerLevel,
+      employeeDepartmentId: u.department_id || null,
+      managerDepartmentId: manager.department_id || null,
+    });
+    if (candidateError) {
       invalidLinks.push({
         employeeId: u.employee_id,
         employeeName: u.full_name,
-        reason: `Manager must be Level ${level - 1} (currently Level ${
-          managerLevel === UNASSIGNED_LEVEL ? 'unassigned' : managerLevel
-        }).`,
-      });
-    } else if (
-      managerLevel !== 1 &&
-      String(manager.department_id || '') !== String(u.department_id || '')
-    ) {
-      invalidLinks.push({
-        employeeId: u.employee_id,
-        employeeName: u.full_name,
-        reason: 'Manager belongs to a different department.',
+        reason: candidateError,
       });
     }
   }

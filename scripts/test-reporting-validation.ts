@@ -180,7 +180,7 @@ async function main(): Promise<void> {
     check('Self-manager → rejected', !!err && /themselves/i.test(err), err || '(accepted!)');
   }
 
-  // 5. Wrong hierarchy-level manager is REJECTED.
+  // 5. Skip-level (gap 2) manager is ACCEPTED; gap 3 is REJECTED.
   {
     const exec = linkStub({
       roleLevels: baseLevels,
@@ -190,8 +190,19 @@ async function main(): Promise<void> {
     const err = await validateReportingLink(exec, {
       selfId: 'emp-exec', roleId: EXEC_ROLE, departmentId: D_RETAIL, managerId: 'mgr-head', managerIsRequired: true,
     });
-    check('Wrong-level manager (L4 emp → L2 mgr, needs L3) → rejected',
-      !!err && /Level 3/.test(err), err || '(accepted!)');
+    check('Skip-level manager (L4 emp → L2 mgr, gap 2) → accepted', err === null, err || '');
+  }
+  {
+    const exec = linkStub({
+      roleLevels: baseLevels,
+      managers: { 'mgr-ceo': managerRow('mgr-ceo', 'CEO1', 'CEO', 1, D_RETAIL) },
+      chainLinks: {},
+    });
+    const err = await validateReportingLink(exec, {
+      selfId: 'emp-exec', roleId: EXEC_ROLE, departmentId: D_RETAIL, managerId: 'mgr-ceo', managerIsRequired: true,
+    });
+    check('Too-far-up manager (L4 emp → L1 mgr, gap 3) → rejected',
+      !!err && /Level 3 or 2/.test(err), err || '(accepted!)');
   }
 
   // 6. Cross-department manager is REJECTED (non-CEO manager).
