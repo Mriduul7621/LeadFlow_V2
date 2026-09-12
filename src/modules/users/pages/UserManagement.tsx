@@ -18,8 +18,10 @@ import {
   Layers,
   Mail,
   UserCheck,
-  UserX
+  UserX,
+  Upload
 } from 'lucide-react';
+import { UserBulkImportModal } from '../components/UserBulkImportModal';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -251,6 +253,9 @@ export default function UserManagement() {
   const [savingLadder, setSavingLadder] = useState(false);
   const [managerOptions, setManagerOptions] = useState<ReportingOption[]>([]);
   const [loadingManagers, setLoadingManagers] = useState(false);
+
+  // ---- Bulk import ----
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   /* ------------------------------------------------------------------ */
   /*  Load all data                                                      */
@@ -689,12 +694,20 @@ export default function UserManagement() {
           <p className="text-sm text-slate-500 mt-1">Manage employees, departments, roles and organizational hierarchy.</p>
         </div>
         {activeTab === 'employees' && (
-          <button
-            onClick={openCreateUser}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-semibold rounded-lg transition-colors shadow-sm"
-          >
-            <UserPlus className="w-4 h-4" /> Add Employee
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowBulkImport(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-medium rounded-lg transition-colors shadow-sm"
+            >
+              <Upload className="w-4 h-4" /> Bulk Import Users
+            </button>
+            <button
+              onClick={openCreateUser}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-semibold rounded-lg transition-colors shadow-sm"
+            >
+              <UserPlus className="w-4 h-4" /> Add Employee
+            </button>
+          </div>
         )}
       </div>
 
@@ -1543,6 +1556,15 @@ export default function UserManagement() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Bulk Import Modal */}
+      <UserBulkImportModal
+        open={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        onCompleted={() => {
+          void loadData();
+        }}
+      />
     </div>
   );
 }

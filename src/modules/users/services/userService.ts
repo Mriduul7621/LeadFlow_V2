@@ -199,6 +199,27 @@ export const userService = {
     return body.exists === true || body.required === false;
   },
 
+  async validateBulkUsers(rows: any[], mode: 'createOnly' | 'createAndUpdate', fileName?: string): Promise<any> {
+    const body = await apiRequest<{ success: boolean; data: any }>('/api/users/bulk/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows, mode, fileName }),
+    });
+    return (body as any).data || body;
+  },
+
+  async commitBulkUsers(rows: any[], mode: 'createOnly' | 'createAndUpdate', fileName?: string): Promise<any> {
+    const body = await apiRequest<{ success: boolean; data: any }>('/api/users/bulk/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows, mode, fileName }),
+    });
+    const data = (body as any).data || body;
+    invalidateUsersReferenceCache();
+    // After commit, refresh local cache lazily via getAllUsers on next call
+    return data;
+  },
+
   async checkBootstrapRequired(): Promise<boolean> {
     const body = await apiRequest<{ required: boolean; exists?: boolean }>('/api/auth/bootstrap-status');
     return body.required !== false;

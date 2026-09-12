@@ -27,6 +27,21 @@ import {
   addCalendarDays,
   classifyFollowUpBucket,
 } from '../utils/businessTime.js';
+import {
+  USER_BULK_MAX_ROWS,
+  normalizeEmployeeId,
+  normalizeEmail,
+  generateTempPassword,
+  validatePasswordPolicy,
+  parseMustChangePassword,
+  parseStatus,
+  normalizeUserBulkRow,
+  buildReferenceMaps,
+  validateBulkRows,
+  type RawUserBulkRow,
+  type NormalizedUserBulkRow,
+  type ImportMode,
+} from './userBulkImport.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -2266,6 +2281,660 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
   }
 });
 
+/* ===================================================================
+   BULK USER IMPORT & PROVISIONING
+   -------------------------------------------------------------------
+   Endpoints:
+     POST /users/bulk/validate — dry run, no mutation
+     POST /users/bulk/commit   — revalidate + create/update with savepoints
+   Security:
+     - requires users.create for creates, users.edit for updates
+     - ADMIN/SUPERADMIN bypass via hasPermissionCode
+     - Feature Access alone never authorizes
+     - password never stored plaintext, never logged, returned once only
+     - existing user password NEVER changed via bulk
+   Performance:
+     - bulk reference loads, no N+1, recompute chains once after batch
+   =================================================================== */
+
+async function loadUserBulkReferenceData(pool: any, batchEmployeeIds: string[], batchEmails: string[], managerEmployeeIds: string[]) {
+  // Bulk load roles, departments, teams, existing users, all users for cycle detection
+  const rolesRes = await pool.query(`SELECT id, role_code, role_name, hierarchy_level, is_active FROM roles ORDER BY hierarchy_level ASC`);
+  const deptsRes = await pool.query(`SELECT id, department_code, department_name, is_active FROM departments ORDER BY department_name ASC`);
+  const teamsRes = await pool.query(`SELECT id, team_code, team_name, is_active FROM teams ORDER BY team_name ASC`);
+
+  // Existing users that match batch employee_ids or emails
+  const empUpperList = batchEmployeeIds.map(id => id.toUpperCase()).filter(Boolean);
+  const emailLowerList = batchEmails.map(e => e.toLowerCase()).filter(Boolean);
+  const mgrUpperList = managerEmployeeIds.map(id => id.toUpperCase()).filter(Boolean);
+
+  const allLookupIds = Array.from(new Set([...empUpperList, ...mgrUpperList]));
+
+  let existingUsers: any[] = [];
+  if (allLookupIds.length > 0 || emailLowerList.length > 0) {
+    // Build query with ANY for employee_id and email
+    const existingRes = await pool.query(
+      `SELECT u.id, u.employee_id, u.email, u.role_id, u.department_id, u.team_id, u.manager_id, u.is_active, u.account_status,
+              r.role_code, r.hierarchy_level
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE UPPER(u.employee_id) = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,
+      [allLookupIds.length ? allLookupIds : ['__none__'], emailLowerList.length ? emailLowerList : ['__none__']]
+    );
+    existingUsers = existingRes.rows;
+  }
+
+  // All users for cycle detection (id, employee_id, manager_id)
+  const allUsersRes = await pool.query(`SELECT id, employee_id, manager_id FROM users`);
+  const allUsers = allUsersRes.rows;
+
+  return {
+    roles: rolesRes.rows,
+    departments: deptsRes.rows,
+    teams: teamsRes.rows,
+    existingUsers,
+    allUsers,
+  };
+}
+
+router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        totalRows: 0,
+        validRows: 0,
+        rowsToCreate: 0,
+        rowsToUpdate: 0,
+        errorRows: 0,
+        warningRows: 0,
+        rows: [],
+        mode: 'createOnly',
+        message: 'Bulk import validation is not available in demo mode',
+      },
+    });
+  }
+
+  const body = req.body || {};
+  const rawRows: RawUserBulkRow[] = Array.isArray(body.rows) ? body.rows : [];
+  const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
+  const fileName = body.fileName ? String(body.fileName) : undefined;
+
+  if (!rawRows.length) {
+    return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
+  }
+  if (rawRows.length > USER_BULK_MAX_ROWS) {
+    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
+  }
+
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+
+    const canCreate = await hasPermissionCode(caller, 'users.create');
+    const canEdit = await hasPermissionCode(caller, 'users.edit');
+
+    // For validate, we check at least one permission, but per-row errors will surface missing perms
+    if (mode === 'createOnly' && !canCreate) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
+    }
+    if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+    }
+
+    // Normalize rows
+    const normalized: NormalizedUserBulkRow[] = rawRows.map((r: any) => {
+      return normalizeUserBulkRow({
+        rowNumber: Number(r.rowNumber) || 0,
+        employeeId: r.employeeId || r.employee_id || '',
+        fullName: r.fullName || r.full_name || r.name || '',
+        email: r.email || '',
+        phone: r.phone || '',
+        designation: r.designation || '',
+        department: r.department || r.departmentId || '',
+        role: r.role || r.roleId || '',
+        reportingManagerEmployeeId: r.reportingManagerEmployeeId || r.managerId || r.manager || '',
+        team: r.team || r.teamId || '',
+        temporaryPassword: r.temporaryPassword || r.password || '',
+        mustChangePassword: r.mustChangePassword,
+        status: r.status || '',
+      });
+    });
+
+    const batchEmpIds = normalized.map(n => n.employeeId).filter(Boolean);
+    const batchEmails = normalized.map(n => n.email).filter(Boolean);
+    const batchMgrIds = normalized.map(n => n.reportingManagerEmployeeId).filter(Boolean);
+
+    const pool = getPool();
+    const refData = await loadUserBulkReferenceData(pool, batchEmpIds, batchEmails, batchMgrIds);
+    const maps = buildReferenceMaps(refData);
+
+    const preview = validateBulkRows({
+      rows: normalized,
+      maps,
+      mode,
+      permissions: { canCreate, canEdit },
+    });
+
+    preview.fileName = fileName;
+
+    return sendJson(res, 200, { success: true, data: preview });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Bulk validation failed' });
+  }
+});
+
+router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Bulk import is not available in demo mode' });
+  }
+
+  const body = req.body || {};
+  const rawRows: RawUserBulkRow[] = Array.isArray(body.rows) ? body.rows : [];
+  const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
+  const fileName = body.fileName ? String(body.fileName) : undefined;
+
+  if (!rawRows.length) {
+    return sendJson(res, 400, { success: false, message: 'No rows supplied for commit' });
+  }
+  if (rawRows.length > USER_BULK_MAX_ROWS) {
+    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+
+    const canCreate = await hasPermissionCode(caller, 'users.create');
+    const canEdit = await hasPermissionCode(caller, 'users.edit');
+
+    if (mode === 'createOnly' && !canCreate) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
+    }
+    if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+    }
+
+    // Normalize rows (fresh)
+    const normalized: NormalizedUserBulkRow[] = rawRows.map((r: any) => {
+      return normalizeUserBulkRow({
+        rowNumber: Number(r.rowNumber) || 0,
+        employeeId: r.employeeId || r.employee_id || '',
+        fullName: r.fullName || r.full_name || r.name || '',
+        email: r.email || '',
+        phone: r.phone || '',
+        designation: r.designation || '',
+        department: r.department || r.departmentId || '',
+        role: r.role || r.roleId || '',
+        reportingManagerEmployeeId: r.reportingManagerEmployeeId || r.managerId || r.manager || '',
+        team: r.team || r.teamId || '',
+        temporaryPassword: r.temporaryPassword || r.password || '',
+        mustChangePassword: r.mustChangePassword,
+        status: r.status || '',
+      });
+    });
+
+    const batchEmpIds = normalized.map(n => n.employeeId).filter(Boolean);
+    const batchEmails = normalized.map(n => n.email).filter(Boolean);
+    const batchMgrIds = normalized.map(n => n.reportingManagerEmployeeId).filter(Boolean);
+
+    await client.query('BEGIN');
+
+    const refData = await loadUserBulkReferenceData(client, batchEmpIds, batchEmails, batchMgrIds);
+    const maps = buildReferenceMaps(refData);
+
+    const preview = validateBulkRows({
+      rows: normalized,
+      maps,
+      mode,
+      permissions: { canCreate, canEdit },
+    });
+
+    const validRows = preview.rows.filter(r => r.isValid);
+    const invalidRows = preview.rows.filter(r => !r.isValid);
+
+    // Errors from validation phase
+    const errors: Array<{ rowNumber: number; employeeId: string; message: string }> = invalidRows.map(r => ({
+      rowNumber: r.rowNumber,
+      employeeId: r.employeeId,
+      message: r.errors.join('; '),
+    }));
+
+    // Track failed employeeIds for cascade (uppercase)
+    const failedEmpIds = new Set<string>();
+    for (const ir of invalidRows) {
+      if (ir.employeeId) failedEmpIds.add(ir.employeeId.toUpperCase());
+    }
+
+    // For row-atomicity, we need original states for updates
+    const updateRows = validRows.filter(r => r.action === 'Update' && r.existingUserId);
+    const updateIds = updateRows.map(r => r.existingUserId!).filter(Boolean);
+    const originalUserMap = new Map<string, any>(); // employeeIdUpper -> full original row
+    const originalById = new Map<string, any>(); // id -> original row
+    if (updateIds.length > 0) {
+      const origRes = await client.query(
+        `SELECT u.*, r.hierarchy_level FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = ANY($1::uuid[])`,
+        [updateIds]
+      );
+      for (const row of origRes.rows) {
+        const empUpper = String(row.employee_id).toUpperCase();
+        originalUserMap.set(empUpper, row);
+        originalById.set(row.id, row);
+      }
+    }
+
+    // Phase A tracking
+    const createdIds = new Map<string, string>(); // empUpper -> id
+    const createdCredentials = new Map<string, { employeeId: string; fullName: string; temporaryPassword: string; mustChangePassword: boolean; generated: boolean }>(); // empUpper -> cred
+    const succeededRows = new Map<string, typeof validRows[0]>(); // empUpper -> row (only those that passed Phase A)
+    let skipped = 0;
+
+    // Phase A: create/update base users WITHOUT manager (manager_id preserved or NULL)
+    for (let i = 0; i < validRows.length; i++) {
+      const row = validRows[i];
+      const empUpper = row.employeeId.toUpperCase();
+      const spName = `bulk_row_${i}`;
+      await client.query(`SAVEPOINT ${spName}`);
+      try {
+        if (row.action === 'Create') {
+          let plainPassword = row.temporaryPassword;
+          const generated = !plainPassword;
+          if (!plainPassword) {
+            plainPassword = generateTempPassword(10);
+          }
+          const pwErr = validatePasswordPolicy(plainPassword);
+          if (pwErr) throw new Error(pwErr);
+
+          const hash = await bcrypt.hash(plainPassword, 10);
+          const roleId = row.roleId!;
+          const deptId = row.departmentId!;
+          const teamId = row.teamId || null;
+          const isActive = row.isActive;
+          const mustChange = row.mustChangePassword;
+          const emailToUse = row.email || `${row.employeeId.toLowerCase()}@leadflow.local`;
+
+          const insertRes = await client.query(
+            `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, department_id, team_id,
+                                manager_id, designation, is_active, account_status,
+                                must_change_password, reporting_chain, subordinates, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,
+                     CASE WHEN $10 THEN 'ACTIVE' ELSE 'INACTIVE' END,
+                     $11, '[]'::jsonb, '[]'::jsonb, NOW(), NOW())
+             RETURNING id`,
+            [
+              row.employeeId,
+              row.fullName,
+              emailToUse,
+              row.normalized.phone || null,
+              hash,
+              roleId,
+              deptId,
+              teamId,
+              row.normalized.designation || 'Officer',
+              isActive,
+              mustChange,
+            ]
+          );
+
+          const newId = insertRes.rows[0].id;
+          createdIds.set(empUpper, newId);
+          succeededRows.set(empUpper, row);
+
+          // Credential hardening: only return one-time credentials for server-generated passwords
+          // If operator supplied Temporary Password, do NOT echo it back
+          if (generated) {
+            createdCredentials.set(empUpper, {
+              employeeId: row.employeeId,
+              fullName: row.fullName,
+              temporaryPassword: plainPassword,
+              mustChangePassword: mustChange,
+              generated,
+            });
+          }
+        } else if (row.action === 'Update') {
+          const roleId = row.roleId!;
+          const deptId = row.departmentId!;
+          const teamId = row.teamId || null;
+          const isActive = row.isActive;
+          const emailToUse = row.email || null;
+
+          // Update profile/org fields, but keep manager_id unchanged for now (will be handled in Phase B)
+          await client.query(
+            `UPDATE users SET
+               full_name = $1,
+               email = COALESCE($2, email),
+               phone = COALESCE($3, phone),
+               role_id = $4,
+               department_id = $5,
+               team_id = $6,
+               designation = COALESCE(NULLIF($7, ''), designation),
+               is_active = $8,
+               account_status = CASE WHEN $8 THEN 'ACTIVE' ELSE 'INACTIVE' END,
+               updated_at = NOW()
+             WHERE id = $9`,
+            [
+              row.fullName,
+              emailToUse,
+              row.normalized.phone || null,
+              roleId,
+              deptId,
+              teamId,
+              row.normalized.designation || '',
+              isActive,
+              row.existingUserId,
+            ]
+          );
+
+          succeededRows.set(empUpper, row);
+        } else {
+          skipped++;
+        }
+
+        await client.query(`RELEASE SAVEPOINT ${spName}`);
+      } catch (e: any) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${spName}`);
+        await client.query(`RELEASE SAVEPOINT ${spName}`);
+        failedEmpIds.add(empUpper);
+        errors.push({
+          rowNumber: row.rowNumber,
+          employeeId: row.employeeId,
+          message: e?.message || 'Row failed during commit',
+        });
+        // Ensure no credential left
+        createdCredentials.delete(empUpper);
+        createdIds.delete(empUpper);
+        succeededRows.delete(empUpper);
+      }
+    }
+
+    // Build fresh emp->id map after Phase A (including newly created)
+    const allUsersAfterRes = await client.query(`SELECT id, employee_id FROM users`);
+    const empToIdMap = new Map<string, string>();
+    for (const u of allUsersAfterRes.rows) {
+      empToIdMap.set(String(u.employee_id).toUpperCase(), u.id);
+    }
+
+    // Phase B: resolve and apply manager_id links with row-atomicity
+    // We will attempt linking for each succeeded row; on failure, we rollback that row fully
+
+    const managerLinkAttempts = Array.from(succeededRows.values());
+
+    for (let i = 0; i < managerLinkAttempts.length; i++) {
+      const row = managerLinkAttempts[i];
+      const empUpper = row.employeeId.toUpperCase();
+      // If row already failed in cascade or previous manager link, skip
+      if (failedEmpIds.has(empUpper)) continue;
+      if (!succeededRows.has(empUpper)) continue;
+
+      const spName = `bulk_mgr_${i}`;
+      await client.query(`SAVEPOINT ${spName}`);
+      try {
+        const userId = empToIdMap.get(empUpper);
+        if (!userId) throw new Error(`User ${row.employeeId} not found after creation`);
+
+        let managerId: string | null = null;
+
+        if (!row.managerInput) {
+          // No manager supplied: must be Level-1 (CEO) — set NULL and validate
+          const roleId = row.roleId!;
+          const deptId = row.departmentId!;
+          const linkError = await validateReportingLink(client, {
+            selfId: userId,
+            roleId,
+            departmentId: deptId,
+            managerId: null,
+            managerIsRequired: true,
+          });
+          if (linkError) throw new Error(linkError);
+          await client.query(`UPDATE users SET manager_id = NULL, updated_at = NOW() WHERE id = $1`, [userId]);
+        } else {
+          const mgrUpper = row.managerInput.toUpperCase();
+          // If manager already failed, this row must fail too
+          if (failedEmpIds.has(mgrUpper)) {
+            throw new Error(`Reporting manager "${row.managerInput}" failed to be provisioned`);
+          }
+          const resolvedMgrId = empToIdMap.get(mgrUpper);
+          if (!resolvedMgrId) throw new Error(`Manager ${row.managerInput} not found after creation`);
+
+          const roleId = row.roleId!;
+          const deptId = row.departmentId!;
+          const linkError = await validateReportingLink(client, {
+            selfId: userId,
+            roleId,
+            departmentId: deptId,
+            managerId: resolvedMgrId,
+            managerIsRequired: true,
+          });
+          if (linkError) throw new Error(linkError);
+
+          await client.query(`UPDATE users SET manager_id = $1, updated_at = NOW() WHERE id = $2`, [resolvedMgrId, userId]);
+          managerId = resolvedMgrId;
+        }
+
+        await client.query(`RELEASE SAVEPOINT ${spName}`);
+      } catch (e: any) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${spName}`);
+        await client.query(`RELEASE SAVEPOINT ${spName}`);
+
+        // Row-atomicity: rollback the entire row
+        const rollbackSp = `bulk_rollback_${i}`;
+        await client.query(`SAVEPOINT ${rollbackSp}`);
+        try {
+          if (row.action === 'Create') {
+            const createdId = createdIds.get(empUpper);
+            if (createdId) {
+              await client.query(`DELETE FROM users WHERE id = $1`, [createdId]);
+              empToIdMap.delete(empUpper);
+            }
+          } else if (row.action === 'Update') {
+            const orig = originalUserMap.get(empUpper);
+            if (orig) {
+              await client.query(
+                `UPDATE users SET
+                   full_name = $1,
+                   email = $2,
+                   phone = $3,
+                   role_id = $4,
+                   department_id = $5,
+                   team_id = $6,
+                   manager_id = $7,
+                   designation = $8,
+                   is_active = $9,
+                   account_status = $10,
+                   must_change_password = $11,
+                   updated_at = NOW()
+                 WHERE id = $12`,
+                [
+                  orig.full_name,
+                  orig.email,
+                  orig.phone,
+                  orig.role_id,
+                  orig.department_id,
+                  orig.team_id,
+                  orig.manager_id,
+                  orig.designation,
+                  orig.is_active,
+                  orig.account_status,
+                  orig.must_change_password,
+                  orig.id,
+                ]
+              );
+            }
+          }
+          await client.query(`RELEASE SAVEPOINT ${rollbackSp}`);
+        } catch (rbErr: any) {
+          await client.query(`ROLLBACK TO SAVEPOINT ${rollbackSp}`);
+          await client.query(`RELEASE SAVEPOINT ${rollbackSp}`);
+          // If rollback itself fails, we still mark row as failed and continue
+        }
+
+        failedEmpIds.add(empUpper);
+        createdCredentials.delete(empUpper);
+        createdIds.delete(empUpper);
+        succeededRows.delete(empUpper);
+
+        errors.push({
+          rowNumber: row.rowNumber,
+          employeeId: row.employeeId,
+          message: `Manager link failed: ${e?.message || 'unknown'}`,
+        });
+      }
+    }
+
+    // Cascade: if a manager failed, any succeeded row that reports to it must also fail (transitive)
+    let cascadeChanged = true;
+    let cascadeIter = 0;
+    while (cascadeChanged && cascadeIter < 10) {
+      cascadeChanged = false;
+      cascadeIter++;
+      const currentSucceeded = Array.from(succeededRows.values());
+      for (let i = 0; i < currentSucceeded.length; i++) {
+        const row = currentSucceeded[i];
+        const empUpper = row.employeeId.toUpperCase();
+        if (failedEmpIds.has(empUpper)) continue;
+        const mgrInput = row.managerInput ? row.managerInput.toUpperCase() : '';
+        if (mgrInput && failedEmpIds.has(mgrInput)) {
+          const spName = `bulk_cascade_${cascadeIter}_${i}`;
+          await client.query(`SAVEPOINT ${spName}`);
+          try {
+            if (row.action === 'Create') {
+              const createdId = createdIds.get(empUpper);
+              if (createdId) {
+                await client.query(`DELETE FROM users WHERE id = $1`, [createdId]);
+                empToIdMap.delete(empUpper);
+              }
+            } else if (row.action === 'Update') {
+              const orig = originalUserMap.get(empUpper);
+              if (orig) {
+                await client.query(
+                  `UPDATE users SET
+                     full_name = $1,
+                     email = $2,
+                     phone = $3,
+                     role_id = $4,
+                     department_id = $5,
+                     team_id = $6,
+                     manager_id = $7,
+                     designation = $8,
+                     is_active = $9,
+                     account_status = $10,
+                     must_change_password = $11,
+                     updated_at = NOW()
+                   WHERE id = $12`,
+                  [
+                    orig.full_name,
+                    orig.email,
+                    orig.phone,
+                    orig.role_id,
+                    orig.department_id,
+                    orig.team_id,
+                    orig.manager_id,
+                    orig.designation,
+                    orig.is_active,
+                    orig.account_status,
+                    orig.must_change_password,
+                    orig.id,
+                  ]
+                );
+              }
+            }
+            await client.query(`RELEASE SAVEPOINT ${spName}`);
+          } catch (e: any) {
+            await client.query(`ROLLBACK TO SAVEPOINT ${spName}`);
+            await client.query(`RELEASE SAVEPOINT ${spName}`);
+          }
+
+          failedEmpIds.add(empUpper);
+          createdCredentials.delete(empUpper);
+          createdIds.delete(empUpper);
+          succeededRows.delete(empUpper);
+
+          errors.push({
+            rowNumber: row.rowNumber,
+            employeeId: row.employeeId,
+            message: `Manager dependency failed: reporting manager "${row.managerInput}" was not provisioned`,
+          });
+          cascadeChanged = true;
+        }
+      }
+    }
+
+    // Final successful set established — recompute reporting chains once
+    try {
+      await recomputeReportingChains(client);
+    } catch (e: any) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 500, { success: false, message: `Failed to recompute reporting chains: ${e?.message || 'unknown'}` });
+    }
+
+    await client.query('COMMIT');
+
+    // Final counters must match committed DB state
+    const finalCreated = Array.from(succeededRows.values()).filter(r => r.action === 'Create').length;
+    const finalUpdated = Array.from(succeededRows.values()).filter(r => r.action === 'Update').length;
+    const finalFailed = rawRows.length - finalCreated - finalUpdated - skipped;
+
+    // Credentials: only for server-generated temporary passwords, and only for final successful creates
+    const finalCredentials = Array.from(createdCredentials.values()).map(c => ({
+      employeeId: c.employeeId,
+      fullName: c.fullName,
+      temporaryPassword: c.temporaryPassword,
+      mustChangePassword: c.mustChangePassword,
+    }));
+
+    // Audit log batch-level (no plaintext passwords, no binary)
+    try {
+      const auditPool = getPool();
+      await auditPool.query(
+        `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
+         VALUES ($1, $1, 'users-bulk-import', 'user', $1, $2)`,
+        [caller.id, JSON.stringify({ fileName: fileName || null, mode, totalRows: rawRows.length, created: finalCreated, updated: finalUpdated, failed: finalFailed, skipped, timestamp: new Date().toISOString() })]
+      );
+    } catch {
+      // best-effort audit
+    }
+
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        totalRows: rawRows.length,
+        created: finalCreated,
+        updated: finalUpdated,
+        failed: finalFailed,
+        skipped,
+        errors,
+        credentials: finalCredentials,
+        fileName: fileName || null,
+        mode,
+        summary: {
+          total: rawRows.length,
+          valid: validRows.length,
+          created: finalCreated,
+          updated: finalUpdated,
+          failed: finalFailed,
+          skipped,
+          errorRows: finalFailed,
+        },
+      },
+    });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch {}
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Bulk commit failed' });
+  } finally {
+    client.release();
+  }
+});
+
+/* ---------- user permission overrides + audit ---------- */
 /* ---------- user permission overrides + audit ---------- */
 
 router.get('/users/:id/permissions', requireAuth, requireSelfOrAdmin('id'), async (req, res) => {
