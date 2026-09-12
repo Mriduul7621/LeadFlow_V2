@@ -75,8 +75,8 @@ const APP_FEATURES: FeatureMeta[] = [
   },
   {
     key: 'lead_tracking',
-    label: 'Lead Tracking',
-    desc: 'Open the lead tracking workspace; what the role can do inside it follows Action Permissions.',
+    label: 'Lead Workspace',
+    desc: 'Open the lead workspace; what the role can do inside it follows Action Permissions.',
   },
   {
     key: 'lead_generate',
@@ -90,8 +90,8 @@ const APP_FEATURES: FeatureMeta[] = [
   },
   {
     key: 'all_leads',
-    label: 'All Leads',
-    desc: 'Open the all-leads workspace; actual data scope still follows role visibility.',
+    label: 'Lead Pool',
+    desc: 'Open the lead pool; actual data scope still follows server Data Visibility.',
   },
   { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.' },
   { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.' },
@@ -138,7 +138,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
       { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },
       { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add New Lead).' },
       { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench and Task Calendar complete, edit, cancel and reschedule.' },
-      { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (All Leads).' },
+      { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (Lead Pool).' },
       { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
       { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
       { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Bulk Upload).' },

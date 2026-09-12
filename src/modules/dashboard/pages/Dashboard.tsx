@@ -557,7 +557,7 @@ export function NeedsAttentionSection({ untouched }: { untouched: number }) {
           </div>
           <div className="text-right">
             <p className="text-2xl font-black text-brand-text">{formatCount(untouched)}</p>
-            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Tracking</span>
+            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Workspace</span>
           </div>
         </Link>
       </div>
