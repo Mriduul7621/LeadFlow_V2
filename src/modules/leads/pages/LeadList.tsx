@@ -16,17 +16,16 @@ import {
   Calendar, 
   RefreshCw,
   Edit2,
-  Trash2
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../auth/store/authStore';
-import { UserRole, Lead, LeadStatus } from '../../shared/types';
+import { Lead, LeadStatus } from '../../shared/types';
 import { toast } from 'sonner';
 import { leadService } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
-import { userService } from '../../users/services/userService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
+import { usePermissions } from '../../shared/hooks/usePermissions';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
@@ -50,6 +49,9 @@ const formatToDateTimeLocal = (dateStr?: string) => {
 
 export default function LeadList() {
   const { user } = useAuthStore();
+  const { canAccess } = usePermissions();
+  const canEditLead = canAccess('lead_tracking', 'edit');
+  const canExportLeads = canAccess('lead_tracking', 'export');
   const location = useLocation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -59,8 +61,6 @@ export default function LeadList() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-  const [selectedRO, setSelectedRO] = useState<string>('');
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -75,17 +75,9 @@ export default function LeadList() {
     }
   }, [location.search, leads]);
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const list = await userService.getAllUsers();
-        setAllUsers(list);
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    fetchUsers();
-  }, []);
+  // Lead Workspace intentionally has no assignment-management data load.
+  // Ownership changes belong to Lead Pool; this page stays focused on
+  // operational execution against the server-visible lead set.
 
   // Editing state fields for granular updates
   const [formStatus, setFormStatus] = useState<LeadStatus | ''>('');
@@ -136,12 +128,10 @@ export default function LeadList() {
     if (!user) return;
     setLoading(true);
     try {
-      const allLeads = await leadService.getLeads({ 
-        role: user.role, 
-        employeeId: user.employeeId 
-      });
-      
-      setLeads(allLeads);
+      // The API derives both identity and Data Visibility from the session.
+      // Do not send a client-selected role or employee id to widen scope.
+      const visibleLeads = await leadService.getLeads();
+      setLeads(visibleLeads);
     } catch (err) {
       toast.error('Failed to sync lead intelligence');
     } finally {
@@ -159,20 +149,6 @@ export default function LeadList() {
     const patch = (list: Lead[]) => list.map(l => (l.id === updated.id ? updated : l));
     setLeads(prev => patch(prev));
     setAdvancedFilteredLeads(prev => (prev.some(l => l.id === updated.id) ? patch(prev) : prev));
-  };
-
-  const handleDeleteLead = async (leadId: string) => {
-    if (!window.confirm('Are you sure you want to permanently delete this lead?')) return;
-    try {
-      await leadService.deleteLead(leadId);
-      toast.success('Lead has been deleted successfully');
-      // The server confirmed the soft delete; remove the row locally
-      // instead of refetching the entire lead list.
-      setLeads(prev => prev.filter(l => l.id !== leadId));
-      setAdvancedFilteredLeads(prev => prev.filter(l => l.id !== leadId));
-    } catch (err) {
-      toast.error('Failed to delete the lead');
-    }
   };
 
   const DEFAULT_STATUS_LIST: LeadStatus[] = [
@@ -204,6 +180,10 @@ export default function LeadList() {
 
   const handleSaveLeadUpdate = async () => {
     if (!selectedLead) return;
+    if (!canEditLead) {
+      toast.error('You do not have permission to update lead progress.');
+      return;
+    }
     if (!formStatus) {
       toast.error('Please select a target status');
       return;
@@ -296,6 +276,10 @@ export default function LeadList() {
   };
 
   const handleUpdateStatus = async (leadId: string, status: LeadStatus, ncp?: number) => {
+    if (!canEditLead) {
+      toast.error('You do not have permission to update lead progress.');
+      return;
+    }
     try {
       const updated = await leadService.updateLeadStatus(leadId, status, ncp, 'Initial assignment tracking');
       toast.success('Lead intelligence updated');
@@ -354,6 +338,10 @@ export default function LeadList() {
   })();
 
   const handleExport = () => {
+    if (!canExportLeads) {
+      toast.error('You do not have permission to export leads.');
+      return;
+    }
     if (leads.length === 0) {
       toast.error("No lead data available to export.");
       return;
@@ -449,6 +437,15 @@ export default function LeadList() {
     });
   };
 
+  if (!canAccess('lead_tracking', 'view')) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-100 rounded-sm shadow-sm max-w-xl mx-auto space-y-3">
+        <h2 className="text-xl font-bold text-slate-800">Lead Workspace unavailable</h2>
+        <p className="text-sm text-slate-500">Your current Feature Access does not include the Lead Workspace.</p>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -464,8 +461,8 @@ export default function LeadList() {
     <div className="space-y-6 pb-20 bg-white min-h-screen">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-1">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Tracking</h1>
-          <p className="text-sm text-slate-500 mt-1">View and manage your leads pipeline</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Workspace</h1>
+          <p className="text-sm text-slate-500 mt-1">Manage assigned leads, update progress, and schedule the next action.</p>
         </div>
         <div className="flex items-center gap-2">
           <button 
@@ -481,13 +478,15 @@ export default function LeadList() {
             <Filter className="w-3.5 h-3.5 text-slate-400 group-hover:text-primary" />
             Segment Matrix
           </button>
-          <button 
-            onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-md"
-          >
-            <Download className="w-3.5 h-3.5 text-[#978C21]" />
-            Export Intelligence
-          </button>
+          {canExportLeads && (
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-md"
+            >
+              <Download className="w-3.5 h-3.5 text-[#978C21]" />
+              Export Intelligence
+            </button>
+          )}
         </div>
       </div>
 
@@ -530,10 +529,10 @@ export default function LeadList() {
             <thead>
               <tr className="bg-[#3C3C3C] text-white italic">
                 <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Financial</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Details</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Status</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Remarks</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Owner / Next Action</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Campaign / Source</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Current Status</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Last Activity</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
               </tr>
             </thead>
@@ -571,8 +570,13 @@ export default function LeadList() {
                     </div>
                   </td>
                   <td className="px-6 py-6 border-l border-slate-50/50">
-                    <p className="text-[12px] font-black text-brand-text italic uppercase group-hover:text-primary transition-colors">{lead.productName || 'N/A'}</p>
-                    <p className="text-[10px] font-black text-[#10B981] tracking-tighter mt-1 whitespace-nowrap">৳ {(lead.collectedNCP || 0).toLocaleString()} <span className="text-[8px] font-bold text-slate-300 uppercase tracking-widest ml-1">NCP Collected</span></p>
+                    <p className="text-[11px] font-black text-[#978C21] uppercase tracking-tight italic">{lead.assignedTo || 'Unassigned'}</p>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+                      {lead.nextFollowUpDate ? `Next: ${new Date(lead.nextFollowUpDate).toLocaleDateString('en-GB')}` : 'No next action set'}
+                    </p>
+                    {(lead.projectedNCP || lead.collectedNCP) ? (
+                      <p className="text-[9px] text-emerald-600 font-bold mt-1">NCP signal: ৳ {(lead.collectedNCP || lead.projectedNCP || 0).toLocaleString()}</p>
+                    ) : null}
                   </td>
                   <td className="px-6 py-6 border-l border-slate-50/50">
                     <p className="text-[11px] font-black text-slate-400 uppercase tracking-tight italic">{lead.campaignName || 'N/A'}</p>
@@ -614,13 +618,6 @@ export default function LeadList() {
                          title="Call Prospect"
                        >
                         <Phone className="w-3.5 h-3.5" />
-                       </button>
-                       <button 
-                         onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
-                         className="p-2 border border-slate-100 hover:border-red-300 text-slate-400 hover:text-red-550 hover:bg-red-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Delete Lead"
-                       >
-                        <Trash2 className="w-3.5 h-3.5" />
                        </button>
                     </div>
                   </td>
@@ -787,7 +784,9 @@ export default function LeadList() {
                       </div>
                    )}
 
-                   {/* Editable Form Inputs */}
+                   {/* Editable Form Inputs. Fieldset keeps the page read-only when
+                       the canonical leads.edit action is missing. */}
+                   <fieldset disabled={!canEditLead} className="contents">
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                       <div className="space-y-1">
                          <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Status <span className="text-red-500">*</span></p>
@@ -955,60 +954,17 @@ export default function LeadList() {
                          />
                       </div>
                    </div>
+                   </fieldset>
 
-                   {/* Requirement 5: Update button */}
-                   <button
-                     onClick={handleSaveLeadUpdate}
-                     className="hidden"
-                   >
-                     <CheckCircle className="w-4 h-4 text-[#978C21]" />
-                     Save & Update Status
-                   </button>
-
-                   {/* RM Delegation Action Matrix */}
-                   {user?.role === UserRole.RM && (
-                      <div className="p-4 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm space-y-3 mt-4">
-                         <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest italic leading-none">📋 Delegate to Relationship Officer (RO)</p>
-                         <div className="flex gap-3">
-                            <select
-                              value={selectedRO}
-                              onChange={(e) => setSelectedRO(e.target.value)}
-                              className="flex-1 bg-white border border-slate-100 rounded-sm px-3 py-2 text-[11px] font-black uppercase tracking-wider outline-none focus:ring-1 focus:ring-[#978C21]"
-                            >
-                               <option value="">-- CHOOSE RO --</option>
-                               {allUsers
-                                 .filter(u => u.role === UserRole.RO && u.status === 'Active')
-                                 .map(u => (
-                                    <option key={u.employeeId} value={u.employeeId}>
-                                       {u.name} (ID: {u.employeeId})
-                                    </option>
-                                 ))
-                               }
-                            </select>
-                            <button
-                              onClick={async () => {
-                                if (!selectedRO) {
-                                  toast.error('Please choose a valid RO first');
-                                  return;
-                                }
-                                try {
-                                   await leadService.updateLead(selectedLead.id, { 
-                                     assignedTo: selectedRO 
-                                   }, user.name);
-                                   toast.success(`Successfully delegated lead directly to RO: ${selectedRO}`);
-                                   setSelectedLead(prev => prev ? { ...prev, assignedTo: selectedRO } : null);
-                                   loadLeads();
-                                } catch (err) {
-                                   toast.error('Re-assignment failure');
-                                }
-                              }}
-                              className="px-4 py-2 bg-[#978C21] text-white text-[10px] font-black uppercase tracking-widest rounded-sm transition-all hover:bg-opacity-90 font-black whitespace-nowrap"
-                            >
-                               Assign RO
-                            </button>
-                         </div>
-                      </div>
+                   {!canEditLead && (
+                     <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded-sm p-3">
+                       View only: the canonical <code>leads.edit</code> permission is required to record operational progress.
+                     </p>
                    )}
+
+                   <p className="text-[10px] text-slate-400 italic mt-4">
+                     Ownership changes are managed in Lead Pool. Use this workspace for operational progress and the next action.
+                   </p>
                 </div>
 
                 {/* Historical Timeline Audit Log */}
@@ -1057,13 +1013,17 @@ export default function LeadList() {
               </div>
 
               <div className="p-8 bg-slate-50 border-t border-slate-100 flex items-center justify-center">
-                <button 
-                  onClick={handleSaveLeadUpdate}
-                  className="w-full bg-slate-900 hover:bg-black text-white px-6 py-4 text-[11px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl flex items-center justify-center gap-3 cursor-pointer"
-                >
-                   <CheckCircle className="w-4 h-4 text-[#978C21]" />
-                   Save & Update Status
-                </button>
+                {canEditLead ? (
+                  <button
+                    onClick={handleSaveLeadUpdate}
+                    className="w-full bg-slate-900 hover:bg-black text-white px-6 py-4 text-[11px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl flex items-center justify-center gap-3 cursor-pointer"
+                  >
+                    <CheckCircle className="w-4 h-4 text-[#978C21]" />
+                    Save & Update Status
+                  </button>
+                ) : (
+                  <p className="text-[11px] font-semibold text-slate-500">Status updates require the <code>leads.edit</code> permission.</p>
+                )}
               </div>
             </motion.div>
           </div>

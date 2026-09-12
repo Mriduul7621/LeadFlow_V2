@@ -23,10 +23,10 @@ exist and what they are called:
 | My Work | Activities | `/activities` |
 | My Work | Task Calendar | `/task-calendar` |
 | My Work | Follow-up Queue | `/follow-up` |
-| Leads | Lead Tracking | `/leads` |
+| Leads | Lead Workspace | `/leads` |
 | Leads | Add New Lead | `/leads/new` |
 | Leads | Bulk Upload | `/leads/upload` |
-| Leads | All Leads | `/leads/all` |
+| Leads | Lead Pool | `/leads/all` |
 | Insights | Performance | `/execution-intelligence` |
 | Insights | NCP Progress | `/ncp-progress` |
 | Insights | Trends | `/trend-charts` |
@@ -49,10 +49,10 @@ only the visible labels were updated to match the current sidebar names.
 | Activities | `activities` | `/activities` | `menuAccess['/activities']` | Aligned |
 | Task Calendar | `task_calendar` | `/task-calendar` | `menuAccess['/task-calendar']` | Aligned |
 | Follow-up Queue | `follow_up_strategy` | `/follow-up` | `menuAccess['/follow-up']` | Renamed |
-| Lead Tracking | `lead_tracking` | `/leads` | `menuAccess['/leads']` | Aligned |
+| Lead Workspace | `lead_tracking` | `/leads` | `menuAccess['/leads']` | Aligned |
 | Add New Lead | `lead_generate` | `/leads/new` | `menuAccess['/leads/new']` | Renamed |
 | Bulk Upload | `lead_upload` | `/leads/upload` | `menuAccess['/leads/upload']` | Aligned |
-| All Leads | `lead_tracking.view_all_leads_tab` | `/leads/all` | `menuAccess['/leads/all']` | Renamed (sub-option) |
+| Lead Pool | `all_leads` | `/leads/all` | `menuAccess['/leads/all']` | Renamed (stable standalone key) |
 | Performance | `execution_intelligence` | `/execution-intelligence` | `menuAccess['/execution-intelligence']` | Renamed |
 | NCP Progress | `ncp_progress` | `/ncp-progress` | `menuAccess['/ncp-progress']` | Aligned |
 | Trends | `trend_charts` | `/trend-charts` | `menuAccess['/trend-charts']` | Renamed |
@@ -99,7 +99,7 @@ full access via the explicit bypass.
 | Follow-up Strategy | Follow-up Queue |
 | Team Progress | Team |
 | User Management | Users |
-| All Leads Tab | All Leads |
+| Lead Pool Tab | Lead Pool |
 | Sync Settings | System Connection |
 
 `view_sync` was relabeled to **System Connection** because it only gates the
@@ -158,10 +158,10 @@ is a valid role configuration.
 
 | Canonical code | Gates (client) | Server enforcement |
 | --- | --- | --- |
-| `leads.view` | Lead Tracking / All Leads directory | `hasPermissionCode(caller, 'leads.view')` |
+| `leads.view` | Lead Workspace / Lead Pool directory | `hasPermissionCode(caller, 'leads.view')` |
 | `leads.create` | Add New Lead | `hasPermissionCode(caller, 'leads.create')` |
 | `leads.edit` | Lead status update + Daily Workbench Complete/Edit/Cancel/Reschedule | `hasPermissionCode(caller, 'leads.edit')` |
-| `leads.delete` | All Leads delete | `hasPermissionCode(caller, 'leads.delete')` |
+| `leads.delete` | Lead Pool delete | `hasPermissionCode(caller, 'leads.delete')` |
 | `leads.assign` | Assign / reassign ownership | `hasPermissionCode(caller, 'leads.assign')` |
 | `leads.transfer` | Transfer ownership | `hasPermissionCode(caller, 'leads.transfer')` |
 | `leads.import` | Bulk Upload | `hasPermissionCode(caller, 'leads.import')` |
@@ -219,10 +219,10 @@ Exact DB fields:
 - `ensureFeaturePermissions` reconciles roles that predate this change by
   merging the `workbench` default on read; roles edited and saved through the
   new editor now persist `menuAccess['/workbench']` explicitly.
-- `All Leads` remains a sub-option of `lead_tracking`
+- `Lead Pool` remains the standalone `all_leads` feature key
   (`view_all_leads_tab`), preserving the existing
   `menuAccess['/leads/all']` semantics and the in-page capability check
-  (`canAccess('all_leads', ...)`, mapped to `lead_tracking`).
+  (`canAccess('all_leads', ...)`).
 
 ---
 
@@ -250,7 +250,7 @@ model separates the three layers and is specified in
 
 - **Feature Access** is module/page visibility **only**. All action-like
   sub-options (including `view_all_leads_tab`) were removed from the
-  editor. `All Leads` is now the standalone `all_leads` feature mapping to
+  editor. `Lead Pool` is now the standalone `all_leads` feature mapping to
   `/leads/all`; on read it is backfilled from the legacy
   `view_all_leads_tab` / `menuAccess['/leads/all']` so existing roles keep
   their effective access.

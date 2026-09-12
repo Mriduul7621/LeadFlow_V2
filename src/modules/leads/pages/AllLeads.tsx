@@ -23,9 +23,11 @@ import {
   UserCheck
 } from 'lucide-react';
 import { useAuthStore } from '../../auth/store/authStore';
+import { cn } from '../../../lib/utils';
 import { usePermissions } from '../../shared/hooks/usePermissions';
-import { Lead, UserRole, LeadStatus } from '../../shared/types';
+import { Lead } from '../../shared/types';
 import { leadService } from '../services/leadService';
+import { filterLeadsByPoolTab, getLeadPoolCounts, type LeadPoolTab } from '../utils/leadPool';
 import { userService } from '../../users/services/userService';
 import { settingsService } from '../../../services/settingsService';
 import { toast } from 'sonner';
@@ -34,9 +36,16 @@ import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 export default function AllLeads() {
   const { user } = useAuthStore();
   const { canAccess, userRole } = usePermissions();
+  const canAssign = canAccess('all_leads', 'assign');
+  const canEdit = canAccess('all_leads', 'edit');
+  const canDelete = canAccess('all_leads', 'delete');
+  const canExport = canAccess('all_leads', 'export');
+  const isAdminRole = ['ADMIN', 'SUPERADMIN'].includes(String(userRole || '').toUpperCase());
+  const canPurgeCampaign = canDelete && isAdminRole;
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[]>([]);
+  const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[] | null>(null);
+  const [poolTab, setPoolTab] = useState<LeadPoolTab>('unassigned');
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [campaignOptions, setCampaignOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,6 +78,10 @@ export default function AllLeads() {
   const [bulkAssigning, setBulkAssigning] = useState(false);
 
   const handleBulkAssign = async () => {
+    if (!canAssign) {
+      toast.error('You do not have permission to assign leads.');
+      return;
+    }
     if (!selectedLeadIds.length) {
       toast.error('No leads selected');
       return;
@@ -98,21 +111,28 @@ export default function AllLeads() {
 
   useEffect(() => {
     loadData();
-  }, [user]);
+  }, [user, canAssign]);
 
   const loadData = async () => {
     if (!user) return;
     setLoading(true);
     try {
-      // 1. Fetch all leads in database without restriction (Since user role is ADMIN)
-      const allLeads = await leadService.getLeads({ role: UserRole.ADMIN });
-      setLeads(allLeads);
+      // The server derives the caller and Data Visibility from the session.
+      // Never impersonate ADMIN or send a role query from this page.
+      const visibleLeads = await leadService.getLeads();
+      setLeads(visibleLeads);
 
-      // 2. Fetch all system team members
-      const usersList = await userService.getAllUsers();
-      setAllUsers(usersList);
+      // Assignee references are only needed when the canonical assign action
+      // is available. userService itself remains session-cached/coalesced.
+      if (canAssign) {
+        const usersList = await userService.getAllUsers();
+        setAllUsers(usersList);
+      } else {
+        setAllUsers([]);
+      }
 
-      // 3. Select active campaigns 
+      // Campaign options support the secondary administrative correction and
+      // danger-zone controls; they do not determine visibility.
       const campaigns = await settingsService.getOptionsByType('Campaign');
       setCampaignOptions(campaigns);
     } catch (err) {
@@ -139,8 +159,8 @@ export default function AllLeads() {
 
   // Handle single lead deletion
   const handleDeleteIndividualLead = async (leadId: string) => {
-    if (!canAccess('all_leads', 'delete_destroy_leads')) {
-      toast.error('Access Denied: Your Clearance Level cannot delete leads.');
+    if (!canDelete) {
+      toast.error('Access Denied: the canonical leads.delete permission is required.');
       return;
     }
     if (!window.confirm('Are you strictly sure you want to permanently delete this lead?')) return;
@@ -156,8 +176,8 @@ export default function AllLeads() {
 
   // Handle campaign-wise deletion
   const handlePurgeCampaignLeads = async () => {
-    if (!canAccess('all_leads', 'delete_destroy_leads')) {
-      toast.error('Access Denied: Your Clearance Level cannot delete campaigns.');
+    if (!canPurgeCampaign) {
+      toast.error('Campaign purge requires admin access and the canonical leads.delete permission.');
       return;
     }
     if (!targetCampaignToDelete) {
@@ -192,21 +212,21 @@ export default function AllLeads() {
     }
   };
 
-  if (!canAccess('all_leads', 'view_global_directory')) {
+  if (!canAccess('all_leads', 'view')) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-100 rounded-sm shadow-xs max-w-xl mx-auto space-y-6 animate-in fade-in duration-300">
         <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
           <AlertTriangle className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Clearance Protocol Warning</span>
+          <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Lead Pool access</span>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight italic">Access Denied</h2>
           <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-            Your current clearance level <span className="text-red-650 font-black">"{userRole || 'RESTRICTED'}"</span> does not have structural privileges to view the Administrative Lead Archive Ledger.
+            Your current clearance level <span className="text-red-650 font-black">"{userRole || 'RESTRICTED'}"</span> does not have Feature Access to the Lead Pool.
           </p>
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature all_leads.view_global_directory Required
+          Feature Access: all_leads · canonical leads.view required
         </div>
       </div>
     );
@@ -215,6 +235,10 @@ export default function AllLeads() {
   // Handle general lead details update
   const handleUpdateLeadDetails = async () => {
     if (!selectedLead) return;
+    if (!canEdit) {
+      toast.error('Access Denied: the canonical leads.edit permission is required.');
+      return;
+    }
     if (!editName.trim()) {
       toast.error('Prospect Name is a mandatory field');
       return;
@@ -230,12 +254,14 @@ export default function AllLeads() {
         mobileNumber: editPhone,
         email: editEmail,
         campaignName: editCampaign,
-        assignedTo: editAssignee,
         area: editArea,
         source: editSource,
         productName: editProduct,
         profession: editProfession
       };
+      if (canAssign) {
+        updatePayload.assignedTo = editAssignee;
+      }
 
       await leadService.updateLead(selectedLead.id, updatePayload, user?.name || 'Administrator');
       toast.success('Lead demographics and routing updated successfully!');
@@ -248,12 +274,17 @@ export default function AllLeads() {
 
   // Handle inline quick-assign dropdown saving
   const handleSaveInlineAssignment = async (leadId: string) => {
+    if (!canAssign) {
+      toast.error('You do not have permission to assign leads.');
+      return;
+    }
     if (!inlineAssigneeId) {
-      toast.error('Select an assignee or clear');
+      toast.error('Select an assignee or choose Unassigned');
       return;
     }
     try {
-      await leadService.updateLead(leadId, { assignedTo: inlineAssigneeId }, user?.name || 'Admin');
+      const targetAssignee = inlineAssigneeId === 'unassign' ? '' : inlineAssigneeId;
+      await leadService.updateLead(leadId, { assignedTo: targetAssignee }, user?.name || 'Admin');
       toast.success(`Lead successfully routed to assignee ID ${inlineAssigneeId}`);
       setInlineAssignmentLeadId(null);
       loadData();
@@ -262,13 +293,16 @@ export default function AllLeads() {
     }
   };
 
-  // Searching logic combined with dynamic rules filter
+  // Searching logic combined with the advanced filter and canonical pool tab.
+  // A null advanced-filter result means "no filter applied"; an empty array
+  // means the filter intentionally matched no records.
   const filteredLeads = (() => {
-    const baseList = advancedFilteredLeads.length > 0 || leads.length === 0 ? advancedFilteredLeads : leads;
+    const advancedList = advancedFilteredLeads ?? leads;
+    const tabList = filterLeadsByPoolTab(advancedList, poolTab);
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return baseList;
+    if (!q) return tabList;
 
-    return baseList.filter(l => {
+    return tabList.filter(l => {
       return (
         (l.prospectName || '').toLowerCase().includes(q) ||
         (l.mobile || '').toLowerCase().includes(q) ||
@@ -281,20 +315,20 @@ export default function AllLeads() {
     });
   })();
 
-  // Numeric summary calculations
-  const totalLeadsCount = leads.length;
-  const unassignedLeadsCount = leads.filter(l => !l.assignedTo || l.assignedTo.trim() === '').length;
+  const poolCounts = getLeadPoolCounts(advancedFilteredLeads ?? leads);
+  const totalLeadsCount = poolCounts.total;
+  const unassignedLeadsCount = poolCounts.unassigned;
+  const conversionRateCount = poolCounts.converted;
   const uniqueCampaignsCount = Array.from(new Set(leads.map(l => l.campaignName).filter(Boolean))).length;
-  const conversionRateCount = leads.filter(l => l.currentStatus === 'Converted').length;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       {/* Title & Top Meta Row */}
       <div className="border-b border-slate-100 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">System Management Console</span>
-           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">Uploaded Leads Master Archive</h1>
-           <p className="text-xs text-slate-500 mt-1">Full administrative monitoring, campaign mass purges, inline assignments and interaction audit telemetry logs.</p>
+           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Lead intake and routing console</span>
+           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">Lead Pool</h1>
+           <p className="text-xs text-slate-500 mt-1">Route intake, review server-visible lead records, correct permitted details, and open the operational workspace.</p>
         </div>
         <div className="flex gap-3">
           <button 
@@ -306,13 +340,40 @@ export default function AllLeads() {
         </div>
       </div>
 
-      {/* Admin Quick Statistics Widget Grid */}
+      {/* Canonical intake tabs. Classification is based only on assignedTo. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {([
+          { id: 'unassigned' as const, label: 'Unassigned', count: poolCounts.unassigned, hint: 'Needs routing' },
+          { id: 'assigned' as const, label: 'Assigned', count: poolCounts.assigned, hint: 'In active ownership' },
+          { id: 'all' as const, label: 'All', count: poolCounts.total, hint: 'Server-visible pool' },
+        ]).map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => { setPoolTab(tab.id); setSelectedLeadIds([]); }}
+            className={cn(
+              'text-left p-4 border rounded-sm transition-all',
+              poolTab === tab.id
+                ? 'border-[#978C21] bg-[#978C21]/5 shadow-sm'
+                : 'border-slate-100 bg-white hover:border-slate-300'
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">{tab.label}</span>
+              <span className="text-xl font-black text-slate-900">{tab.count}</span>
+            </div>
+            <span className="text-[9px] text-slate-400 uppercase tracking-widest">{tab.hint}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Lead Pool summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
          <div className="p-6 bg-[#FBFAF8] border border-slate-100 rounded-sm shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-slate-900 group-hover:scale-110 transition-transform">
                <Database className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Archived Records</p>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Pool Records</p>
             <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{totalLeadsCount}</p>
             <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">uploaded entities cataloged</span>
          </div>
@@ -345,8 +406,8 @@ export default function AllLeads() {
          </div>
       </div>
 
-      {/* Campaign Purge Management Section */}
-      {canAccess('all_leads', 'delete_destroy_leads') && (
+      {/* Secondary danger zone: destructive purge is never the primary workflow. */}
+      {canPurgeCampaign && (
       <div className="p-6 bg-red-50/30 border border-red-100/60 rounded-sm shadow-sm">
          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="space-y-1 max-w-2xl">
@@ -414,7 +475,7 @@ export default function AllLeads() {
          </div>
 
          {/* Batch Lead Assignment Header Panel when items are selected */}
-         {selectedLeadIds.length > 0 && (
+         {canAssign && selectedLeadIds.length > 0 && (
             <div className="p-5 bg-amber-50/65 border-b border-amber-100/80 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-fadeIn">
                <div className="flex items-center gap-2">
                   <span className="inline-flex items-center justify-center bg-[#978C21] text-white font-black rounded-full h-5 w-5 text-[10px] shadow-sm">
@@ -464,15 +525,17 @@ export default function AllLeads() {
                      <th className="p-4 px-6 text-center select-none w-14">
                         <input 
                           type="checkbox"
-                          checked={filteredLeads.length > 0 && selectedLeadIds.length === filteredLeads.length}
+                          checked={canAssign && filteredLeads.length > 0 && selectedLeadIds.length === filteredLeads.length}
+                          disabled={!canAssign}
                           onChange={(e) => {
+                             if (!canAssign) return;
                              if (e.target.checked) {
                                 setSelectedLeadIds(filteredLeads.map(l => l.id));
                              } else {
                                 setSelectedLeadIds([]);
                              }
                           }}
-                          className="cursor-pointer accent-[#978C21] h-3.5 w-3.5 rounded border-slate-300 focus:ring-0"
+                          className="cursor-pointer accent-[#978C21] h-3.5 w-3.5 rounded border-slate-300 focus:ring-0 disabled:cursor-not-allowed disabled:opacity-40"
                         />
                      </th>
                      <th className="p-4 px-6 text-slate-900">Demographic Name</th>
@@ -545,14 +608,14 @@ export default function AllLeads() {
 
                            {/* Assignee / Employee ID (Requirement 4) */}
                            <td className="p-4 px-6 select-none">
-                              {inlineAssignmentLeadId === lead.id ? (
+                              {canAssign && inlineAssignmentLeadId === lead.id ? (
                                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                     <select
                                       value={inlineAssigneeId}
                                       onChange={(e) => setInlineAssigneeId(e.target.value)}
                                       className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                                     >
-                                       <option value="">-- UNASSIGNED --</option>
+                                       <option value="unassign">-- UNASSIGNED --</option>
                                        {allUsers.map(u => (
                                           <option key={u.employeeId} value={u.employeeId}>
                                              {u.role}: {u.name} (ID: {u.employeeId})
@@ -584,15 +647,17 @@ export default function AllLeads() {
                                           ● UNASSIGNED
                                        </span>
                                     )}
-                                    <button 
-                                      onClick={() => {
-                                        setInlineAssigneeId(lead.assignedTo || '');
-                                        setInlineAssignmentLeadId(lead.id);
-                                      }}
-                                      className="opacity-0 group-hover:opacity-100 text-[9px] font-black px-1.5 py-0.5 uppercase tracking-widest italic hover:text-[#978C21] text-slate-400 bg-slate-50 transition-opacity ml-2"
-                                    >
-                                       Change
-                                    </button>
+                                    {canAssign && (
+                                      <button
+                                        onClick={() => {
+                                          setInlineAssigneeId(lead.assignedTo || 'unassign');
+                                          setInlineAssignmentLeadId(lead.id);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 text-[9px] font-black px-1.5 py-0.5 uppercase tracking-widest italic hover:text-[#978C21] text-slate-400 bg-slate-50 transition-opacity ml-2"
+                                      >
+                                        Change
+                                      </button>
+                                    )}
                                  </div>
                               )}
                            </td>
@@ -619,13 +684,15 @@ export default function AllLeads() {
                                  >
                                     <Edit3 className="w-3.5 h-3.5" />
                                  </button>
-                                 <button
-                                   onClick={() => handleDeleteIndividualLead(lead.id)}
-                                   className="p-2 border border-slate-100 hover:border-red-200 text-slate-600 hover:text-red-500 hover:bg-red-50 rounded-sm shadow-sm transition-all bg-white"
-                                   title="Secure Delete"
-                                 >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                 </button>
+                                 {canDelete && (
+                                   <button
+                                     onClick={() => handleDeleteIndividualLead(lead.id)}
+                                     className="p-2 border border-slate-100 hover:border-red-200 text-slate-600 hover:text-red-500 hover:bg-red-50 rounded-sm shadow-sm transition-all bg-white"
+                                     title="Secure Delete"
+                                   >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                   </button>
+                                 )}
                               </div>
                            </td>
                         </tr>
@@ -725,6 +792,7 @@ export default function AllLeads() {
                   {/* Core Editor inputs */}
                   <div className="space-y-4">
                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Modify Demographics Registry</p>
+                     <fieldset disabled={!canEdit} className="contents">
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-1">
                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Prospect Full Name *</p>
@@ -803,6 +871,12 @@ export default function AllLeads() {
                            />
                         </div>
                      </div>
+                     </fieldset>
+                     {!canEdit && (
+                       <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded-sm p-3">
+                         View only: demographic corrections require the canonical <code>leads.edit</code> permission.
+                       </p>
+                     )}
                   </div>
 
                   {/* Assign Routing Controls */}
@@ -813,7 +887,8 @@ export default function AllLeads() {
                      </p>
                      <p className="text-[11px] text-slate-500">Route or transfer matching ownership. Assigning to any RM propagates instant alerts to their interface feed.</p>
                      <select
-                       value={editAssignee} disabled={!canAccess('all_leads', 'reassign_global_leads')}
+                       value={editAssignee}
+                       disabled={!canAssign}
                        onChange={(e) => setEditAssignee(e.target.value)}
                        className="w-full bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider p-3 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                      >
@@ -855,10 +930,11 @@ export default function AllLeads() {
 
                {/* Modal Footer Controls */}
                <div className="p-8 border-t border-slate-100 bg-slate-50/50 flex gap-4 select-none">
+                  {canExport && (
                   <button
                     onClick={() => {
-                      if (!canAccess('all_leads', 'export_raw_xlsx')) {
-                         toast.error("Access Denied: Your Clearance Level does not possess credentials to export logs.");
+                      if (!canExport) {
+                         toast.error('Access Denied: the canonical leads.export permission is required.');
                          return;
                       }
                       if (window.confirm("Ensure any modification will overwrite values. Select OK to export back to CSV.")) {
@@ -888,12 +964,17 @@ export default function AllLeads() {
                   >
                      📥 Export Logs
                   </button>
+                  )}
+                  {canEdit ? (
                   <button
                     onClick={handleUpdateLeadDetails}
                     className="flex-1 bg-slate-900 hover:bg-black text-white font-black uppercase tracking-widest text-[10px] py-4 rounded-sm transition-all shadow-xl"
                   >
                      Save Modifications
                   </button>
+                  ) : (
+                    <p className="flex-1 text-center self-center text-[10px] font-semibold text-slate-500">Read only: <code>leads.edit</code> is required to save permitted demographic changes.</p>
+                  )}
                </div>
             </div>
          </div>

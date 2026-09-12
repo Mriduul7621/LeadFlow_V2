@@ -752,9 +752,13 @@ describe('Performance & latency hardening — client source guards', () => {
     const quickHandler = page.slice(page.indexOf('const handleUpdateStatus'), page.indexOf('const filteredLeads'));
     assert.ok(quickHandler.includes('applyLeadUpdate(updated)'), 'quick status update must patch in place');
     assert.ok(!quickHandler.includes('leadService.getLeads('), 'quick status update must not refetch the full list');
-    const deleteHandler = page.slice(page.indexOf('const handleDeleteLead'), page.indexOf('const DEFAULT_STATUS_LIST'));
-    assert.ok(!deleteHandler.includes('loadLeads()'), 'delete must not refetch the full list after the confirmed soft delete');
-    assert.ok(deleteHandler.includes('filter(l => l.id !== leadId)'), 'delete must remove the confirmed row locally');
+    // Deletion is intentionally a Lead Pool responsibility now; the
+    // execution workspace must not become a second delete workflow.
+    assert.ok(!page.includes('const handleDeleteLead'), 'Lead Workspace must not own the delete workflow');
+    const pool = read('src/modules/leads/pages/AllLeads.tsx');
+    const deleteHandler = pool.slice(pool.indexOf('const handleDeleteIndividualLead'), pool.indexOf('const handlePurgeCampaignLeads'));
+    assert.ok(!deleteHandler.includes('loadData()'), 'pool delete must not refetch before the confirmed soft delete');
+    assert.ok(deleteHandler.includes('setLeads(prev => prev.filter(l => l.id !== leadId))'), 'pool delete must remove the confirmed row locally');
     // leadService mutations themselves never trigger a list refetch.
     const svc = LEAD_SERVICE();
     const createBody = svc.slice(svc.indexOf('async createLead'), svc.indexOf('async bulkUploadLeads'));

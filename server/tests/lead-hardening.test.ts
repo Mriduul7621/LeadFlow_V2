@@ -151,6 +151,17 @@ describe('Lead Hardening - Ownership & Visibility', () => {
     assert.equal(isLeadAccessible(siblingLead, visibility, manager), false);
   });
 
+  it('canonical unassigned rows do not inherit a stale custom owner', () => {
+    const caller = makeCaller({ id: 'user-1', employee_id: 'EMP001' });
+    const visibility = { all: false, userIds: ['user-1'], employeeIds: ['EMP001'] };
+    const staleRow = {
+      assigned_to: null,
+      custom_fields: { assignedTo: 'EMP001' },
+      created_by: 'user-9',
+    };
+    assert.equal(isLeadAccessible(staleRow, visibility, caller), false);
+  });
+
   it('admin bypass - visibility.all = true allows any lead', () => {
     const admin = makeCaller({ id: 'admin-1', employee_id: 'ADMIN001', role_code: 'ADMIN' });
     const visibility = { all: true, userIds: [], employeeIds: [] };
@@ -196,6 +207,18 @@ describe('Lead Hardening - Assignment Scope', () => {
     const caller = makeCaller();
     const visibility = { all: false, userIds: ['user-1'], employeeIds: ['EMP001'] };
     assert.equal(isAssignedToAllowed(null, visibility, caller), true);
+  });
+
+  it('explicitly allowed unassignment stays NULL rather than defaulting to caller', async () => {
+    const caller = makeCaller();
+    const record = await buildSecureLeadRecord(
+      { customerName: 'Unowned', mobile: '017000000099' },
+      caller,
+      null,
+      { allowUnassigned: true }
+    );
+    assert.ok(!('error' in record));
+    assert.equal(record.assignedTo, null);
   });
 });
 

@@ -99,10 +99,10 @@ const menuSections: MenuSection[] = [
     key: 'leads',
     labelKey: 'navSectionLeads',
     items: [
-      { label: 'Lead Tracking', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
+      { label: 'Lead Workspace', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
       { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: ALL_ROLES },
       { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
-      { label: 'All Leads', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
+      { label: 'Lead Pool', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
     ],
   },
   {

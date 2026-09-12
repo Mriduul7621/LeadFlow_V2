@@ -168,14 +168,14 @@ describe('Role Feature Access — source guards', () => {
     assert.deepEqual(keys, expected, 'feature list order must match the sidebar (Overview → My Work → Leads → Insights → Management → System)');
   });
 
-  it('All Leads stays a view control and does not claim data-scope authority', () => {
+  it('Lead Pool stays a view control and does not claim data-scope authority', () => {
     const block = appFeaturesBlock();
-    // All Leads is now a standalone top-level module toggle (previously the
-    // view_all_leads_tab sub-option of lead_tracking).
+    // Lead Pool is a standalone top-level module toggle (the internal key
+    // remains all_leads for route/API compatibility).
     assert.ok(block.includes("key: 'all_leads'"), 'all_leads must be a top-level feature key');
-    assert.ok(block.includes('All Leads'), 'visible label All Leads must exist');
+    assert.ok(block.includes('Lead Pool'), 'visible label Lead Pool must exist');
     // Menu/route access must never be conflated with server data visibility.
-    assert.ok(block.includes('data scope still follows role visibility'), 'All Leads description must defer data scope to role visibility');
+    assert.ok(block.includes('server Data Visibility'), 'Lead Pool description must defer data scope to server visibility');
     const src = userMgmt();
     const saveIdx = src.indexOf('menuAccess: {');
     const slice = src.slice(saveIdx, saveIdx + 800);

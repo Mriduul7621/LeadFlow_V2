@@ -710,7 +710,10 @@ function mapTeamRow(row: any) {
 function mapLeadRow(row: any) {
   const custom = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
   const spread: Record<string, any> = { ...custom };
-  const assignedToEmp = row.assigned_to_employee_id || '';
+  const hasCanonicalAssignment = row.assigned_to != null && String(row.assigned_to).trim() !== '';
+  // PostgreSQL assigned_to is the only ownership source. Never resurrect a
+  // stale custom_fields.assignedTo value for an unassigned canonical row.
+  const assignedToEmp = hasCanonicalAssignment ? (row.assigned_to_employee_id || '') : '';
   const assignedByEmp = row.assigned_by_employee_id || '';
   return {
     ...spread,
@@ -1127,9 +1130,10 @@ export function isLeadAccessible(leadRow: any, visibility: any, caller: CallerDb
   if (visibility.all) return true;
   // Support both DB row shape (assigned_to, custom_fields, created_by) and fallbackStore shape (assignedTo, customFields, etc)
   const assignedToId = leadRow.assigned_to ? String(leadRow.assigned_to) : (leadRow.assignedTo ? '' : '');
-  // For fallbackStore, assignedTo is employeeId, need to check against employeeIds
-  const customFields = (leadRow.custom_fields && typeof leadRow.custom_fields === 'object' ? leadRow.custom_fields : (leadRow.customFields && typeof leadRow.customFields === 'object' ? leadRow.customFields : {}));
-  const customAssignedTo = String((customFields as any).assignedTo || leadRow.assignedTo || '').trim();
+  // Fallback records expose assignedTo directly; PostgreSQL records use
+  // assigned_to and never consult custom_fields for ownership.
+  const isDbLeadRow = Object.prototype.hasOwnProperty.call(leadRow, 'assigned_to');
+  const customAssignedTo = isDbLeadRow ? '' : String(leadRow.assignedTo || '').trim();
   const createdBy = leadRow.created_by ? String(leadRow.created_by) : (leadRow.createdBy ? String(leadRow.createdBy) : '');
 
   if (assignedToId) {
@@ -3718,6 +3722,7 @@ const LEAD_IGNORED_KEYS = new Set([
   'statusHistory', 'assignmentHistory', 'documents', 'currentStatus', 'customFields',
   'createdBy', 'updatedBy', 'created_by', 'updated_by', 'assigned_by', 'assigned_to',
   'created_at', 'updated_at', 'is_deleted', 'deleted_at', 'deleted_by',
+  '_preserveAssignment',
 ]);
 
 /** Normalize an incoming lead payload (frontend shape) to DB fields - SECURE version.
@@ -3755,7 +3760,7 @@ export async function buildSecureLeadRecord(
   const reserved: Record<string, any> = {
     assignedTo: effectiveAssigned ? effectiveAssigned.employeeId || '' : '',
     assignedBy: effectiveAssigned ? caller.employee_id || '' : '',
-    assignedDate: lead.assignedDate || (preserveDates ? '' : new Date().toISOString()),
+    assignedDate: effectiveAssigned ? (lead.assignedDate || (preserveDates ? '' : new Date().toISOString())) : null,
     projectedNCP: lead.projectedNCP,
     sumAssured: lead.sumAssured,
     collectedNCP: lead.collectedNCP,
@@ -3847,7 +3852,9 @@ export async function buildSecureLeadRecord(
     notes: lead.notes != null && lead.notes !== '' ? String(lead.notes) : null,
     assignedTo: assignedToId,
     assignedBy: assignedById,
-    assignedAt: preserveDates ? dateOrNull(lead.assignedDate) : (dateOrNull(lead.assignedDate) || new Date().toISOString()),
+    assignedAt: effectiveAssigned
+      ? (preserveDates ? dateOrNull(lead.assignedDate) : (dateOrNull(lead.assignedDate) || new Date().toISOString()))
+      : null,
     lastFollowUpDate: dateOrNull(lead.lastFollowUpDate || lead.lastContactedAt),
     nextFollowUpDate: dateOrNull(lead.nextFollowUpDate || lead.nextFollowUpAt),
     currentStatus: clean(lead.currentStatus).slice(0, 255) || (preserveDates ? '' : 'Untouched'),
@@ -4010,9 +4017,8 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     if (assignedTo) {
       const assignedResolved = await resolveAssignedTo(String(assignedTo));
       const filterUserId = assignedResolved?.userId || String(assignedTo);
-      const filterEmpId = assignedResolved?.employeeId || String(assignedTo);
-      params.push(filterUserId, filterEmpId);
-      where.push(`(l.assigned_to::text = $${params.length - 1} OR UPPER(l.custom_fields->>'assignedTo') = UPPER($${params.length}))`);
+      params.push(filterUserId);
+      where.push(`l.assigned_to::text = $${params.length}`);
     }
     if (search) {
       params.push(`%${String(search)}%`);
@@ -4021,10 +4027,9 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     const visibility = await resolveCallerVisibility(caller);
     perf.span('authz.visibility');
     if (!visibility.all) {
-      params.push(visibility.userIds, visibility.employeeIds);
-      const pUser = params.length - 1;
-      const pEmp = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      params.push(visibility.userIds);
+      const pUser = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
     }
     const result = await pool.query(
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
@@ -4156,75 +4161,100 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       }
     }
 
-    // Resolve assignedTo target (prevent spoofing)
+    // Resolve assignedTo target (prevent spoofing). For compatibility, the
+    // client may send the existing lead shape on every update; the explicit
+    // marker distinguishes an ownership action from a demographic edit.
+    const preserveExistingAssignment = existingLead && payload._preserveAssignment === true;
+    const assignmentRequested = !preserveExistingAssignment && Object.prototype.hasOwnProperty.call(payload, 'assignedTo');
+    const existingLeadIsDbRow = Boolean(existingLead && Object.prototype.hasOwnProperty.call(existingLead, 'assigned_to'));
     let targetAssigned: { userId: string; employeeId: string } | null = null;
-    if (payload.assignedTo) {
-      const resolved = await resolveAssignedTo(payload.assignedTo);
-      if (!resolved) {
-        return sendJson(res, 400, { success: false, message: `Assigned user "${payload.assignedTo}" not found.` });
+    if (assignmentRequested) {
+      const requestedAssignee = clean(payload.assignedTo);
+      if (requestedAssignee) {
+        const resolved = await resolveAssignedTo(requestedAssignee);
+        if (!resolved) {
+          return sendJson(res, 400, { success: false, message: `Assigned user "${requestedAssignee}" not found.` });
+        }
+        targetAssigned = resolved;
+      } else {
+        // An explicit blank is an authorized unassignment, not self-assignment.
+        targetAssigned = null;
       }
-      targetAssigned = resolved;
     } else if (existingLead) {
-      // For updates without assignedTo change, keep existing assignment
+      // Canonical assigned_to remains authoritative. Never promote stale
+      // custom_fields.assignedTo data and never assign an unowned record to
+      // the caller during a non-routing update.
       if (existingLead.assigned_to) {
         const empId = await managerEmployeeId(existingLead.assigned_to);
-        targetAssigned = { userId: existingLead.assigned_to, employeeId: empId || caller.employee_id };
-      } else if ((existingLead as any).assignedTo) {
-        // FallbackStore shape
-        const empId = String((existingLead as any).assignedTo);
-        const resolved = await resolveAssignedTo(empId);
-        if (resolved) {
-          targetAssigned = resolved;
-        } else {
-          targetAssigned = { userId: caller.id, employeeId: empId || caller.employee_id };
-        }
+        targetAssigned = { userId: existingLead.assigned_to, employeeId: empId || String(existingLead.assigned_to) };
+      } else if (!existingLeadIsDbRow && existingLead.assignedTo) {
+        const resolved = await resolveAssignedTo(existingLead.assignedTo);
+        targetAssigned = resolved || null;
       } else {
-        targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
+        targetAssigned = null;
       }
     } else {
       targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
     }
 
-    // Validate assignedTo is within caller's scope
-    if (!isAssignedToAllowed(targetAssigned, visibility, caller)) {
+    if (assignmentRequested && !isAssignedToAllowed(targetAssigned, visibility, caller)) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to assign leads to that user. Assignment is limited to your authorized scope.' });
     }
 
-    // If reassigning to different user, require assign/transfer permission
-    if (existingLead && existingLead.assigned_to && targetAssigned && String(existingLead.assigned_to) !== String(targetAssigned.userId)) {
-      const canAssign = await hasPermissionCode(caller, 'leads.assign');
-      const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
-      if (!canAssign && !canTransfer && !visibility.all) {
-        perf.span('authz.permissions');
-        perf.finish(res);
-        return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign this lead to another user.' });
-      }
+    // leads.assign is the canonical gate for assignment/reassignment. The
+    // separate leads.transfer permission is preserved for transfer-specific
+    // server semantics and is not treated as generic edit access here.
+    const existingAssignmentKey = existingLead
+      ? (existingLead.assigned_to
+        ? String(existingLead.assigned_to)
+        : (!existingLeadIsDbRow ? String(existingLead.assignedTo || '') : ''))
+      : '';
+    const targetAssignmentKey = targetAssigned
+      ? (existingLeadIsDbRow ? String(targetAssigned.userId) : String(targetAssigned.employeeId))
+      : '';
+    const assignmentChanged = Boolean(existingLead && existingAssignmentKey !== targetAssignmentKey);
+    const createAssignmentToOther = Boolean(!existingLead && targetAssigned && targetAssigned.userId !== caller.id);
+    if (assignmentRequested && (assignmentChanged || createAssignmentToOther) && !(await hasPermissionCode(caller, 'leads.assign'))) {
+      perf.span('authz.permissions');
+      perf.finish(res);
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to assign or reassign this lead.' });
     }
     perf.span('authz.permissions');
 
-    const record = await buildSecureLeadRecord(payload, caller, targetAssigned);
+    const record = await buildSecureLeadRecord(
+      payload,
+      caller,
+      targetAssigned,
+      { allowUnassigned: Boolean(existingLead && !targetAssigned) }
+    );
     if ('error' in record) {
       return sendJson(res, 400, { success: false, message: record.error });
     }
 
-    // For updates, merge assignment history server-side if reassigned
-    if (existingLead && targetAssigned && String(existingLead.assigned_to) !== String(targetAssigned.userId)) {
+    // For explicit routing actions, merge assignment history server-side.
+    // This also records an explicit unassignment and removes any stale
+    // custom-field owner shadow.
+    if (existingLead && assignmentRequested && assignmentChanged) {
       const existingHistory = Array.isArray(existingLead.assignment_history) ? existingLead.assignment_history : [];
       const newEntry = {
         id: `assign_${Date.now()}`,
-        fromEmployeeId: existingLead.custom_fields?.assignedTo || await managerEmployeeId(existingLead.assigned_to) || undefined,
-        toEmployeeId: targetAssigned.employeeId,
+        fromEmployeeId: existingLead.assigned_to ? await managerEmployeeId(existingLead.assigned_to) || undefined : undefined,
+        toEmployeeId: targetAssigned?.employeeId,
         changedBy: caller.employee_id,
         date: new Date().toISOString(),
-        note: 'Reassigned via API',
+        note: targetAssigned ? 'Reassigned via API' : 'Unassigned via API',
       };
       (record as any).assignmentHistory = [...existingHistory, newEntry];
-      (record as any).customFields = {
-        ...(record as any).customFields,
-        assignedTo: targetAssigned.employeeId,
-        assignedBy: caller.employee_id,
-        assignedDate: new Date().toISOString(),
-      };
+      const nextCustomFields = { ...((record as any).customFields || {}) };
+      delete nextCustomFields.assignedTo;
+      delete nextCustomFields.assignedBy;
+      delete nextCustomFields.assignedDate;
+      if (targetAssigned) {
+        nextCustomFields.assignedTo = targetAssigned.employeeId;
+        nextCustomFields.assignedBy = caller.employee_id;
+        nextCustomFields.assignedDate = new Date().toISOString();
+      }
+      (record as any).customFields = nextCustomFields;
     }
 
     if (!useDb()) {
@@ -4272,8 +4302,8 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         currentStatus: record.currentStatus || 'Untouched',
         projectedNCP: record.projectedNCP ?? 0,
         collectedNCP: record.collectedNCP ?? 0,
-        assignedTo: targetAssigned?.employeeId || caller.employee_id,
-        assignedBy: caller.employee_id,
+        assignedTo: targetAssigned?.employeeId || (existingLead ? '' : caller.employee_id),
+        assignedBy: targetAssigned ? caller.employee_id : '',
         timestamp: new Date().toISOString(),
         customFields: record.customFields,
         assignmentHistory: finalAssignmentHistory,
@@ -4609,6 +4639,9 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       // A blank "Assigned To" stays blank: unassigned lead (schema allows
       // it) - never a fake assignment to the importing user.
 
+      if (assigned && !canAssign) {
+        rowErrors.push('Assigning an imported lead requires the leads.assign permission');
+      }
       if (assigned && !isAssignedToAllowed(assigned, visibility, caller)) {
         rowErrors.push(`Cannot assign to "${row.assignedTo}" - outside your authorized scope`);
       }
@@ -4768,7 +4801,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       if (
         existing.assigned_to && p.assigned &&
         String(existing.assigned_to) !== String(p.assigned.userId) &&
-        !canAssign && !canTransfer && !visibility.all
+        !canAssign
       ) {
         return 'No permission to reassign an existing lead';
       }
@@ -5441,8 +5474,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       where.push(`l.current_status = $${params.length}`);
     }
     if (assignedFilter) {
-      params.push(assignedFilter.userId, assignedFilter.employeeId);
-      where.push(`(l.assigned_to::text = $${params.length - 1} OR UPPER(l.custom_fields->>'assignedTo') = UPPER($${params.length}))`);
+      params.push(assignedFilter.userId);
+      where.push(`l.assigned_to::text = $${params.length}`);
     }
     if (fromYmd) {
       params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
@@ -5454,10 +5487,9 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       where.push(`l.next_follow_up_at < $${params.length}::timestamp`);
     }
     if (!visibility.all) {
-      params.push(visibility.userIds, visibility.employeeIds);
-      const pUser = params.length - 1;
-      const pEmp = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      params.push(visibility.userIds);
+      const pUser = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
     }
 
     const todayLit = bounds.todayStartIso.replace(/'/g, "''");
@@ -5517,7 +5549,9 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
         prospectName: row.customer_name,
         customerName: row.customer_name,
         mobile: row.mobile || '',
-        assignedTo: row.assigned_to_employee_id || cf.assignedTo || '',
+        assignedTo: row.assigned_to != null && String(row.assigned_to).trim() !== ''
+          ? (row.assigned_to_employee_id || '')
+          : '',
         assignedEmployeeName: row.assigned_to_full_name || row.assigned_to_employee_id || '',
         currentStatus: row.current_status,
         nextFollowUpAt: nfd,
@@ -5573,7 +5607,7 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
       if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       const visibility = await resolveCallerVisibility(caller);
-      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      const fakeRow = { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy || null };
       if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
         return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
@@ -5613,7 +5647,7 @@ router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
       if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       const visibility = await resolveCallerVisibility(caller);
-      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      const fakeRow = { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy || null };
       if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
         return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
@@ -5746,7 +5780,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       if ((lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       const visibility = await resolveCallerVisibility(caller);
-      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: (lead as any).assignedTo }, created_by: (lead as any).createdBy || null, assignedTo: (lead as any).assignedTo };
+      const fakeRow = { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy || null };
       if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
         return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
       }
@@ -6047,7 +6081,7 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
     const visibility = await resolveCallerVisibility(caller);
     const lead = fallbackStore.leads.find((l: any) => l.id === req.params.id);
     if (lead) {
-      const fakeRow = { assigned_to: null, custom_fields: { assignedTo: lead.assignedTo }, created_by: null };
+      const fakeRow = { assignedTo: lead.assignedTo, createdBy: lead.createdBy || null };
       if (!isLeadAccessible(fakeRow, visibility, caller) && !callerIsAdmin(req)) {
         return sendJson(res, 403, { success: false, message: 'You do not have permission to delete this lead.' });
       }
@@ -6072,6 +6106,12 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
 });
 
 router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req, res) => {
+  const caller = await getCallerDbInfo(req);
+  if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
+  const callerRole = normalizeRole(caller.role_code);
+  if (callerRole !== 'ADMIN' && callerRole !== 'SUPERADMIN' && !(await hasPermissionCode(caller, 'leads.delete'))) {
+    return sendJson(res, 403, { success: false, message: 'You do not have permission to purge campaign leads.' });
+  }
   const campaign = req.params.campaign;
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
@@ -6190,10 +6230,9 @@ function buildDashboardVisibilitySql(
   params: any[]
 ): string {
   if (visibility.all) return 'TRUE';
-  params.push(visibility.userIds, visibility.employeeIds);
-  const pUser = params.length - 1;
-  const pEmp = params.length;
-  return `(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`;
+  params.push(visibility.userIds);
+  const pUser = params.length;
+  return `(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`;
 }
 
 function numOr0(v: any): number {
@@ -6271,7 +6310,11 @@ function computeDashboardFromLeads(
 
   const agentStats = agents.map(agent => {
     const agentLeads = leads.filter(l => {
-      const assigned = String(l.assignedTo || l.assigned_to_employee_id || (l.customFields || l.custom_fields || {}).assignedTo || '').toUpperCase();
+      const assigned = String(
+        l.assigned_to != null && String(l.assigned_to).trim() !== ''
+          ? (l.assignedTo || l.assigned_to_employee_id || '')
+          : (Object.prototype.hasOwnProperty.call(l, 'assigned_to') ? '' : (l.assignedTo || ''))
+      ).toUpperCase();
       return assigned === String(agent.employeeId).toUpperCase();
     });
     const agentCollected = agentLeads.reduce((a, l) => a + leadCollectedNcp(l), 0);
@@ -6561,10 +6604,9 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       where.push(`sa.scheduled_at < $${params.length}::timestamp`);
     }
     if (!visibility.all) {
-      params.push(visibility.userIds, visibility.employeeIds);
-      const pUser = params.length - 1;
-      const pEmp = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR UPPER(l.custom_fields->>'assignedTo') = ANY(ARRAY(SELECT UPPER(unnest) FROM unnest($${pEmp}::text[]) AS unnest)) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      params.push(visibility.userIds);
+      const pUser = params.length;
+      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
     }
 
     const whereSql = where.join(' AND ');
@@ -7640,8 +7682,8 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     }
     const agentSql = `
       SELECT
-        COALESCE(au.employee_id, UPPER(l.custom_fields->>'assignedTo'), 'UNASSIGNED') AS employee_id,
-        COALESCE(au.full_name, UPPER(l.custom_fields->>'assignedTo'), 'Unassigned') AS full_name,
+        COALESCE(au.employee_id, 'UNASSIGNED') AS employee_id,
+        COALESCE(au.full_name, 'Unassigned') AS full_name,
         COUNT(*)::int AS assigned,
         COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS no_call,
         COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_up,

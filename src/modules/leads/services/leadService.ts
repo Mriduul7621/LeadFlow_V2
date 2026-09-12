@@ -430,9 +430,14 @@ export const leadService = {
       fields.assignmentHistory = [...(existing.assignmentHistory || []), assignmentEntry];
     }
 
-    const payload: Lead = {
+    const payload: Lead & { _preserveAssignment?: boolean } = {
       ...existing,
       ...fields,
+      // Keep the compatibility payload shape, but tell the server whether
+      // this operation intentionally changes ownership. This prevents a
+      // demographic/document edit from turning a canonical NULL owner into
+      // the current caller.
+      _preserveAssignment: fields.assignedTo === undefined,
       statusHistory: fields.statusHistory || existing.statusHistory || [],
       assignmentHistory: fields.assignmentHistory || existing.assignmentHistory || [],
       documents: fields.documents || existing.documents || [],
