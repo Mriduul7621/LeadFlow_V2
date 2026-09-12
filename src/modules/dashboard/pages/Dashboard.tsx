@@ -25,7 +25,7 @@ import {
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
-import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
+import { dashboardService, type DashboardMetrics, type DashboardQualityAggregate } from '../services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
@@ -536,6 +536,51 @@ function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date
   );
 }
 
+// ---- Lead Quality snapshot (server-computed aggregate only) --------
+export function LeadQualitySnapshot({ quality }: { quality?: DashboardQualityAggregate }) {
+  if (!quality) return null;
+  const bands = [
+    { label: 'Hot', value: quality.hot, dot: 'bg-red-500' },
+    { label: 'Warm', value: quality.warm, dot: 'bg-amber-500' },
+    { label: 'Developing', value: quality.developing, dot: 'bg-blue-500' },
+    { label: 'Cold', value: quality.cold, dot: 'bg-slate-300' },
+  ];
+  const desc =
+    quality.activeScored > 0
+      ? `${formatCount(quality.activeScored)} active leads scored${quality.activeAverage !== null ? ` · avg ${quality.activeAverage}` : ''}`
+      : 'No active leads scored yet';
+  return (
+    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading
+        title="Lead Quality"
+        desc={desc}
+        action={(
+          <Link to="/leads" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
+            Open Lead Workspace <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        )}
+      />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {bands.map(band => (
+          <div key={band.label} className="rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-4 py-3">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-stone-500">
+              <span className={cn('w-2 h-2 rounded-full', band.dot)} />
+              {band.label}
+            </p>
+            <p className="text-xl font-black text-brand-text mt-1 tabular-nums">{formatCount(band.value)}</p>
+          </div>
+        ))}
+      </div>
+      {quality.needsAttention > 0 && (
+        <p className="mt-3 text-[12px] text-stone-500">
+          <span className="font-bold text-amber-600">{formatCount(quality.needsAttention)}</span>
+          {' '}need attention — overdue or stale engagement.
+        </p>
+      )}
+    </section>
+  );
+}
+
 // ---- Needs Attention ------------------------------------------------
 export function NeedsAttentionSection({ untouched }: { untouched: number }) {
   return (
@@ -966,6 +1011,9 @@ export default function Dashboard() {
 
           {/* ==== Sales Pipeline ==== */}
           <SalesPipeline statusCounts={statusCounts} totalLeads={totalLeads} />
+
+          {/* ==== Lead Quality (server-computed band distribution) ==== */}
+          <LeadQualitySnapshot quality={metrics?.quality} />
 
           {/* ==== Follow-up Discipline ==== */}
           <FollowUpDiscipline

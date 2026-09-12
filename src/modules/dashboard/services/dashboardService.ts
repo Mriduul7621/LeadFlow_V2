@@ -64,6 +64,42 @@ export interface DashboardCampaignStat {
   color: string;
 }
 
+/**
+ * Scope-consistent Lead Quality aggregate from GET /api/dashboard.
+ * Server-computed only — the client never derives band counts from lead
+ * lists. Undefined when the server omits it (older responses).
+ */
+export interface DashboardQualityAggregate {
+  hot: number;
+  warm: number;
+  developing: number;
+  cold: number;
+  /** Mean score across scored active leads (null when none). */
+  activeAverage: number | null;
+  /** Active leads scored (terminal outcomes excluded by definition). */
+  activeScored: number;
+  /** Active leads carrying at least one attention reason. */
+  needsAttention: number;
+}
+
+function sanitizeQuality(raw: unknown): DashboardQualityAggregate | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const q = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    hot: num(q.hot),
+    warm: num(q.warm),
+    developing: num(q.developing),
+    cold: num(q.cold),
+    activeAverage:
+      typeof q.activeAverage === 'number' && Number.isFinite(q.activeAverage)
+        ? q.activeAverage
+        : null,
+    activeScored: num(q.activeScored),
+    needsAttention: num(q.needsAttention),
+  };
+}
+
 export interface DashboardMetrics {
   timezone: string;
   todayDate: string;
@@ -98,6 +134,8 @@ export interface DashboardMetrics {
   trendData?: Array<{ date: string; value: number }>;
   leadCount?: number;
   userCount?: number;
+  /** Server-computed Lead Quality band distribution (undefined when absent). */
+  quality?: DashboardQualityAggregate;
 }
 
 export type DashboardPeriod = 'TODAY' | 'THIS_MONTH' | 'LAST_MONTH' | 'CUSTOM' | 'ALL' | 'THIS MONTH' | 'LAST MONTH';
@@ -186,6 +224,8 @@ export const dashboardService = {
       teamStats: Array.isArray(data.teamStats) ? data.teamStats : [],
       campaignStats: Array.isArray(data.campaignStats) ? data.campaignStats : [],
       trendData: Array.isArray(data.trendData) ? data.trendData : [],
+      // Server-computed quality aggregate — sanitized, never fabricated.
+      quality: sanitizeQuality((data as { quality?: unknown }).quality),
       // Preserve null TAT — never coerce to a fabricated default hours value.
       avgResponseTAT: data.avgResponseTAT == null || data.avgResponseTAT === '' ? null : String(data.avgResponseTAT),
     };

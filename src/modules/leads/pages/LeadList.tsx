@@ -20,13 +20,15 @@ import {
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../auth/store/authStore';
-import { Lead, LeadStatus } from '../../shared/types';
+import { Lead, LeadQuality, LeadStatus } from '../../shared/types';
 import { toast } from 'sonner';
 import { leadService } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
+import LeadQualityBadge from '../components/LeadQualityBadge';
+import LeadQualityPanel from '../components/LeadQualityPanel';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
 
@@ -56,11 +58,17 @@ export default function LeadList() {
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[]>([]);
-  const [sortLogic, setSortLogic] = useState<'Recency' | 'Economic Potential' | 'Priority Status'>('Recency');
+  const [sortLogic, setSortLogic] = useState<'Recency' | 'Economic Potential' | 'Priority Status' | 'Quality: High to Low' | 'Quality: Low to High'>('Recency');
+  // Lead Quality band filter — compares the SERVER-computed band only.
+  const [qualityBand, setQualityBand] = useState<string>('All');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
+  // Full server-side quality explanation for the open details modal (the
+  // list rows carry the compact score/band; factors load on demand).
+  const [qualityDetail, setQualityDetail] = useState<LeadQuality | null>(null);
+  const [qualityDetailLoading, setQualityDetailLoading] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -78,6 +86,39 @@ export default function LeadList() {
   // Lead Workspace intentionally has no assignment-management data load.
   // Ownership changes belong to Lead Pool; this page stays focused on
   // operational execution against the server-visible lead set.
+
+  // Load the full quality explanation when the details modal opens (one
+  // single-lead read; the list itself never fetches explanations per row).
+  useEffect(() => {
+    if (!selectedLead) {
+      setQualityDetail(null);
+      setQualityDetailLoading(false);
+      return;
+    }
+    // Single-lead GET responses already embed the full explanation.
+    const embedded = (selectedLead as Lead).leadQuality;
+    if (embedded && (embedded.positiveFactors || embedded.negativeFactors)) {
+      setQualityDetail(embedded);
+      setQualityDetailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setQualityDetailLoading(true);
+    leadService
+      .getLeadQuality(selectedLead.id)
+      .then(detail => {
+        if (!cancelled) setQualityDetail(detail);
+      })
+      .catch(() => {
+        if (!cancelled) setQualityDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setQualityDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLead?.id]);
 
   // Editing state fields for granular updates
   const [formStatus, setFormStatus] = useState<LeadStatus | ''>('');
@@ -295,8 +336,14 @@ export default function LeadList() {
     // Authoritative source of rules-filtered leads from dynamic query builder
     const baseList = advancedFilteredLeads.length > 0 || leads.length === 0 ? advancedFilteredLeads : leads;
 
+    // Narrow by server-computed Lead Quality band (never widens scope).
+    const qualityScoped =
+      qualityBand === 'All'
+        ? baseList
+        : baseList.filter(lead => (lead.leadQuality as LeadQuality | undefined)?.band === qualityBand);
+
     // Filter using fast text search across demographics
-    let result = baseList.filter(lead => {
+    let result = qualityScoped.filter(lead => {
       const prospectName = String(lead.prospectName || '').toLowerCase();
       const mobile = String(lead.mobile || '');
       const mobileNum = String(lead.mobileNumber || '').toLowerCase();
@@ -330,6 +377,16 @@ export default function LeadList() {
         return potB - potA;
       } else if (sortLogic === 'Priority Status') {
         return getLeadStatusOrder(b.currentStatus) - getLeadStatusOrder(a.currentStatus);
+      } else if (sortLogic === 'Quality: High to Low' || sortLogic === 'Quality: Low to High') {
+        // Sort by the SERVER-computed score (missing scores sort last).
+        const scoreA = (a.leadQuality as LeadQuality | undefined)?.score;
+        const scoreB = (b.leadQuality as LeadQuality | undefined)?.score;
+        const valA = typeof scoreA === 'number' ? scoreA : -1;
+        const valB = typeof scoreB === 'number' ? scoreB : -1;
+        if (valA !== valB) return sortLogic === 'Quality: High to Low' ? valB - valA : valA - valB;
+        const keyA = new Date(a.timestamp || a.creationDate || 0).getTime();
+        const keyB = new Date(b.timestamp || b.creationDate || 0).getTime();
+        return keyB - keyA;
       }
       return 0;
     });
@@ -511,6 +568,21 @@ export default function LeadList() {
           </div>
           <div className="flex items-center gap-4">
              <div className="h-10 w-px bg-slate-200 hidden md:block" />
+            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Quality</label>
+            <select
+              value={qualityBand}
+              onChange={(e) => setQualityBand(e.target.value)}
+              title="Filter by server-computed Lead Quality band"
+              className="bg-white border border-slate-100 rounded-sm px-4 py-2.5 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 outline-none shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
+            >
+              <option value="All">All Quality</option>
+              <option value="Hot">Hot</option>
+              <option value="Warm">Warm</option>
+              <option value="Developing">Developing</option>
+              <option value="Cold">Cold</option>
+              <option value="Converted">Converted</option>
+              <option value="Not Interested">Not Interested</option>
+            </select>
             <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sort by</label>
             <select 
               value={sortLogic}
@@ -520,6 +592,8 @@ export default function LeadList() {
               <option value="Recency">Recency</option>
               <option value="Economic Potential">Economic Potential</option>
               <option value="Priority Status">Priority Status</option>
+              <option value="Quality: High to Low">Quality: High to Low</option>
+              <option value="Quality: Low to High">Quality: Low to High</option>
             </select>
           </div>
         </div>
@@ -532,6 +606,7 @@ export default function LeadList() {
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Owner / Next Action</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Campaign / Source</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Current Status</th>
+                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Quality</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Last Activity</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
               </tr>
@@ -590,6 +665,9 @@ export default function LeadList() {
                       {lead.currentStatus}
                     </span>
                   </td>
+                  <td className="px-6 py-6 border-l border-slate-50/50">
+                    <LeadQualityBadge quality={lead.leadQuality} />
+                  </td>
                   <td className="px-6 py-6 border-l border-slate-50/50 max-w-[200px]">
                     {(() => {
                       const latestHistory = lead.statusHistory && lead.statusHistory.length > 0 
@@ -624,7 +702,7 @@ export default function LeadList() {
                 </motion.tr>
               )) : (
                 <tr>
-                  <td colSpan={6} className="px-8 py-20 text-center">
+                  <td colSpan={7} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-3">
                        <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center">
                           <Search className="w-6 h-6 text-slate-200" />
@@ -719,13 +797,14 @@ export default function LeadList() {
                   </div>
                   <div className="space-y-2">
                     <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Status</p>
-                    <div className="flex">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className={cn(
                         "px-4 py-1.5 rounded-sm text-[10px] font-black uppercase tracking-widest border",
                         getStatusColor(selectedLead.currentStatus)
                       )}>
                         {selectedLead.currentStatus}
                       </span>
+                      <LeadQualityBadge quality={selectedLead.leadQuality} />
                     </div>
                   </div>
                 </div>
@@ -743,6 +822,15 @@ export default function LeadList() {
                       <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Institutional Lead</p>
                       <p className="text-[11px] font-black text-[#978C21] uppercase italic leading-none">{selectedLead.assignedTo || 'N/A'}</p>
                    </div>
+                </div>
+
+                <div className="space-y-4">
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Lead Quality</p>
+                   {qualityDetailLoading ? (
+                     <p className="text-[11px] text-slate-300 uppercase tracking-widest italic">Loading quality explanation...</p>
+                   ) : (
+                     <LeadQualityPanel quality={qualityDetail || selectedLead.leadQuality} />
+                   )}
                 </div>
 
                 <div className="space-y-4">

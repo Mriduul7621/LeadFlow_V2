@@ -36,6 +36,17 @@ import {
   classifyFollowUpBucket,
 } from '../utils/businessTime.js';
 import {
+  fetchActivityQualitySignals,
+  fetchScheduledQualitySignals,
+  compactScoreLeadRow,
+  scoreLeadRow,
+  aggregateQualityForScope,
+  aggregateQualityForFallbackLeads,
+  compactQualityForFallbackLeads,
+  scoreFallbackLead,
+} from '../utils/leadQualitySignals.js';
+import type { LeadQualityBand } from '../utils/leadQuality.js';
+import {
   USER_BULK_MAX_ROWS,
   normalizeEmployeeId,
   normalizeEmail,
@@ -4664,6 +4675,47 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
   };
 }
 
+/* ------------------------------------------------------------------
+   Lead Quality list helpers — server-computed compact scores attached
+   to already-visible rows. Filtering/sorting by quality is a NARROWING
+   operation applied AFTER visibility scoping; it can never widen scope.
+------------------------------------------------------------------- */
+const LEAD_QUALITY_BAND_FILTERS: LeadQualityBand[] = [
+  'Hot', 'Warm', 'Developing', 'Cold', 'Converted', 'Not Interested',
+];
+
+function normalizeQualityBandFilter(raw: any): LeadQualityBand | null {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const text = String(raw).trim().toLowerCase();
+  // Accept canonical bands plus common casings ('hot', 'NOT INTERESTED').
+  const match = LEAD_QUALITY_BAND_FILTERS.find(b => b.toLowerCase() === text);
+  return match || null;
+}
+
+function applyQualityListOptions(
+  leads: Array<Record<string, any>>,
+  query: any
+): Array<Record<string, any>> {
+  const band = normalizeQualityBandFilter(query?.qualityBand ?? query?.quality);
+  let out = band ? leads.filter(l => (l.leadQuality as any)?.band === band) : leads;
+  const sort = String(query?.sort || '').trim().toLowerCase();
+  if (sort === 'quality_desc' || sort === 'quality_asc') {
+    const dir = sort === 'quality_desc' ? -1 : 1;
+    out = [...out].sort((a, b) => {
+      const sa = Number((a.leadQuality as any)?.score);
+      const sb = Number((b.leadQuality as any)?.score);
+      const va = Number.isFinite(sa) ? sa : -1;
+      const vb = Number.isFinite(sb) ? sb : -1;
+      if (va !== vb) return (va - vb) * dir;
+      // Stable tiebreak: newest first (matches the default list order).
+      const ta = new Date(a.timestamp || a.creationDate || 0).getTime();
+      const tb = new Date(b.timestamp || b.creationDate || 0).getTime();
+      return tb - ta;
+    });
+  }
+  return out;
+}
+
 router.get('/leads', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
@@ -4673,18 +4725,25 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
     }
     const visibility = await resolveCallerVisibility(caller);
-    if (visibility.all) {
-      return sendJson(res, 200, fallbackStore.leads);
-    }
-    const filtered = fallbackStore.leads.filter((l: any) => {
-      const assigned = String(l.assignedTo || '').toUpperCase();
-      const callerEmpUpper = String(caller.employee_id || '').toUpperCase();
-      if (assigned && assigned === callerEmpUpper) return true;
-      // Also check if assignedTo matches any visible employee
-      const visEmpUpper = visibility.employeeIds.map((e: string) => String(e).toUpperCase());
-      return assigned && visEmpUpper.includes(assigned);
-    });
-    return sendJson(res, 200, filtered);
+    const scope = (list: any[]) => {
+      if (visibility.all) return list;
+      return list.filter((l: any) => {
+        const assigned = String(l.assignedTo || '').toUpperCase();
+        const callerEmpUpper = String(caller.employee_id || '').toUpperCase();
+        if (assigned && assigned === callerEmpUpper) return true;
+        // Also check if assignedTo matches any visible employee
+        const visEmpUpper = visibility.employeeIds.map((e: string) => String(e).toUpperCase());
+        return assigned && visEmpUpper.includes(assigned);
+      });
+    };
+    const visible = scope(fallbackStore.leads || []);
+    const qualityById = compactQualityForFallbackLeads(
+      visible,
+      (fallbackStore as any).leadActivities || [],
+      (fallbackStore as any).scheduledActivities || []
+    );
+    const scored = visible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)) }));
+    return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
   }
   const perf = createPerf('leads.list');
   try {
@@ -4731,8 +4790,27 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       params
     );
     perf.span('db.query');
+    // Lead Quality: exactly two bulk signal queries for the whole page
+    // (history aggregates + planned-action aggregates) — never per-lead.
+    // Scoring runs in memory over rows the visibility scope already
+    // allowed; the score itself grants no access.
+    const ids = (result.rows || []).map((r: any) => String(r.id));
+    const [activityMap, scheduledMap] = await Promise.all([
+      fetchActivityQualitySignals(pool, ids),
+      fetchScheduledQualitySignals(pool, ids),
+    ]);
+    perf.span('db.qualitySignals');
+    const scored = (result.rows || []).map((row: any) => {
+      const mapped: any = mapLeadRow(row);
+      mapped.leadQuality = compactScoreLeadRow(
+        row,
+        activityMap.get(String(row.id)),
+        scheduledMap.get(String(row.id))
+      );
+      return mapped;
+    });
     perf.finish(res);
-    return sendJson(res, 200, result.rows.map(mapLeadRow));
+    return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
   } catch (error: any) {
     perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
@@ -5022,6 +5100,11 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       const existingIndex = fallbackStore.leads.findIndex((item: any) => item.id === lead.id || String(item.mobile || '').toUpperCase() === String(lead.mobile || '').toUpperCase());
       if (existingIndex >= 0) fallbackStore.leads[existingIndex] = { ...fallbackStore.leads[existingIndex], ...lead };
       else fallbackStore.leads.push(lead);
+      lead.leadQuality = scoreFallbackLead(
+        lead,
+        (fallbackStore as any).leadActivities || [],
+        (fallbackStore as any).scheduledActivities || []
+      );
       return sendJson(res, 200, { success: true, data: lead });
     }
 
@@ -5033,15 +5116,25 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       // sequential lookups on the response path).
       const employeeIds = await employeeIdsFor([row.assigned_to, row.assigned_by]);
       perf.span('db.responseJoins');
-      perf.finish(res);
-      return sendJson(res, 200, {
-        success: true,
-        data: mapLeadRow({
-          ...row,
-          assigned_to_employee_id: employeeIds.get(String(row.assigned_to || '')) || null,
-          assigned_by_employee_id: employeeIds.get(String(row.assigned_by || '')) || null,
-        }),
+      const mappedLead: any = mapLeadRow({
+        ...row,
+        assigned_to_employee_id: employeeIds.get(String(row.assigned_to || '')) || null,
+        assigned_by_employee_id: employeeIds.get(String(row.assigned_by || '')) || null,
       });
+      // Fresh full quality for the saved row (two single-lead bulk-safe
+      // queries) so in-place UI patches never carry a stale score.
+      const [saveActivity, saveScheduled] = await Promise.all([
+        fetchActivityQualitySignals(getPool(), [String(row.id)]),
+        fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+      ]);
+      mappedLead.leadQuality = scoreLeadRow(
+        row,
+        saveActivity.get(String(row.id)),
+        saveScheduled.get(String(row.id))
+      );
+      perf.span('db.qualitySignals');
+      perf.finish(res);
+      return sendJson(res, 200, { success: true, data: mappedLead });
     } catch (error: any) {
       perf.finish(res);
       return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
@@ -6138,6 +6231,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       const total = rows.length;
       rows.sort((a: any, b: any) => new Date(a.nextFollowUpDate || 0).getTime() - new Date(b.nextFollowUpDate || 0).getTime());
       const page = rows.slice(offset, offset + limit);
+      const demoQualityById = compactQualityForFallbackLeads(
+        page,
+        (fallbackStore as any).leadActivities || [],
+        (fallbackStore as any).scheduledActivities || []
+      );
       const items = page.map((l: any) => {
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
         return {
@@ -6159,6 +6257,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
           overdueDays: overdueDays(nfd, bounds),
           dueState: classify(l),
           latestActivity: null,
+          leadQuality: demoQualityById.get(String(l.id)),
         };
       });
       return sendJson(res, 200, {
@@ -6234,6 +6333,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const listSql = `
       SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.area, l.priority,
              l.current_status, l.next_follow_up_at, l.last_contacted_at,
+             l.created_at, l.expected_premium,
              COALESCE(l.follow_up_count, 0) AS follow_up_count,
              l.custom_fields,
              au.employee_id AS assigned_to_employee_id,
@@ -6256,6 +6356,13 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       LIMIT $${pLimit} OFFSET $${pOffset}
     `;
     const listRes = await pool.query(listSql, params);
+    // Lead Quality for the page: two bulk signal queries for all returned
+    // leads — never per-lead. Scores attach to visible rows only.
+    const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
+    const [queueActivity, queueScheduled] = await Promise.all([
+      fetchActivityQualitySignals(pool, queueIds),
+      fetchScheduledQualitySignals(pool, queueIds),
+    ]);
     const items = listRes.rows.map((row: any) => {
       const cf = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
       const nfd = row.next_follow_up_at;
@@ -6283,6 +6390,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
         latestActivity: row.latest_activity_at
           ? { status: row.latest_activity_status, remarks: row.latest_activity_remarks, createdAt: row.latest_activity_at }
           : null,
+        leadQuality: compactScoreLeadRow(
+          row,
+          queueActivity.get(String(row.id)),
+          queueScheduled.get(String(row.id))
+        ),
       };
     });
 
@@ -6328,7 +6440,14 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
       if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
         return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
-      return sendJson(res, 200, lead);
+      return sendJson(res, 200, {
+        ...lead,
+        leadQuality: scoreFallbackLead(
+          lead,
+          (fallbackStore as any).leadActivities || [],
+          (fallbackStore as any).scheduledActivities || []
+        ),
+      });
     }
 
     const row = await findLeadByIdRaw(param, false);
@@ -6337,9 +6456,79 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
     if (!isLeadAccessible(row, visibility, caller)) {
       return sendJson(res, 404, { success: false, message: 'Lead not found.' });
     }
-    return sendJson(res, 200, mapLeadRow(row));
+    const mappedSingle: any = mapLeadRow(row);
+    const [singleActivity, singleScheduled] = await Promise.all([
+      fetchActivityQualitySignals(getPool(), [String(row.id)]),
+      fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+    ]);
+    mappedSingle.leadQuality = scoreLeadRow(
+      row,
+      singleActivity.get(String(row.id)),
+      singleScheduled.get(String(row.id))
+    );
+    return sendJson(res, 200, mappedSingle);
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   GET /leads/:id/quality — full Lead Quality explanation (Lead360)
+   Server-authoritative, deterministic, read-only. Same visibility and
+   permission boundary as the lead itself (`leads.view` + scope check);
+   the score never grants access.
+------------------------------------------------------------------- */
+router.get('/leads/:id/quality', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+    const visibility = await resolveCallerVisibility(caller);
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const lead = fallbackStore.leads.find((l: any) => String(l.id) === param);
+      if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      const fakeRow = { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy || null };
+      if (!isLeadAccessible(fakeRow as any, visibility, caller) && !callerIsAdmin(req)) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      return sendJson(res, 200, {
+        success: true,
+        data: scoreFallbackLead(
+          lead,
+          (fallbackStore as any).leadActivities || [],
+          (fallbackStore as any).scheduledActivities || []
+        ),
+      });
+    }
+
+    const row = await findLeadByIdRaw(param, false);
+    if (!row) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    if (!isLeadAccessible(row, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    const [qualityActivity, qualityScheduled] = await Promise.all([
+      fetchActivityQualitySignals(getPool(), [String(row.id)]),
+      fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+    ]);
+    return sendJson(res, 200, {
+      success: true,
+      data: scoreLeadRow(
+        row,
+        qualityActivity.get(String(row.id)),
+        qualityScheduled.get(String(row.id))
+      ),
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead quality fetch failed' });
   }
 });
 
@@ -6587,7 +6776,13 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       (fallbackStore as any).leadActivities.push(activity);
 
       const mappedActivity = mapActivityRow(activity);
-      // Return lead (authoritative) + activity
+      // Return lead (authoritative) + activity, with fresh quality so the
+      // UI in-place patch never carries a stale score after a status move.
+      (lead as any).leadQuality = scoreFallbackLead(
+        lead,
+        (fallbackStore as any).leadActivities || [],
+        (fallbackStore as any).scheduledActivities || []
+      );
       return sendJson(res, 200, { success: true, data: { lead: lead, activity: mappedActivity } });
     }
 
@@ -6766,11 +6961,23 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       // replaces the previous post-commit LEAD_SELECT re-fetch.
       const employeeIds = await employeeIdsFor([updatedRow.assigned_to, updatedRow.assigned_by]);
       perf.span('db.responseJoins');
-      const mappedLead = mapLeadRow({
+      const mappedLead: any = mapLeadRow({
         ...updatedRow,
         assigned_to_employee_id: employeeIds.get(String(updatedRow.assigned_to || '')) || null,
         assigned_by_employee_id: employeeIds.get(String(updatedRow.assigned_by || '')) || null,
       });
+      // Fresh full quality for the updated row (two single-lead bulk-safe
+      // queries) — the follow-up changed status/recency/follow-up signals.
+      const [fuActivity, fuScheduled] = await Promise.all([
+        fetchActivityQualitySignals(getPool(), [String(updatedRow.id)]),
+        fetchScheduledQualitySignals(getPool(), [String(updatedRow.id)]),
+      ]);
+      mappedLead.leadQuality = scoreLeadRow(
+        updatedRow,
+        fuActivity.get(String(updatedRow.id)),
+        fuScheduled.get(String(updatedRow.id))
+      );
+      perf.span('db.qualitySignals');
       const mappedActivity = mapActivityRow({ ...activityInsert.rows[0], actor_employee_id: caller.employee_id });
       perf.finish(res);
 
@@ -7276,9 +7483,25 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       rows.sort((a: any, b: any) => new Date(a.scheduledAt || a.scheduled_at).getTime() - new Date(b.scheduledAt || b.scheduled_at).getTime());
       const total = rows.length;
       const page = rows.slice(offset, offset + limit);
+      // Parent-lead quality for the page (in-memory, same formula).
+      const pageLeads = Array.from(
+        new Map(
+          page
+            .map((r: any) => leadById.get(String(r.leadId || r.lead_id)))
+            .filter(Boolean)
+            .map((l: any) => [String(l.id), l])
+        ).values()
+      );
+      const schedDemoQuality = compactQualityForFallbackLeads(
+        pageLeads,
+        (fallbackStore as any).leadActivities || [],
+        (fallbackStore as any).scheduledActivities || []
+      );
       const items = page.map((r: any) => {
         const lead = leadById.get(String(r.leadId || r.lead_id));
-        return mapScheduledActivityRow({ ...r, lead_customer_name: (lead as any)?.prospectName || (lead as any)?.customerName, lead_mobile: (lead as any)?.mobile, lead_current_status: (lead as any)?.currentStatus });
+        const mapped: any = mapScheduledActivityRow({ ...r, lead_customer_name: (lead as any)?.prospectName || (lead as any)?.customerName, lead_mobile: (lead as any)?.mobile, lead_current_status: (lead as any)?.currentStatus });
+        mapped.leadQuality = schedDemoQuality.get(String((lead as any)?.id || '')) || null;
+        return mapped;
       });
       return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
     }
@@ -7330,7 +7553,10 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     const pLimit = params.length - 1;
     const pOffset = params.length;
     const listRes = await pool.query(
-      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status,
+              l.next_follow_up_at AS lead_next_follow_up_at, l.last_contacted_at AS lead_last_contacted_at,
+              l.created_at AS lead_created_at, l.expected_premium AS lead_expected_premium,
+              l.custom_fields->>'interestedAmount' AS lead_interested_amount
        FROM scheduled_activities sa
        JOIN leads l ON l.id = sa.lead_id
        WHERE ${whereSql}
@@ -7338,7 +7564,33 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
        LIMIT $${pLimit} OFFSET $${pOffset}`,
       params
     );
-    const items = listRes.rows.map(mapScheduledActivityRow);
+    // Parent-lead quality for the page: two bulk signal queries over the
+    // distinct parent leads — never per-row.
+    const parentIds = Array.from(
+      new Set((listRes.rows || []).map((r: any) => String(r.lead_id || '')))
+    ).filter(Boolean);
+    const [schedActivity, schedPlanned] = await Promise.all([
+      fetchActivityQualitySignals(pool, parentIds),
+      fetchScheduledQualitySignals(pool, parentIds),
+    ]);
+    const items = listRes.rows.map((row: any) => {
+      const mapped: any = mapScheduledActivityRow(row);
+      const parentKey = String(row.lead_id || '');
+      mapped.leadQuality = compactScoreLeadRow(
+        {
+          id: parentKey,
+          current_status: row.lead_current_status,
+          next_follow_up_at: row.lead_next_follow_up_at,
+          last_contacted_at: row.lead_last_contacted_at,
+          created_at: row.lead_created_at,
+          expected_premium: row.lead_expected_premium,
+          custom_fields: { interestedAmount: row.lead_interested_amount },
+        },
+        schedActivity.get(parentKey),
+        schedPlanned.get(parentKey)
+      );
+      return mapped;
+    });
     return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activities fetch failed.' });
@@ -8328,7 +8580,12 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         })
         .map((u: any) => ({ employeeId: u.employeeId, name: u.fullName || u.name || u.employeeId, role: u.role }));
 
-      const data = computeDashboardFromLeads(leads, followUpCounts, bounds, period.label, agents);
+      const data: any = computeDashboardFromLeads(leads, followUpCounts, bounds, period.label, agents);
+      data.quality = aggregateQualityForFallbackLeads(
+        leads,
+        (fallbackStore as any).leadActivities || [],
+        (fallbackStore as any).scheduledActivities || []
+      );
       return sendJson(res, 200, { success: true, data });
     }
 
@@ -8411,11 +8668,18 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       LIMIT 200
     `;
 
+    // Lead Quality aggregates: one narrow active-lead scan + two bulk
+    // signal queries, scored in memory. Same visibility scope as every
+    // other dashboard figure — never wider.
+    const qualityParams: any[] = [];
+    const qualityVisibilitySql = buildDashboardVisibilitySql(visibility, qualityParams);
+
     // Team Performance deferred (Step 5B): do not invent teams from area text.
-    const [metricRes, fuRes, agentRes] = await Promise.all([
+    const [metricRes, fuRes, agentRes, qualityAgg] = await Promise.all([
       pool.query(metricSql, metricParams),
       pool.query(fuCountSql, fuParams),
       pool.query(agentSql, agentParams),
+      aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList),
     ]);
     perf.span('db.queries');
 
@@ -8495,6 +8759,10 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       conversionRateValue: totalLeads > 0 ? Number(((converted / totalLeads) * 100).toFixed(1)) : 0,
       // No fabricated TAT — null until a proven first-contact source exists.
       avgResponseTAT: null,
+      // Lead Quality distribution over active visible leads (Hot/Warm/
+      // Developing/Cold + mean active score + attention count). Terminal
+      // outcomes stay in converted/notInterested, never in these bands.
+      quality: qualityAgg,
       followUpsQueue: followUpCounts,
       followUpCounts,
       agentStats,
