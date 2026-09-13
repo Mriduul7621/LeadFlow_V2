@@ -15,7 +15,6 @@
     "smoke:production": "tsx scripts/smoke-production.ts"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
     "@hookform/resolvers": "^5.2.2",
     "@supabase/supabase-js": "^2.106.2",
     "@tailwindcss/vite": "^4.1.14",

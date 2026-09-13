@@ -85,7 +85,6 @@ The canonical catalog lives in `server/config/env.ts`
 | `TRUST_PROXY` | OPTIONAL | Trusted reverse-proxy hop count for rate-limit client IPs. |
 | `PORT`, `PGSSL` | OPTIONAL | Standalone listen port / SSL override. |
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | OPTIONAL | Public browser config (compiled into the client bundle). |
-| `GEMINI_API_KEY` | OPTIONAL | See §6 (secret exposure finding). |
 | `SESSION_SECRET` | OPTIONAL | Reserved; the current auth flow is JWT-based. |
 
 **In production:**
@@ -105,6 +104,22 @@ Consequences are enforced where they matter:
 - The readiness endpoint reports `config.ok: false` with the offending
   variable names.
 - Startup logs a secret-free `[config]` summary + per-issue lines.
+
+### Production secrets policy (client boundary)
+
+- **Server secrets are never injected into the browser bundle.** `DATABASE_URL`
+  and `JWT_SECRET` are server-only and never appear in `vite.config.ts`
+  `define` or any `import.meta.env` value.
+- Only **public-by-design** variables may reach the client, and only via the
+  `VITE_` prefix (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
+- A prior finding — `GEMINI_API_KEY` injected into the bundle via
+  `vite.config.ts` — has been **fixed**: the key is not used by any runtime
+  feature, so the Vite `define` entry, the only client import of
+  `@google/genai`, and the now-unused dependency were all removed. Source
+  guards (`production-readiness.test.ts` Part 5) and a built-output search
+  prove the key name/value cannot be bundled into browser assets.
+- If a server-side AI call is ever added, it must go through a server API
+  boundary and **never** return the raw key to the client.
 
 ---
 
@@ -156,7 +171,7 @@ Recorded during the audit; not all are fixed in this stage.
 
 | # | Finding | Severity | Disposition |
 | --- | --- | --- | --- |
-| 1 | `GEMINI_API_KEY` is injected into the **browser bundle** (`vite.config.ts`), i.e. exposed to any client that loads the app. | **HIGH** | Documented as an open item; moving the Gemini call server-side is an architecture change tracked under the roadmap. |
+| 1 | ~~`GEMINI_API_KEY` injected into the browser bundle via `vite.config.ts`.~~ | ~~HIGH~~ **FIXED** | The Vite `define` injection, the only client import of `@google/genai`, and the now-unused dependency were removed. The key is **not** used by any runtime feature (the client Gemini import was an unused placeholder). Source guards + built-output search prove it cannot be bundled. |
 | 2 | Migration failures are logged but not surfaced as a readiness signal (see §5). | **HIGH** | Mitigated operationally by `verify:db-schema` + release-runbook gate; structural fix deferred. |
 | 3 | `server/db.ts` and `server/server.ts` are legacy, unused duplicates (not imported by either entrypoint); `server/db.ts` contains a contradictory "fallback to in-memory" log line and unconditionally `rejectUnauthorized: false`. | MEDIUM | Left untouched (avoid rewriting); they are dead code and should be deleted in a cleanup PR. |
 | 4 | `DATABASE_URL` connections use `ssl: { rejectUnauthorized: false }` (Supabase convention). | MEDIUM | Accepted for Supabase; document for non-Supabase hosts in the deployment runbook. |

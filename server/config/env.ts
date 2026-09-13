@@ -111,12 +111,6 @@ export const ENV_VAR_SPECS: EnvVarSpec[] = [
     description: 'Supabase anon key. Public by design; row-level security scoped.',
   },
   {
-    name: 'GEMINI_API_KEY',
-    classification: 'OPTIONAL',
-    description:
-      'Gemini API key injected into the browser bundle. See the secrets policy in docs/PRODUCTION_READINESS.md.',
-  },
-  {
     name: 'SESSION_SECRET',
     classification: 'OPTIONAL',
     description: 'Reserved. The current auth flow is JWT-based and does not consume this.',

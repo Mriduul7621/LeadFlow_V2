@@ -341,3 +341,90 @@ describe('Production-readiness source guards', () => {
     assert.ok(!smoke.includes('JWT_SECRET='), 'smoke script has no JWT secret');
   });
 });
+
+/* ==================================================================== */
+/* Part 5 — server-secret exposure guards (GEMINI_API_KEY)              */
+/* ==================================================================== */
+
+/** Recursively list files under a relative directory (test-only helper). */
+function listFiles(dir: string): string[] {
+  const out: string[] = [];
+  const abs = path.join(ROOT, dir);
+  if (!fs.existsSync(abs)) return out;
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...listFiles(rel));
+    else out.push(rel);
+  }
+  return out;
+}
+
+const CLIENT_DIRS = ['src'];
+const CLIENT_EXTS = ['.ts', '.tsx', '.js', '.jsx'];
+
+function clientSourceFiles(): string[] {
+  return CLIENT_DIRS.flatMap((d) =>
+    listFiles(d).filter((f) => CLIENT_EXTS.some((ext) => f.endsWith(ext)))
+  );
+}
+
+describe('Server-secret exposure guards (GEMINI_API_KEY)', () => {
+  it('W. GEMINI_API_KEY is not injected into the browser via Vite define/env', () => {
+    const vite = read('vite.config.ts');
+    assert.ok(!vite.includes('GEMINI_API_KEY'), 'vite.config.ts must not reference GEMINI_API_KEY');
+    assert.ok(!/process\.env\.GEMINI/.test(vite), 'vite.config.ts must not inject a process.env GEMINI value');
+    // Any process.env reference must be a public VITE_* var (or a benign dev flag),
+    // never a server secret.
+    const processEnvRefs = [...vite.matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1]);
+    const allowed = new Set(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY', 'DISABLE_HMR']);
+    for (const name of processEnvRefs) {
+      assert.ok(allowed.has(name), `process.env.${name} must not be injected into the browser bundle`);
+    }
+  });
+
+  it('X. no client source imports or references the Gemini SDK or key', () => {
+    const files = clientSourceFiles();
+    assert.ok(files.length > 0, 'expected client source files to scan');
+    for (const f of files) {
+      const src = read(f);
+      assert.ok(!/GEMINI_API_KEY/i.test(src), `${f} must not reference GEMINI_API_KEY`);
+      assert.ok(!/@google\/genai|GoogleGenAI|google-genai/i.test(src), `${f} must not import the Gemini SDK`);
+    }
+  });
+
+  it('Y. GEMINI_API_KEY is no longer classified as a runtime env requirement', () => {
+    const gemini = ENV_VAR_SPECS.filter((s) => /GEMINI/i.test(s.name));
+    assert.deepEqual(gemini, [], 'GEMINI_API_KEY must not appear in the env catalog');
+  });
+
+  it('Z. config validation never exposes a GEMINI_API_KEY value', () => {
+    const report = validateProductionConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@h/d',
+      JWT_SECRET: 'a-strong-production-secret-1234567890',
+      GEMINI_API_KEY: 'AIzaVerySecretValue123456789',
+    } as NodeJS.ProcessEnv);
+    const serialized = JSON.stringify(report);
+    assert.ok(!serialized.includes('AIzaVerySecretValue123456789'), 'GEMINI_API_KEY value must never leak');
+    // And the env catalog's own source must not contain a hard-coded secret.
+    const envSrc = read('server/config/env.ts');
+    assert.ok(!/AIza[A-Za-z0-9_-]{10,}/.test(envSrc), 'no hard-coded API key in env.ts');
+  });
+
+  it('AA. only public VITE_* variables remain in the Vite define block', () => {
+    const vite = read('vite.config.ts');
+    // Every `define` entry that names an import.meta.env var must be VITE_-prefixed.
+    const defines = [...vite.matchAll(/import\.meta\.env\.([A-Z0-9_]+)/g)].map((m) => m[1]);
+    assert.ok(defines.length > 0, 'expected at least one define entry');
+    for (const name of defines) {
+      assert.ok(name.startsWith('VITE_'), `only VITE_* vars may be defined, got ${name}`);
+    }
+  });
+
+  it('AB. the Gemini SDK dependency is no longer shipped', () => {
+    const pkg = read('package.json');
+    assert.ok(!pkg.includes('@google/genai'), 'package.json must not depend on @google/genai');
+    const lock = read('package-lock.json');
+    assert.ok(!lock.includes('@google/genai'), 'package-lock.json must not reference @google/genai');
+  });
+});
