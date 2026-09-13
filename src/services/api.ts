@@ -1,7 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
-
 // This is a placeholder service. In a real app, you'd fetch from your GAS endpoint.
 // For now, it provides mock data or logic.
+//
+// NOTE: no server secret (e.g. a Gemini/API key) is imported or referenced
+// here. Any future AI call must go through a server-side API boundary and
+// never embed the key in the browser bundle (see docs/PRODUCTION_READINESS.md).
 
 export const fetchLeads = async (filters: any) => {
   // Simulate API delay

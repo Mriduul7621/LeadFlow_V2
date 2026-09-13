@@ -8,7 +8,10 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      // Only PUBLIC, by-design browser variables are injected here. Never
+      // inject a server secret (e.g. a Gemini/API key) through Vite `define`
+      // or `import.meta.env` — it would be compiled into the client bundle
+      // and shipped to every browser. See docs/PRODUCTION_READINESS.md.
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || ''),
     },

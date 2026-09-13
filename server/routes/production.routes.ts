@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { isWeakJwtSecret } from '../config/env.js';
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
@@ -95,8 +96,12 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VER
 
 const JWT_SECRET = process.env.JWT_SECRET || 'leadflow_development_only_secret';
 
-if (!process.env.JWT_SECRET && IS_PRODUCTION) {
-  console.error('❌ JWT_SECRET is not configured in production. Authentication will refuse to start.');
+if (IS_PRODUCTION && isWeakJwtSecret(process.env.JWT_SECRET)) {
+  console.error(
+    '❌ JWT_SECRET is not configured, or is a known weak/default value. ' +
+      'Authentication will refuse to sign tokens in production. ' +
+      'Set a strong, production-specific secret (see docs/PRODUCTION_READINESS.md).'
+  );
 }
 
 function useDb(): boolean {
@@ -130,8 +135,11 @@ function normalizeRole(value?: string): string {
 }
 
 function signToken(payload: Record<string, any>): string {
-  if (!process.env.JWT_SECRET && IS_PRODUCTION) {
-    throw new Error('JWT_SECRET is not configured.');
+  if (IS_PRODUCTION && isWeakJwtSecret(process.env.JWT_SECRET)) {
+    throw new Error(
+      'JWT_SECRET is not configured, or is a known weak/default value. ' +
+        'Refusing to sign a token in production.'
+    );
   }
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
