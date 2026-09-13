@@ -4285,14 +4285,20 @@ router.get('/notifications/leads/:leadId', requireAuth, async (req, res) => {
 });
 
 /**
- * Cross-user boundary (audit fix):
- *   - notifying SELF is a self-service action (authenticated only);
- *   - notifying ANOTHER user is a cross-user mutation. The only business
- *     flow that produces cross-user notifications is the lead
- *     assignment/transfer fan-out, so it requires one of the canonical
- *     routing grants (leads.assign / leads.transfer) — fail closed for
- *     everyone else instead of letting any authenticated employee push
- *     notifications to arbitrary accounts.
+ * Generic notification endpoint (self-service channel).
+ * ------------------------------------------------------------------
+ * Cross-user boundary (audit fix, PR #40) — updated by the notification
+ * reliability PR:
+ *   - notifying SELF remains a self-service action (authenticated only);
+ *   - arbitrary cross-user direct creation stays tightly permission-gated
+ *     to the canonical routing grants (leads.assign / leads.transfer);
+ *   - this endpoint must NOT become a backdoor around the business APIs:
+ *     system-generated business notifications (lead assignment fan-out)
+ *     are produced server-side by the route that commits the business
+ *     mutation (see POST /leads and docs/NOTIFICATION_RELIABILITY.md), so
+ *     the browser never needs to call this endpoint after an assignment.
+ * Rows created here are manual self-service notifications: event_key
+ * stays NULL (they are never part of the idempotency identity).
  */
 router.post('/notifications', requireAuth, async (req, res) => {
   const payload = req.body || {};
@@ -4426,6 +4432,239 @@ router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('u
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification delete failed' });
   }
 });
+
+/* ====================================================================
+   SYSTEM NOTIFICATIONS — server-owned business delivery
+   ------------------------------------------------------------------
+   Lead assignment / reassignment used to notify through the BROWSER:
+   after the lead commit, leadService fired one POST /api/notifications
+   per recipient, fire-and-forget, and the fan-out died with the tab.
+   Production business notifications are therefore produced HERE, by
+   the route that commits the authoritative mutation, inside the SAME
+   database transaction (business-critical semantics — a notification
+   insert failure rolls the whole save back; a retry of the same
+   business event re-derives the same idempotency keys and inserts
+   nothing twice; there is no in-memory or browser retry queue —
+   serverless memory is NOT a durable queue; see
+   docs/NOTIFICATION_RELIABILITY.md).
+
+   Recipients are resolved SERVER-SIDE only, from users.manager_id —
+   client-sent recipient lists are never trusted for system events.
+   The established recipient scope is preserved exactly:
+     - the assignee always receives 'New Lead Assigned';
+     - every active manager up the reporting chain receives one
+       'Team Lead Assigned Upline Alert';
+     - traversal STOPS at the first inactive/missing manager (the same
+       boundary the client loop enforced before it was removed);
+     - cycles terminate; recipients are deduped by user id;
+     - unassignment intentionally notifies nobody (current behavior);
+     - bulk import intentionally does not fan out (current behavior —
+       no notifications were ever produced there and inventing them
+       would be new business behavior).
+==================================================================== */
+
+/** Coarse event class for system-generated lead-routing notifications. */
+const LEAD_ASSIGNMENT_EVENT_TYPE = 'lead-assigned';
+
+/**
+ * Hard bound for the upward hierarchy traversal. Real reporting chains
+ * stop at the org root (manager_id NULL) long before this; the bound
+ * makes traversal deterministic even on malformed data and mirrors the
+ * cycle-guard semantics the removed client loop provided via its
+ * `visited` set.
+ */
+const NOTIFICATION_MAX_UPLINE_DEPTH = 32;
+
+/**
+ * Stable, DATA-DERIVED idempotency identity:
+ *   lead-assigned:<leadCode>:<assignmentSeq>:<recipientKey>
+ *
+ * assignmentSeq is the length of the lead's assignment_history array
+ * immediately AFTER this save's server-side merge — i.e. the number of
+ * recorded assignment transitions the lead has now. A brand-new record
+ * whose create-event carries an empty history legitimately uses 0 (no
+ * merged entry existed at insert time). Because the history array grows
+ * monotonically, every distinct business event on a lead has a distinct
+ * seq, while a RETRY of a rolled-back attempt recomputes the identical
+ * length (nothing committed) and therefore the identical key — the
+ * unique partial index (uniq_notifications_event_key) turns the duplicate
+ * insert into a no-op. A fully committed event replayed as a new request
+ * no longer changes the assignment, so no event is produced at all.
+ * Timestamps / random UUIDs are deliberately NOT part of the key.
+ */
+function leadAssignmentEventKey(leadCode: string, assignmentSeq: number, recipientKey: string): string {
+  const seq = Math.max(0, Math.floor(Number(assignmentSeq)) || 0);
+  return `${LEAD_ASSIGNMENT_EVENT_TYPE}:${String(leadCode || '').slice(0, 50)}:${seq}:${String(recipientKey || '').slice(0, 60)}`.slice(0, 180);
+}
+
+export interface LeadNotificationRecipient {
+  userId: string;
+  employeeId: string;
+  fullName: string;
+  /** 1 = assignee (chain start); 2+ = upline managers, nearest first. */
+  depth: number;
+}
+
+/**
+ * Resolve the assignee + upline notification recipients in ONE bounded
+ * recursive query over the authoritative users.manager_id graph:
+ *   - cycle-safe (path array + depth bound),
+ *   - active-only above the assignee (is_active AND account_status),
+ *     with traversal stopping at the first inactive/missing manager —
+ *     the exact boundary semantics of the removed client loop,
+ *   - deduped by construction (a user can appear in the chain once).
+ * The account_status predicate reads the column through to_jsonb so the
+ * query remains valid on legacy databases where the pre-035 shape lacks
+ * the column (missing column ⇒ treated as not-INACTIVE, exactly what the
+ * 035 default would add).
+ */
+async function resolveLeadAssignmentUpline(
+  executor: any,
+  assigneeUserId: string
+): Promise<LeadNotificationRecipient[]> {
+  const assigneeUuid = asUuid(assigneeUserId);
+  if (!assigneeUuid) return [];
+  const result = await executor.query(
+    `WITH RECURSIVE upline AS (
+       SELECT u.id, u.employee_id, u.full_name, u.manager_id, 1 AS depth, ARRAY[u.id] AS path
+       FROM users u
+       WHERE u.id = $1::uuid
+       UNION ALL
+       SELECT m.id, m.employee_id, m.full_name, m.manager_id, p.depth + 1, p.path || m.id
+       FROM users m
+       JOIN upline p ON m.id = p.manager_id
+       WHERE p.depth < $2
+         AND NOT m.id = ANY(p.path)
+         AND m.is_active IS DISTINCT FROM FALSE
+         AND UPPER(COALESCE((to_jsonb(m))->>'account_status', 'ACTIVE')) <> 'INACTIVE'
+     )
+     SELECT id, employee_id, full_name, depth FROM upline ORDER BY depth`,
+    [assigneeUuid, NOTIFICATION_MAX_UPLINE_DEPTH]
+  );
+  return (result.rows || []).map((row: any) => ({
+    userId: String(row.id),
+    employeeId: String(row.employee_id || ''),
+    fullName: String(row.full_name || row.employee_id || ''),
+    depth: Number(row.depth) || 1,
+  }));
+}
+
+/**
+ * Dev-demo mirror of resolveLeadAssignmentUpline over the in-memory store
+ * (never used when a database is configured). Walks the same
+ * employee-keyed manager chain with the same stop/cycle semantics as the
+ * client loop it replaces.
+ */
+function resolveLeadAssignmentUplineDemo(assigneeEmployeeId: string): LeadNotificationRecipient[] {
+  const byEmp = new Map<string, any>();
+  for (const u of fallbackStore.users) byEmp.set(String(u.employeeId || '').toUpperCase(), u);
+  const out: LeadNotificationRecipient[] = [];
+  const visited = new Set<string>();
+  let current = byEmp.get(String(assigneeEmployeeId || '').toUpperCase());
+  let depth = 1;
+  while (current && depth <= NOTIFICATION_MAX_UPLINE_DEPTH) {
+    const empKey = String(current.employeeId || '').toUpperCase();
+    if (!empKey || visited.has(empKey)) break; // cycle guard
+    visited.add(empKey);
+    out.push({
+      userId: current.id,
+      employeeId: current.employeeId,
+      fullName: current.name || current.fullName || current.employeeId,
+      depth,
+    });
+    const manager = current.managerId ? byEmp.get(String(current.managerId).toUpperCase()) : undefined;
+    if (!manager || manager.status === 'Inactive' || String(manager.accountStatus || '').toUpperCase() === 'INACTIVE') break;
+    current = manager;
+    depth += 1;
+  }
+  return out;
+}
+
+function leadAssignmentNotificationTitle(recipient: LeadNotificationRecipient): string {
+  return recipient.depth === 1 ? 'New Lead Assigned' : 'Team Lead Assigned Upline Alert';
+}
+
+function leadAssignmentNotificationMessage(
+  recipient: LeadNotificationRecipient,
+  args: { prospectName: string; assigneeEmployeeId: string; subordinateName: string; actorName: string }
+): string {
+  if (recipient.depth === 1) {
+    return `Lead '${args.prospectName}' has been assigned to you by ${args.actorName}.`;
+  }
+  return `Lead '${args.prospectName}' under your team tracking has been routed to assignee: ${args.assigneeEmployeeId} (${args.subordinateName}) by ${args.actorName}.`;
+}
+
+/**
+ * Insert the system notifications for one assignment event in a SINGLE
+ * batched statement (one round trip regardless of recipient count) with
+ * ON CONFLICT DO NOTHING on the partial unique event_key index — the
+ * DB-enforced at-most-once guarantee. MUST be executed on the same
+ * transaction client as the lead mutation it is coupled to.
+ */
+async function insertLeadAssignmentNotifications(
+  executor: any,
+  args: {
+    leadId: string;             // lead row UUID (reference_id)
+    leadCode: string;           // canonical lead_code (read-back key + idempotency)
+    prospectName: string;
+    actorName: string;
+    assigneeEmployeeId: string;
+    eventSeq: number;
+    recipients: LeadNotificationRecipient[];
+  }
+): Promise<number> {
+  if (!args.recipients.length) return 0;
+  const assignee = args.recipients[0];
+  const columnsPerRow = 8;
+  const tuples: string[] = [];
+  const params: any[] = [];
+  const leadUuid = asUuid(args.leadId);
+  args.recipients.forEach((recipient, index) => {
+    const subordinate = index > 0 ? args.recipients[index - 1] : recipient;
+    const base = index * columnsPerRow;
+    tuples.push(
+      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, FALSE, 'info', NOW(), NOW())`
+    );
+    params.push(
+      recipient.userId,
+      recipient.employeeId || null,
+      leadAssignmentNotificationTitle(recipient),
+      leadAssignmentNotificationMessage(recipient, {
+        prospectName: args.prospectName,
+        assigneeEmployeeId: args.assigneeEmployeeId || assignee.employeeId,
+        subordinateName: subordinate.fullName,
+        actorName: args.actorName,
+      }),
+      String(args.leadCode || '').slice(0, 50) || null,
+      leadUuid,
+      leadAssignmentEventKey(args.leadCode, args.eventSeq, recipient.employeeId || recipient.userId),
+      LEAD_ASSIGNMENT_EVENT_TYPE
+    );
+  });
+  const result = await executor.query(
+    `INSERT INTO notifications
+       (user_id, recipient_key, title, message, lead_code, reference_id, event_key, event_type, is_read, type, created_at, updated_at)
+     VALUES ${tuples.join(', ')}
+     ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING`,
+    params
+  );
+  return result.rowCount ?? 0;
+}
+
+/** Authenticated actor's display name for notification wording — always
+ *  server-derived (never a client-sent name) for system events. */
+async function callerDisplayName(caller: CallerDbInfo): Promise<string> {
+  if (!useDb()) {
+    const user = fallbackStore.users.find(u => u.id === caller.id || u.employeeId === caller.employee_id);
+    return String((user as any)?.name || (user as any)?.fullName || caller.employee_id || 'System');
+  }
+  try {
+    const result = await getPool().query('SELECT full_name FROM users WHERE id = $1', [caller.id]);
+    return String(result.rows[0]?.full_name || caller.employee_id || 'System');
+  } catch {
+    return String(caller.employee_id || 'System');
+  }
+}
 
 /* ====================================================================
    LEADS
@@ -5162,6 +5401,39 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       const existingIndex = fallbackStore.leads.findIndex((item: any) => item.id === lead.id || String(item.mobile || '').toUpperCase() === String(lead.mobile || '').toUpperCase());
       if (existingIndex >= 0) fallbackStore.leads[existingIndex] = { ...fallbackStore.leads[existingIndex], ...lead };
       else fallbackStore.leads.push(lead);
+
+      // Dev-demo mirror of the server-owned notification transaction: same
+      // recipient rules (assignee + active upline chain, stop at first
+      // inactive, cycle-safe, deduped). In-memory; no durability promised
+      // (demo mode is explicitly non-persistent).
+      if (lead.assignedTo && (existingLead ? (assignmentRequested && assignmentChanged) : true)) {
+        const demoHistory = Array.isArray(finalAssignmentHistory) ? finalAssignmentHistory : [];
+        const eventSeq = demoHistory.length;
+        const recipients = resolveLeadAssignmentUplineDemo(String(lead.assignedTo));
+        const actorName = await callerDisplayName(caller);
+        const seenKeys = new Set<string>();
+        recipients.forEach((recipient, index) => {
+          const eventKey = leadAssignmentEventKey(String(lead.id || lead.leadCode || ''), eventSeq, recipient.employeeId || recipient.userId);
+          if (seenKeys.has(eventKey)) return;
+          seenKeys.add(eventKey);
+          const subordinate = index > 0 ? recipients[index - 1] : recipient;
+          fallbackStore.notifications.push({
+            id: createId('notification'),
+            userId: recipient.employeeId,
+            title: leadAssignmentNotificationTitle(recipient),
+            message: leadAssignmentNotificationMessage(recipient, {
+              prospectName: String(lead.prospectName || lead.customerName || ''),
+              assigneeEmployeeId: recipients[0]?.employeeId || '',
+              subordinateName: subordinate.fullName,
+              actorName,
+            }),
+            leadId: String(lead.id || ''),
+            read: false,
+            date: new Date().toISOString(),
+          });
+        });
+      }
+
       lead.leadQuality = scoreFallbackLead(
         lead,
         (fallbackStore as any).leadActivities || [],
@@ -5170,10 +5442,68 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       return sendJson(res, 200, { success: true, data: lead });
     }
 
+    let savedRow: any = null;
+    {
+      // ---------- business mutation + system notifications (one txn) ----------
+      const pool = getPool();
+      let client: any;
+      try {
+        client = await pool.connect();
+      } catch (error: any) {
+        perf.finish(res);
+        return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
+      }
+      try {
+        await client.query('BEGIN');
+        const result = await client.query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
+        perf.span('db.upsert');
+        savedRow = result.rows[0];
+
+        // ---- server-owned business notification (transactional, idempotent) ----
+        // Event = this save genuinely set an assignee. Replaying a committed
+        // assignment resolves assignmentChanged=false, so a committed event is
+        // never re-notified; a rolled-back retry re-derives identical event keys
+        // and the unique partial index collapses the duplicate inserts.
+        if (savedRow && savedRow.assigned_to) {
+          const assignmentEvent = existingLead ? (assignmentRequested && assignmentChanged) : true;
+          if (assignmentEvent) {
+            const mergedHistory = Array.isArray(savedRow.assignment_history)
+              ? savedRow.assignment_history
+              : (Array.isArray((record as any).assignmentHistory) ? (record as any).assignmentHistory : []);
+            const eventSeq = mergedHistory.length;
+            const recipients = await resolveLeadAssignmentUpline(client, String(savedRow.assigned_to));
+            const actorName = await callerDisplayName(caller);
+            await insertLeadAssignmentNotifications(client, {
+              leadId: String(savedRow.id),
+              leadCode: String(savedRow.lead_code || ''),
+              prospectName: String(savedRow.customer_name || ''),
+              actorName,
+              assigneeEmployeeId: recipients[0]?.employeeId || '',
+              eventSeq,
+              recipients,
+            });
+            perf.span('db.notifications');
+          }
+        }
+
+        await client.query('COMMIT');
+        perf.span('db.commit');
+      } catch (error: any) {
+        // Documented transaction semantics: the notification insert is PART of
+        // the assignment transaction. Any failure before commit rolls back the
+        // entire save — no partial lead/history state is left behind and the
+        // client receives a failure (never a silent "saved without notifying").
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        console.error(`[leads] lead save rolled back for ${record.leadCode}: ${error?.message || error}`);
+        perf.finish(res);
+        return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
+      } finally {
+        try { client.release(); } catch { /* ignore */ }
+      }
+    }
+
     try {
-      const result = await getPool().query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
-      perf.span('db.upsert');
-      const row = result.rows[0];
+      const row = savedRow;
       // One primary-key lookup for both joined employee ids (was two
       // sequential lookups on the response path).
       const employeeIds = await employeeIdsFor([row.assigned_to, row.assigned_by]);

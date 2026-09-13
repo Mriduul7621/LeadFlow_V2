@@ -2,11 +2,9 @@ import { Lead, LeadQuality, LeadStatus, RolePermission, StatusHistoryEntry, User
 import { useAuthStore } from '../../auth/store/authStore';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
-import { notificationService } from '../../notifications/services/notificationService';
 import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
-import { toast } from 'sonner';
 import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
@@ -62,59 +60,21 @@ export interface BulkImportResult {
  *   Every mutation calls the API FIRST. The local cache is only updated
  *   after the server confirms the PostgreSQL commit. Failed writes
  *   throw; no lead is ever "saved" locally while the cloud write failed.
+ *
+ * Notification policy (reliability hardening):
+ *   The browser is NOT a notification producer for business events.
+ *   Lead assignment / reassignment / transfer notifications are created
+ *   server-side, in the same PostgreSQL transaction that commits the
+ *   lead mutation, with DB-enforced idempotency (event_key) — see
+ *   POST /api/leads and docs/NOTIFICATION_RELIABILITY.md. The client
+ *   therefore performs exactly ONE request per mutation; it never issues
+ *   a second best-effort fan-out and never depends on a tab staying open.
+ *   Recipients remain displayed via the normal user-scoped notification
+ *   reads (AppLayout refresh), which are display-refresh only.
  */
 
 function currentEmployeeId(): string {
   return useAuthStore.getState().user?.employeeId || '';
-}
-
-async function sendHierarchyNotifications(leadId: string, prospectName: string, assignedTo: string, updaterName: string) {
-  const errors: string[] = [];
-  try {
-    const allUsers = await userService.getAllUsers();
-
-    // 1. Send notification to the assignee
-    try {
-      await notificationService.createNotification(assignedTo, 'New Lead Assigned', `Lead '${prospectName}' has been assigned to you by ${updaterName}.`, leadId);
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : 'Assignee notification failed');
-    }
-
-    // 2. Transmit notifications up the supervisor/manager hierarchy
-    let currentAssignee = allUsers.find(u => u.employeeId === assignedTo);
-    const visited = new Set<string>();
-    if (currentAssignee) visited.add(currentAssignee.employeeId);
-
-    while (currentAssignee && currentAssignee.managerId) {
-      const supervisorId = currentAssignee.managerId;
-      if (visited.has(supervisorId)) break; // Prevent infinite loops
-      visited.add(supervisorId);
-
-      const manager = allUsers.find(u => u.employeeId === supervisorId);
-      if (manager && manager.status === 'Active') {
-        try {
-          await notificationService.createNotification(
-            manager.employeeId,
-            'Team Lead Assigned Upline Alert',
-            `Lead '${prospectName}' under your team tracking has been routed to assignee: ${assignedTo} (${currentAssignee.name}) by ${updaterName}.`,
-            leadId
-          );
-        } catch (err) {
-          errors.push(err instanceof Error ? err.message : 'Upline notification failed');
-        }
-        currentAssignee = manager;
-      } else {
-        break;
-      }
-    }
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : 'Notification recipients could not be loaded');
-  }
-  if (errors.length > 0) {
-    // The lead itself is persisted - surface the side-effect failure so it
-    // is never silently lost, without rolling back the successful write.
-    toast.warning('Lead saved, but one or more team notifications could not be sent.', { id: `notif-${leadId}` });
-  }
 }
 
 function loadRolePermissions(): RolePermission[] {
@@ -180,17 +140,10 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications are a side channel - fired only AFTER the
-    // lead itself committed to the database, and fire-and-forget: the
-    // save is already server-confirmed, so the notification fan-out
-    // (which fans out one request per supervisor up the chain) must not
-    // extend the user's "saving..." state. Failures still surface via the
-    // warning toast inside sendHierarchyNotifications.
-    if (saved.assignedTo) {
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System').catch(
-        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
-      );
-    }
+    // No client-side notification fan-out: POST /api/leads owns the
+    // assignment notification rows in the same database transaction.
+    // A notification failure fails the save (nothing partial is left);
+    // the affected inbox refreshes through the normal reads.
     return saved;
   },
 
@@ -470,14 +423,9 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications after the DB commit confirmed — and
-    // fire-and-forget, so the confirmed save is not extended by the
-    // per-supervisor fan-out (see createLead above).
-    if (fields.assignedTo && fields.assignedTo !== existing.assignedTo) {
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater).catch(
-        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
-      );
-    }
+    // Reassignment / transfer notifications are produced server-side by
+    // the /api/leads transaction itself (see createLead above) — the
+    // browser never issues the per-recipient fan-out anymore.
     return saved;
   },
 
