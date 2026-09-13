@@ -4,6 +4,11 @@ import { User } from '../../shared/types';
 import { clearSessionCache } from '../../shared/api/sessionCache';
 import { clearCoalescing } from '../../shared/api/coalesce';
 import { resetStartupPriority } from '../../shared/api/startupPriority';
+import {
+  setLocalDbUserIdProvider,
+  clearUserCaches,
+  clearLegacyGlobalCaches,
+} from '../../../services/localDb';
 
 /**
  * authStore.ts
@@ -57,6 +62,9 @@ export const useAuthStore = create<AuthState>()(
         set({ user, token: token || null, isAuthenticated: true, isInitialized: true, isOfflineMode: isOffline });
       },
       logout: () => {
+        // Capture the signing-out user FIRST: their browser caches must
+        // be deleted while their identity is still resolvable.
+        const signingOutUser = useAuthStore.getState().user;
         localStorage.removeItem('leadflow-auth');
         localStorage.removeItem('leadflow_last_activity');
         // Session-scoped data (roles, notifications, permission sheet)
@@ -68,6 +76,13 @@ export const useAuthStore = create<AuthState>()(
         clearCoalescing();
         // First-dashboard sequencing must restart for the next login.
         resetStartupPriority();
+        // Per-user localStorage business caches (leads, users,
+        // notifications) belong to the signing-out user: delete them so
+        // the next account on this browser can never fall back to this
+        // user's previously visible data. Also sweep the pre-hardening
+        // unscoped global keys one last time.
+        clearUserCaches(signingOutUser?.id);
+        clearLegacyGlobalCaches();
         // `isInitialized` is deliberately preserved: logging out is a settled
         // state, and re-running validation after a logout is how a page ends
         // up in a redirect loop.
@@ -91,3 +106,12 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+
+/**
+ * localDb business-data caches are keyed per authenticated user. The
+ * provider is registered here (one-way dependency: authStore ->
+ * localDb) so every cache read/write resolves the CURRENT user's scope;
+ * when logged out the scope is null and business data is neither read
+ * nor persisted.
+ */
+setLocalDbUserIdProvider(() => useAuthStore.getState().user?.id ?? null);

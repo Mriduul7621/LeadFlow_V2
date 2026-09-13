@@ -1,4 +1,5 @@
 import { apiRequest, ApiError } from '../../shared/api/http';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 export interface Department {
   id: string;
@@ -136,7 +137,7 @@ export const orgService = {
       writeCache(KEYS.DEPT, cloudDepts);
       return cloudDepts;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return readCache<Department>(KEYS.DEPT);
     }
   },
@@ -169,7 +170,7 @@ export const orgService = {
       writeCache(KEYS.HIER, cloudHiers);
       return cloudHiers;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return readCache<Hierarchy>(KEYS.HIER);
     }
   },

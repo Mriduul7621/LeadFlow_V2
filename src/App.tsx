@@ -7,6 +7,7 @@ import {
 import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import AdminRoute from './modules/auth/components/AdminRoute';
+import FeatureGate from './modules/auth/components/FeatureGate';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
@@ -89,79 +90,63 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    element: <ProtectedRoute><LazyPage page={<Dashboard />} /></ProtectedRoute>,
+    element: <ProtectedRoute><FeatureGate route="/"><LazyPage page={<Dashboard />} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/leads/new',
-    element: <ProtectedRoute><LazyPage page={<LeadGenerate />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/leads/new"><LazyPage page={<LeadGenerate />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/leads',
-    element: <ProtectedRoute><LazyPage page={<LeadList />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/leads"><LazyPage page={<LeadList />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/leads/upload',
-    element: <ProtectedRoute><LazyPage page={<LeadUpload />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/leads/upload"><LazyPage page={<LeadUpload />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/leads/all',
-    element: <ProtectedRoute><LazyPage page={<AllLeads />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/leads/all"><LazyPage page={<AllLeads />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/follow-up',
-    element: <ProtectedRoute><LazyPage page={<FollowUpStrategy />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/follow-up"><LazyPage page={<FollowUpStrategy />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/task-calendar',
-    element: <ProtectedRoute><LazyPage page={<TaskCalendar />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/task-calendar"><LazyPage page={<TaskCalendar />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/activities',
-    element: <ProtectedRoute><LazyPage page={<Activities />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/activities"><LazyPage page={<Activities />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/workbench',
-    element: <ProtectedRoute><LazyPage page={<DailyWorkbench />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/workbench"><LazyPage page={<DailyWorkbench />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/leads/:id',
-    element: <ProtectedRoute><LazyPage page={<Lead360 />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/leads/:id"><LazyPage page={<Lead360 />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/users',
-    element: <ProtectedRoute><LazyPage page={<UserManagement />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/users"><LazyPage page={<UserManagement />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/team',
-    element: <ProtectedRoute><LazyPage page={<TeamHierarchy />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/team"><LazyPage page={<TeamHierarchy />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/execution-intelligence',
-    element: <ProtectedRoute><LazyPage page={<ExecutionIntelligence />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/execution-intelligence"><LazyPage page={<ExecutionIntelligence />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/ncp-progress',
-    element: <ProtectedRoute><LazyPage page={<NcpProgress />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/ncp-progress"><LazyPage page={<NcpProgress />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/trend-charts',
-    element: <ProtectedRoute><LazyPage page={<TrendCharts />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/trend-charts"><LazyPage page={<TrendCharts />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/campaign-breakdown',
-    element: <ProtectedRoute><LazyPage page={<CampaignBreakdown />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/campaign-breakdown"><LazyPage page={<CampaignBreakdown />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/settings',
-    element: <ProtectedRoute><LazyPage page={<Settings />} /></ProtectedRoute>,
-  },
+    element: <ProtectedRoute><FeatureGate route="/settings"><LazyPage page={<Settings />} /></FeatureGate></ProtectedRoute>,  },
   {
     // TEMPORARY admin-only mobile diagnostics. Still behind the standard
     // ProtectedRoute gate, plus the ADMIN/SUPERADMIN-only AdminRoute gate
     // (sidebar entry is also admin-only). Client-side only — no new
     // server endpoint exists for this feature.
     path: '/settings/performance-diagnostics',
-    element: <ProtectedRoute><LazyPage page={<AdminRoute><PerformanceDiagnostics /></AdminRoute>} /></ProtectedRoute>,
+    element: <ProtectedRoute><FeatureGate route="/settings/performance-diagnostics"><LazyPage page={<AdminRoute><PerformanceDiagnostics /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '*',

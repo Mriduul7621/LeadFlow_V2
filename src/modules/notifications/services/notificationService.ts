@@ -2,6 +2,7 @@ import { SystemNotification } from '../../shared/types';
 import { localDb } from '../../../services/localDb';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /**
  * notificationService.ts
@@ -13,10 +14,11 @@ import { coalesceGet } from '../../shared/api/coalesce';
 
 function syncCacheForUser(userId: string, cloud: SystemNotification[]): void {
   try {
+    // The cache is user-scoped (localDb), so this write can only ever
+    // touch the CURRENT user's cached slice — never another user's.
     const all = localDb.getNotifications(userId);
     const others = all.filter(n => n.userId !== userId);
-    const merged = [...others, ...cloud];
-    localStorage.setItem('shanta_notifications', JSON.stringify(merged));
+    localDb.saveNotifications([...others, ...cloud]);
   } catch (e) {
     console.error('Failed to update notification cache:', e);
   }
@@ -32,7 +34,7 @@ export const notificationService = {
       syncCacheForUser(user_Id, cloudNotifs);
       return cloudNotifs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return localDb.getNotifications(user_Id);
     }
   },
@@ -57,11 +59,11 @@ export const notificationService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    // Cache after DB success.
+    // Cache after DB success (user-scoped via localDb).
     try {
       const cached = localDb.getNotifications(user_Id);
       if (!cached.some(n => n.id === saved.id)) {
-        localStorage.setItem('shanta_notifications', JSON.stringify([...cached, saved]));
+        localDb.saveNotifications([...cached, saved]);
       }
     } catch (e) {
       console.error('Failed to update notification cache:', e);

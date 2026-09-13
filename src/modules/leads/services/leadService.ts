@@ -7,6 +7,7 @@ import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
 import { toast } from 'sonner';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
 export interface FollowUpQueueItem {
@@ -239,7 +240,7 @@ export const leadService = {
       localDb.saveLeads(cloudLeads);
       leads = cloudLeads;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       leads = localDb.getLeads(); // read-only offline cache
     }
 
@@ -266,7 +267,7 @@ export const leadService = {
       localDb.saveLeads(cloudLeads);
       return cloudLeads;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return localDb.getLeads();
     }
   },
@@ -344,7 +345,7 @@ export const leadService = {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 404) return null;
-        if (err.status !== 0 && err.status < 500) throw err;
+        if (!shouldFallBackToCache(err.status)) throw err;
       }
       // Network / 5xx: return cached for offline read, but never report write success elsewhere
       return cached;
@@ -392,7 +393,7 @@ export const leadService = {
       return Array.isArray(activities) ? activities : [];
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return [];
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return [];
     }
   },
@@ -408,7 +409,7 @@ export const leadService = {
       return quality ?? null;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return null;
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return null;
     }
   },

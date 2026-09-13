@@ -87,10 +87,17 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     const app = APP();
     // The Suspense wrapper lives in the route element (i.e. inside
     // ProtectedRoute/AppLayout), so the app shell survives chunk loads.
+    // RBAC/fallback-safety audit: the FeatureGate (route-level Feature
+    // Access) sits between the session gate and the lazy page, so the
+    // accepted shape is <ProtectedRoute><FeatureGate ...><LazyPage ...>.
     assert.ok(
-      /<ProtectedRoute><LazyPage/.test(app),
+      /<ProtectedRoute><FeatureGate route="[^"]*"><LazyPage/.test(app),
       'route elements must wrap the lazy page in the shell-preserving Suspense boundary'
     );
+    // Every gated page route keeps BOTH gates — no route may render the
+    // lazy page outside the ProtectedRoute + FeatureGate chain.
+    const routeCount = (app.match(/element:\s*<ProtectedRoute><FeatureGate route="[^"]*"><LazyPage/g) || []).length;
+    assert.equal(routeCount, 18, 'all 18 page routes must render through ProtectedRoute + FeatureGate');
     const lazyPage = app.slice(app.indexOf('function LazyPage'));
     assert.ok(lazyPage.includes('<Suspense fallback='), 'LazyPage must use a Suspense boundary');
     assert.ok(lazyPage.includes('RouteFallback'), 'LazyPage must fall back to the compact placeholder');
