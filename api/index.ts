@@ -7,10 +7,33 @@ import {
   createApiNotFoundHandler,
   isProductionRuntime,
 } from '../server/middleware.js';
+import {
+  buildReadinessReport,
+  describeReadiness,
+} from '../server/health.js';
+import {
+  summarizeConfigValidation,
+  validateProductionConfig,
+} from '../server/config/env.js';
 
 dotenv.config();
 
 const app = express();
+
+// Startup configuration validation (serverless-safe): runs once per warm
+// function instance at module evaluation, reports BLOCKER/WARNING issues in a
+// secret-free form, and never throws. A misconfigured production instance is
+// still allowed to boot (liveness) but its readiness endpoint and its
+// database-backed routes stay honest about the failure.
+{
+  const report = validateProductionConfig();
+  if (report.issues.length) {
+    console.warn(`[config] ${summarizeConfigValidation(report)}`);
+    for (const issue of report.issues) {
+      console.warn(`[config] ${issue.severity} ${issue.name}: ${issue.message}`);
+    }
+  }
+}
 
 /**
  * Security headers, trust proxy, rate limiting and JSON body limits —
@@ -100,6 +123,34 @@ const healthHandler = async (_req, res) => {
 
 app.get('/health', healthHandler);
 app.get('/api/health', healthHandler);
+
+// Readiness endpoint (additive; see server/health.ts). Registered here —
+// before the lazy `/api` dispatch below — so it is available immediately on
+// cold start and does not depend on the production router having loaded.
+// Returns 200 when ready, 503 when not ready (misconfigured or DB
+// unreachable), with a body that never leaks secrets or connection details.
+const readinessHandler = async (_req: express.Request, res: express.Response) => {
+  let configured = false;
+  let reachable = false;
+  if (process.env.DATABASE_URL) {
+    try {
+      const { isDatabaseConfigured, checkDatabaseHealth } = await import('../server/database/connection.js');
+      configured = isDatabaseConfigured();
+      reachable = configured ? await checkDatabaseHealth().catch(() => false) : false;
+    } catch {
+      configured = Boolean(process.env.DATABASE_URL);
+      reachable = false;
+    }
+  }
+  const report = buildReadinessReport({
+    databaseConfigured: configured,
+    databaseReachable: reachable,
+  });
+  console.log(`[readiness] ${describeReadiness(report)}`);
+  res.status(report.status === 'ready' ? 200 : 503).json(report);
+};
+app.get('/health/readiness', readinessHandler);
+app.get('/api/health/readiness', readinessHandler);
 
 // All API routes - load after DB init
 let productionRouter: express.Router | null = null;

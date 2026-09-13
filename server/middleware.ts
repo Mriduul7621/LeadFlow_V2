@@ -200,7 +200,7 @@ export const AUTH_RATE_LIMIT_MESSAGE =
  * They carry no session data and must keep answering while a client IP is
  * throttled, so they are exempt from the general limiter.
  */
-export const RATE_LIMIT_EXEMPT_PATHS = ['/api/health', '/api/db-status'];
+export const RATE_LIMIT_EXEMPT_PATHS = ['/api/health', '/api/health/readiness', '/api/db-status'];
 
 /**
  * Authentication-sensitive endpoints — a stricter limiter than the API

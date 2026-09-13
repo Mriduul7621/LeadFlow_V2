@@ -11,12 +11,27 @@ import {
   createApiErrorHandler,
   createApiNotFoundHandler,
 } from './server/middleware.js';
+import { buildReadinessReport, describeReadiness } from './server/health.js';
+import { summarizeConfigValidation, validateProductionConfig } from './server/config/env.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+
+// Startup configuration validation (secret-free). Reports issues without
+// ever logging a value; a misconfigured production instance still boots but
+// stays honest via its readiness endpoint and its database-backed routes.
+{
+  const report = validateProductionConfig();
+  if (report.issues.length) {
+    console.warn(`[config] ${summarizeConfigValidation(report)}`);
+    for (const issue of report.issues) {
+      console.warn(`[config] ${issue.severity} ${issue.name}: ${issue.message}`);
+    }
+  }
+}
 
 /**
  * Security headers, trust proxy, rate limiting and JSON body limits.
@@ -95,6 +110,22 @@ const healthHandler = async (_req: express.Request, res: express.Response) => {
 
 app.get('/health', healthHandler);
 app.get('/api/health', healthHandler);
+
+// Readiness endpoint (additive; see server/health.ts). Same contract on the
+// standalone path as on Vercel: 200 when ready, 503 when not ready, and a
+// body that never leaks secrets, connection strings or SQL details.
+const readinessHandler = async (_req: express.Request, res: express.Response) => {
+  const configured = isDatabaseConfigured();
+  const reachable = configured ? await checkDatabaseHealth().catch(() => false) : false;
+  const report = buildReadinessReport({
+    databaseConfigured: configured,
+    databaseReachable: reachable,
+  });
+  console.log(`[readiness] ${describeReadiness(report)}`);
+  res.status(report.status === 'ready' ? 200 : 503).json(report);
+};
+app.get('/health/readiness', readinessHandler);
+app.get('/api/health/readiness', readinessHandler);
 
 /**
  * Unknown /api/* routes return the same JSON 404 as the Vercel function
