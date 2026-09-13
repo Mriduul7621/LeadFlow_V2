@@ -50,3 +50,11 @@ CREATE INDEX IF NOT EXISTS idx_notifications_created_at
 ON notifications(created_at DESC);
 
 `;
+
+export const notificationReliabilityMigration = `
+
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS event_type VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(500);
+
+`;

@@ -62,6 +62,10 @@ import {
   type NormalizedUserBulkRow,
   type ImportMode,
 } from './userBulkImport.js';
+import {
+  createAssignmentNotifications,
+  createAssignmentNotificationsDemo,
+} from '../services/NotificationService.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -5167,13 +5171,96 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         (fallbackStore as any).leadActivities || [],
         (fallbackStore as any).scheduledActivities || []
       );
+
+      // Server-side notification for demo mode (replaces client fire-and-forget)
+      const demoShouldNotify = Boolean(
+        targetAssigned &&
+        (assignmentChanged || createAssignmentToOther) &&
+        targetAssigned.userId
+      );
+      if (demoShouldNotify) {
+        const isDemoReassign = Boolean(existingLead && assignmentChanged);
+        const demoEventType = isDemoReassign ? 'lead-reassigned' : 'lead-assigned';
+        const demoHistoryArr = Array.isArray(record.assignmentHistory) ? record.assignmentHistory : [];
+        const demoLatestId = demoHistoryArr.length > 0
+          ? (demoHistoryArr[demoHistoryArr.length - 1] as any).id
+          : `assign_${lead.id}`;
+        try {
+          createAssignmentNotificationsDemo({
+            leadId: String(lead.id),
+            leadCode: String(record.leadCode || lead.id),
+            prospectName: record.customerName || 'Unknown',
+            assignedToUserId: targetAssigned!.userId,
+            assignedToEmployeeId: targetAssigned!.employeeId,
+            changedByEmployeeId: caller.employee_id,
+            eventType: demoEventType,
+            assignmentHistoryId: demoLatestId,
+          });
+        } catch (demoNotifErr) {
+          console.warn('[leads/demo] Notification creation failed:', demoNotifErr);
+        }
+      }
+
       return sendJson(res, 200, { success: true, data: lead });
     }
 
+    // ── PostgreSQL path: transactional upsert + server-side notifications ──
+    const pool = getPool();
+    const client = await pool.connect();
     try {
-      const result = await getPool().query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
+      await client.query('BEGIN');
+      const result = await client.query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
       perf.span('db.upsert');
       const row = result.rows[0];
+
+      // Server-side notification generation for assignment/reassignment.
+      // Runs in a SAVEPOINT inside the lead transaction so the
+      // notification is durable when the lead state commits — but a
+      // notification failure (e.g. missing table in test DB) does NOT
+      // abort the lead save itself. The browser no longer needs to fire
+      // a separate best-effort POST /notifications after the save.
+      const shouldNotify = Boolean(
+        targetAssigned &&
+        (assignmentChanged || createAssignmentToOther) &&
+        targetAssigned.userId
+      );
+      if (shouldNotify) {
+        const isReassign = Boolean(existingLead && assignmentChanged);
+        const eventType = isReassign ? 'lead-reassigned' : 'lead-assigned';
+        const assignmentHistoryArr: any[] = Array.isArray(record.assignmentHistory)
+          ? record.assignmentHistory
+          : [];
+        const latestAssignmentId = assignmentHistoryArr.length > 0
+          ? assignmentHistoryArr[assignmentHistoryArr.length - 1].id
+          : `assign_${row.id}`;
+        const prospectName = record.customerName || 'Unknown';
+        await client.query('SAVEPOINT notification_sp');
+        try {
+          await createAssignmentNotifications(client, {
+            leadId: String(row.id),
+            leadCode: String(row.lead_code || record.leadCode || ''),
+            prospectName,
+            assignedToUserId: targetAssigned!.userId,
+            assignedToEmployeeId: targetAssigned!.employeeId,
+            changedByEmployeeId: caller.employee_id,
+            eventType,
+            assignmentHistoryId: latestAssignmentId,
+            excludeNotifyUserId: undefined, // notify everyone including actor
+          });
+          await client.query('RELEASE SAVEPOINT notification_sp');
+        } catch (notifErr: any) {
+          // Notification failure should not roll back the lead save.
+          // Roll back to the savepoint (which undoes only the notification
+          // INSERT, not the lead upsert) and release.
+          try { await client.query('ROLLBACK TO SAVEPOINT notification_sp'); } catch { /* ignore */ }
+          try { await client.query('RELEASE SAVEPOINT notification_sp'); } catch { /* ignore */ }
+          console.warn('[leads] Server-side notification creation failed (lead committed):', notifErr?.message || notifErr);
+        }
+      }
+
+      await client.query('COMMIT');
+      perf.span('db.commit');
+
       // One primary-key lookup for both joined employee ids (was two
       // sequential lookups on the response path).
       const employeeIds = await employeeIdsFor([row.assigned_to, row.assigned_by]);
@@ -5186,8 +5273,8 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       // Fresh full quality for the saved row (two single-lead bulk-safe
       // queries) so in-place UI patches never carry a stale score.
       const [saveActivity, saveScheduled] = await Promise.all([
-        fetchActivityQualitySignals(getPool(), [String(row.id)]),
-        fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+        fetchActivityQualitySignals(pool, [String(row.id)]),
+        fetchScheduledQualitySignals(pool, [String(row.id)]),
       ]);
       mappedLead.leadQuality = scoreLeadRow(
         row,
@@ -5198,8 +5285,11 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       perf.finish(res);
       return sendJson(res, 200, { success: true, data: mappedLead });
     } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
       perf.finish(res);
       return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead save failed' });
+    } finally {
+      try { client.release(); } catch { /* ignore */ }
     }
   } catch (error: any) {
     perf.finish(res);

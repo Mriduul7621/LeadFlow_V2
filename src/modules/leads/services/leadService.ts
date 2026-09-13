@@ -2,11 +2,9 @@ import { Lead, LeadQuality, LeadStatus, RolePermission, StatusHistoryEntry, User
 import { useAuthStore } from '../../auth/store/authStore';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
-import { notificationService } from '../../notifications/services/notificationService';
 import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
-import { toast } from 'sonner';
 import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
@@ -68,53 +66,19 @@ function currentEmployeeId(): string {
   return useAuthStore.getState().user?.employeeId || '';
 }
 
-async function sendHierarchyNotifications(leadId: string, prospectName: string, assignedTo: string, updaterName: string) {
-  const errors: string[] = [];
-  try {
-    const allUsers = await userService.getAllUsers();
-
-    // 1. Send notification to the assignee
-    try {
-      await notificationService.createNotification(assignedTo, 'New Lead Assigned', `Lead '${prospectName}' has been assigned to you by ${updaterName}.`, leadId);
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : 'Assignee notification failed');
-    }
-
-    // 2. Transmit notifications up the supervisor/manager hierarchy
-    let currentAssignee = allUsers.find(u => u.employeeId === assignedTo);
-    const visited = new Set<string>();
-    if (currentAssignee) visited.add(currentAssignee.employeeId);
-
-    while (currentAssignee && currentAssignee.managerId) {
-      const supervisorId = currentAssignee.managerId;
-      if (visited.has(supervisorId)) break; // Prevent infinite loops
-      visited.add(supervisorId);
-
-      const manager = allUsers.find(u => u.employeeId === supervisorId);
-      if (manager && manager.status === 'Active') {
-        try {
-          await notificationService.createNotification(
-            manager.employeeId,
-            'Team Lead Assigned Upline Alert',
-            `Lead '${prospectName}' under your team tracking has been routed to assignee: ${assignedTo} (${currentAssignee.name}) by ${updaterName}.`,
-            leadId
-          );
-        } catch (err) {
-          errors.push(err instanceof Error ? err.message : 'Upline notification failed');
-        }
-        currentAssignee = manager;
-      } else {
-        break;
-      }
-    }
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : 'Notification recipients could not be loaded');
-  }
-  if (errors.length > 0) {
-    // The lead itself is persisted - surface the side-effect failure so it
-    // is never silently lost, without rolling back the successful write.
-    toast.warning('Lead saved, but one or more team notifications could not be sent.', { id: `notif-${leadId}` });
-  }
+/**
+ * sendHierarchyNotifications — DEPRECATED (server-side authoritative).
+ *
+ * Assignment/reassignment notifications are now created server-side
+ * inside the same PostgreSQL transaction as the lead upsert (see
+ * production.routes.ts POST /leads). The browser no longer fires a
+ * separate best-effort POST /notifications after the save.
+ *
+ * This function is retained as a no-op so any stale call site compiles
+ * but does nothing. It will be removed in a future cleanup pass.
+ */
+async function sendHierarchyNotifications(_leadId: string, _prospectName: string, _assignedTo: string, _updaterName: string) {
+  // No-op: server-side notification delivery handles this.
 }
 
 function loadRolePermissions(): RolePermission[] {
@@ -180,16 +144,12 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications are a side channel - fired only AFTER the
-    // lead itself committed to the database, and fire-and-forget: the
-    // save is already server-confirmed, so the notification fan-out
-    // (which fans out one request per supervisor up the chain) must not
-    // extend the user's "saving..." state. Failures still surface via the
-    // warning toast inside sendHierarchyNotifications.
+    // Assignment notifications are now created server-side inside the
+    // same transaction as the lead upsert (production.routes.ts POST /leads).
+    // The browser no longer needs to fire a separate POST /notifications.
     if (saved.assignedTo) {
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System').catch(
-        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
-      );
+      // No-op: server-side notification delivery handles this.
+      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System');
     }
     return saved;
   },
@@ -470,13 +430,12 @@ export const leadService = {
     });
     cacheLead(saved);
 
-    // Assignment notifications after the DB commit confirmed — and
-    // fire-and-forget, so the confirmed save is not extended by the
-    // per-supervisor fan-out (see createLead above).
+    // Assignment notifications are now created server-side inside the
+    // same transaction as the lead upsert (production.routes.ts POST /leads).
+    // The browser no longer fires per-supervisor fan-out requests.
     if (fields.assignedTo && fields.assignedTo !== existing.assignedTo) {
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater).catch(
-        err => console.warn('[leads] Assignment notification fan-out failed (lead is saved):', err)
-      );
+      // No-op: server-side notification delivery handles this.
+      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater);
     }
     return saved;
   },
