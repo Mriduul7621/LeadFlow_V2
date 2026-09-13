@@ -1,0 +1,128 @@
+# ---------------------------------------------------------------------------
+# LeadFlow CI — mandatory release-validation gate
+# ---------------------------------------------------------------------------
+# This is the single canonical GitHub Actions workflow for the repository.
+# It replaces the empty placeholder workflows (client.yml / server.yml /
+# deploy.yml) that GitHub Actions registered but could never run, producing
+# three permanently failing runs on every push.
+#
+# Job: `validate`
+#   One deterministic job, so branch protection / rulesets can require the
+#   single stable check name: `LeadFlow CI / validate`.
+#
+# No production secrets are used:
+#   * the server test suite provisions its own isolated in-process PostgreSQL
+#     (PGlite, `DATABASE_URL=pglite://memory`) and derives a throwaway JWT
+#     secret when none is present;
+#   * `npm run verify:serverless` is deliberately run without DATABASE_URL so
+#     it exercises production-honesty mode (no silent in-memory fallback).
+#   No env vars are injected here — nothing in the suite requires them.
+#
+# This workflow never deploys anything. Vercel's Git integration stays
+# separate; a green Vercel deployment is not a substitute for this gate.
+#
+# Full operating documentation: docs/CI_RELEASE_GATE.md
+# ---------------------------------------------------------------------------
+
+name: LeadFlow CI
+
+on:
+  # Every pull request targeting main must be validated.
+  pull_request:
+    branches: [main]
+  # Post-merge integrity check: the same gates run on the merge commit.
+  push:
+    branches: [main]
+  # Manual re-run for ad-hoc validation.
+  workflow_dispatch:
+
+# Least privilege: read the repository and nothing else.
+# No deployment, package, OIDC or secret permissions.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same pull request / branch, so a correction
+# commit pushed to an open PR immediately retires the stale validation run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    # Hung installs/tests must not consume unlimited CI minutes.
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the diff/whitespace gate can compare HEAD against
+          # the base branch (fetch-depth: 0 fetches all branches and tags).
+          fetch-depth: 0
+          # CI only reads; keep the workflow token out of the git config.
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Node 22 LTS. Required by:
+          #   * the mandated `npm test -- --run` gate — Node 20's CLI/test
+          #     runner rejects the trailing `--run` (exit 1: "Could not find
+          #     '--run'"), Node 22 accepts it;
+          #   * devDependency engines `^20.19.0 || >=22.12.0`
+          #     (eslint 10, @vitejs/plugin-react 5).
+          # Rationale and evidence: docs/CI_RELEASE_GATE.md
+          node-version: '22'
+          # Cache npm's download cache, keyed on the lockfile.
+          # node_modules is intentionally NOT cached — `npm ci` rebuilds it.
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # Gate 1 — reproducible install; also proves package.json and
+      # package-lock.json are in sync (`npm ci` fails otherwise).
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate 2 — the complete server suite (auth/session, RBAC, lead
+      # visibility/workspace/pool, bulk imports, scheduled activities,
+      # dashboards, source guards, chunk recovery, hierarchy, Lead Quality,
+      # production security, fallback safety).
+      - name: Full test suite
+        run: npm test -- --run
+
+      # Gate 3 — TypeScript, no emit.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Gate 4 — the production build (Vite client + bundled server).
+      - name: Production build
+        run: npm run build
+
+      # Gate 5 — Vercel-style per-file ESM serverless build + boot smoke test.
+      # Runs without DATABASE_URL on purpose (production-honesty mode).
+      - name: Serverless verification
+        run: npm run verify:serverless
+
+      # Gate 6 — whitespace / diff errors.
+      - name: Diff / whitespace validation
+        run: |
+          set -euo pipefail
+
+          echo "1) git diff --check (index + working tree)"
+          git diff --check
+
+          echo "2) git diff --check (commits introduced by this run)"
+          base="origin/${{ github.base_ref || 'main' }}"
+          merge_base=""
+          if git rev-parse --verify --quiet "${base}" >/dev/null 2>&1; then
+            merge_base="$(git merge-base "${base}" HEAD 2>/dev/null || true)"
+          fi
+
+          if [ -n "${merge_base}" ]; then
+            git diff --check "${merge_base}" HEAD
+            echo "No whitespace or diff errors between ${merge_base} and HEAD."
+          else
+            echo "::warning::Cannot resolve ${base} or its merge base in this checkout; the commit-range whitespace check was skipped. The working-tree check above still ran."
+          fi
