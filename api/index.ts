@@ -1,10 +1,27 @@
 import express from 'express';
 import dotenv from 'dotenv';
 
+import {
+  applyProductionHttpSecurity,
+  createApiErrorHandler,
+  createApiNotFoundHandler,
+  isProductionRuntime,
+} from '../server/middleware.js';
+
 dotenv.config();
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+
+/**
+ * Security headers, trust proxy, rate limiting and JSON body limits —
+ * mounted before every route so no response can bypass them. This is the
+ * exact same call the standalone entrypoint (server.ts) makes, which keeps
+ * the two production runtime paths at parity.
+ *
+ * Order: trust proxy -> headers -> /api limiter -> auth limiter ->
+ *        bulk JSON parser -> global JSON parser -> routes.
+ */
+applyProductionHttpSecurity(app, { production: true });
 
 let dbInitialized = false;
 let dbInitializationAttempted = false;
@@ -13,7 +30,15 @@ async function ensureDb() {
   if (dbInitializationAttempted) return;
   dbInitializationAttempted = true;
   if (!process.env.DATABASE_URL) {
-    console.log('DATABASE_URL not set - running in fallback mode');
+    // Honest startup log: without DATABASE_URL a serverless deployment does
+    // NOT fall back to in-memory persistence. Database-backed requests are
+    // refused with HTTP 503 by the production router (see
+    // docs/PRODUCTION_SECURITY_HARDENING.md).
+    console.log(
+      isProductionRuntime()
+        ? 'DATABASE_URL not configured - database-backed requests will be refused (503), no in-memory fallback'
+        : 'DATABASE_URL not set - development demo mode (in-memory, not persistent)'
+    );
     return;
   }
 
@@ -27,7 +52,7 @@ async function ensureDb() {
   }
 }
 
-const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+const IS_PRODUCTION = isProductionRuntime();
 
 app.get('/api/db-status', async (_req, res) => {
   if (!process.env.DATABASE_URL) {
@@ -124,14 +149,12 @@ app.use('/api', async (req, res, next) => {
 
 // 404 catch-all for unknown /api/* routes (must be registered after the loader
 // middleware so lazily-mounted production routes still get a chance to match).
-app.use('/api', (req, res) => {
-  res.status(404).json({ success: false, message: `API route not found: ${req.method} ${req.originalUrl}` });
-});
+app.use('/api', createApiNotFoundHandler());
 
-// Generic error handler so failures return JSON instead of an HTML stack trace
-app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Unhandled API error:', error?.message || error);
-  res.status(error?.status || 500).json({ success: false, message: error?.message || 'Internal server error' });
-});
+// Generic error handler so failures return JSON instead of an HTML stack trace.
+// In production it sends a curated message (never the raw error text, which can
+// carry SQL, connection details or query parameters) while logging the full
+// error server-side.
+app.use(createApiErrorHandler({ production: true }));
 
 export default app;
