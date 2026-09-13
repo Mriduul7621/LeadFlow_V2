@@ -258,9 +258,16 @@ describe('Performance & latency hardening — server behavior', () => {
         reference_id UUID,
         is_read BOOLEAN NOT NULL DEFAULT FALSE,
         read_at TIMESTAMP,
+        event_key VARCHAR(180),
+        event_type VARCHAR(60),
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
+    `);
+    // Mirrors migration 040 (idempotency identity for system notifications).
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_notifications_event_key
+      ON notifications(event_key) WHERE event_key IS NOT NULL;
     `);
 
     /* --- seed --- */
@@ -739,9 +746,14 @@ describe('Performance & latency hardening — client source guards', () => {
     const fuBody = svc.slice(svc.indexOf('async updateLeadStatus'), svc.indexOf('async getLead('));
     assert.ok(fuBody.includes('await apiRequest'), 'follow-up save must await the server');
     assert.ok(fuBody.indexOf('cacheLead(lead)') > fuBody.indexOf('await apiRequest'), 'follow-up cache write only after commit');
-    // The notification fan-out never extends the confirmed save.
-    assert.ok(svc.includes('void sendHierarchyNotifications('), 'fan-out must be fire-and-forget');
-    assert.ok(!svc.includes('await sendHierarchyNotifications('), 'fan-out must not be awaited on the save path');
+    // Notification reliability PR: the fire-and-forget browser fan-out was
+    // REMOVED — lead assignment notifications are now produced server-side
+    // inside the POST /api/leads transaction. The client must therefore not
+    // produce (or even reach) system notifications from the save paths; this
+    // is strictly stronger than "must not be awaited on the save path".
+    assert.ok(!svc.includes('sendHierarchyNotifications'), 'client must not own a notification fan-out at all anymore');
+    assert.ok(!svc.includes('notificationService.createNotification'), 'client lead service must not create notifications');
+    assert.ok(!svc.includes('/api/notifications'), 'client lead service must not call the notifications API');
   });
 
   it('L. no new full-list refetch after a mutation (LeadList)', () => {

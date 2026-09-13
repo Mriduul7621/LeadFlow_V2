@@ -247,19 +247,11 @@ export const localDb = {
   saveNotifications(notifications: SystemNotification[]): void {
     writeScoped(keys.notifications, notifications);
   },
-  createNotification(userId: string, title: string, message: string, leadId: string): SystemNotification {
-    const notification: SystemNotification = {
-      id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      userId,
-      title,
-      message,
-      leadId,
-      read: false,
-      date: new Date().toISOString(),
-    };
-    this.saveNotifications([...readScoped<SystemNotification[]>(keys.notifications, []), notification]);
-    return notification;
-  },
+  // NOTE: a cache-only notification creator deliberately does not exist on
+  // localDb. The cache is never the authority for notifications: business
+  // notifications are created by the server inside the owning mutation's
+  // transaction, and the retained self-service path writes through the API
+  // first (see the notifications module service).
   markNotificationAsRead(id: string): boolean {
     const notifications = readScoped<SystemNotification[]>(keys.notifications, []);
     const notification = notifications.find(item => item.id === id);

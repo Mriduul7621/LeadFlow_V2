@@ -278,10 +278,17 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
         message TEXT,
         is_read BOOLEAN DEFAULT FALSE,
         type VARCHAR(30) DEFAULT 'info',
+        event_key VARCHAR(180),
+        event_type VARCHAR(60),
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW(),
         read_at TIMESTAMP
       );
+    `);
+    // Mirrors migration 040 (idempotency identity for system notifications).
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_notifications_event_key
+      ON notifications(event_key) WHERE event_key IS NOT NULL;
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (

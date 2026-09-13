@@ -188,6 +188,33 @@ describe('Follow-up Queue — GET /api/leads/follow-ups (Step 4B)', () => {
     await getPGliteInstanceAsync();
     pool = await createPGlitePoolAsync();
     _setTestPoolForTest(pool);
+
+    // Notifications (PR: server-side idempotent delivery) — the mounted
+    // router writes system rows here inside the /api/leads transaction, so
+    // the fixture mirrors migrations 010 + 035 + 040 (event_key/event_type
+    // + unique partial index).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID,
+        recipient_key VARCHAR(100),
+        lead_code VARCHAR(50),
+        reference_id UUID,
+        title VARCHAR(255),
+        message TEXT,
+        is_read BOOLEAN DEFAULT FALSE,
+        type VARCHAR(30) DEFAULT 'info',
+        event_key VARCHAR(180),
+        event_type VARCHAR(60),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        read_at TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_notifications_event_key
+      ON notifications(event_key) WHERE event_key IS NOT NULL;
+    `);
     await setupSchema(pool);
 
     await pool.query(`DELETE FROM lead_activities`);
