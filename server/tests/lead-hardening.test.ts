@@ -239,8 +239,14 @@ describe('Lead Hardening - Auth & Persistence', () => {
     const createLeadSection = file.split('async createLead')[1]?.split('async bulkUploadLeads')[0] || '';
     assert.ok(createLeadSection.includes('apiRequest'), 'createLead must call apiRequest');
     assert.ok(createLeadSection.includes('cacheLead'), 'createLead must cache after API success');
-    // Check that getLeads throws on 4xx, only falls back on >=500 or network
-    assert.ok(file.includes('if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err'), 'getLeads must throw on 4xx');
+    // Check that getLeads throws on 4xx, only falls back on >=500 or network.
+    // RBAC/fallback-safety audit: the rule now lives in the shared,
+    // unit-tested offlinePolicy helper (shouldFallBackToCache = 0 or >=500),
+    // so 401/403/404 still NEVER fall back to cached business data.
+    assert.ok(
+      file.includes('!shouldFallBackToCache(err.status)) throw err'),
+      'getLeads must throw on 4xx via the shared offline policy'
+    );
     // Check that deleteLead calls API before local delete
     const deleteSection = file.split('async deleteLead')[1]?.split('async deleteLeadsByCampaign')[0] || '';
     assert.ok(deleteSection.includes('apiRequest'), 'deleteLead must call API');

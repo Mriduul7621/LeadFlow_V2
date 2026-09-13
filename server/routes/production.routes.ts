@@ -3051,7 +3051,15 @@ router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permiss
   }
 });
 
-router.get('/audit-logs', requireAuth, async (req, res) => {
+/**
+ * Org-wide audit trail (actors, targets, action codes, metadata such as
+ * bulk-import file names). This is management telemetry, not user-scoped
+ * data, so it is gated by the canonical `audit.view` grant — fail closed
+ * for anyone without it, ADMIN/SUPERADMIN bypass as everywhere else.
+ * (Previously plain requireAuth: every authenticated employee could read
+ * the whole org's audit trail.)
+ */
+router.get('/audit-logs', requireAuth, requirePermissionCode('audit.view'), async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) return sendJson(res, 200, { success: true, data: [] });
   try {
@@ -4222,21 +4230,45 @@ router.get('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('user
   }
 });
 
+/**
+ * Lead-scoped read: the notification history of a lead is only exposed
+ * for leads the caller is already allowed to see. Same boundary as
+ * GET /leads/:id (leads.view + server-side Data Visibility); an
+ * inaccessible lead answers 404 so lead existence is not leaked.
+ * (Previously plain requireAuth: any authenticated employee could read
+ * the notification history of any lead, bypassing Data Visibility.)
+ */
 router.get('/notifications/leads/:leadId', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
-  if (!useDb()) {
-    const list = fallbackStore.notifications
-      .filter(item => item.leadId === req.params.leadId)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    return sendJson(res, 200, list);
-  }
   try {
-    const uuid = asUuid(req.params.leadId);
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const leadParam = String(req.params.leadId || '').trim();
+    if (!leadParam) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+
+    const visibility = await resolveCallerVisibility(caller);
+    const leadRow = await findLeadByIdRaw(leadParam, false);
+    if (!leadRow || !isLeadAccessible(leadRow, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+
+    if (!useDb()) {
+      const list = fallbackStore.notifications
+        .filter(item => item.leadId === leadParam)
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return sendJson(res, 200, list);
+    }
+    const uuid = asUuid(leadParam);
     const result = await getPool().query(
       `${NOTIFICATION_SELECT}
        WHERE n.lead_code = $1 OR n.reference_id::text = $1 OR n.reference_id = $2
        ORDER BY n.created_at DESC`,
-      [req.params.leadId, uuid || null]
+      [leadParam, uuid || null]
     );
     return sendJson(res, 200, result.rows.map(mapNotificationRow));
   } catch (error: any) {
@@ -4244,6 +4276,16 @@ router.get('/notifications/leads/:leadId', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * Cross-user boundary (audit fix):
+ *   - notifying SELF is a self-service action (authenticated only);
+ *   - notifying ANOTHER user is a cross-user mutation. The only business
+ *     flow that produces cross-user notifications is the lead
+ *     assignment/transfer fan-out, so it requires one of the canonical
+ *     routing grants (leads.assign / leads.transfer) — fail closed for
+ *     everyone else instead of letting any authenticated employee push
+ *     notifications to arbitrary accounts.
+ */
 router.post('/notifications', requireAuth, async (req, res) => {
   const payload = req.body || {};
   const userIdRef = clean(payload.userId || payload.user_id);
@@ -4251,6 +4293,18 @@ router.post('/notifications', requireAuth, async (req, res) => {
   const message = clean(payload.message);
   if (!userIdRef || !title) {
     return sendJson(res, 400, { success: false, message: 'userId and title are required' });
+  }
+
+  if (!isSelfRef(req, userIdRef)) {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const canAssign = await hasPermissionCode(caller, 'leads.assign');
+    const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
+    if (!canAssign && !canTransfer) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to notify another user.' });
+    }
   }
 
   if (!useDb()) {

@@ -9,6 +9,7 @@ import {
   invalidateSessionCache,
   registerSessionCacheClearHandler,
 } from '../../shared/api/sessionCache';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /**
  * metadataService.ts
@@ -71,7 +72,7 @@ registerSessionCacheClearHandler(clearMetadataSessionCaches);
 function isOfflineError(err: unknown): boolean {
   // status 0 = network failure; >=500 = server/database unavailable.
   if (err instanceof ApiError) {
-    return err.status === 0 || err.status >= 500;
+    return shouldFallBackToCache(err.status);
   }
   return true;
 }

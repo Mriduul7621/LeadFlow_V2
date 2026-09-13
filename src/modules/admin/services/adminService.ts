@@ -6,6 +6,7 @@ import { emitRolesCacheChanged } from '../../shared/utils/localCacheEvents';
 import { invalidateSessionCache } from '../../shared/api/sessionCache';
 import { coalesceGet } from '../../shared/api/coalesce';
 import { useAuthStore } from '../../auth/store/authStore';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 const KEYS = {
   ROLES: 'lf_local_roles_permissions',
@@ -249,7 +250,7 @@ export const adminService = {
       writeCache(KEYS.ROLES, finalized);
       return finalized;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       const cached = cachedRoles();
       if (cached.length > 0) return cached;
       return DEFAULT_ROLE_PERMISSIONS.map(finalizeRole);
@@ -316,7 +317,7 @@ export const adminService = {
       writeCache(KEYS.TEAMS, cloudTeams);
       return cloudTeams;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return readCache<Team[]>(KEYS.TEAMS, []);
     }
   },
@@ -374,7 +375,7 @@ export const adminService = {
       writeCache(KEYS.PERMS, normalized);
       return normalized;
     } catch (err) {
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return readCache<Permissions[]>(KEYS.PERMS, []).map(normalizePermissions);
     }
   },
@@ -397,7 +398,7 @@ export const adminService = {
       if (err instanceof ApiError && err.status === 404) {
         return defaultPermissionsFor(roleIdClean, roleName);
       }
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       const cached = readCache<Permissions[]>(KEYS.PERMS, [])
         .map(normalizePermissions)
         .find(p => p.roleId === roleIdClean);

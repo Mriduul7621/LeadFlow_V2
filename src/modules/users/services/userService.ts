@@ -9,6 +9,7 @@ import {
   writeSessionCache,
   invalidateSessionCache,
 } from '../../shared/api/sessionCache';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /** Short-lived session TTL for the users reference list (same window as roles). */
 const USERS_REFERENCE_TTL_MS = 5 * 60 * 1000;
@@ -141,7 +142,7 @@ export const userService = {
     } catch (err) {
       // Offline / server-down fallback: return the read-only cache. Auth
       // failures (401/403) are never swallowed here.
-      if (err instanceof ApiError && err.status !== 0 && err.status < 500) throw err;
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       const cached = localDb.getUsers();
       return cached;
     }

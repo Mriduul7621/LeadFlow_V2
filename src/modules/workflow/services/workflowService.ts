@@ -1,5 +1,6 @@
 import { WorkflowRule } from '../../shared/types';
 import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
+import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
 /**
  * workflowService.ts
@@ -20,7 +21,7 @@ import { apiRequest, jsonBody, ApiError } from '../../shared/api/http';
 let cache: WorkflowRule[] | null = null;
 
 function isOfflineError(err: unknown): boolean {
-  if (err instanceof ApiError) return err.status === 0 || err.status >= 500;
+  if (err instanceof ApiError) return shouldFallBackToCache(err.status);
   return true;
 }
 
