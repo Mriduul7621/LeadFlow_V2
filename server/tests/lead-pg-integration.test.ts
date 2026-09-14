@@ -1,5 +1,7 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
@@ -8,6 +10,7 @@ import { _setTestPoolForTest, _resetPoolsForTest, closePool } from '../database/
 import { getPGliteInstanceAsync, createPGlitePoolAsync, resetPGlite } from '../database/pglitePool.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'leadflow_development_only_secret';
+const ROOT = process.cwd();
 
 function signToken(payload: Record<string, any>): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
@@ -123,6 +126,40 @@ async function setupSchema(pool: any) {
       deleted_at TIMESTAMP,
       deleted_by UUID
     );
+  `);
+
+  // Notifications table with idempotency key constraint
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      recipient_key VARCHAR(255),
+      title VARCHAR(255) NOT NULL,
+      message TEXT,
+      type VARCHAR(50) DEFAULT 'info',
+      event_type VARCHAR(100),
+      idempotency_key VARCHAR(500),
+      reference_type VARCHAR(100),
+      reference_id UUID,
+      lead_code VARCHAR(50),
+      is_read BOOLEAN DEFAULT FALSE,
+      read_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE indexname = 'idx_notifications_idempotency_key'
+      ) THEN
+        CREATE UNIQUE INDEX idx_notifications_idempotency_key
+          ON notifications(idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+      END IF;
+    END
+    $$;
   `);
 }
 
