@@ -170,12 +170,19 @@ export async function fetchScheduledQualitySignals(
   const ids = Array.from(new Set((leadIds || []).filter(Boolean)));
   if (ids.length === 0) return out;
   try {
+    // `status = 'scheduled'` (plain equality, not LOWER()) is exactly
+    // equivalent: the scheduled_activities CHECK constraint restricts
+    // status to ('scheduled','completed','cancelled') and every write
+    // path stores those lowercase literals. Equality keeps the predicate
+    // sargable so the partial index idx_scheduled_activities_open_lead
+    // (migration 041) applies — LOWER() would force a post-index filter
+    // over every completed/cancelled row of each lead.
     const res = await pool.query(
       `SELECT s.lead_id::text AS lead_id,
               MIN(s.scheduled_at) AS next_scheduled_at
          FROM scheduled_activities s
         WHERE s.lead_id = ANY($1::uuid[])
-          AND LOWER(s.status) = 'scheduled'
+          AND s.status = 'scheduled'
         GROUP BY s.lead_id`,
       [ids]
     );

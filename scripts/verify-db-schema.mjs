@@ -16,8 +16,12 @@
  *   2. opens a connection and runs SELECT 1;
  *   3. reads information_schema for the set of tables the production router
  *      and migrations create/query;
- *   4. prints a per-table PASS/MISS list (never any row data);
- *   5. exits 0 when every expected table exists, 1 otherwise.
+ *   4. reads pg_indexes for the set of CRITICAL indexes the hot query
+ *      paths depend on (see EXPECTED_INDEXES — this is a floor, not a
+ *      full index diff; missing non-critical indexes do not fail);
+ *   5. prints a per-table / per-index PASS/MISS list (never any row data);
+ *   6. exits 0 when every expected table and critical index exists,
+ *      1 otherwise.
  *
  * What it NEVER does: CREATE / ALTER / DROP / INSERT / UPDATE / DELETE,
  * run migrations, run seeds, or read business rows.
@@ -77,6 +81,39 @@ const EXPECTED_TABLES = [
   'department_hierarchies',
 ];
 
+/**
+ * CRITICAL indexes the production hot paths depend on. Curated from the
+ * database performance audit (docs/DATABASE_PERFORMANCE_AUDIT.md). This is
+ * a floor: the check catches indexes whose absence degrades a high-frequency
+ * read path or drops a correctness guarantee (idempotency). Missing
+ * non-critical indexes are intentionally NOT reported — we never force an
+ * operator to create speculative indexes to pass.
+ *
+ * Each entry is { table, index }. The unique idempotency index is asserted
+ * separately because it is a correctness guarantee, not a performance hint.
+ */
+const EXPECTED_INDEXES = [
+  // Follow-up queue / dashboard visibility hot paths (leads)
+  { table: 'leads', index: 'idx_leads_assigned_to' },
+  { table: 'leads', index: 'idx_leads_created_by' },
+  { table: 'leads', index: 'idx_leads_next_follow_up_active' },
+  { table: 'leads', index: 'idx_leads_assigned_next_follow_up_active' },
+  // Lead quality signal aggregation
+  { table: 'lead_activities', index: 'idx_lead_activities_lead_created_at' },
+  { table: 'scheduled_activities', index: 'idx_scheduled_activities_open_lead' },
+  // Hierarchy / visibility traversal
+  { table: 'users', index: 'idx_users_manager' },
+  // Notification delivery paths
+  { table: 'notifications', index: 'idx_notifications_recipient_key' },
+  { table: 'notifications', index: 'idx_notification_user' },
+];
+
+/** Correctness-critical unique partial index (PR #40 / #44). */
+const IDEMPOTENCY_INDEX = {
+  table: 'notifications',
+  index: 'idx_notifications_idempotency_key',
+};
+
 const log = (...a) => console.log(...a);
 
 function fail(msg) {
@@ -130,8 +167,45 @@ async function main() {
       process.exit(1);
     }
 
+    // ---- Critical index readiness (read-only pg_indexes lookup) ----
+    const idxRes = await client.query(
+      `SELECT tablename, indexname
+         FROM pg_indexes
+        WHERE schemaname = 'public'`
+    );
+    const existingIndexes = new Set(
+      idxRes.rows.map((r) => `${String(r.tablename)}.${String(r.indexname)}`)
+    );
+
+    const criticalIndexes = [...EXPECTED_INDEXES, IDEMPOTENCY_INDEX];
+    const missingIndexes = criticalIndexes.filter(
+      (e) => !existingIndexes.has(`${e.table}.${e.index}`)
+    );
+
     log('');
-    log('✓ Schema is complete for the expected LeadFlow tables.');
+    log(
+      `Critical index readiness — ${criticalIndexes.length - missingIndexes.length}/${criticalIndexes.length} present.`
+    );
+    for (const e of criticalIndexes) {
+      const ok = existingIndexes.has(`${e.table}.${e.index}`);
+      log(`  [${ok ? 'PASS' : 'MISS'}] ${e.table}.${e.index}`);
+    }
+
+    if (missingIndexes.length > 0) {
+      console.error('');
+      console.error(
+        `✗ Missing critical indexes (${missingIndexes.length}): ` +
+          missingIndexes.map((e) => `${e.table}.${e.index}`).join(', ')
+      );
+      console.error(
+        'Hot read paths or the notification idempotency guarantee are degraded. ' +
+          'Apply pending migrations (see docs/PRODUCTION_RELEASE_RUNBOOK.md) before serving traffic.'
+      );
+      process.exit(1);
+    }
+
+    log('');
+    log('✓ Schema is complete for the expected LeadFlow tables and critical indexes.');
     process.exit(0);
   } catch (err) {
     fail(`Schema check failed: ${err?.message || err}`);
