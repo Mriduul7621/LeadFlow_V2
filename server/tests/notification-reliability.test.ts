@@ -7,7 +7,7 @@
  *   2. Idempotency via DB unique constraint on idempotency_key
  *   3. Hierarchy/upline resolution from users.manager_id
  *   4. Cycle prevention in hierarchy traversal
- *   5. SAVEPOINT isolation (notification failure does not abort lead save)
+ *   5. Transactional atomicity — notification failure aborts entire business transaction
  *   6. Cross-user notification permission (leads.assign/transfer required)
  *   7. Self-directed generic notification still works
  *   8. Data Visibility enforcement on notification reads
@@ -241,17 +241,12 @@ describe('Demo-mode assignment notifications', () => {
 ==================================================================== */
 
 describe('Client notification source guards', () => {
-  it('10. sendHierarchyNotifications is a no-op (not fire-and-forget)', () => {
+  it('10. sendHierarchyNotifications is fully removed (no dead code)', () => {
     const src = read('src/modules/leads/services/leadService.ts');
-    // The function should exist but be a no-op
+    // The function should be deleted entirely, not kept as a no-op
     assert.ok(
-      src.includes('async function sendHierarchyNotifications'),
-      'sendHierarchyNotifications must exist (for compilation)'
-    );
-    // Should NOT contain the old fire-and-forget pattern
-    assert.ok(
-      !src.includes('notificationService.createNotification(assignedTo'),
-      'Must not call notificationService.createNotification for assignee (server-side now)'
+      !src.includes('async function sendHierarchyNotifications'),
+      'sendHierarchyNotifications must be fully deleted (not a no-op shim)'
     );
     assert.ok(
       !src.includes('notificationService.createNotification('),
@@ -289,11 +284,11 @@ describe('Server-side notification integration guards', () => {
     );
   });
 
-  it('14. production.routes.ts uses SAVEPOINT for notification isolation', () => {
+  it('14. production.routes.ts does NOT use SAVEPOINT — notification failure aborts entire transaction', () => {
     const src = read('server/routes/production.routes.ts');
     assert.ok(
-      src.includes('SAVEPOINT notification_sp'),
-      'Notification creation must use SAVEPOINT for failure isolation'
+      !src.includes('SAVEPOINT notification_sp'),
+      'Notification creation must NOT use SAVEPOINT — must be part of main transaction (Option A)'
     );
   });
 

@@ -5179,7 +5179,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         targetAssigned.userId
       );
       if (demoShouldNotify) {
-        const isDemoReassign = Boolean(existingLead && assignmentChanged);
+        const isDemoReassign = Boolean(existingLead && assignmentChanged && existingLead.assigned_to);
         const demoEventType = isDemoReassign ? 'lead-reassigned' : 'lead-assigned';
         const demoHistoryArr = Array.isArray(record.assignmentHistory) ? record.assignmentHistory : [];
         const demoLatestId = demoHistoryArr.length > 0
@@ -5225,7 +5225,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         targetAssigned.userId
       );
       if (shouldNotify) {
-        const isReassign = Boolean(existingLead && assignmentChanged);
+        const isReassign = Boolean(existingLead && assignmentChanged && existingLead.assigned_to);
         const eventType = isReassign ? 'lead-reassigned' : 'lead-assigned';
         const assignmentHistoryArr: any[] = Array.isArray(record.assignmentHistory)
           ? record.assignmentHistory
@@ -5234,28 +5234,22 @@ router.post('/leads', requireAuth, async (req: any, res) => {
           ? assignmentHistoryArr[assignmentHistoryArr.length - 1].id
           : `assign_${row.id}`;
         const prospectName = record.customerName || 'Unknown';
-        await client.query('SAVEPOINT notification_sp');
-        try {
-          await createAssignmentNotifications(client, {
-            leadId: String(row.id),
-            leadCode: String(row.lead_code || record.leadCode || ''),
-            prospectName,
-            assignedToUserId: targetAssigned!.userId,
-            assignedToEmployeeId: targetAssigned!.employeeId,
-            changedByEmployeeId: caller.employee_id,
-            eventType,
-            assignmentHistoryId: latestAssignmentId,
-            excludeNotifyUserId: undefined, // notify everyone including actor
-          });
-          await client.query('RELEASE SAVEPOINT notification_sp');
-        } catch (notifErr: any) {
-          // Notification failure should not roll back the lead save.
-          // Roll back to the savepoint (which undoes only the notification
-          // INSERT, not the lead upsert) and release.
-          try { await client.query('ROLLBACK TO SAVEPOINT notification_sp'); } catch { /* ignore */ }
-          try { await client.query('RELEASE SAVEPOINT notification_sp'); } catch { /* ignore */ }
-          console.warn('[leads] Server-side notification creation failed (lead committed):', notifErr?.message || notifErr);
-        }
+        // OPTION A — TRANSACTIONAL ATOMICITY: notification rows are part
+        // of the same transaction as the lead upsert. If notification
+        // persistence fails, the entire transaction (lead + history +
+        // notifications) rolls back and the client receives failure.
+        // No SAVEPOINT: notifications are required, not optional.
+        await createAssignmentNotifications(client, {
+          leadId: String(row.id),
+          leadCode: String(row.lead_code || record.leadCode || ''),
+          prospectName,
+          assignedToUserId: targetAssigned!.userId,
+          assignedToEmployeeId: targetAssigned!.employeeId,
+          changedByEmployeeId: caller.employee_id,
+          eventType,
+          assignmentHistoryId: latestAssignmentId,
+          excludeNotifyUserId: undefined,
+        });
       }
 
       await client.query('COMMIT');

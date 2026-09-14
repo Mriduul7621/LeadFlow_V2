@@ -13,7 +13,8 @@
  *     (reporting_chain column), never client-supplied IDs.
  *   - Hierarchy traversal is bounded and cycle-safe.
  *   - Notifications are created in the same DB transaction as the
- *     business mutation (or immediately after with durable retry).
+ *     business mutation. If notification INSERT fails, the entire
+ *     transaction rolls back (Option A — transactional atomicity).
  *
  * This module is imported ONLY by production.routes.ts — it never
  * touches the client-side notificationService.ts.

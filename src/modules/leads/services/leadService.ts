@@ -66,21 +66,6 @@ function currentEmployeeId(): string {
   return useAuthStore.getState().user?.employeeId || '';
 }
 
-/**
- * sendHierarchyNotifications — DEPRECATED (server-side authoritative).
- *
- * Assignment/reassignment notifications are now created server-side
- * inside the same PostgreSQL transaction as the lead upsert (see
- * production.routes.ts POST /leads). The browser no longer fires a
- * separate best-effort POST /notifications after the save.
- *
- * This function is retained as a no-op so any stale call site compiles
- * but does nothing. It will be removed in a future cleanup pass.
- */
-async function sendHierarchyNotifications(_leadId: string, _prospectName: string, _assignedTo: string, _updaterName: string) {
-  // No-op: server-side notification delivery handles this.
-}
-
 function loadRolePermissions(): RolePermission[] {
   try {
     const raw = localStorage.getItem('lf_local_roles_permissions');
@@ -148,8 +133,7 @@ export const leadService = {
     // same transaction as the lead upsert (production.routes.ts POST /leads).
     // The browser no longer needs to fire a separate POST /notifications.
     if (saved.assignedTo) {
-      // No-op: server-side notification delivery handles this.
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, saved.assignedBy || 'System');
+      // Notifications are now server-side in the same DB transaction.
     }
     return saved;
   },
@@ -434,8 +418,7 @@ export const leadService = {
     // same transaction as the lead upsert (production.routes.ts POST /leads).
     // The browser no longer fires per-supervisor fan-out requests.
     if (fields.assignedTo && fields.assignedTo !== existing.assignedTo) {
-      // No-op: server-side notification delivery handles this.
-      void sendHierarchyNotifications(saved.id, saved.prospectName, saved.assignedTo, updater);
+      // Notifications are now server-side in the same DB transaction.
     }
     return saved;
   },

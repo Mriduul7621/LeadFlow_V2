@@ -739,9 +739,8 @@ describe('Performance & latency hardening — client source guards', () => {
     const fuBody = svc.slice(svc.indexOf('async updateLeadStatus'), svc.indexOf('async getLead('));
     assert.ok(fuBody.includes('await apiRequest'), 'follow-up save must await the server');
     assert.ok(fuBody.indexOf('cacheLead(lead)') > fuBody.indexOf('await apiRequest'), 'follow-up cache write only after commit');
-    // The notification fan-out never extends the confirmed save.
-    assert.ok(svc.includes('void sendHierarchyNotifications('), 'fan-out must be fire-and-forget');
-    assert.ok(!svc.includes('await sendHierarchyNotifications('), 'fan-out must not be awaited on the save path');
+    // The notification fan-out is fully server-side now — sendHierarchyNotifications deleted.
+    assert.ok(!svc.includes('sendHierarchyNotifications('), 'sendHierarchyNotifications must be fully removed from client code');
   });
 
   it('L. no new full-list refetch after a mutation (LeadList)', () => {
