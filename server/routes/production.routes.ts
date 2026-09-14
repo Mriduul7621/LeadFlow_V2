@@ -335,6 +335,19 @@ function sendJson(res: any, status: number, payload: any): void {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const asUuid = (value: any): string | null => (value && UUID_RE.test(String(value)) ? String(value) : null);
 
+/**
+ * Strict canonical-lowercase UUID test for query-shape optimization.
+ * PostgreSQL renders uuid::text in canonical lowercase, so a predicate
+ * like `col::text = $1` can only match when $1 is already canonical
+ * lowercase. Only in that case may we rewrite it to the sargable
+ * `col = $1::uuid` with EXACTLY the same result set; uppercase or
+ * non-UUID inputs keep the legacy (no-match) behavior.
+ */
+const isCanonicalLowerUuid = (value: unknown): boolean => {
+  const s = String(value ?? '');
+  return UUID_RE.test(s) && s === s.toLowerCase();
+};
+
 const jsonbOr = (value: any, fallback: any = null): any => {
   if (value == null) return fallback;
   if (typeof value === 'string') {
@@ -4264,12 +4277,27 @@ router.get('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('user
   try {
     const pool = getPool();
     const uuid = asUuid(req.params.userId);
+    // Performance audit (docs/DATABASE_PERFORMANCE_AUDIT.md):
+    //  1. the legacy cast-to-text user_id branch was provably redundant
+    //     (whenever it matched, $1 was a canonical uuid already covered
+    //     by `n.user_id = $2`) — removed;
+    //  2. the legacy `user_id IN (SELECT ... UPPER(employee_id) ...)`
+    //     hashed SubPlan made the planner estimate ~50% of the table
+    //     regardless of scale, defeating every index on this query.
+    //     employee_id is UNIQUE, so that subquery returns at most one
+    //     users.id — resolving it with one tiny indexed lookup first
+    //     keeps the result set EXACTLY the same while every remaining
+    //     branch is a plain equality the indexes can serve.
+    const empMatch = await pool.query(
+      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+      [req.params.userId]
+    );
+    const empUserId = empMatch.rows[0]?.id || null;
     const result = await pool.query(
       `${NOTIFICATION_SELECT}
-       WHERE n.recipient_key = $1 OR n.user_id::text = $1 OR n.user_id = $2
-          OR n.user_id IN (SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1))
+       WHERE n.recipient_key = $1 OR n.user_id = $2 OR n.user_id = $3
        ORDER BY n.created_at DESC`,
-      [req.params.userId, uuid || null]
+      [req.params.userId, uuid || null, empUserId]
     );
     return sendJson(res, 200, result.rows.map(mapNotificationRow));
   } catch (error: any) {
@@ -4311,9 +4339,13 @@ router.get('/notifications/leads/:leadId', requireAuth, async (req, res) => {
       return sendJson(res, 200, list);
     }
     const uuid = asUuid(leadParam);
+    // The legacy cast-to-text reference_id branch was provably redundant:
+    // whenever it matched, the parameter was a canonical uuid already
+    // covered by `n.reference_id = $2`. Removing it is result-identical
+    // and leaves only sargable branches.
     const result = await getPool().query(
       `${NOTIFICATION_SELECT}
-       WHERE n.lead_code = $1 OR n.reference_id::text = $1 OR n.reference_id = $2
+       WHERE n.lead_code = $1 OR n.reference_id = $2
        ORDER BY n.created_at DESC`,
       [leadParam, uuid || null]
     );
@@ -4397,12 +4429,14 @@ router.post('/notifications/:id/read', requireAuth, async (req, res) => {
     return sendJson(res, 200, { success: true, data: item });
   }
   try {
+    // Sargable PK lookup; malformed (non-canonical-UUID) ids yield no row
+    // and 404, exactly like the legacy id::text comparison.
     const found = await getPool().query(
       `SELECT n.*, u.employee_id AS user_employee_id, u.email AS user_email
        FROM notifications n
        LEFT JOIN users u ON u.id = n.user_id
-       WHERE n.id::text = $1 LIMIT 1`,
-      [req.params.id]
+       WHERE n.id = $1 LIMIT 1`,
+      [isCanonicalLowerUuid(req.params.id) ? req.params.id : null]
     );
     if (!found.rows[0]) return sendJson(res, 404, { success: false, message: 'Notification not found' });
     if (!callerIsAdmin(req)) {
@@ -4434,11 +4468,18 @@ router.post('/notifications/users/:userId/read-all', requireAuth, requireSelfOrA
   }
   try {
     const uuid = asUuid(req.params.userId);
+    // Same shape as the notification list query: the cast-to-text branch
+    // is gone and the employee_id subquery is pre-resolved to one users.id
+    // (employee_id is UNIQUE), so every branch is an index-served equality.
+    const empMatch = await getPool().query(
+      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+      [req.params.userId]
+    );
+    const empUserId = empMatch.rows[0]?.id || null;
     await getPool().query(
       `UPDATE notifications SET is_read = TRUE, read_at = NOW(), updated_at = NOW()
-       WHERE recipient_key = $1 OR user_id::text = $1 OR user_id = $2
-          OR user_id IN (SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1))`,
-      [req.params.userId, uuid || null]
+       WHERE recipient_key = $1 OR user_id = $2 OR user_id = $3`,
+      [req.params.userId, uuid || null, empUserId]
     );
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
@@ -4454,11 +4495,18 @@ router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('u
   }
   try {
     const uuid = asUuid(req.params.userId);
+    // Same shape as the notification list query: the cast-to-text branch
+    // is gone and the employee_id subquery is pre-resolved to one users.id
+    // (employee_id is UNIQUE), so every branch is an index-served equality.
+    const empMatch = await getPool().query(
+      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+      [req.params.userId]
+    );
+    const empUserId = empMatch.rows[0]?.id || null;
     await getPool().query(
       `DELETE FROM notifications
-       WHERE recipient_key = $1 OR user_id::text = $1 OR user_id = $2
-          OR user_id IN (SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1))`,
-      [req.params.userId, uuid || null]
+       WHERE recipient_key = $1 OR user_id = $2 OR user_id = $3`,
+      [req.params.userId, uuid || null, empUserId]
     );
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
@@ -4873,7 +4921,12 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       const assignedResolved = await resolveAssignedTo(String(assignedTo));
       const filterUserId = assignedResolved?.userId || String(assignedTo);
       params.push(filterUserId);
-      where.push(`l.assigned_to::text = $${params.length}`);
+      // Resolved user ids (and canonical-lowercase UUID inputs) use a
+      // sargable uuid comparison so idx_leads_assigned_to applies;
+      // anything else keeps the legacy text comparison (no-match).
+      where.push(isCanonicalLowerUuid(filterUserId)
+        ? `l.assigned_to = $${params.length}::uuid`
+        : `l.assigned_to::text = $${params.length}`);
     }
     if (search) {
       params.push(`%${String(search)}%`);
@@ -4884,7 +4937,9 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     if (!visibility.all) {
       params.push(visibility.userIds);
       const pUser = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      // UUID-typed ANY keeps the predicate sargable (userIds are
+      // server-resolved users.id values) — see buildDashboardVisibilitySql.
+      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
     }
     const result = await pool.query(
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
@@ -4998,8 +5053,8 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       const pool = getPool();
       if (incomingLeadCode) {
         const found = await pool.query(
-          `SELECT * FROM leads WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE LIMIT 1`,
-          [incomingLeadCode]
+          `SELECT * FROM leads WHERE (lead_code = $1 OR id = $2) AND is_deleted = FALSE LIMIT 1`,
+          [incomingLeadCode, isCanonicalLowerUuid(incomingLeadCode) ? incomingLeadCode : null]
         );
         existingLead = found.rows[0] || null;
       }
@@ -5426,13 +5481,16 @@ export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, {
     return map;
   }
   const upper = values.map(v => v.toUpperCase());
-  const uuids = values.map(v => asUuid(v)).filter((v): v is string => !!v);
+  // Only canonical-lowercase UUIDs can match `users.id::text`; passing
+  // exactly those as a uuid[] keeps this branch sargable AND result-
+  // identical to the previous ::text comparison (see isCanonicalLowerUuid).
+  const uuids = values.filter(isCanonicalLowerUuid);
   const result = await getPool().query(
     `SELECT id, employee_id, email, COALESCE(is_active, TRUE) AS is_active
      FROM users
      WHERE UPPER(employee_id) = ANY($1::text[])
         OR UPPER(email) = ANY($1::text[])
-        OR ($2::text[] IS NOT NULL AND id::text = ANY($2::text[]))`,
+        OR ($2::uuid[] IS NOT NULL AND id = ANY($2::uuid[]))`,
     [upper, uuids.length ? uuids : null]
   );
   for (const row of result.rows) {
@@ -6164,9 +6222,9 @@ async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
       const pool = getPool();
       const leadResult = await pool.query(
         `SELECT id, assigned_to, custom_fields, created_by FROM leads
-         WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
+         WHERE (lead_code = $1 OR id = $2) AND is_deleted = FALSE
          LIMIT 1`,
-        [req.params.id]
+        [req.params.id, isCanonicalLowerUuid(req.params.id) ? req.params.id : null]
       );
       leadRow = leadResult.rows[0] || null;
     } else {
@@ -6287,9 +6345,13 @@ async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): Promise<
   // Note: FOR UPDATE is only valid inside a transaction (client.query). Caller must handle when useDb() but not in tx.
   // This helper is used both inside and outside tx; when forUpdate=true we use SELECT ... FOR UPDATE (caller must be inside tx via client).
   // However to keep helper simple, we just do normal select; the transactional callers will do their own SELECT FOR UPDATE.
+  // Sargable dual lookup: lead_code equality OR PK equality. The id branch
+  // is only populated for canonical-lowercase UUID input — exactly the
+  // inputs that could match the legacy `l.id::text = $1` comparison — so
+  // the result set is unchanged while the PK index becomes usable.
   const result = await pool.query(
-    `${LEAD_SELECT} WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1`,
-    [raw]
+    `${LEAD_SELECT} WHERE (l.lead_code = $1 OR l.id = $2) AND l.is_deleted = FALSE LIMIT 1`,
+    [raw, isCanonicalLowerUuid(raw) ? raw : null]
   );
   return result.rows[0] || null;
 }
@@ -6472,7 +6534,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     }
     if (assignedFilter) {
       params.push(assignedFilter.userId);
-      where.push(`l.assigned_to::text = $${params.length}`);
+      // assignedFilter.userId is a server-resolved users.id (canonical
+      // uuid). The uuid-typed comparison lets PostgreSQL use the partial
+      // composite idx_leads_assigned_next_follow_up_active (migration
+      // 038); the previous ::text cast made that index unreachable.
+      where.push(`l.assigned_to = $${params.length}::uuid`);
     }
     if (fromYmd) {
       params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
@@ -6486,7 +6552,9 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     if (!visibility.all) {
       params.push(visibility.userIds);
       const pUser = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      // UUID-typed ANY keeps the predicate sargable (userIds are
+      // server-resolved users.id values) — see buildDashboardVisibilitySql.
+      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
     }
 
     const todayLit = bounds.todayStartIso.replace(/'/g, "''");
@@ -6972,10 +7040,13 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // Lock the lead row to prevent lost updates / concurrent history overwrite
+      // Lock the lead row to prevent lost updates / concurrent history overwrite.
+      // Same sargable dual lookup as findLeadByIdRaw: lead_code equality or
+      // PK equality (id branch only for canonical-lowercase UUID input, the
+      // only inputs the legacy id::text comparison could match).
       const leadRes = await client.query(
-        `SELECT l.* FROM leads l WHERE (l.lead_code = $1 OR l.id::text = $1) AND l.is_deleted = FALSE LIMIT 1 FOR UPDATE`,
-        [param]
+        `SELECT l.* FROM leads l WHERE (l.lead_code = $1 OR l.id = $2) AND l.is_deleted = FALSE LIMIT 1 FOR UPDATE`,
+        [param, isCanonicalLowerUuid(param) ? param : null]
       );
       perf.span('db.lockLead');
       const leadRow = leadRes.rows[0];
@@ -7199,9 +7270,9 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
     const caller = await getCallerDbInfo(req);
     const result = await getPool().query(
       `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
-       WHERE (lead_code = $1 OR id::text = $1) AND is_deleted = FALSE
+       WHERE (lead_code = $1 OR id = $3) AND is_deleted = FALSE
        RETURNING id`,
-      [req.params.id, caller?.id || null]
+      [req.params.id, caller?.id || null, isCanonicalLowerUuid(req.params.id) ? req.params.id : null]
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Lead not found' });
     return sendJson(res, 200, { success: true, message: 'Lead deleted' });
@@ -7333,7 +7404,12 @@ function buildDashboardVisibilitySql(
   if (visibility.all) return 'TRUE';
   params.push(visibility.userIds);
   const pUser = params.length;
-  return `(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`;
+  // UUID-typed ANY (never a ::text cast on the indexed columns):
+  // visibility.userIds are users.id values resolved server-side, so the
+  // comparison stays sargable and the planner can BitmapOr the existing
+  // idx_leads_assigned_to / idx_leads_created_by indexes instead of
+  // seq-scanning leads. Result-identical to the previous text cast.
+  return `(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`;
 }
 
 function numOr0(v: any): number {
@@ -7697,11 +7773,19 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
     if (typeFilter) {
       params.push(typeFilter);
-      where.push(`LOWER(sa.activity_type) = LOWER($${params.length})`);
+      // activity_type is CHECK-constrained to lowercase literals
+      // ('call','meeting','follow_up','task') and typeFilter is already
+      // lowercased, so plain equality is result-identical to LOWER() and
+      // keeps the predicate sargable.
+      where.push(`sa.activity_type = $${params.length}`);
     }
     if (statusFilter) {
       params.push(statusFilter);
-      where.push(`LOWER(sa.status) = LOWER($${params.length})`);
+      // status is CHECK-constrained to ('scheduled','completed',
+      // 'cancelled') and statusFilter is already lowercased — plain
+      // equality is result-identical to LOWER() and sargable, so the
+      // status='scheduled' partial index (migration 041) can apply.
+      where.push(`sa.status = $${params.length}`);
     }
     if (priorityFilter) {
       params.push(priorityFilter);
@@ -7709,7 +7793,10 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
     if (assignedFilter) {
       params.push(assignedFilter.userId);
-      where.push(`sa.assigned_to::text = $${params.length}`);
+      // assignedFilter.userId is a server-resolved users.id (canonical
+      // uuid). Sargable uuid comparison lets the planner use the
+      // scheduled-activity assigned_to index; the ::text cast prevented it.
+      where.push(`sa.assigned_to = $${params.length}::uuid`);
     }
     if (fromYmd) {
       params.push(dhakaStartUtc(fromYmd.y, fromYmd.m, fromYmd.d).toISOString());
@@ -7723,7 +7810,9 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     if (!visibility.all) {
       params.push(visibility.userIds);
       const pUser = params.length;
-      where.push(`(l.assigned_to::text = ANY($${pUser}::text[]) OR l.created_by::text = ANY($${pUser}::text[]))`);
+      // UUID-typed ANY keeps the predicate sargable (userIds are
+      // server-resolved users.id values) — see buildDashboardVisibilitySql.
+      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
     }
 
     const whereSql = where.join(' AND ');
@@ -7814,8 +7903,8 @@ router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
               l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
        FROM scheduled_activities sa
        JOIN leads l ON l.id = sa.lead_id
-       WHERE sa.id::text = $1 LIMIT 1`,
-      [id]
+       WHERE sa.id = $1 LIMIT 1`,
+      [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!r.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const row = r.rows[0];
@@ -8189,10 +8278,13 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     }
 
     // Verify existence and lead visibility before update
+    // Sargable PK lookup: the id branch is NULL unless the input is a
+    // canonical-lowercase UUID (the only inputs the legacy id::text
+    // comparison could match), so malformed ids still 404 unchanged.
     const existingRes = await getPool().query(
       `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id::text = $1 LIMIT 1`,
-      [id]
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
+      [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const existingRow = existingRes.rows[0];
@@ -8271,10 +8363,11 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
       return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
     }
 
+    // Sargable PK lookup (see the update path) — malformed ids still 404.
     const existingRes = await getPool().query(
       `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id::text = $1 LIMIT 1`,
-      [id]
+       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
+      [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const row = existingRes.rows[0];
@@ -8285,7 +8378,9 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
     if (String(row.status).toLowerCase() !== 'scheduled') {
       return sendJson(res, 409, { success: false, message: `Cannot delete a ${row.status} activity — use cancel for pending work.` });
     }
-    await getPool().query(`DELETE FROM scheduled_activities WHERE id::text = $1`, [id]);
+    // Sargable PK delete (existence already verified above); the param is
+    // NULL for non-canonical inputs exactly like the legacy text compare.
+    await getPool().query(`DELETE FROM scheduled_activities WHERE id = $1`, [isCanonicalLowerUuid(id) ? id : null]);
     return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity delete failed.' });
@@ -8422,8 +8517,8 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       const schedRes = await client.query(
         `SELECT sa.*, l.id AS lead_db_id, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.current_status AS lead_current_status
          FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
-         WHERE sa.id::text = $1 FOR UPDATE`,
-        [id]
+         WHERE sa.id = $1 FOR UPDATE`,
+        [isCanonicalLowerUuid(id) ? id : null]
       );
       if (!schedRes.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const schedRow: any = schedRes.rows[0];
@@ -8607,8 +8702,8 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
       const r = await client.query(
         `SELECT sa.*, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields
          FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
-         WHERE sa.id::text = $1 FOR UPDATE`,
-        [id]
+         WHERE sa.id = $1 FOR UPDATE`,
+        [isCanonicalLowerUuid(id) ? id : null]
       );
       if (!r.rows[0]) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const row = r.rows[0];
