@@ -21,23 +21,36 @@ curl -sS "$BASE/api/db-status"            # connected:true/false, mode
 These three tell you whether the runtime, the configuration and the database
 are each healthy — without exposing secrets.
 
+**Correlating a failing request (structured logs):** every API response
+carries an `X-Request-ID` header, and every server log event carries the same
+id as `"requestId":"…"` plus the deployment's `"build":"…"`. To trace one
+request, filter Vercel Runtime Logs (or the standalone process log) for its
+id — see `docs/PRODUCTION_OBSERVABILITY.md` §9. Key events:
+`http_request_complete` (status + duration + DB time), `http_request_error`
+(5xx, sanitized), `http_request_slow` / `db_query_slow` (latency),
+`auth_*` / `rate_limit_rejected` (security), `readiness_check` (probe
+outcomes).
+
 ---
 
 ## 1. Application unavailable
 
 - **Verify:** `/api/health` timing out / 5xx; Vercel function logs; last
-  deploy state.
+  deploy state. Confirm WHICH build is failing via the `"build"` field in
+  structured log events and the `build` value in `/api/health/readiness`.
 - **Contain:** confirm it is not a deploy-in-progress; if it is a bad release,
   redeploy the previous known-good deployment (application rollback).
 - **Recover:** redeploy previous version, then re-run the smoke test.
-- **Evidence:** health/readiness output, function logs, deploy history,
-  timestamps.
+- **Evidence:** health/readiness output, function logs (`http_request_error`
+  events with their `requestId`), deploy history, timestamps.
 - **Do not** restore the database for a pure application failure.
 
 ## 2. Database unavailable
 
 - **Verify:** `/api/db-status` → `database-unreachable` / 503; readiness →
   `not_ready` with `database.reachable:false`; provider console status.
+  Structured correlation: `readiness_check` warnings plus
+  `http_request_error` events whose `errorCode` is a pg/connection code.
 - **Contain:** confirm whether it is a provider outage vs. credential/network
   change vs. connection-pool exhaustion. **Do not** start mutating data.
 - **Recover:** wait for provider recovery, or fix the connection/credential,
@@ -48,24 +61,33 @@ are each healthy — without exposing secrets.
 
 ## 3. Login unavailable
 
-- **Verify:** login 5xx vs 429 vs 401; auth limiter logs
-  (`[security] auth rate limit exceeded`); `JWT_SECRET` config validity.
+- **Verify:** login 5xx vs 429 vs 401; the structured auth events
+  (`rate_limit_rejected` with `limiter:"auth"`, `auth_login_failed`,
+  `auth_token_rejected`); `JWT_SECRET` config validity. These logs never
+  contain passwords, tokens, emails or submitted identifiers by design.
 - **Contain:** if 429, it is rate limiting (by design) — wait/whitelist; if
   5xx, it is database/config — see §2 and check `[config] BLOCKER` logs.
 - **Recover:** fix the underlying DB/config issue; **never** rotate
   `JWT_SECRET` in place while users hold valid tokens without a deliberate
   session-invalidation plan.
-- **Evidence:** status codes, limiter logs, config validation output.
+- **Evidence:** status codes, auth/rate-limit events (with `requestId`),
+  config validation output.
 - **Do not** disable the auth limiter to "fix" logins.
 
 ## 4. Severe latency
 
-- **Verify:** function latency, DB query latency, connection-pool saturation;
-  `createPerf` spans in logs where enabled.
+- **Verify:** whether slowness is systematic: filter logs for
+  `"event":"http_request_slow"` (+ a `"route"` value) to see which routes
+  breach `OBSERVABILITY_SLOW_REQUEST_MS` (default 2000 ms), and compare
+  `durationMs` against `dbDurationMs`/`dbQueryCount` to decide auth vs. DB
+  vs. application work; a single `db_query_slow` warning marks an individual
+  >`OBSERVABILITY_SLOW_DB_MS` (default 750 ms) operation. `createPerf` spans
+  (`Server-Timing`) remain available per route where instrumented.
 - **Contain:** identify the hot path (dashboard? bulk import? a missing
   index). Throttle or disable the specific feature if it is abusive.
 - **Recover:** add/verify index, bound the query, or scale; re-measure.
-- **Evidence:** latency traces, query plans, pool metrics, timestamps.
+- **Evidence:** latency traces (`requestId`-correlated), query plans, pool
+  metrics, timestamps.
 - **Do not** raise global rate limits as a latency fix.
 
 ## 5. Permission / access incident
@@ -126,9 +148,11 @@ are each healthy — without exposing secrets.
 
 ## 10. Notification failure
 
-- **Verify:** notifications not created/delivered (check `notifications` table
-  and the relevant logs). Note: server-side notification **reliability** is a
-  planned roadmap item, so today's notifications are synchronous/best-effort.
+- **Verify:** notifications not created/delivered (check `notifications` table;
+  correlate the failing business request by its `X-Request-ID` →
+  `http_request_error` / 5xx log events). Note: server-side notification
+  **reliability** is a planned roadmap item, so today's notifications are
+  synchronous/best-effort.
 - **Contain:** confirm it is a notification issue and not a DB issue (§2).
 - **Recover:** re-create the missed notifications manually where safe, or
   accept the gap and record it; escalate to the Notification Reliability item.

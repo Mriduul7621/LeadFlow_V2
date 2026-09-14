@@ -38,6 +38,14 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
+import {
+  createApiObservabilityMiddleware,
+  getRequestContext,
+  normalizeRoutePath,
+} from './observability/http.js';
+import { nowMs, round1 } from './observability/context.js';
+import { logHttpRequestError, logRateLimitRejected } from './observability/events.js';
+
 /* ==================================================================== */
 /* 1. Runtime / deployment mode                                         */
 /* ==================================================================== */
@@ -226,17 +234,23 @@ let lastRateLimitLogAt = 0;
 const RATE_LIMIT_LOG_INTERVAL_MS = 10_000;
 
 /**
- * Operational signal only — at most one line per 10 s per process to avoid
- * log flooding under attack. Logs the scope, method, path and client key;
- * NEVER a request body, password, token, Authorization header or cookie.
+ * Operational signal only — at most one event per 10 s per process to
+ * avoid log flooding under attack. Emits the structured
+ * `rate_limit_rejected` event: limiter class, method and normalized
+ * route, plus the requestId (attached automatically from the request
+ * context, which is mounted before the limiters). NEVER a request body,
+ * password, token, Authorization header or cookie — and never the raw
+ * client IP (privacy default; correlate on the requestId instead).
  */
 function logRateLimitEvent(scope: string, req: Request): void {
   const now = Date.now();
   if (now - lastRateLimitLogAt < RATE_LIMIT_LOG_INTERVAL_MS) return;
   lastRateLimitLogAt = now;
-  console.warn(
-    `[security] ${scope} rate limit exceeded: ${req.method} ${requestPath(req)} (client ${req.ip || 'unknown'})`
-  );
+  logRateLimitRejected({
+    limiter: scope === 'auth' ? 'auth' : 'general',
+    method: req.method || 'UNKNOWN',
+    route: normalizeRoutePath(requestPath(req)),
+  });
 }
 
 function createLimitHandler(scope: string, message: string) {
@@ -325,6 +339,11 @@ export function applyProductionHttpSecurity(app: Express, options: HttpSecurityO
 
   configureTrustProxy(app);
   app.disable('x-powered-by');
+  // Request observability FIRST: every /api/* request gets its server
+  // correlation id (X-Request-ID) and AsyncLocalStorage context before
+  // security headers, limiters, body parsers or routes run — so 429s,
+  // parser rejections, 404s and 5xx are all correlated identically.
+  app.use(createApiObservabilityMiddleware());
   app.use(createSecurityHeaders({ production, allowFraming: options.allowFraming }));
   applyRateLimiters(app);
   applyBodyParsers(app);
@@ -392,10 +411,31 @@ export function createApiErrorHandler(options: ApiErrorHandlerOptions = {}) {
         ? explicitStatus
         : 500;
 
-    console.error(
-      `[api-error] ${req.method} ${path} -> ${status}:`,
-      error?.message || error
-    );
+    // Structured error event. Production logs sanitized metadata ONLY:
+    // the error class name, a safe machine error code (e.g. the pg code
+    // '23505') and the body-parser error type. The raw message can carry
+    // SQL text, connection details or query parameters, and is therefore
+    // logged solely outside production. The stack trace likewise never
+    // leaves development. The 5xx RESPONSE contract below is unchanged
+    // (generic message, no internals).
+    const observabilityCtx = getRequestContext();
+    logHttpRequestError({
+      requestId: (req as any).requestId ?? observabilityCtx?.requestId,
+      method: req.method || 'UNKNOWN',
+      route: normalizeRoutePath(path),
+      status,
+      durationMs: observabilityCtx
+        ? round1(nowMs() - observabilityCtx.startedAtMs)
+        : undefined,
+      errorName: typeof error?.name === 'string' ? error.name : 'Error',
+      errorCode:
+        typeof error?.code === 'string' || typeof error?.code === 'number'
+          ? String(error.code)
+          : undefined,
+      errorType: typeof error?.type === 'string' ? error.type : undefined,
+      message: production ? undefined : String(error?.message || error || 'unknown'),
+      stack: production ? undefined : (typeof error?.stack === 'string' ? error.stack : undefined),
+    });
 
     // Body-parser failures (invalid JSON, payload too large) are client
     // errors with a well-defined, safe message.

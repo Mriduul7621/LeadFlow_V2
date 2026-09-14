@@ -66,6 +66,13 @@ import {
   createAssignmentNotifications,
   createAssignmentNotificationsDemo,
 } from '../services/NotificationService.js';
+import {
+  logAuthAdminPasswordReset,
+  logAuthForcedPasswordChangeCompleted,
+  logAuthLoginFailed,
+  logAuthLoginSuccess,
+  logAuthTokenRejected,
+} from '../observability/events.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -158,9 +165,26 @@ function getAuthUser(req: any): any {
   }
 }
 
+/**
+ * Observability only: when a Bearer token was PRESENTED but failed
+ * verification, emit one safe `auth_token_rejected` event (reason
+ * 'expired' | 'invalid'). Anonymous requests (no header) stay silent.
+ * Never logs the token, the header or any claim.
+ */
+function logRejectedTokenIfPresent(req: any): void {
+  const header = req?.headers?.authorization || '';
+  if (!header.startsWith('Bearer ')) return;
+  try {
+    jwt.verify(header.slice(7), JWT_SECRET);
+  } catch (error: any) {
+    logAuthTokenRejected({ reason: error?.name === 'TokenExpiredError' ? 'expired' : 'invalid' });
+  }
+}
+
 function requireAuth(req: any, res: any, next: any): void {
   const user = getAuthUser(req);
   if (!user) {
+    logRejectedTokenIfPresent(req);
     res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
     return;
   }
@@ -1443,15 +1467,18 @@ router.post('/auth/login', async (req, res) => {
         String(item.email || '').toLowerCase() === loginId.toLowerCase()
     );
     if (!user || !user.password) {
+      logAuthLoginFailed({ reason: 'invalid_credentials' });
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
     const ok = user.password.startsWith('$2')
       ? await bcrypt.compare(password, user.password)
       : user.password === password;
     if (!ok) {
+      logAuthLoginFailed({ reason: 'invalid_credentials' });
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
     const token = signToken({ id: user.id, employeeId: user.employeeId, role: normalizeRole(user.role), email: user.email, name: user.fullName || user.name });
+    logAuthLoginSuccess({ userId: user.id, role: normalizeRole(user.role) });
     const { password: _pw, ...safeUser } = user;
     return res.status(200).json({ token, user: { ...safeUser, name: user.fullName || user.name } });
   }
@@ -1473,6 +1500,7 @@ router.post('/auth/login', async (req, res) => {
     perf.span('db.userLookup');
     const user = result.rows[0];
     if (!user) {
+      logAuthLoginFailed({ reason: 'invalid_credentials' });
       perf.finish(res);
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
@@ -1481,6 +1509,7 @@ router.post('/auth/login', async (req, res) => {
       : user.password === password;
     perf.span('auth.bcryptVerify');
     if (!valid) {
+      logAuthLoginFailed({ reason: 'invalid_credentials' });
       perf.finish(res);
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
@@ -1491,6 +1520,7 @@ router.post('/auth/login', async (req, res) => {
       .catch(() => undefined);
     const role = user.role_code || 'EMPLOYEE';
     const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
+    logAuthLoginSuccess({ userId: user.id, role });
     perf.finish(res);
     return sendJson(res, 200, { token, user: mapUserRow(user, user.manager_employee_id) });
   } catch (error: any) {
@@ -1704,6 +1734,7 @@ router.post('/auth/change-required-password', requireAuth, async (req: any, res)
     }
     demoUser.password = await bcrypt.hash(newPassword, 10);
     demoUser.mustChangePassword = false;
+    logAuthForcedPasswordChangeCompleted({ userId: demoUser.id });
     const { password: _pw, ...safeUser } = demoUser;
     return sendJson(res, 200, { success: true, data: { ...safeUser, name: demoUser.fullName || demoUser.name } });
   }
@@ -1729,6 +1760,8 @@ router.post('/auth/change-required-password', requireAuth, async (req: any, res)
       `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
       [hashed, user.id]
     );
+
+    logAuthForcedPasswordChangeCompleted({ userId: user.id });
 
     // Security-safe audit event (no password material). Best-effort: a
     // missing/readonly audit table must never fail the password change.
@@ -2313,6 +2346,7 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
     if (!user) return sendJson(res, 404, { success: false, message: 'User not found' });
     user.password = await bcrypt.hash(password, 10);
     user.mustChangePassword = true;
+    logAuthAdminPasswordReset({ actorUserId: req.currentUser?.id, targetUserId: user.id });
     return sendJson(res, 200, { success: true, message: 'Password reset successfully' });
   }
   try {
@@ -2324,6 +2358,7 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
       'UPDATE users SET password = $1, must_change_password = TRUE, updated_at = NOW() WHERE id = $2',
       [hash, found.rows[0].id]
     );
+    logAuthAdminPasswordReset({ actorUserId: req.currentUser?.id, targetUserId: found.rows[0].id });
     return sendJson(res, 200, { success: true, message: 'Password reset successfully' });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Password reset failed' });

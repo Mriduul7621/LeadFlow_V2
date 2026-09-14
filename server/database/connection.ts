@@ -1,5 +1,7 @@
 import { Pool, QueryResult, QueryResultRow } from "pg";
 
+import { instrumentPoolForObservability } from "../observability/dbTiming.js";
+
 let pool: Pool | null = null;
 let pglitePool: any = null;
 
@@ -14,9 +16,13 @@ function isPGliteUrl(url: string | undefined): boolean {
 
 export function getPool(): Pool {
     if (pool) {
+        // Idempotent per-request DB timing hook (no SQL/params; see
+        // observability/dbTiming.ts and docs/PRODUCTION_OBSERVABILITY.md).
+        instrumentPoolForObservability(pool);
         return pool;
     }
     if (pglitePool) {
+        instrumentPoolForObservability(pglitePool);
         return pglitePool as unknown as Pool;
     }
 
@@ -30,6 +36,7 @@ export function getPool(): Pool {
         if (!pglitePool) {
             throw new Error("PGlite pool not initialized. Call _setTestPoolForTest() in tests.");
         }
+        instrumentPoolForObservability(pglitePool);
         return pglitePool as unknown as Pool;
     }
 
@@ -56,6 +63,8 @@ export function getPool(): Pool {
     });
 
     console.log("🚀 PostgreSQL Connection Pool Initialized");
+
+    instrumentPoolForObservability(pool);
 
     return pool;
 }

@@ -15,6 +15,7 @@ import {
   summarizeConfigValidation,
   validateProductionConfig,
 } from '../server/config/env.js';
+import { logReadinessCheck } from '../server/observability/events.js';
 
 dotenv.config();
 
@@ -146,7 +147,9 @@ const readinessHandler = async (_req: express.Request, res: express.Response) =>
     databaseConfigured: configured,
     databaseReachable: reachable,
   });
-  console.log(`[readiness] ${describeReadiness(report)}`);
+  // Structured, low-noise: passing probes log at debug (invisible at the
+  // production default level), failing probes stay visible as warnings.
+  logReadinessCheck({ status: report.status, summary: describeReadiness(report) });
   res.status(report.status === 'ready' ? 200 : 503).json(report);
 };
 app.get('/health/readiness', readinessHandler);
@@ -193,7 +196,9 @@ app.use('/api', async (req, res, next) => {
     const router = await loadRoutes();
     router(req, res, next);
   } catch (error: any) {
-    console.error('Route error:', error?.message);
+    // The central API error handler below emits the structured, sanitized
+    // `http_request_error` event (with the request correlation id) — no
+    // raw error text is logged here.
     next(error);
   }
 });

@@ -115,6 +115,24 @@ export const ENV_VAR_SPECS: EnvVarSpec[] = [
     classification: 'OPTIONAL',
     description: 'Reserved. The current auth flow is JWT-based and does not consume this.',
   },
+  {
+    name: 'OBSERVABILITY_LOG_LEVEL',
+    classification: 'OPTIONAL',
+    description:
+      'Structured log level: debug | info | warn | error. Defaults to info in production and debug elsewhere; unknown values fall back to info.',
+  },
+  {
+    name: 'OBSERVABILITY_SLOW_REQUEST_MS',
+    classification: 'OPTIONAL',
+    description:
+      'Request duration at or above which an http_request_slow warning is emitted (default 2000 ms). Never fails the request.',
+  },
+  {
+    name: 'OBSERVABILITY_SLOW_DB_MS',
+    classification: 'OPTIONAL',
+    description:
+      'Single PostgreSQL operation duration at or above which a db_query_slow warning is emitted (default 750 ms). SQL text and parameters are never logged.',
+  },
 ];
 
 /* ==================================================================== */
