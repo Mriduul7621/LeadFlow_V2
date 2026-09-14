@@ -13,6 +13,7 @@ import {
 } from './server/middleware.js';
 import { buildReadinessReport, describeReadiness } from './server/health.js';
 import { summarizeConfigValidation, validateProductionConfig } from './server/config/env.js';
+import { logReadinessCheck } from './server/observability/events.js';
 
 dotenv.config();
 
@@ -121,7 +122,9 @@ const readinessHandler = async (_req: express.Request, res: express.Response) =>
     databaseConfigured: configured,
     databaseReachable: reachable,
   });
-  console.log(`[readiness] ${describeReadiness(report)}`);
+  // Structured, low-noise: passing probes log at debug (invisible at the
+  // production default level), failing probes stay visible as warnings.
+  logReadinessCheck({ status: report.status, summary: describeReadiness(report) });
   res.status(report.status === 'ready' ? 200 : 503).json(report);
 };
 app.get('/health/readiness', readinessHandler);
