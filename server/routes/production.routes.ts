@@ -6,6 +6,7 @@ import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import { computeHierarchyHealth } from '../utils/hierarchyHealth.js';
+import auditService from '../services/auditService.js';
 import {
   UNASSIGNED_LEVEL,
   resolveRoleLevel,
@@ -3090,9 +3091,13 @@ router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permiss
       if (override.allowed === null || override.allowed === undefined) {
         await client.query('DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2', [userId, permResult.rows[0].id]);
       } else {
+        // Column list matches migration 027 exactly (user_id, permission_id,
+        // is_allowed, reason, created_at, updated_at). The migrated table has
+        // NO granted_at column; referencing one made this route fail with
+        // 42703 on a real database (reliability audit regression).
         await client.query(
-          `INSERT INTO user_permissions (user_id, permission_id, is_allowed, reason, granted_at, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, NOW(), NOW(), NOW())
+          `INSERT INTO user_permissions (user_id, permission_id, is_allowed, reason, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())
            ON CONFLICT (user_id, permission_id) DO UPDATE SET
              is_allowed = EXCLUDED.is_allowed,
              reason = EXCLUDED.reason,
@@ -7281,10 +7286,48 @@ router.delete('/leads/:id', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * Bulk-operation audit trail (reliability audit). Org-wide soft-delete
+ * actions (campaign purge, clear-all) record an aggregate audit_logs row:
+ * actor, action code and COUNTS only — never lead payloads. Best-effort:
+ * the soft-delete itself already committed; a missing/readonly audit
+ * table must not turn a successful purge into a 5xx (the row count is
+ * still returned to the operator and logged by the request pipeline).
+ */
+async function recordBulkLeadAudit(
+  req: any,
+  actionCode: 'LEAD_CAMPAIGN_PURGE' | 'LEAD_CLEAR_ALL',
+  actorUserId: string | null,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  try {
+    await auditService.record({
+      actorUserId,
+      targetUserId: null,
+      actionCode,
+      entityType: 'lead',
+      entityId: null,
+      metadata,
+      ipAddress: null,
+      userAgent: typeof req.get === 'function' ? String(req.get('user-agent') || '').slice(0, 255) || null : null,
+    });
+  } catch {
+    /* best-effort audit */
+  }
+}
+
 router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req, res) => {
   // Campaign purge intentionally remains the established PR #32
   // ADMIN/SUPERADMIN-only capability. It is not a leads.delete action.
-  const campaign = req.params.campaign;
+  //
+  // Fail-closed filter (reliability audit): the purge predicate is the
+  // campaign name. A blank/whitespace name must never be accepted — it
+  // would silently match only leads whose campaignName is literally empty,
+  // which is an unintended, unreviewable scope. Reject it explicitly.
+  const campaign = String(req.params.campaign ?? '').trim();
+  if (!campaign) {
+    return sendJson(res, 400, { success: false, message: 'A campaign name is required for a campaign purge.' });
+  }
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.leads = fallbackStore.leads.filter((l: any) => l.campaignName !== campaign);
@@ -7298,6 +7341,10 @@ router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req
        RETURNING id`,
       [campaign, caller?.id || null]
     );
+    await recordBulkLeadAudit(req, 'LEAD_CAMPAIGN_PURGE', caller?.id || null, {
+      campaignNameLength: campaign.length,
+      deleted: result.rows.length,
+    });
     return sendJson(res, 200, {
       success: true,
       message: result.rows.length > 0 ? 'Campaign leads deleted' : 'No leads found for that campaign',
@@ -7321,6 +7368,7 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
        WHERE is_deleted = FALSE RETURNING id`,
       [caller?.id || null]
     );
+    await recordBulkLeadAudit(req, 'LEAD_CLEAR_ALL', caller?.id || null, { deleted: result.rows.length });
     return sendJson(res, 200, { success: true, message: 'All leads cleared', deleted: result.rows.length });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead clear failed' });

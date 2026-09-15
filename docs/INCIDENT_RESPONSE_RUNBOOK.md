@@ -114,32 +114,48 @@ outcomes).
 
 ## 7. Failed migration
 
-- **Verify:** `npm run verify:db-schema` → missing tables; startup logs show
-  migration failure.
+- **Verify:** `npm run verify:db-schema` → missing tables/indexes; startup
+  logs show `❌ Migration failed: migrations=failed completed=<n>/<total>
+  failedAt=<name> error=<first line>` (the runner's failure marker names the
+  exact migration; everything before it completed).
 - **Contain:** stop writes if the schema is half-applied; do **not** re-run
-  partially-applied destructive DDL blindly.
-- **Recover:** forward-fix with an idempotent migration, or restore from a
-  pre-migration backup (see `BACKUP_RESTORE_RUNBOOK.md` §5–6).
-- **Evidence:** migration logs, `verify:db-schema` output, backup SHA.
+  partially-applied destructive DDL blindly. All shipped migrations are
+  idempotent (`IF NOT EXISTS` / guarded `DO $$` blocks), so a plain re-run
+  (redeploy / cold start) is the normal recovery once the cause is fixed.
+- **Recover:** forward-fix with an idempotent migration, re-run, then
+  `verify:db-schema` **and** `npm run verify:data-integrity` (a BLOCKER here
+  after a migration means the schema and the data disagree). Restore from a
+  pre-migration backup only per `BACKUP_RESTORE_RUNBOOK.md` §10.
+- **Evidence:** migration logs (failure marker line), `verify:db-schema` and
+  `verify:data-integrity` output, backup SHA.
 - **Do not** revert a destructive migration after data was written.
 
 ## 8. Suspected data corruption
 
-- **Verify:** integrity queries (orphan FK checks in
-  `BACKUP_RESTORE_RUNBOOK.md` §6), application misbehaviour, audit-log
-  anomalies.
+- **Verify:** `DATABASE_URL=… npm run verify:data-integrity` (read-only;
+  BLOCKER = structural/business break, WARNING = drift). Add `--diagnostic`
+  to get opaque row ids for the failing invariants, then inspect those rows
+  yourself. Correlate with application misbehaviour and `audit_logs`
+  anomalies (`LEAD_CAMPAIGN_PURGE`, `LEAD_CLEAR_ALL`, `users-bulk-import`).
 - **Contain:** stop writes immediately; freeze the database; do **not** run
-  repair scripts speculatively.
-- **Recover:** determine the corruption window, then restore the last
-  known-good point into a scratch instance, validate, and cut over — or
-  forward-fix only after root cause is understood.
-- **Evidence:** pre- and post-corruption dumps/SHAs, audit logs, queries.
+  repair scripts speculatively — the checker never repairs, by design.
+- **Recover:** decide forward-fix vs. restore with the decision tree in
+  `BACKUP_RESTORE_RUNBOOK.md` §10. WARNING-class findings are corrected
+  through the application (re-save the hierarchy link, reassign the lead,
+  cancel the schedule). Only an unrecoverable BLOCKER window justifies a
+  restore — into a scratch target first (`restore:drill`), validate, then
+  go/no-go.
+- **Evidence:** `verify:data-integrity` output before and after, pre- and
+  post-corruption dumps/SHAs, audit logs, the queries you ran.
 - **Do not** overwrite live data with an unvalidated restore.
 
 ## 9. Accidental bulk operation
 
-- **Verify:** scope of the bulk create/update/delete (row counts, timestamps
-  in `audit_logs` for `users-bulk-import`, campaign/clear-all actions).
+- **Verify:** scope of the bulk create/update/delete — row counts and
+  timestamps in `audit_logs` (`users-bulk-import`, `LEAD_CAMPAIGN_PURGE`,
+  `LEAD_CLEAR_ALL`; the lead purges record actor + counts only). Soft-deleted
+  leads keep `deleted_by` / `deleted_at`, so the affected set is
+  `SELECT id FROM leads WHERE deleted_at BETWEEN … AND deleted_by = …`.
 - **Contain:** stop further bulk actions; identify the exact rows affected.
 - **Recover:** if the operation is recoverable from audit/backup, restore the
   affected rows or the last good backup; otherwise forward-fix and document.
@@ -148,15 +164,19 @@ outcomes).
 
 ## 10. Notification failure
 
-- **Verify:** notifications not created/delivered (check `notifications` table;
-  correlate the failing business request by its `X-Request-ID` →
-  `http_request_error` / 5xx log events). Note: server-side notification
-  **reliability** is a planned roadmap item, so today's notifications are
-  synchronous/best-effort.
+- **Verify:** notifications not created/delivered (check `notifications`
+  table; correlate the failing business request by its `X-Request-ID` →
+  `http_request_error` / 5xx log events). System notifications (assignment,
+  upline) are created **inside the business transaction** with a
+  deterministic `idempotency_key` (PR #44): if the lead save committed, its
+  notifications committed with it; a retry can never duplicate them. Run
+  `verify:data-integrity` — `notifications.idempotency_index_present` /
+  `notifications.idempotency_key_duplicate` must PASS.
 - **Contain:** confirm it is a notification issue and not a DB issue (§2).
-- **Recover:** re-create the missed notifications manually where safe, or
-  accept the gap and record it; escalate to the Notification Reliability item.
-- **Evidence:** notification rows, trigger timestamps, logs.
+- **Recover:** a missing unique index (BLOCKER) means migrations did not
+  complete → §7. Otherwise re-create missed notifications manually only where
+  the business event is confirmed, or accept the gap and record it.
+- **Evidence:** notification rows, trigger timestamps, logs, checker output.
 - **Do not** mass-insert notifications without understanding the trigger.
 
 ---

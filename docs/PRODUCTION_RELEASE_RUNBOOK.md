@@ -59,10 +59,15 @@ empty-table seeds). There is no separate migration CLI and no version ledger.
 
   ```bash
   DATABASE_URL="$DATABASE_URL" npm run verify:db-schema
+  DATABASE_URL="$DATABASE_URL" npm run verify:data-integrity
   ```
 
-  This is read-only: connect, `SELECT 1`, compare `information_schema`
-  against the expected table set, and exit non-zero when tables are missing.
+  Both are read-only. `verify:db-schema` connects, `SELECT 1`, compares
+  `information_schema` against the expected table set, and exits non-zero
+  when tables/critical indexes are missing. `verify:data-integrity` runs the
+  business invariant matrix in a `READ ONLY` transaction and exits non-zero
+  on a BLOCKER (WARNINGS are printed for review) — see
+  `DATA_INTEGRITY_AND_RECOVERY.md`. Neither prints row data.
 
 - **Cold-start race note:** on serverless, the migration check runs per warm
   instance at first request. A failed migration is logged but not surfaced as

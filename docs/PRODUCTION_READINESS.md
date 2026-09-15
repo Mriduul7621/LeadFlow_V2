@@ -156,12 +156,24 @@ existing `rbac-fallback-safety-audit.test.ts`.
 - No migration-tracking table exists (migrations are re-runnable idempotent
   DDL, not a versioned ledger). Destructive migrations must be reviewed
   explicitly (see the release runbook).
+- The runner keeps an in-memory **run summary / failure marker**
+  (`getLastMigrationRunSummary()`): on failure the startup log names the
+  failing migration and how many completed before it
+  (`❌ Migration failed: migrations=failed completed=n/total failedAt=<name>`).
+  It is never written to the database and never exposed over HTTP.
+- Data-safety guards added by migration 042 (`users_no_self_manager` CHECK
+  `NOT VALID`; partial UNIQUE on `scheduled_activities.completed_activity_id`
+  created only when no duplicates exist) can never fail a cold start on
+  legacy data; violations surface through `npm run verify:data-integrity`.
 
 `npm run verify:db-schema` performs a **read-only** schema readiness check:
 connect, `SELECT 1`, compare `information_schema` against the expected table
 set, and exit non-zero when tables are missing. It never writes, never runs
 migrations, and is deliberately **not** part of CI (CI must not require a
-real production database).
+real production database). `npm run verify:data-integrity` is its data-level
+companion (read-only invariant matrix, PASS/WARN/FAIL, exit 1 on BLOCKER) —
+same posture, same non-CI status. `/api/health/readiness` deliberately stays
+a single `SELECT 1`; no health endpoint scans business tables.
 
 ---
 
@@ -175,7 +187,7 @@ Recorded during the audit; not all are fixed in this stage.
 | 2 | Migration failures are logged but not surfaced as a readiness signal (see §5). | **HIGH** | Mitigated operationally by `verify:db-schema` + release-runbook gate; structural fix deferred. |
 | 3 | `server/db.ts` and `server/server.ts` are legacy, unused duplicates (not imported by either entrypoint); `server/db.ts` contains a contradictory "fallback to in-memory" log line and unconditionally `rejectUnauthorized: false`. | MEDIUM | Left untouched (avoid rewriting); they are dead code and should be deleted in a cleanup PR. |
 | 4 | `DATABASE_URL` connections use `ssl: { rejectUnauthorized: false }` (Supabase convention). | MEDIUM | Accepted for Supabase; document for non-Supabase hosts in the deployment runbook. |
-| 5 | Backup/restore scripts (`scripts/backup-db.ts`, `restore-db.ts`, `reset-db.ts`, `migrate.ts`, `health-check.ts`) are empty placeholders. | MEDIUM | Documented as unimplemented; procedure covered in `BACKUP_RESTORE_RUNBOOK.md` via `pg_dump`. |
+| 5 | Backup/restore scripts (`scripts/backup-db.ts`, `restore-db.ts`, `reset-db.ts`, `migrate.ts`, `health-check.ts`) are empty placeholders. | MEDIUM → **MITIGATED** | Placeholders remain unreferenced (deletion is a cleanup PR). Verified capability now lives in `scripts/verify-backup.mjs` (dump verification, never creates a backup), `scripts/verify-data-integrity.mjs` (read-only invariant matrix) and `scripts/restore-drill.mjs` (isolated, default-deny restore rehearsal) — see `DATA_INTEGRITY_AND_RECOVERY.md`. Backup **creation** remains a deliberate operator `pg_dump` (`BACKUP_RESTORE_RUNBOOK.md` §5); provider backups are an external dependency, not a verified capability. |
 | 6 | `server/utils/jwt.ts` (legacy JWT path) still falls back to the development secret and only checks `NODE_ENV === 'production'` (not `VERCEL`). The active production router (`production.routes.ts`) is hardened; the legacy path is not used by either entrypoint. | MEDIUM | Documented; delete with the legacy cleanup (see #3). |
 | 7 | No CSP, distributed rate-limit store, or per-account lockout yet (deferred in `PRODUCTION_SECURITY_HARDENING.md`). | MEDIUM | Existing, tracked. |
 

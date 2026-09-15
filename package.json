@@ -12,6 +12,9 @@
     "test": "tsx --test server/tests/*.test.ts",
     "verify:serverless": "node scripts/verify-serverless-build.mjs",
     "verify:db-schema": "node scripts/verify-db-schema.mjs",
+    "verify:data-integrity": "node scripts/verify-data-integrity.mjs",
+    "verify:backup": "node scripts/verify-backup.mjs",
+    "restore:drill": "node scripts/restore-drill.mjs",
     "smoke:production": "tsx scripts/smoke-production.ts"
   },
   "dependencies": {

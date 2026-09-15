@@ -32,6 +32,7 @@ import { up as followupQueueIndexes } from "./migrations/038_followup_queue_inde
 import { up as scheduledActivities } from "./migrations/039_scheduled_activities.js";
 import { up as notificationReliability } from "./migrations/040_notification_reliability.js";
 import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_activity_open_index.js";
+import { up as dataIntegrityGuards } from "./migrations/042_data_integrity_guards.js";
 
 interface Migration {
 
@@ -213,7 +214,80 @@ const migrations: Migration[] = [
         run: scheduledActivityOpenIndex,
     },
 
+    {
+        name: "Data Integrity Guards",
+        run: dataIntegrityGuards,
+    },
+
 ];
+
+/**
+ * Migration run summary — the cheap, safe visibility improvement from the
+ * reliability audit (docs/DATA_INTEGRITY_AND_RECOVERY.md §9).
+ *
+ * The runner is intentionally NOT a versioned ledger: every migration is
+ * idempotent DDL (IF NOT EXISTS / ON CONFLICT DO NOTHING) and the whole
+ * list re-runs on every cold start. That design is preserved. What was
+ * missing was a process-local record of WHAT happened on the last run, so
+ * a partial failure could be told apart from "never ran" without grepping
+ * logs. The summary lives in memory only (never written to the database,
+ * never exposed as a public endpoint) and is safe to log: it contains
+ * migration names, counts and a sanitized error message — no SQL text,
+ * no connection details, no row data.
+ */
+export interface MigrationRunSummary {
+    /** 'never' before the first attempt in this process. */
+    status: "never" | "running" | "completed" | "failed";
+    /** Total migrations in the fixed list. */
+    total: number;
+    /** Migrations that completed in the most recent run (in order). */
+    completed: string[];
+    /** Migration that threw in the most recent run, if any. */
+    failedAt: string | null;
+    /** Sanitized error message (first line only, capped) or null. */
+    error: string | null;
+    /** ISO timestamps of the most recent run boundaries. */
+    startedAt: string | null;
+    finishedAt: string | null;
+}
+
+let lastRun: MigrationRunSummary = {
+    status: "never",
+    total: migrations.length,
+    completed: [],
+    failedAt: null,
+    error: null,
+    startedAt: null,
+    finishedAt: null,
+};
+
+/** Read-only snapshot of the most recent migration run in this process. */
+export function getLastMigrationRunSummary(): MigrationRunSummary {
+    return { ...lastRun, completed: [...lastRun.completed] };
+}
+
+/** Names of the fixed migration list (for tooling/tests; no side effects). */
+export function listMigrationNames(): string[] {
+    return migrations.map((m) => m.name);
+}
+
+/** One-line, secret-free description for startup logs. */
+export function describeMigrationRun(summary: MigrationRunSummary = lastRun): string {
+    const base = `migrations=${summary.status} completed=${summary.completed.length}/${summary.total}`;
+    if (summary.status === "failed") {
+        return `${base} failedAt=${summary.failedAt || "unknown"} error=${summary.error || "unknown"}`;
+    }
+    return base;
+}
+
+function sanitizeMigrationError(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error ?? "unknown error");
+    // First line only, no connection strings, capped length.
+    return raw
+        .split(/\r?\n/)[0]
+        .replace(/postgres(ql)?:\/\/\S+/gi, "postgres://[redacted]")
+        .slice(0, 300);
+}
 
 export async function runMigrations(): Promise<void> {
 
@@ -221,18 +295,46 @@ export async function runMigrations(): Promise<void> {
     console.log("🚀 Running Database Migrations");
     console.log("========================================");
 
+    lastRun = {
+        status: "running",
+        total: migrations.length,
+        completed: [],
+        failedAt: null,
+        error: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+    };
+
     for (const migration of migrations) {
 
         console.log(`➡️ ${migration.name}`);
 
-        await migration.run();
+        try {
+            await migration.run();
+        } catch (error) {
+            // Failure marker: record WHICH migration failed and how far the
+            // run got, then rethrow unchanged so startup behaviour is exactly
+            // as before (initializeDatabase() rejects; requests get 503).
+            lastRun = {
+                ...lastRun,
+                status: "failed",
+                failedAt: migration.name,
+                error: sanitizeMigrationError(error),
+                finishedAt: new Date().toISOString(),
+            };
+            console.error(`❌ Migration failed: ${describeMigrationRun(lastRun)}`);
+            throw error;
+        }
 
+        lastRun.completed.push(migration.name);
         console.log(`✅ ${migration.name} completed`);
 
     }
 
+    lastRun = { ...lastRun, status: "completed", finishedAt: new Date().toISOString() };
+
     console.log("========================================");
-    console.log("✅ All Database Migrations Completed");
+    console.log(`✅ All Database Migrations Completed (${describeMigrationRun(lastRun)})`);
     console.log("========================================");
 
 }
