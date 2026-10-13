@@ -777,10 +777,44 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
+        <main className="flex-1 p-4 pb-24 md:p-6 lg:p-8 lg:pb-8 overflow-y-auto mobile-main-content">
           {children}
         </main>
       </div>
+
+      {/* Persistent bottom navigation keeps the most common field actions within thumb reach. */}
+      <nav className="mobile-bottom-nav lg:hidden" aria-label="Primary mobile navigation">
+        {[
+          { label: 'Home', icon: LayoutDashboard, path: '/' },
+          { label: 'My Work', icon: Target, path: '/workbench' },
+          { label: 'Leads', icon: ClipboardList, path: '/leads' },
+          { label: 'Add Lead', icon: UserPlus, path: '/leads/new' },
+        ].map((item) => {
+          const active = item.path === '/'
+            ? location.pathname === '/'
+            : location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+          return (
+            <Link
+              key={item.path}
+              to={item.path}
+              aria-current={active ? 'page' : undefined}
+              className={cn('mobile-bottom-nav-item', active && 'mobile-bottom-nav-item-active')}
+            >
+              <item.icon className="h-5 w-5" strokeWidth={active ? 2.4 : 1.8} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setIsMobileMenuOpen(true)}
+          className="mobile-bottom-nav-item"
+          aria-label="Open all navigation options"
+        >
+          <Menu className="h-5 w-5" />
+          <span>More</span>
+        </button>
+      </nav>
     </div>
   );
 }
