@@ -621,11 +621,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </AnimatePresence>
 
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
-        <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
+        <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0 mobile-app-header">
           <div className="flex items-center gap-3 lg:hidden">
              <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 rounded-[10px] hover:bg-stone-50" aria-label="Open menu">
                 <Menu className="w-6 h-6 text-stone-500" />
              </button>
+             <span className="text-sm font-extrabold tracking-tight text-stone-800">Lead<span className="text-[#F3702B]">Flow</span></span>
           </div>
 
           <div className="hidden lg:flex items-center gap-3">
