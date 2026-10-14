@@ -21,6 +21,8 @@ export interface PerfSpan {
 export interface Perf {
   /** Records the elapsed time since the previous span point (or start). */
   span(label: string): void;
+  /** Records an independently measured duration without moving the sequential span clock. */
+  measure(label: string, ms: number): void;
   /** Elapsed time since the tracker was created, in ms. */
   totalMs(): number;
   /**
@@ -54,6 +56,9 @@ export function createPerf(event: string): Perf {
       const t = nowMs();
       spans.push({ label, ms: round1(t - lastAt) });
       lastAt = t;
+    },
+    measure(label: string, ms: number): void {
+      if (Number.isFinite(ms) && ms >= 0) spans.push({ label, ms: round1(ms) });
     },
     totalMs(): number {
       return round1(nowMs() - startedAt);
