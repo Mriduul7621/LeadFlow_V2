@@ -1062,3 +1062,26 @@
   .lf-recent-row { gap: 9px; padding: 12px 0; }
   .lf-lead-avatar { width: 35px; height: 35px; flex-basis: 35px; border-radius: 11px; }
 }
+
+/* Lead Prospect list: compact mobile rows and calmer desktop table */
+.lf-mobile-lead-list { display: none; }
+.lf-desktop-lead-table { border: 1px solid #EEECE2; border-radius: 14px; background: #FFFFFF; }
+.lf-desktop-lead-table table { border-collapse: separate; border-spacing: 0; }
+.lf-desktop-lead-table thead th { padding-top: 15px !important; padding-bottom: 15px !important; border-color: #EEECE2 !important; font-style: normal !important; font-size: 10px !important; letter-spacing: .06em !important; }
+.lf-desktop-lead-table tbody td { padding-top: 15px !important; padding-bottom: 15px !important; border-color: #F0EFE8 !important; font-style: normal !important; }
+.lf-desktop-lead-table tbody tr:last-child td:first-child { border-bottom-left-radius: 14px; }
+.lf-desktop-lead-table tbody tr:last-child td:last-child { border-bottom-right-radius: 14px; }
+@media (max-width: 767px) {
+  .lf-mobile-lead-list { display: flex; flex-direction: column; overflow: hidden; border: 1px solid #EEECE2; border-radius: 14px; background: #FFFFFF; }
+  .lf-mobile-lead-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 14px 13px; border: 0; border-bottom: 1px solid #F0EFE8; background: #FFFFFF; color: inherit; text-align: left; cursor: pointer; transition: background .15s ease; }
+  .lf-mobile-lead-row:last-child { border-bottom: 0; }
+  .lf-mobile-lead-row:active, .lf-mobile-lead-row:hover { background: #FDFCF7; }
+  .lf-mobile-lead-avatar { display: flex; width: 44px; height: 44px; flex: 0 0 44px; align-items: center; justify-content: center; border: 1px solid #EAE7D6; border-radius: 14px; background: #F7F5E9; color: #817719; font-size: 14px; font-weight: 800; letter-spacing: -.03em; }
+  .lf-mobile-lead-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; }
+  .lf-mobile-lead-copy strong { max-width: 100%; overflow: hidden; color: #29352E; font-size: 13px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+  .lf-mobile-lead-copy small { max-width: 100%; overflow: hidden; color: #898C82; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .lf-mobile-lead-status { display: inline-flex; max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 6px; background: #F5F3E5; color: #77701E; font-size: 9px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+  .lf-mobile-lead-arrow { flex: 0 0 auto; color: #A2A398; }
+  .lf-mobile-lead-empty { padding: 28px 14px; color: #898C82; font-size: 12px; text-align: center; }
+  .lf-desktop-lead-table { display: none; }
+}
