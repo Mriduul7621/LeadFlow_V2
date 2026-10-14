@@ -125,13 +125,17 @@ export function parseExplicitInvestmentAmount(
  */
 export async function fetchActivityQualitySignals(
   pool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
-  leadIds: string[]
+  leadIds: string[],
+  onTiming?: (durationMs: number) => void
 ): Promise<Map<string, ActivityQualitySignals>> {
   const out = new Map<string, ActivityQualitySignals>();
   const ids = Array.from(new Set((leadIds || []).filter(Boolean)));
   if (ids.length === 0) return out;
   try {
-    const res = await pool.query(
+    const startedAt = Date.now();
+    let res: { rows: any[] };
+    try {
+      res = await pool.query(
       `SELECT a.lead_id::text AS lead_id,
               MAX(a.created_at) AS last_activity_at,
               COUNT(*) FILTER (WHERE LOWER(a.status) IN ('no response', 'unreachable'))::int AS failed_contact_count,
@@ -140,7 +144,10 @@ export async function fetchActivityQualitySignals(
         WHERE a.lead_id = ANY($1::uuid[])
         GROUP BY a.lead_id`,
       [ids]
-    );
+      );
+    } finally {
+      onTiming?.(Date.now() - startedAt);
+    }
     for (const row of res.rows || []) {
       out.set(String(row.lead_id), {
         lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null,
@@ -164,7 +171,8 @@ export async function fetchActivityQualitySignals(
  */
 export async function fetchScheduledQualitySignals(
   pool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
-  leadIds: string[]
+  leadIds: string[],
+  onTiming?: (durationMs: number) => void
 ): Promise<Map<string, ScheduledQualitySignals>> {
   const out = new Map<string, ScheduledQualitySignals>();
   const ids = Array.from(new Set((leadIds || []).filter(Boolean)));
@@ -177,7 +185,10 @@ export async function fetchScheduledQualitySignals(
     // sargable so the partial index idx_scheduled_activities_open_lead
     // (migration 041) applies — LOWER() would force a post-index filter
     // over every completed/cancelled row of each lead.
-    const res = await pool.query(
+    const startedAt = Date.now();
+    let res: { rows: any[] };
+    try {
+      res = await pool.query(
       `SELECT s.lead_id::text AS lead_id,
               MIN(s.scheduled_at) AS next_scheduled_at
          FROM scheduled_activities s
@@ -185,7 +196,10 @@ export async function fetchScheduledQualitySignals(
           AND s.status = 'scheduled'
         GROUP BY s.lead_id`,
       [ids]
-    );
+      );
+    } finally {
+      onTiming?.(Date.now() - startedAt);
+    }
     for (const row of res.rows || []) {
       out.set(String(row.lead_id), {
         nextScheduledAt: row.next_scheduled_at
@@ -307,13 +321,17 @@ export async function aggregateQualityForScope(
   visibilitySql: string,
   visibilityParams: any[],
   terminalStatuses: string[],
-  now?: Date | string
+  now?: Date | string,
+  onTiming?: (label: string, durationMs: number) => void
 ): Promise<LeadQualityDashboard> {
   const params: any[] = [...visibilityParams, terminalStatuses];
   const pTerminal = params.length;
   let rows: any[] = [];
   try {
-    const res = await pool.query(
+    const scanStartedAt = Date.now();
+    let res: { rows: any[] };
+    try {
+      res = await pool.query(
       `SELECT l.id::text AS id,
               l.current_status,
               l.next_follow_up_at,
@@ -326,7 +344,10 @@ export async function aggregateQualityForScope(
           AND l.current_status <> ALL($${pTerminal}::text[])
           AND (${visibilitySql})`,
       params
-    );
+      );
+    } finally {
+      onTiming?.('leadScan', Date.now() - scanStartedAt);
+    }
     rows = res.rows || [];
   } catch (error: any) {
     console.warn(
@@ -339,8 +360,8 @@ export async function aggregateQualityForScope(
 
   const ids = rows.map(r => String(r.id));
   const [activityMap, scheduledMap] = await Promise.all([
-    fetchActivityQualitySignals(pool, ids),
-    fetchScheduledQualitySignals(pool, ids),
+    fetchActivityQualitySignals(pool, ids, ms => onTiming?.('activitySignals', ms)),
+    fetchScheduledQualitySignals(pool, ids, ms => onTiming?.('scheduledSignals', ms)),
   ]);
 
   const agg = emptyQualityDashboard();
