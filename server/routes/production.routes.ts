@@ -8046,11 +8046,19 @@ function normalizePriority(value: any): string | null {
    assignedTo is a NARROWING filter only — it never widens visibility.
 ------------------------------------------------------------------- */
 router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
+  const perf = createPerf('scheduled.list');
   if (sendDbUnavailable(res)) return;
   try {
     const caller = await getCallerDbInfo(req);
-    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+    perf.span('authz.caller');
+    if (!caller) {
+      perf.finish(res);
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const canViewLeads = await hasPermissionCode(caller, 'leads.view');
+    perf.span('authz.permission');
+    if (!canViewLeads) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
 
@@ -8082,6 +8090,7 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     offset = Math.floor(offset);
 
     const visibility = await resolveCallerVisibility(caller);
+    perf.span('authz.visibility');
 
     // assignedTo NARROWING filter — never widens visibility
     let assignedFilter: { userId: string; employeeId: string } | null = null;
@@ -8212,6 +8221,7 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
 
     const whereSql = where.join(' AND ');
     const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
+    perf.span('db.countTotal');
     const total = Number(countRes.rows[0]?.cnt || 0);
 
     params.push(limit, offset);
@@ -8229,6 +8239,7 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
        LIMIT $${pLimit} OFFSET $${pOffset}`,
       params
     );
+    perf.span('db.list');
     // Parent-lead quality for the page: two bulk signal queries over the
     // distinct parent leads — never per-row.
     const parentIds = Array.from(
@@ -8238,6 +8249,7 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       fetchActivityQualitySignals(pool, parentIds),
       fetchScheduledQualitySignals(pool, parentIds),
     ]);
+    perf.span('db.qualitySignals');
     const items = listRes.rows.map((row: any) => {
       const mapped: any = mapScheduledActivityRow(row);
       const parentKey = String(row.lead_id || '');
@@ -8256,8 +8268,10 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       );
       return mapped;
     });
+    perf.finish(res);
     return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activities fetch failed.' });
   }
 });
