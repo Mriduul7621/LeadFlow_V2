@@ -7,7 +7,7 @@ let pool: Pool | null = null;
 let pglitePool: any = null;
 
 export function isDatabaseConfigured(): boolean {
-    return Boolean(process.env.POSTGRES_URL || process.env.DATABASE_URL);
+    return Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
 }
 
 function isPGliteUrl(url: string | undefined): boolean {
@@ -27,12 +27,11 @@ export function getPool(): Pool {
         return pglitePool as unknown as Pool;
     }
 
-    // Prefer Vercel/Supabase POSTGRES_URL (the managed pooled endpoint) for
-    // serverless request concurrency. DATABASE_URL remains a compatibility
-    // fallback for local/dev environments that do not define POSTGRES_URL.\n    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+    // Preserve the existing configured DATABASE_URL first; use POSTGRES_URL only as fallback.
+    const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
     if (!connectionString) {
-        throw new Error("Database connection string is not configured. Set POSTGRES_URL or DATABASE_URL in the Vercel environment.");
+        throw new Error("Database connection string is not configured. Set DATABASE_URL (preferred) or POSTGRES_URL in the Vercel environment for this deployment.");
     }
 
     if (isPGliteUrl(connectionString)) {
