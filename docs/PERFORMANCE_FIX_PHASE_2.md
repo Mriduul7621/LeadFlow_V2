@@ -20,3 +20,11 @@ The latest preview build emits separate chunks: entry `720.77 kB` minified (`221
 ## Next
 
 Capture fresh-login timings. If browser duration is high while `Server-Timing` is low, investigate network/connection contention. If server timing is high, profile the backend spans and SQL. Profile the 720 kB entry chunk before further code-splitting changes.
+
+## Field diagnostics follow-up — 14 Oct 2026
+
+The user-provided preview and production snapshots each captured roughly 29 completed `GET /api/roles` requests in a short diagnostic session, mostly 0.5–0.9 s each. This repetition is abnormal: the session cache and GET coalescing should prevent repeated role reads on every render/navigation.
+
+Code trace found the feedback loop: `adminService.getRoles()` successfully fetched roles, wrote the local role cache, and that generic cache writer emitted `ROLES_CACHE_CHANGED_EVENT`. `FeatureGate` listens to the same event and calls `getRoles()` again, repeating the cycle. Phase 2 now makes role-cache notification opt-out for read refreshes and disables the event for successful GETs; role save/delete mutations still notify mounted gates. A regression guard is added at `server/tests/perf-role-cache-loop.test.ts`.
+
+The single `GET /api/leads` sample was 2.292 s total, with `Server-Timing` showing 1.4046 s in `authz.caller`, 397.7 ms in `db.query`, and 212.1 ms in `db.qualitySignals`. This is a separate backend latency candidate; measure several requests after the role-loop fix before changing authorization or query behavior. The sample size is one, so do not treat it as a stable baseline.
