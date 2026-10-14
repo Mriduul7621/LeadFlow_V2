@@ -6647,7 +6647,18 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
 
     const countSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${where.join(' AND ')} GROUP BY 1`;
-    const listWhere = bucket === 'all' ? where : [...where, `${bucketExpr} = '${bucket}'`];
+    // Keep the list predicate sargable: comparing CASE(bucketExpr) to a
+    // string prevents PostgreSQL from using the next_follow_up_at range
+    // index. Equivalent half-open ranges preserve the Dhaka bucket rules.
+    const bucketRangePredicate =
+      bucket === 'overdue'
+        ? `l.next_follow_up_at < '${todayLit}'::timestamp`
+        : bucket === 'today'
+          ? `l.next_follow_up_at >= '${todayLit}'::timestamp AND l.next_follow_up_at < '${tomorrowLit}'::timestamp`
+          : bucket === 'upcoming'
+            ? `l.next_follow_up_at >= '${tomorrowLit}'::timestamp`
+            : null;
+    const listWhere = bucketRangePredicate ? [...where, bucketRangePredicate] : where;
     // The bucket counts already provide the exact total for the requested
     // bucket. Keep list parameters separate so the count and page queries
     // can run concurrently without mutating a shared parameter array.
