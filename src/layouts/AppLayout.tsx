@@ -622,10 +622,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
         <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
-          <div className="flex items-center gap-3 lg:hidden">
-             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 rounded-[10px] hover:bg-stone-50" aria-label="Open menu">
-                <Menu className="w-6 h-6 text-stone-500" />
+          <div className="flex items-center gap-2 lg:hidden">
+             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 rounded-xl hover:bg-stone-50 active:scale-95 transition" aria-label="Open menu">
+                <Menu className="w-5 h-5 text-stone-700" />
              </button>
+             <img src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO" alt="Shanta Life" className="h-7 w-auto max-w-[112px] object-contain" referrerPolicy="no-referrer" />
           </div>
 
           <div className="hidden lg:flex items-center gap-3">
@@ -777,10 +778,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
+        <main className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
         </main>
       </div>
+      <nav className="leadflow-mobile-nav" aria-label="Primary mobile navigation">
+        {[
+          { label: "Home", path: "/", icon: LayoutDashboard },
+          { label: "My Work", path: "/workbench", icon: Target },
+          { label: "Leads", path: "/leads", icon: ClipboardList },
+          { label: "Add Lead", path: "/leads/new", icon: UserPlus },
+        ].map((item) => {
+          const active = item.path === "/" ? location.pathname === "/" : location.pathname === item.path || (item.path === "/leads" && location.pathname.startsWith("/leads") && location.pathname !== "/leads/new");
+          return <Link key={item.path} to={item.path} aria-current={active ? "page" : undefined} className={cn("leadflow-mobile-nav-item", active && "is-active")}><item.icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.8} /><span>{item.label}</span></Link>;
+        })}
+        <button type="button" onClick={() => setIsMobileMenuOpen(true)} className={cn("leadflow-mobile-nav-item", isMobileMenuOpen && "is-active")} aria-label="Open all sections"><Menu className="h-[19px] w-[19px]" strokeWidth={1.8} /><span>More</span></button>
+      </nav>
     </div>
   );
 }
