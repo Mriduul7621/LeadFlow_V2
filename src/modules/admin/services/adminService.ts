@@ -67,16 +67,17 @@ function readCache<T>(key: string, fallback: T): T {
   }
 }
 
-function writeCache<T>(key: string, value: T): void {
+function writeCache<T>(key: string, value: T, notifyRoleChange = true): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
     console.error(`Failed to write local cache ${key}:`, e);
   }
-  // Same-tab writers must be announced: the browser only emits `storage`
-  // events to OTHER tabs, so the permissions hook listens for this
-  // instead of polling localStorage on a timer.
-  if (key === KEYS.ROLES) emitRolesCacheChanged();
+  // Only confirmed role mutations should announce a same-tab change.
+  // A successful GET refresh is NOT a mutation: notifying here would make
+  // FeatureGate reload GET /api/roles, whose cache write would notify again,
+  // creating an unbounded request loop.
+  if (key === KEYS.ROLES && notifyRoleChange) emitRolesCacheChanged();
 }
 
 /**
@@ -249,7 +250,9 @@ export const adminService = {
         return String(a.roleName || a.roleId).localeCompare(String(b.roleName || b.roleId));
       });
       const finalized = sorted.map(finalizeRole);
-      writeCache(KEYS.ROLES, finalized);
+      // Refreshing read cache must not emit ROLES_CACHE_CHANGED_EVENT.
+      // The event is reserved for save/delete mutations only.
+      writeCache(KEYS.ROLES, finalized, false);
       return finalized;
     } catch (err) {
       if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
