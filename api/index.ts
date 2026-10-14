@@ -47,35 +47,6 @@ const app = express();
  */
 applyProductionHttpSecurity(app, { production: true });
 
-let dbInitialized = false;
-let dbInitializationAttempted = false;
-
-async function ensureDb() {
-  if (dbInitializationAttempted) return;
-  dbInitializationAttempted = true;
-  if (!process.env.DATABASE_URL) {
-    // Honest startup log: without DATABASE_URL a serverless deployment does
-    // NOT fall back to in-memory persistence. Database-backed requests are
-    // refused with HTTP 503 by the production router (see
-    // docs/PRODUCTION_SECURITY_HARDENING.md).
-    console.log(
-      isProductionRuntime()
-        ? 'DATABASE_URL not configured - database-backed requests will be refused (503), no in-memory fallback'
-        : 'DATABASE_URL not set - development demo mode (in-memory, not persistent)'
-    );
-    return;
-  }
-
-  try {
-    const { initializeDatabase } = await import('../server/database/initialize.js');
-    await initializeDatabase();
-    dbInitialized = true;
-    console.log('Database initialized');
-  } catch (error: any) {
-    console.error('DB init failed:', error?.message || error);
-  }
-}
-
 const IS_PRODUCTION = isProductionRuntime();
 
 app.get('/api/db-status', async (_req, res) => {
@@ -155,7 +126,10 @@ const readinessHandler = async (_req: express.Request, res: express.Response) =>
 app.get('/health/readiness', readinessHandler);
 app.get('/api/health/readiness', readinessHandler);
 
-// All API routes - load after DB init
+// API routes are imported lazily once per warm function instance. Production
+// database migrations and seeds run in the Vercel production build step, not
+// in the request path; this keeps cold starts from serially replaying the
+// migration list before serving the first API request.
 let productionRouter: express.Router | null = null;
 let routesLoading: Promise<express.Router> | null = null;
 
@@ -163,7 +137,6 @@ async function loadRoutes(): Promise<express.Router> {
   if (productionRouter) return productionRouter;
   if (!routesLoading) {
     routesLoading = (async () => {
-      await ensureDb();
       const { default: productionRoutes } = await import('../server/routes/production.routes.js');
       productionRouter = productionRoutes;
       return productionRoutes;
@@ -175,17 +148,8 @@ async function loadRoutes(): Promise<express.Router> {
   return routesLoading;
 }
 
-// Serverless cold start: kick off DB init + router load as soon as the
-// module is evaluated, instead of on the first request. On Vercel the
-// function container boots, evaluates this module, and only then starts
-// dispatching requests — so the (several-seconds) migration check and the
-// production-router import now overlap container warm-up and network time
-// to the first request, instead of sitting on that request's critical
-// path. `loadRoutes` is memoized: the first request still awaits the SAME
-// promise (no second init, no changed dispatch order, no new 404s). The
-// `.catch` keeps the kick-off from becoming an unhandled rejection — a
-// cold-start failure is still surfaced on the first request, exactly as
-// before.
+// Start the import while the serverless module is warming. No database
+// migration or seed work is performed by this warm-up path.
 void loadRoutes().catch(() => undefined);
 
 // Dispatch /api/* into the lazily-loaded production router. Calling the router
