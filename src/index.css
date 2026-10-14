@@ -421,7 +421,7 @@
     overscroll-behavior-y: contain;
   }
   body {
-    background: #F7F7F2;
+    background: #FDFBF7;
   }
   .leadflow-main {
     padding: 16px 14px calc(92px + env(safe-area-inset-bottom)) !important;
