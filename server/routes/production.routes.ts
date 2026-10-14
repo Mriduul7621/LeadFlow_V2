@@ -6705,8 +6705,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     // leads — never per-lead. Scores attach to visible rows only.
     const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
     const [queueActivity, queueScheduled] = await Promise.all([
-      fetchActivityQualitySignals(pool, queueIds),
-      fetchScheduledQualitySignals(pool, queueIds),
+      fetchActivityQualitySignals(pool, queueIds, ms => perf.measure('db.qualityActivity', ms)),
+      fetchScheduledQualitySignals(pool, queueIds, ms => perf.measure('db.qualityScheduled', ms)),
     ]);
     perf.span('db.qualitySignals');
     const items = listRes.rows.map((row: any) => {
@@ -8262,8 +8262,8 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       new Set((listRes.rows || []).map((r: any) => String(r.lead_id || '')))
     ).filter(Boolean);
     const [schedActivity, schedPlanned] = await Promise.all([
-      fetchActivityQualitySignals(pool, parentIds),
-      fetchScheduledQualitySignals(pool, parentIds),
+      fetchActivityQualitySignals(pool, parentIds, ms => perf.measure('db.qualityActivity', ms)),
+      fetchScheduledQualitySignals(pool, parentIds, ms => perf.measure('db.qualityScheduled', ms)),
     ]);
     perf.span('db.qualitySignals');
     const items = listRes.rows.map((row: any) => {
@@ -9388,7 +9388,14 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       measurePromise('db.metricQuery', pool.query(metricSql, metricParams)),
       measurePromise('db.followUpCounts', pool.query(fuCountSql, fuParams)),
       measurePromise('db.agentQuery', pool.query(agentSql, agentParams)),
-      measurePromise('db.qualityAggregate', aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList)),
+      measurePromise('db.qualityAggregate', aggregateQualityForScope(
+        pool,
+        qualityVisibilitySql,
+        qualityParams,
+        terminalList,
+        undefined,
+        (label, ms) => perf.measure(`db.qualityAggregate.${label}`, ms)
+      )),
     ]);
     perf.span('db.queries');
 
