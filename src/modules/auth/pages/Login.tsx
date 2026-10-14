@@ -2,7 +2,7 @@ import React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Lock, User as UserIcon, LogIn, ShieldCheck, ArrowRight, ArrowLeft, Mail } from 'lucide-react';
+import { Lock, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -46,9 +46,6 @@ function getDesignationFromRole(role: UserRole): string {
     default: return 'Office Employee';
   }
 }
-
-// @ts-ignore
-import bgImage from '../../../assets/images/income_planner_bg_1779253838380.png';
 
 const loginSchema = z.object({
   username: z.string().min(3, 'Employee ID is required'),
