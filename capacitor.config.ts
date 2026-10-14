@@ -1,5 +1,3 @@
-import type { CapacitorConfig } from '@capacitor/cli';
-
 /**
  * Debug APK shell for LeadFlow.
  *
@@ -8,7 +6,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * The configured URL must be reachable by pilot users without a Vercel SSO
  * interstitial; use an approved public/custom domain for external testing.
  */
-const config: CapacitorConfig = {
+const config = {
   appId: 'com.shantalife.leadflow',
   appName: 'LeadFlow',
   webDir: 'dist',
