@@ -507,7 +507,13 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.ok(page.includes('Authoritative metrics from GET /api/dashboard') || page.includes('getDashboard'));
     // loadDashboardData must call dashboardService, not compute from getLeads first
     const loadStart = page.indexOf('const loadDashboardData');
-    const loadEnd = page.indexOf('const formattedDateRange');
+    // The end marker must be a declaration that still exists: it used to be
+    // 'const formattedDateRange' (removed by the dashboard redesign), which
+    // made indexOf return -1 and slice(start, -1) silently swallow the whole
+    // file tail — the slice assertions only passed by accident. Anchor on the
+    // real boundary and fail loudly if it ever disappears again.
+    const loadEnd = page.indexOf('const loadDailyExecution');
+    assert.ok(loadStart >= 0 && loadEnd > loadStart, 'loadDashboardData boundary markers must exist');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(loadBody.includes('dashboardService.getDashboard'));
     // Must not use getLeads for stats calculation
@@ -591,7 +597,13 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
 
     const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
     const loadStart = page.indexOf('const loadDashboardData');
-    const loadEnd = page.indexOf('const formattedDateRange');
+    // The end marker must be a declaration that still exists: it used to be
+    // 'const formattedDateRange' (removed by the dashboard redesign), which
+    // made indexOf return -1 and slice(start, -1) silently swallow the whole
+    // file tail — the slice assertions only passed by accident. Anchor on the
+    // real boundary and fail loudly if it ever disappears again.
+    const loadEnd = page.indexOf('const loadDailyExecution');
+    assert.ok(loadStart >= 0 && loadEnd > loadStart, 'loadDashboardData boundary markers must exist');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
     assert.ok(page.includes('No trend data available') || loadBody.includes('setTrendData([])') || loadBody.includes('metrics.trendData'));

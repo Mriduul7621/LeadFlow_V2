@@ -40,6 +40,20 @@ interface CalendarEvent {
   dateStr: string; // ISO string (scheduledAt)
   remarks?: string;
   status: string;
+  /**
+   * Flattened lead fields for the row/detail UI. The scheduled-activities
+   * list returns leadCustomerName / leadMobile / leadStatus as flat columns
+   * (there is no nested `lead` object), so the mapping builds this shape.
+   * Every consumer must still tolerate the optional fields being absent —
+   * a lead outside the caller's visibility scope legitimately has no name.
+   */
+  lead: {
+    prospectName: string;
+    mobile?: string;
+    status?: string;
+    area?: string;
+    campaignName?: string;
+  };
   raw: ScheduledActivity;
 }
 
@@ -145,6 +159,13 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
             dateStr: iso,
             remarks: sa.remarks || undefined,
             status: sa.status,
+            lead: {
+              prospectName: (sa as any).leadCustomerName || prospect,
+              mobile: (sa as any).leadMobile || undefined,
+              status: (sa as any).leadStatus || sa.status || undefined,
+              area: (sa as any).leadArea || (sa as any).lead_area || undefined,
+              campaignName: (sa as any).leadCampaignName || (sa as any).lead_campaign_name || undefined,
+            },
             raw: sa,
           };
         });
@@ -424,7 +445,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         event.type === 'task' && "bg-purple-50 text-purple-700 border-purple-200 border-l-purple-500"
                       )}
                     >
-                      <span className="truncate font-black">{event.lead.prospectName}</span>
+                      <span className="truncate font-black">{event.lead?.prospectName || event.prospectName}</span>
                       <span className="text-[7.5px] font-mono text-slate-450 leading-none flex items-center gap-0.5 mt-0.5 font-bold">
                         <Clock className="w-2.5 h-2.5 shrink-0" />
                         {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
@@ -507,7 +528,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         event.type === 'task' && "bg-purple-50 text-purple-800 border-purple-250 border-l-purple-500"
                       )}
                     >
-                      <span className="text-[10px] font-black uppercase tracking-wider block truncate">{event.lead.prospectName}</span>
+                      <span className="text-[10px] font-black uppercase tracking-wider block truncate">{event.lead?.prospectName || event.prospectName}</span>
                       <p className="text-[8px] uppercase tracking-wider opacity-90 line-clamp-2">{event.remarks || 'No notes specified.'}</p>
                       
                       <div className="pt-1.5 border-t border-black/5 flex items-center justify-between text-[8px] font-mono font-bold opacity-80">
@@ -607,7 +628,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                         ⏰ {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-                    <h5 className="text-xs font-black uppercase tracking-wide text-slate-900">{event.lead.prospectName}</h5>
+                    <h5 className="text-xs font-black uppercase tracking-wide text-slate-900">{event.lead?.prospectName || event.prospectName}</h5>
                     <p className="text-[9px] text-slate-500 font-medium leading-relaxed italic">{event.remarks || 'No notes defined.'}</p>
                   </div>
 
@@ -875,12 +896,12 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[10px] uppercase font-mono">
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Phone className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Mobile: <span className="text-slate-800 font-black">{selectedEvent.lead.mobile}</span></span>
+                      <span>Mobile: <span className="text-slate-800 font-black">{selectedEvent.lead?.mobile || selectedEvent.leadMobile || '—'}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <Tag className="w-3.5 h-3.5 text-slate-300" />
-                      <span>Campaign: <span className="text-slate-800 font-black">{selectedEvent.lead.campaignName}</span></span>
+                      <span>Campaign: <span className="text-slate-800 font-black">{selectedEvent.lead?.campaignName || '—'}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
@@ -890,7 +911,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
                     <div className="flex items-center gap-2 text-slate-500 font-bold">
                       <MapPin className="w-3.5 h-3.5 text-slate-300" />
-                      <span className="truncate">Area: <span className="text-slate-800 font-black" title={selectedEvent.lead.area}>{selectedEvent.lead.area}</span></span>
+                      <span className="truncate">Area: <span className="text-slate-800 font-black" title={selectedEvent.lead?.area || ''}>{selectedEvent.lead?.area || '—'}</span></span>
                     </div>
                   </div>
                 </div>
@@ -1012,7 +1033,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                             ⏰ {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
-                        <h4 className="text-xs font-black uppercase text-slate-850 truncate group-hover:text-[#978C21] transition-colors">{event.lead.prospectName}</h4>
+                        <h4 className="text-xs font-black uppercase text-slate-850 truncate group-hover:text-[#978C21] transition-colors">{event.lead?.prospectName || event.prospectName}</h4>
                         <p className="text-[9px] text-slate-450 line-clamp-1 italic font-medium">{event.remarks || 'No notes registered.'}</p>
                       </div>
 

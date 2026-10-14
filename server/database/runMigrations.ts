@@ -1,3 +1,22 @@
+/**
+ * runMigrations.ts — ledger-backed, single-writer schema migrations
+ * ------------------------------------------------------------------
+ * Behavior contract (unchanged): the same migration functions run in the
+ * same order and stay idempotent. What changed is the COST of a boot:
+ *
+ *   before: every boot re-ran all 36 migrations (226 round trips on an
+ *           already-current schema — see database/migrationLedger.ts)
+ *   after : a current schema costs 2 round trips; only genuinely pending
+ *           migrations execute, each recorded the moment it succeeds.
+ *
+ * Guards added on top:
+ *   - a PostgreSQL advisory lock makes concurrent cold starts safe (the
+ *     second instance skips instead of racing DDL);
+ *   - a pre-existing legacy database is adopted (see tryAdoptLegacySchema)
+ *     instead of being replayed;
+ *   - the outcome is returned so entrypoints/scripts can log one line.
+ */
+
 import { up as departments } from "./migrations/001_departments.js";
 import { up as roles } from "./migrations/002_roles.js";
 import { up as teams } from "./migrations/003_teams.js";
@@ -34,7 +53,18 @@ import { up as notificationReliability } from "./migrations/040_notification_rel
 import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_activity_open_index.js";
 import { up as roadshows } from "./migrations/042_roadshows.js";
 
+import {
+  loadLedger,
+  readAppliedIds,
+  recordApplied,
+  tryAdoptLegacySchema,
+  withMigrationLock,
+} from "./migrationLedger.js";
+
 interface Migration {
+
+    /** Stable ledger id — never rename an id that has shipped. */
+    id: string;
 
     name: string;
 
@@ -44,201 +74,166 @@ interface Migration {
 
 const migrations: Migration[] = [
 
-    {
-        name: "Departments",
-        run: departments,
-    },
+    { id: "001_departments", name: "Departments", run: departments },
 
-    {
-        name: "Roles",
-        run: roles,
-    },
+    { id: "002_roles", name: "Roles", run: roles },
 
-    {
-        name: "Teams",
-        run: teams,
-    },
+    { id: "003_teams", name: "Teams", run: teams },
 
-    {
-        name: "Users",
-        run: users,
-    },
+    { id: "004_users", name: "Users", run: users },
 
-    {
-        name: "Hierarchies",
-        run: hierarchies,
-    },
+    { id: "005_hierarchies", name: "Hierarchies", run: hierarchies },
 
-    {
-        name: "Metadata",
-        run: metadata,
-    },
+    { id: "006_metadata", name: "Metadata", run: metadata },
 
-    {
-        name: "Options",
-        run: options,
-    },
+    { id: "007_options", name: "Options", run: options },
 
-    {
-        name: "Forms",
-        run: forms,
-    },
+    { id: "008_forms", name: "Forms", run: forms },
 
-    {
-        name: "Workflows",
-        run: workflows,
-    },
+    { id: "009_workflows", name: "Workflows", run: workflows },
 
-    {
-        name: "Notifications",
-        run: notifications,
-    },
+    { id: "010_notifications", name: "Notifications", run: notifications },
 
-    {
-        name: "Products",
-        run: products,
-    },
+    { id: "011_products", name: "Products", run: products },
 
-    {
-        name: "Campaigns",
-        run: campaigns,
-    },
+    { id: "012_campaigns", name: "Campaigns", run: campaigns },
 
-    {
-        name: "Lead Status",
-        run: leadStatus,
-    },
+    { id: "013_lead_status", name: "Lead Status", run: leadStatus },
 
-    {
-        name: "Leads",
-        run: leads,
-    },
+    { id: "014_leads", name: "Leads", run: leads },
 
-    {
-        name: "Identity Compatibility",
-        run: identityCompatibility,
-    },
+    { id: "022_identity_compatibility", name: "Identity Compatibility", run: identityCompatibility },
 
-    {
-        name: "Employees",
-        run: employees,
-    },
+    { id: "023_employees", name: "Employees", run: employees },
 
-    {
-        name: "Employee Departments",
-        run: employeeDepartments,
-    },
+    { id: "024_employee_departments", name: "Employee Departments", run: employeeDepartments },
 
-    {
-        name: "Permissions",
-        run: permissions,
-    },
+    { id: "025_permissions", name: "Permissions", run: permissions },
 
-    {
-        name: "Role Permissions",
-        run: rolePermissions,
-    },
+    { id: "026_role_permissions", name: "Role Permissions", run: rolePermissions },
 
-    {
-        name: "User Permissions",
-        run: userPermissions,
-    },
+    { id: "027_user_permissions", name: "User Permissions", run: userPermissions },
 
-    {
-        name: "User Visibility",
-        run: userVisibility,
-    },
+    { id: "028_user_visibility", name: "User Visibility", run: userVisibility },
 
-    {
-        name: "Team Members",
-        run: teamMembers,
-    },
+    { id: "029_team_members", name: "Team Members", run: teamMembers },
 
-    {
-        name: "Employee Reporting",
-        run: employeeReporting,
-    },
+    { id: "030_employee_reporting", name: "Employee Reporting", run: employeeReporting },
 
-    {
-        name: "Sessions",
-        run: sessions,
-    },
+    { id: "031_sessions", name: "Sessions", run: sessions },
 
-    {
-        name: "Audit Logs",
-        run: auditLogs,
-    },
+    { id: "032_audit_logs", name: "Audit Logs", run: auditLogs },
 
-    {
-        name: "Territories",
-        run: territories,
-    },
+    { id: "033_territories", name: "Territories", run: territories },
 
-    {
-        name: "User Territories",
-        run: userTerritories,
-    },
+    { id: "034_user_territories", name: "User Territories", run: userTerritories },
 
-    {
-        name: "LeadFlow Persistence Harmonization",
-        run: persistenceHarmonization,
-    },
+    { id: "035_leadflow_persistence_harmonization", name: "Persistence Harmonization", run: persistenceHarmonization },
 
-    {
-        name: "Fine Permissions",
-        run: finePermissions,
-    },
+    { id: "036_fine_permissions", name: "Fine Permissions", run: finePermissions },
 
-    {
-        name: "Lead Activities",
-        run: leadActivities,
-    },
+    { id: "037_lead_activities", name: "Lead Activities", run: leadActivities },
 
-    {
-        name: "Follow-up Queue Indexes",
-        run: followupQueueIndexes,
-    },
+    { id: "038_followup_queue_indexes", name: "Follow-up Queue Indexes", run: followupQueueIndexes },
 
-    {
-        name: "Scheduled Activities",
-        run: scheduledActivities,
-    },
+    { id: "039_scheduled_activities", name: "Scheduled Activities", run: scheduledActivities },
 
-    {
-        name: "Notification Reliability",
-        run: notificationReliability,
-    },
+    { id: "040_notification_reliability", name: "Notification Reliability", run: notificationReliability },
 
-    {
-        name: "Scheduled Activity Open Index",
-        run: scheduledActivityOpenIndex,
-    },
+    { id: "041_scheduled_activity_open_index", name: "Scheduled Activity Open Index", run: scheduledActivityOpenIndex },
 
-    {
-        name: "Roadshows",
-        run: roadshows,
-    },
+    { id: "042_roadshows", name: "Roadshows", run: roadshows },
 
 ];
 
-export async function runMigrations(): Promise<void> {
+/** Ids of every migration this build knows about (ledger ids, ordered). */
+export const MIGRATION_IDS: string[] = migrations.map(m => m.id);
 
-    console.log("========================================");
-    console.log("🚀 Running Database Migrations");
-    console.log("========================================");
+export interface MigrationRunResult {
+    /** True when nothing had to be executed (the common, cheap case). */
+    upToDate: boolean;
+    /** Ids applied in THIS run (empty when up to date or adopted). */
+    applied: string[];
+    /** True when a legacy database was adopted instead of replayed. */
+    adopted: boolean;
+    /** True when another instance already held the migration lock. */
+    skippedForAnotherWriter: boolean;
+    /** Wall-clock duration of the whole call. */
+    durationMs: number;
+}
 
-    for (const migration of migrations) {
+/**
+ * Apply only the migrations this database has not recorded yet.
+ * Idempotent, safe to call at every boot and from a deploy step.
+ */
+export async function runMigrations(): Promise<MigrationRunResult> {
+    const startedAt = Date.now();
+    const result: MigrationRunResult = {
+        upToDate: false,
+        applied: [],
+        adopted: false,
+        skippedForAnotherWriter: false,
+        durationMs: 0,
+    };
 
-        console.log(`➡️ ${migration.name}`);
+    // 2 round trips on a current schema: ledger probe + applied-ids read.
+    const ledger = await loadLedger();
 
-        await migration.run();
-
-        console.log(`✅ ${migration.name} completed`);
-
+    if (ledger.createdNow && ledger.applied.size === 0) {
+        // First boot with the ledger: adopt an already-current legacy
+        // database instead of replaying 226 round trips of DDL.
+        result.adopted = await tryAdoptLegacySchema(MIGRATION_IDS);
+        if (result.adopted) {
+            console.log(
+                `✅ Schema ledger adopted ${MIGRATION_IDS.length} existing migrations (no DDL replayed)`
+            );
+            result.upToDate = true;
+            result.durationMs = Date.now() - startedAt;
+            return result;
+        }
     }
 
-    console.log("========================================");
-    console.log("✅ All Database Migrations Completed");
-    console.log("========================================");
+    const pending = migrations.filter(m => !ledger.applied.has(m.id));
+    if (pending.length === 0) {
+        console.log(`✅ Schema up to date (${migrations.length} migrations recorded)`);
+        result.upToDate = true;
+        result.durationMs = Date.now() - startedAt;
+        return result;
+    }
 
+    console.log(`➡️  Applying ${pending.length} pending migration(s)`);
+
+    const locked = await withMigrationLock(async () => {
+        // Re-read under the lock: another instance may have applied them
+        // between our first read and acquiring the lock.
+        const appliedNow = await readAppliedIds();
+        const stillPending = pending.filter(m => !appliedNow.has(m.id));
+        const appliedHere: string[] = [];
+
+        for (const migration of stillPending) {
+            const t0 = Date.now();
+            console.log(`➡️ ${migration.name}`);
+            await migration.run();
+            // Recorded only after success: a failure leaves the migration
+            // unrecorded so the next boot retries it.
+            await recordApplied(migration.id, Date.now() - t0);
+            appliedHere.push(migration.id);
+            console.log(`✅ ${migration.name} completed`);
+        }
+        return appliedHere;
+    });
+
+    if (locked.outcome === "busy") {
+        console.log("ℹ️  Another instance is migrating this database — skipping this boot's DDL");
+        result.skippedForAnotherWriter = true;
+    } else {
+        result.applied = locked.result || [];
+        result.upToDate = result.applied.length === 0;
+    }
+
+    result.durationMs = Date.now() - startedAt;
+    if (result.applied.length) {
+        console.log(`✅ All Database Migrations Completed (${result.applied.length} applied)`);
+    }
+    return result;
 }

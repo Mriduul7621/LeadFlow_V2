@@ -170,6 +170,24 @@ export const leadService = {
     return result;
   },
 
+  /**
+   * Bounded read for lightweight surfaces (the Dashboard "Recent Leads"
+   * strip). Explicitly limited — the server caps it further with
+   * LEADS_LIST_MAX_ROWS — and it NEVER rewrites the local mirror, so a
+   * 5-row read can never shrink the offline cache the lead screens use.
+   * Falls back to the mirror when the network or the server is unavailable.
+   */
+  async getRecentLeads(limit = 5): Promise<Lead[]> {
+    const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 5;
+    try {
+      const rows = await apiRequest<Lead[]>(`/api/leads?limit=${cap}`);
+      return Array.isArray(rows) ? rows.slice(0, cap) : [];
+    } catch (err) {
+      if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
+      return localDb.getRecentLeads(cap);
+    }
+  },
+
   async getLeads(filters?: { role?: string, employeeId?: string, startDate?: string, endDate?: string }): Promise<Lead[]> {
     let leads: Lead[];
     try {

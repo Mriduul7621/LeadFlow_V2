@@ -96,8 +96,21 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     );
     // Every gated page route keeps BOTH gates — no route may render the
     // lazy page outside the ProtectedRoute + FeatureGate chain.
+    //
+    // The counts are derived from the route table itself instead of the
+    // previous hardcoded 18: the mobile navigation redesign (PR #52/#53)
+    // legitimately added routes (/more, /reports, /administration,
+    // /notifications, /help, /about, /roadshows, /settings/system,
+    // /settings/performance-diagnostics) and a magic number silently rotted
+    // into a false failure. The guarantee is stronger stated as an identity:
+    // EVERY ProtectedRoute element and EVERY <LazyPage> render must carry
+    // the full chain.
     const routeCount = (app.match(/element:\s*<ProtectedRoute><FeatureGate route="[^"]*"><LazyPage/g) || []).length;
-    assert.equal(routeCount, 18, 'all 18 page routes must render through ProtectedRoute + FeatureGate');
+    const protectedElements = (app.match(/element:\s*<ProtectedRoute/g) || []).length;
+    const lazyPages = (app.match(/<LazyPage page=/g) || []).length;
+    assert.ok(routeCount >= 18, `the original 18 gated page routes must all remain, saw ${routeCount}`);
+    assert.equal(routeCount, protectedElements, 'every ProtectedRoute element must use the FeatureGate + LazyPage chain');
+    assert.equal(routeCount, lazyPages, 'every LazyPage render must sit behind ProtectedRoute + FeatureGate');
     const lazyPage = app.slice(app.indexOf('function LazyPage'));
     assert.ok(lazyPage.includes('<Suspense fallback='), 'LazyPage must use a Suspense boundary');
     assert.ok(lazyPage.includes('RouteFallback'), 'LazyPage must fall back to the compact placeholder');

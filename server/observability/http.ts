@@ -107,6 +107,8 @@ export const REQUEST_COMPLETION_ALLOWLIST = [
   'durationMs',
   'dbQueryCount',
   'dbDurationMs',
+  'dbAcquireDurationMs',
+  'dbPoolWaitingCount',
   'userId',
   'role',
   'serverTiming',
@@ -154,6 +156,8 @@ function logCompletion(req: Request, res: Response, ctx: RequestObservabilityCon
     durationMs,
     dbQueryCount: ctx.dbQueryCount,
     dbDurationMs: round1(ctx.dbDurationMs),
+    dbAcquireDurationMs: round1(ctx.dbAcquireDurationMs || 0),
+    dbPoolWaitingCount: ctx.dbPoolWaitingCount || 0,
     userId,
     role,
     serverTiming,
@@ -215,6 +219,8 @@ export function createApiObservabilityMiddleware() {
       startedAtIso: new Date().toISOString(),
       dbQueryCount: 0,
       dbDurationMs: 0,
+      dbAcquireDurationMs: 0,
+      dbPoolWaitingCount: 0,
     };
 
     // Correlation header — present on EVERY api response (200s, 4xx, 429,

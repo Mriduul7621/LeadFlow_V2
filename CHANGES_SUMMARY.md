@@ -363,3 +363,46 @@ The Roles & Access editor now cleanly separates the three permission layers:
   field on user edit).
 
 Details: `docs/ROLE_PERMISSION_MODEL.md`.
+
+---
+
+# Final Performance Fix — ডেটা লোডিং আর ধীর হবে না (ঠিক করা হয়েছে ✅)
+
+আগের ফেজগুলো (PERFORMANCE_PHASE_2 / PERFORMANCE_PHASE_3 / DATABASE_PERFORMANCE_AUDIT)
+polling বন্ধ করেছিল, बंडल ভাগ করেছিল, ডুপ্লিকেট GET coalesce করেছিল এবং
+first-dashboard রিকোয়েস্ট sequence করেছিল। তারপরও মোবাইল রেকর্ডিং-এ দেখা যাচ্ছিল
+`GET /api/dashboard` client-এ ৪৭.৬ সেকেন্ড, অথচ `Server-Timing` মাত্র ১.৬ সেকেন্ড।
+মানে দেরিটা SQL-এ নয় — তার **আগে** এবং **পাশে** ছিল। এই ফিক্সে যা পাওয়া গেছে:
+
+**১. প্রতিটি cold start-এ পুরো স্কিমা রিপ্লে হচ্ছিল (মূল কারণ)।**
+`api/index.ts` প্রথম `/api/*` রিকোয়েস্ট ডিসপ্যাচ করার আগে `initializeDatabase()`
+await করত, আর `runMigrations()`-এ কোনো ledger ছিল না — অর্থাৎ প্রতিবার **সব**
+migration + seed আবার চলত। পরিমাপকৃত: বর্তমান স্কিমাতেও **২২৬টি PostgreSQL
+round trip** (নতুন DB-তে ৩২৬টি)। Vercel-এর প্রতিটি নতুন function instance এই খরচ
+নিজে দিত → ৩০ms RTT ধরে ~৬.৮ সেকেন্ড, ৬০ms RTT-তে ~১৩.৬ সেকেন্ড।
+
+এখন: `server/database/migrationLedger.ts` + নতুন `runMigrations.ts` —
+`schema_migrations` ledger থাকায় একই অবস্থায় খরচ **২২৬ → ৪ রাউন্ড ট্রিপ**।
+সাথে পোস্টগ্রেস **advisory lock** (একই সময়ে দুটি instance DDL race করতে পারবে না),
+পুরনো (ledger-এর আগের) ডেটাবেস **adopt** করা হয় — রিপ্লে 없이, এবং ব্যর্থ migration
+record হয় না তাই পরের বুটে আবার চেষ্টা হয়। `runSeeds()`-ও marker দিয়ে skip হয়।
+
+**২. API রেসপন্স uncompressed যাচ্ছিল।**
+`GET /api/leads` ৫০০০ লিড অবধি `l.*` ফেরত দেয় — ১৫০০ লিডে payload **১.২ MB**।
+এখন `applyProductionHttpSecurity()`-এ gzip compression যুক্ত — একই ডেটা
+**৭৭.৫ KiB (≈১৬x ছোট)**। `x-no-compression` respect করা হয়, ছোট body untouched।
+
+**৩. Authorization round trip সিরিয়াল ছিল + pool সার্ভার-এর জন্য সাইজ করা ছিল।**
+permission চেক + visibility এখন একসাথে (parallel) চলে; follow-up queue-এর bucket
+filter এখন sargable half-open range (migration 038-এর partial index আসলে কাজে লাগে),
+bucket aggregate ও page query parallel, বাড়তি COUNT বাদ। connection pool এখন
+serverless-aware (`PG_POOL_MAX`, keepAlive, idle timeout), pooled URL
+(`DATABASE_URL` → `POSTGRES_URL` → `POSTGRES_PRISMA_URL`) সাপোর্ট করে, direct
+Supabase endpoint-এ serverless চললে সতর্কবার্তা দেয়। pool-এর অপেক্ষার সময় এখন
+আলাদা করে মাপা হয় (`Server-Timing: dbq`, `dbwait`)।
+
+**৪. ক্লায়েন্ট:** নিজের permission sheet আর KPI রিকোয়েস্টের সাথে প্রতিযোগিতা করে না
+(shell gate), আর role cache-এর GET আর `ROLES_CACHE_CHANGED_EVENT` emit করে না —
+যে self-sustaining request loop তৈরি করত।
+
+বিশদ পরিমাপ, ডিপ্লয় নোট ও যাচাইয়ের কমান্ড: `docs/PERFORMANCE_FINAL_FIX.md`

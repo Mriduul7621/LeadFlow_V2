@@ -2,6 +2,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission } from '../types';
 import { readSessionCache, writeSessionCache } from '../api/sessionCache';
 import { coalesceGet } from '../api/coalesce';
+import { waitForShellStartup } from '../api/startupPriority';
 import { ROLES_CACHE_CHANGED_EVENT } from '../utils/localCacheEvents';
 import { useEffect, useState } from 'react';
 
@@ -74,6 +75,16 @@ export function usePermissions() {
       }
 
       try {
+        // This permission sheet governs OPTIONAL client-side actions (e.g.
+        // the Add Lead button), never authentication or server-side
+        // authorization. On a first Dashboard load it therefore must not
+        // compete with the critical KPI request for the browser's limited
+        // mobile connection pool: wait for the shell gate, which AppLayout
+        // releases immediately on every non-`/` route and the first
+        // dashboard KPI releases on `/` (see api/startupPriority.ts).
+        await waitForShellStartup();
+        if (cancelled) return;
+
         // GET read: many pages mount usePermissions on the same tick and a
         // TTL expiry can overlap a remount — share one round-trip.
         const permPath = `/api/users/${encodeURIComponent(user.id)}/permissions`;

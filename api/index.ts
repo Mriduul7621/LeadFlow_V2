@@ -11,6 +11,7 @@ import {
   buildReadinessReport,
   describeReadiness,
 } from '../server/health.js';
+import { isDatabaseConfigured, resolveConnectionString } from '../server/database/connection.js';
 import {
   summarizeConfigValidation,
   validateProductionConfig,
@@ -53,7 +54,7 @@ let dbInitializationAttempted = false;
 async function ensureDb() {
   if (dbInitializationAttempted) return;
   dbInitializationAttempted = true;
-  if (!process.env.DATABASE_URL) {
+  if (!isDatabaseConfigured()) {
     // Honest startup log: without DATABASE_URL a serverless deployment does
     // NOT fall back to in-memory persistence. Database-backed requests are
     // refused with HTTP 503 by the production router (see
@@ -67,10 +68,19 @@ async function ensureDb() {
   }
 
   try {
-    const { initializeDatabase } = await import('../server/database/initialize.js');
-    await initializeDatabase();
+    const { initializeDatabase, resolveRuntimeMigrationMode } =
+      await import('../server/database/initialize.js');
+    // Ledger-backed: an up-to-date schema costs 4 round trips instead of
+    // re-running every migration (see database/migrationLedger.ts). With
+    // LEADFLOW_RUNTIME_MIGRATIONS=off the deploy step owns the DDL and this
+    // becomes a reachability + seed-marker check only.
+    const result = await initializeDatabase();
     dbInitialized = true;
-    console.log('Database initialized');
+    console.log(
+      `Database initialized in ${Math.round(result.durationMs)} ms` +
+        ` (mode=${resolveRuntimeMigrationMode()}` +
+        `, ${result.noOp ? 'schema current, baseline data present' : 'work applied'})`
+    );
   } catch (error: any) {
     console.error('DB init failed:', error?.message || error);
   }
@@ -79,7 +89,7 @@ async function ensureDb() {
 const IS_PRODUCTION = isProductionRuntime();
 
 app.get('/api/db-status', async (_req, res) => {
-  if (!process.env.DATABASE_URL) {
+  if (!isDatabaseConfigured()) {
     const demoMode = !IS_PRODUCTION;
     return res.status(demoMode ? 200 : 503).json({
       connected: false,
@@ -133,13 +143,13 @@ app.get('/api/health', healthHandler);
 const readinessHandler = async (_req: express.Request, res: express.Response) => {
   let configured = false;
   let reachable = false;
-  if (process.env.DATABASE_URL) {
+  if (isDatabaseConfigured()) {
     try {
       const { isDatabaseConfigured, checkDatabaseHealth } = await import('../server/database/connection.js');
       configured = isDatabaseConfigured();
       reachable = configured ? await checkDatabaseHealth().catch(() => false) : false;
     } catch {
-      configured = Boolean(process.env.DATABASE_URL);
+      configured = Boolean(resolveConnectionString());
       reachable = false;
     }
   }

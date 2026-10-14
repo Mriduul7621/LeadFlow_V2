@@ -35,6 +35,7 @@
 
 import type { NextFunction, Request, Response } from 'express';
 import express, { type Express } from 'express';
+import compression from 'compression';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
@@ -345,8 +346,47 @@ export function applyProductionHttpSecurity(app: Express, options: HttpSecurityO
   // parser rejections, 404s and 5xx are all correlated identically.
   app.use(createApiObservabilityMiddleware());
   app.use(createSecurityHeaders({ production, allowFraming: options.allowFraming }));
+  // Compression BEFORE the routes: list endpoints return up to 5000 lead
+  // rows (several MB of JSON). Uncompressed, that transfer dominates every
+  // mobile page load; gzip cuts it by ~8-12x. Requests without
+  // `Accept-Encoding: gzip` and bodies under the threshold are untouched,
+  // and a client that opts out with `x-no-compression` is respected.
+  app.use(createResponseCompression());
   applyRateLimiters(app);
   applyBodyParsers(app);
+}
+
+/* ==================================================================== */
+/* 6b. Response compression                                             */
+/* ==================================================================== */
+
+export interface CompressionOptions {
+  /** Minimum body size to compress (bytes). Defaults to 1 KiB. */
+  threshold?: number;
+  /** zlib level (1-9). Defaults to 6 — a good mobile balance. */
+  level?: number;
+}
+
+/**
+ * gzip/deflate compression for dynamic API + SPA responses.
+ *
+ * Why: the lead list endpoint returns `l.*` for up to 5000 rows; on a
+ * mobile connection the transfer of that JSON (uncompressed) is a bigger
+ * cost than the SQL that produced it. `compression` never touches
+ * already-encoded responses, skips tiny bodies, and is a no-op for
+ * clients that do not advertise gzip.
+ */
+export function createResponseCompression(options: CompressionOptions = {}) {
+  return compression({
+    threshold: options.threshold ?? 1024,
+    level: options.level ?? 6,
+    // Explicit opt-out for callers that cannot handle encoded bodies
+    // (e.g. some device-side export flows).
+    filter: (req: Request, res: Response) => {
+      if (req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    },
+  });
 }
 
 /* ==================================================================== */

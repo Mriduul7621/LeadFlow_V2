@@ -31,6 +31,8 @@ import { leadService, type FollowUpQueueItem } from '../../leads/services/leadSe
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
+import SectionErrorBoundary from '../../shared/components/SectionErrorBoundary';
+import { localDb } from '../../../services/localDb';
 
 /** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
@@ -777,6 +779,62 @@ export default function Dashboard() {
     }
   }, [user]);
 
+  /**
+   * Recent Leads — the five most recent rows from the LOCAL MIRROR of server
+   * data (`localDb`), which the lead screens refresh on every successful
+   * read. Deliberately not a network call: this section must not add a
+   * 5000-row request (or any request) to the first dashboard paint. On a
+   * first-ever visit the mirror is empty and the section shows its designed
+   * empty state — it never claims data it does not have.
+   */
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    const readMirror = () => {
+      try {
+        return localDb.getRecentLeads(5);
+      } catch {
+        return [] as Lead[];
+      }
+    };
+
+    const mirrored = readMirror();
+    if (mirrored.length > 0) {
+      setRecentLeads(mirrored);
+      setRecentLeadsLoading(false);
+      return;
+    }
+
+    /**
+     * First visit on this device: the mirror is still empty, so the section
+     * would show "no leads yet" even though the account has leads. Fetch the
+     * five newest rows ONCE — explicitly bounded (limit 5), issued only after
+     * the critical startup has settled so it can never compete with the KPI
+     * request, and never written into the mirror by this call (see
+     * leadService.getRecentLeads). From the next load onward the mirror — or
+     * this same bounded request — answers instantly.
+     */
+    const load = async () => {
+      try {
+        const newest = await leadService.getRecentLeads(5);
+        if (!cancelled) setRecentLeads((newest || []).slice(0, 5));
+      } catch {
+        if (!cancelled) setRecentLeads([]);
+      } finally {
+        if (!cancelled) setRecentLeadsLoading(false);
+      }
+    };
+
+    waitForCriticalStartup()
+      .then(load)
+      .catch(() => { void load(); });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   useEffect(() => {
     void loadDashboardData();
   }, [loadDashboardData]);
@@ -1005,6 +1063,7 @@ export default function Dashboard() {
               pipelineLocked={metrics?.pipelineLocked ?? 0}
               overdueFollowUps={followUpCounts.overdue}
             />
+            <LeadQualitySnapshot quality={metrics?.quality} />
           </section>
 
           <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
@@ -1015,16 +1074,18 @@ export default function Dashboard() {
               </div>
               <Link to="/workbench" className="lf-view-all">My Work <ChevronRight size={16} /></Link>
             </div>
-            <div className="lf-day-snapshot-grid">
-              <Link to="/workbench" className="lf-day-snapshot-card lf-day-snapshot-card--primary">
-                <span><CalendarClock size={16} /> Today's Activities</span>
-                <strong>{dailyLoading ? '—' : formatCount(getDailyActivities(todayFollowUps, todayScheduled).length)}</strong>
-              </Link>
-              <Link to="/follow-up?bucket=today" className="lf-day-snapshot-card">
-                <span><ClipboardCheck size={16} /> Pending Follow-ups</span>
-                <strong>{dailyLoading ? '—' : formatCount(followUpCounts.today)}</strong>
-              </Link>
-            </div>
+            {/* Server-authoritative Today/Tomorrow panel: overdue/today/
+                upcoming COUNTS come from GET /api/dashboard, while the two
+                lists come from the follow-up queue (bucket=today) and the
+                2-day scheduled-activity window. Skeletons (aria-busy) stay
+                until both settle — never a false zero. */}
+            <TodayTomorrowPanel
+              todayFollowUps={todayFollowUps}
+              tomorrowFollowUps={tomorrowFollowUps}
+              todayScheduled={todayScheduled}
+              tomorrowScheduled={tomorrowScheduled}
+              dailyLoading={dailyLoading}
+            />
           </section>
 
           <section className="lf-recent-leads">
@@ -1060,6 +1121,35 @@ export default function Dashboard() {
               </div>
             )}
           </section>
+
+          {/* Analysis sections — every figure below comes from the SAME
+              GET /api/dashboard payload that already loaded (statusCounts,
+              trendData, teamStats, quality). No additional request. */}
+          <SalesPipeline statusCounts={statusCounts} totalLeads={totalLeads} />
+          <FollowUpDiscipline
+            overdue={followUpCounts.overdue}
+            dueToday={followUpCounts.today}
+            upcoming={followUpCounts.upcoming}
+            total={followUpCounts.all}
+          />
+          <NeedsAttentionSection untouched={statusCounts['Untouched'] ?? 0} />
+          <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} />
+
+          {/* Embedded Task Calendar — always the LAST section. Its chunk and
+              its own scheduled-activities request start only after the
+              primary content has settled (calendarReady), inside a Suspense
+              boundary, so the KPI area never waits on it. */}
+          <div className="lf-mobile-calendar">
+            {/* A failure inside the optional calendar must never blank the
+                whole Home screen (it renders its placeholder instead); the
+                primary content above is unaffected. */}
+            <SectionErrorBoundary fallback={<TaskCalendarPlaceholder />}>
+              <Suspense fallback={<TaskCalendarPlaceholder />}>
+                {calendarReady && <TaskCalendar embedded={true} />}
+              </Suspense>
+            </SectionErrorBoundary>
+            <Link to="/task-calendar" className="lf-view-all">Open full calendar <ChevronRight size={16} /></Link>
+          </div>
 
         </>
       )}

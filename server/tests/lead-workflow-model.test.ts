@@ -50,18 +50,47 @@ describe('Lead workflow model', () => {
     const roleEditor = read('src/modules/users/pages/UserManagement.tsx');
     const app = read('src/App.tsx');
 
-    assert.match(layout, /label: 'Lead Workspace'.*path: '\/leads'/s);
-    assert.match(layout, /label: 'Lead Pool'.*path: '\/leads\/all'/s);
+    // The visible shell labels were simplified by the mobile navigation
+    // redesign (PR #52) — this guard protects the ROUTES and the internal
+    // feature keys, which are unchanged. The legacy names still live in the
+    // translations and the role-editor feature catalog asserted below.
+    for (const [label, route] of [
+      ['Home', '/'],
+      ['My Work', '/workbench'],
+      ['Add Lead', '/leads/new'],
+      ['Leads', '/leads'],
+      ['More', '/more'],
+    ] as const) {
+      assert.match(
+        layout,
+        new RegExp(`label: '${label}'[^}]*path: '${route}'`),
+        `shell tab ${label} must keep route ${route}`,
+      );
+    }
+    assert.ok(
+      layout.indexOf("path: '/leads/new'") < layout.indexOf("path: '/leads'"),
+      'shell order must stay Add Lead → Leads',
+    );
     assert.ok(translations.includes('navLeadTracking: "Lead Workspace"'));
     assert.ok(translations.includes('navAllLeads: "Lead Pool"'));
     assert.match(roleEditor, /key: 'lead_tracking',[\s\S]*label: 'Lead Workspace'/);
     assert.match(roleEditor, /key: 'all_leads',[\s\S]*label: 'Lead Pool'/);
     assert.ok(app.includes("path: '/leads'"));
     assert.ok(app.includes("path: '/leads/all'"));
-    const leadSection = layout.slice(layout.indexOf("key: 'leads'"), layout.indexOf("key: 'insights'"));
-    const order = ['Lead Workspace', 'Add New Lead', 'Bulk Upload', 'Lead Pool'].map(label => leadSection.indexOf(`label: '${label}'`));
-    assert.ok(order.every(index => index >= 0));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'sidebar lead order must stay Workspace → Add → Bulk → Pool');
+    // The feature catalog order (role editor) is the surviving single source
+    // for the Workspace → Add → Bulk → Pool sequence, and the More menu keeps
+    // the Bulk Upload / Lead Pool destinations reachable from the mobile shell.
+    const catalogOrder = ['lead_tracking', 'lead_generate', 'lead_upload', 'all_leads']
+      .map(key => roleEditor.indexOf(`key: '${key}'`));
+    assert.ok(catalogOrder.every(index => index >= 0), 'all four lead feature keys must remain in the catalog');
+    assert.deepEqual(
+      catalogOrder,
+      [...catalogOrder].sort((a, b) => a - b),
+      'feature catalog order must stay Workspace → Add → Bulk → Pool',
+    );
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    assert.ok(more.includes("path: '/leads/upload'"), 'More menu must keep Bulk Upload reachable');
+    assert.ok(more.includes("path: '/leads/all'"), 'More menu must keep Lead Pool reachable');
   });
 
   it('separates feature visibility from canonical action controls', () => {

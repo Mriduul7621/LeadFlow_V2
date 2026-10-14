@@ -38,13 +38,17 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(!visible.includes('setLanguage'), 'Login must not have setLanguage (no runtime switching)');
     assert.ok(!visible.includes('useTranslation'), 'Login must not import useTranslation (English-only)');
     assert.ok(!visible.includes("t('") && !visible.includes('t(\"'), 'Login must not call t()');
-    // English polished copy present
+    // English copy of the SHIPPED login screen. The mobile redesign replaced
+    // the old hero/status/CTA marketing block; the English-only guarantee is
+    // what this test protects, so it asserts the copy that actually renders.
     assert.ok(visible.includes('Welcome Back'), 'Login must show Welcome Back');
-    assert.ok(visible.includes('System Ready') || visible.includes('Secure Node Online') || visible.includes('Setup Required'), 'Login must have system status literals');
-    assert.ok(visible.includes('Smart Lead Management System'), 'Login hero must be English');
-    assert.ok(visible.includes('Get Started') || visible.includes('Initialize Console'), 'Login CTA must be English');
+    assert.ok(visible.includes('Sign in to your LeadFlow account'), 'Login subtitle must be English');
+    assert.ok(visible.includes('Set up your LeadFlow account'), 'first-time setup subtitle must be English');
     assert.ok(visible.includes('Employee ID'), 'Login must label Employee ID in English');
-    assert.ok(visible.includes('Back to home'), 'Login must have Back to home');
+    assert.ok(visible.includes('Password'), 'Login must label Password in English');
+    assert.ok(visible.includes('Remember Me'), 'Login must have the English Remember Me option');
+    assert.ok(visible.includes('Login'), 'Login CTA must be English');
+    assert.ok(visible.includes('Shanta Life Insurance'), 'footer must be English');
   });
 
   it('AppLayout is English-only: no language switcher, no useTranslation, polished header & forced-reset copy', () => {

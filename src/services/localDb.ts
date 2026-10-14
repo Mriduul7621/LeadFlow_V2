@@ -155,6 +155,19 @@ export const localDb = {
   },
 
   getLeads(): Lead[] { return readScoped<Lead[]>(keys.leads, []); },
+
+  /**
+   * Read-only projection of the freshest cached leads for lightweight
+   * surfaces (e.g. the Dashboard "Recent Leads" strip). Sorted newest-first
+   * and hard-capped, so a caller can never accidentally render (or clone)
+   * the whole mirror. Performs NO request and writes NOTHING.
+   */
+  getRecentLeads(limit = 5): Lead[] {
+    const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 5;
+    return [...readScoped<Lead[]>(keys.leads, [])]
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+      .slice(0, cap);
+  },
   saveLeads(leads: Lead[]): void { writeScoped(keys.leads, leads); },
   getLead(id: string): Lead | null { return this.getLeads().find(lead => lead.id === id) || null; },
   createLead(lead: Lead): Lead {

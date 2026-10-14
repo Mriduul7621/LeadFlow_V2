@@ -21,6 +21,12 @@ export interface PerfSpan {
 export interface Perf {
   /** Records the elapsed time since the previous span point (or start). */
   span(label: string): void;
+  /**
+   * Records an independently measured duration (e.g. a concurrent query)
+   * WITHOUT moving the sequential span clock — required when several
+   * operations run in parallel and a sequential span would be meaningless.
+   */
+  measure(label: string, ms: number): void;
   /** Elapsed time since the tracker was created, in ms. */
   totalMs(): number;
   /**
@@ -29,6 +35,8 @@ export interface Perf {
    */
   finish(res: any): number;
 }
+
+import { getRequestContext } from '../observability/context.js';
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -55,6 +63,9 @@ export function createPerf(event: string): Perf {
       spans.push({ label, ms: round1(t - lastAt) });
       lastAt = t;
     },
+    measure(label: string, ms: number): void {
+      if (Number.isFinite(ms) && ms >= 0) spans.push({ label, ms: round1(ms) });
+    },
     totalMs(): number {
       return round1(nowMs() - startedAt);
     },
@@ -64,6 +75,15 @@ export function createPerf(event: string): Perf {
         if (res && typeof res.setHeader === 'function') {
           const parts = [`total;dur=${total}`];
           for (const s of spans) parts.push(`${s.label};dur=${s.ms}`);
+          // Attribute time to the database layers so a slow report can be
+          // read without guessing (see observability/context.ts):
+          //   dbq   = instrumented queries executed by this request
+          //   dbwait= time spent WAITING for a pooled client (saturation)
+          const ctx = getRequestContext();
+          if (ctx) {
+            parts.push(`dbq;dur=${ctx.dbQueryCount}`);
+            if (ctx.dbAcquireDurationMs > 0) parts.push(`dbwait;dur=${round1(ctx.dbAcquireDurationMs)}`);
+          }
           res.setHeader('Server-Timing', parts.join(', '));
         }
       } catch {

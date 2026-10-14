@@ -39,6 +39,14 @@ export interface RequestObservabilityContext {
   dbQueryCount: number;
   /** Accumulated instrumented PostgreSQL time in ms (rounded at read time). */
   dbDurationMs: number;
+  /**
+   * Accumulated time this request spent WAITING for a pooled PostgreSQL
+   * client (queueing), separate from query execution. A high value here
+   * means pool saturation, not slow SQL — see database/connection.ts.
+   */
+  dbAcquireDurationMs?: number;
+  /** Highest pool queue length observed during this request. */
+  dbPoolWaitingCount?: number;
 }
 
 const storage = new AsyncLocalStorage<RequestObservabilityContext>();
