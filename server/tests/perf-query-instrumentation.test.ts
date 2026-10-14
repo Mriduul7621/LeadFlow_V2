@@ -50,4 +50,15 @@ describe('Performance diagnostics — database query breakdown', () => {
     }
     assert.ok(body.includes('Promise.all(['), 'scheduled count and list reads should run concurrently');
   });
+  it('profiles individual Lead Quality query families', () => {
+    const source = read('server/utils/leadQualitySignals.ts');
+    const routes = read('server/routes/production.routes.ts');
+    for (const label of ['leadScan', 'activitySignals', 'scheduledSignals']) {
+      assert.ok(source.includes(`onTiming?.('${label}'`) || source.includes(`onTiming?.('${label}',`), 'missing quality timing callback: ' + label);
+    }
+    for (const label of ['db.qualityActivity', 'db.qualityScheduled', 'db.qualityAggregate.']) {
+      assert.ok(routes.includes(label), 'missing route quality timing label: ' + label);
+    }
+  });
+
 });
