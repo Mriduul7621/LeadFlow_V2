@@ -50,7 +50,10 @@ let dbInitialized = false;
 let dbInitializationAttempted = false;
 
 app.use(async (req, res, next) => {
-  if (!isDatabaseConfigured() || dbInitializationAttempted) {
+  // Keep the convenient migration bootstrap for local development only.
+  // Production migrations are executed by the Vercel production build step,
+  // never synchronously in front of a live request.
+  if (!isDatabaseConfigured() || IS_PRODUCTION || dbInitializationAttempted) {
     next();
     return;
   }
