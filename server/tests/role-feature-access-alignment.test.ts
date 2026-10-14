@@ -4,12 +4,13 @@
  * Source guards for the Role Feature Access administration UI
  * (`src/modules/users/pages/UserManagement.tsx` "Roles & Access" tab +
  * `src/modules/admin/services/adminService.ts` defaults) staying aligned
- * with the actual live sidebar / routes / Dashboard / Daily Workbench.
+ * with the primary navigation / More directories / routes / Dashboard /
+ * Daily Workbench.
  *
  * Guards:
  *  - No unenforced fine-grained dashboard child toggles (dead controls)
  *  - Daily Workbench added to the feature taxonomy (route /workbench)
- *  - Legacy labels renamed to current sidebar names; internal keys kept
+ *  - Legacy labels renamed to current navigation names; internal keys kept
  *  - leads.edit preserved for Daily Workbench mutations
  *  - dataVisibility scopes preserved
  *  - server remains the final authorization boundary
@@ -108,7 +109,7 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(/FAIL-CLOSED|fail.closed|fail closed/i.test(svc), 'adminService must document the fail-closed workbench default');
   });
 
-  it('legacy labels are renamed to current sidebar names (internal keys preserved)', () => {
+  it('legacy labels are renamed to current navigation names (internal keys preserved)', () => {
     const block = appFeaturesBlock();
     // New current names present. NOTE: 'System Connection' was the label of
     // the settings_control.view_sync SUB-OPTION and is intentionally gone
@@ -139,7 +140,7 @@ describe('Role Feature Access — source guards', () => {
     }
   });
 
-  it('feature list is presented in the same order as the sidebar', () => {
+  it('feature groups reflect the new primary, More and Administration structure', () => {
     const block = appFeaturesBlock();
     // Strip sub-option blocks so only top-level feature keys remain.
     const topLevel = block.replace(/suboptions:\s*\[[\s\S]*?\],/g, '');
@@ -164,8 +165,17 @@ describe('Role Feature Access — source guards', () => {
       'team_progress',
       'user_management',
       'settings_control',
+      'roadshow_follow_up',
+      'notifications',
+      'help_support',
+      'about_leadflow',
     ];
-    assert.deepEqual(keys, expected, 'feature list order must match the sidebar (Overview → My Work → Leads → Insights → Management → System)');
+    assert.deepEqual(keys, expected, 'feature taxonomy must include every new navigation destination');
+    const primary = block.slice(0, block.indexOf("key: 'activities'"));
+    assert.ok(primary.includes("group: 'Primary navigation'"), 'primary tabs must be grouped together');
+    assert.ok(block.includes("group: 'More → Reports'"), 'legacy report pages must be grouped under More → Reports');
+    assert.ok(block.includes("group: 'Administration'"), 'admin modules must be grouped under Administration');
+    assert.ok(block.includes("group: 'More'"), 'profile and utility pages must be grouped under More');
   });
 
   it('Lead Pool stays a view control and does not claim data-scope authority', () => {
@@ -209,10 +219,10 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(p.includes("'/workbench'"), 'workbench must map to /workbench');
   });
 
-  it('sidebar still lists Daily Workbench under MY WORK', () => {
+  it('primary navigation still lists Daily Workbench under My Work', () => {
     const l = layout();
-    assert.ok(l.includes('Daily Workbench'), 'sidebar must keep Daily Workbench label');
-    assert.ok(l.includes("path: '/workbench'"), 'sidebar must keep /workbench path');
+    assert.ok(l.includes("label: 'My Work'"), 'primary navigation must keep the My Work label');
+    assert.ok(l.includes("path: '/workbench'"), 'primary navigation must keep the /workbench path');
   });
 
   /* ---------- Granular canonical action control ---------- */

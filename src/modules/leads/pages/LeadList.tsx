@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Search, 
@@ -63,6 +63,10 @@ export default function LeadList() {
   const [qualityBand, setQualityBand] = useState<string>('All');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [search, setSearch] = useState('');
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [activeStatus, setActiveStatus] = useState('All');
+  const mobileSearchRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
   // Full server-side quality explanation for the open details modal (the
@@ -165,6 +169,10 @@ export default function LeadList() {
     loadStatusOptions();
   }, [user]);
 
+  useEffect(() => {
+    if (mobileSearchOpen) mobileSearchRef.current?.focus();
+  }, [mobileSearchOpen]);
+
   const loadLeads = async () => {
     if (!user) return;
     setLoading(true);
@@ -204,6 +212,13 @@ export default function LeadList() {
     'Pipeline Locked',
     'Converted',
     'Not Interested'
+  ];
+  const statusTabs = [
+    'All',
+    ...Array.from(new Set([
+      ...(statusOptions.length ? statusOptions : DEFAULT_STATUS_LIST),
+      ...leads.map(lead => lead.currentStatus).filter(Boolean),
+    ])),
   ];
 
   const loadStatusOptions = async () => {
@@ -337,10 +352,13 @@ export default function LeadList() {
     const baseList = advancedFilteredLeads.length > 0 || leads.length === 0 ? advancedFilteredLeads : leads;
 
     // Narrow by server-computed Lead Quality band (never widens scope).
+    const statusScoped = activeStatus === 'All'
+      ? baseList
+      : baseList.filter(lead => String(lead.currentStatus || '').toLowerCase() === activeStatus.toLowerCase());
     const qualityScoped =
       qualityBand === 'All'
-        ? baseList
-        : baseList.filter(lead => (lead.leadQuality as LeadQuality | undefined)?.band === qualityBand);
+        ? statusScoped
+        : statusScoped.filter(lead => (lead.leadQuality as LeadQuality | undefined)?.band === qualityBand);
 
     // Filter using fast text search across demographics
     let result = qualityScoped.filter(lead => {
@@ -517,11 +535,35 @@ export default function LeadList() {
   return (
     <div className="space-y-6 pb-20 bg-white min-h-screen">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-1">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Workspace</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage assigned leads, update progress, and schedule the next action.</p>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Workspace</h1>
+            <p className="text-sm text-slate-500 mt-1">Manage assigned leads, update progress, and schedule the next action.</p>
+          </div>
+          <div className="lf-mobile-lead-tools" aria-label="Lead search and filters">
+            <button
+              type="button"
+              onClick={() => setMobileSearchOpen((open) => !open)}
+              className={cn('lf-mobile-lead-tool', mobileSearchOpen && 'is-active')}
+              aria-label={mobileSearchOpen ? 'Close lead search' : 'Search leads'}
+              aria-expanded={mobileSearchOpen}
+              aria-controls="mobile-lead-search"
+            >
+              <Search size={19} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen((open) => !open)}
+              className={cn('lf-mobile-lead-tool', mobileFiltersOpen && 'is-active')}
+              aria-label={mobileFiltersOpen ? 'Close lead filters' : 'Filter leads'}
+              aria-expanded={mobileFiltersOpen}
+              aria-controls="mobile-lead-filters"
+            >
+              <Filter size={19} />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="lf-desktop-lead-actions flex items-center gap-2">
           <button 
             onClick={() => {
               const panelBtn = document.getElementById('btn-advanced-filter-toggle');
@@ -547,15 +589,92 @@ export default function LeadList() {
         </div>
       </div>
 
+      {mobileSearchOpen && (
+        <div className="lf-mobile-lead-search" id="mobile-lead-search">
+          <Search className="lf-mobile-lead-search-icon" size={18} aria-hidden="true" />
+          <input
+            ref={mobileSearchRef}
+            type="search"
+            placeholder="Search name, phone, area..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search leads by name, phone, or area"
+          />
+        </div>
+      )}
+
+      {mobileFiltersOpen && (
+        <div className="lf-mobile-lead-filters" id="mobile-lead-filters">
+          <label>
+            <span>Lead quality</span>
+            <select value={qualityBand} onChange={(e) => setQualityBand(e.target.value)}>
+              <option value="All">All quality</option>
+              <option value="Hot">Hot</option>
+              <option value="Warm">Warm</option>
+              <option value="Developing">Developing</option>
+              <option value="Cold">Cold</option>
+              <option value="Converted">Converted</option>
+              <option value="Not Interested">Not interested</option>
+            </select>
+          </label>
+          <label>
+            <span>Sort leads</span>
+            <select
+              value={sortLogic}
+              onChange={(e) => setSortLogic(e.target.value as typeof sortLogic)}
+            >
+              <option value="Recency">Most recent</option>
+              <option value="Economic Potential">Economic potential</option>
+              <option value="Priority Status">Priority status</option>
+              <option value="Quality: High to Low">Quality: high to low</option>
+              <option value="Quality: Low to High">Quality: low to high</option>
+            </select>
+          </label>
+        </div>
+      )}
+
+      <div className="flex gap-2 overflow-x-auto border-b border-stone-100 pb-2" role="tablist" aria-label="Filter leads by status">
+        {statusTabs.map(status => {
+          const count = status === 'All'
+            ? leads.length
+            : leads.filter(lead => String(lead.currentStatus || '').toLowerCase() === status.toLowerCase()).length;
+          const active = activeStatus === status;
+          return (
+            <button
+              key={status}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-pressed={active}
+              onClick={() => setActiveStatus(status)}
+              className={cn(
+                'inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-xs font-semibold transition-colors',
+                active
+                  ? 'border-[#978C21] bg-[#978C21] text-white'
+                  : 'border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50',
+              )}
+            >
+              {status}
+              <span className={cn('text-[10px]', active ? 'text-white/80' : 'text-stone-400')}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Advanced multi-criteria search and dynamic filtering builder */}
       <AdvancedFilterPanel 
         onFilterChange={setAdvancedFilteredLeads} 
         allLeads={leads} 
-        className="mx-1 shadow-sm bg-white border border-slate-100 rounded-sm"
+        className={cn(
+          'mx-1 shadow-sm bg-white border border-slate-100 rounded-sm lf-lead-advanced-filters',
+          mobileFiltersOpen && 'is-mobile-open',
+        )}
+        isOpen={mobileFiltersOpen}
+        onOpenChange={setMobileFiltersOpen}
       />
 
       <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden mx-1">
-        <div className="p-6 border-b border-slate-50 flex flex-col md:flex-row md:items-center gap-6 bg-[#FBFAF8]">
+        <div className="lf-desktop-lead-controls p-6 border-b border-slate-50 flex flex-col md:flex-row md:items-center gap-6 bg-[#FBFAF8]">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
@@ -708,7 +827,7 @@ export default function LeadList() {
                        </button>
                        <button 
                          onClick={(e) => { e.stopPropagation(); handleCall(lead.prospectName || 'Prospect'); }}
-                         className="p-2 border border-slate-100 hover:border-blue-300 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
+                         className="p-2 border border-slate-100 hover:border-blue-300 text-blue-700 hover:text-blue-700 hover:bg-blue-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
                          title="Call Prospect"
                        >
                         <Phone className="w-3.5 h-3.5" />
@@ -862,7 +981,7 @@ export default function LeadList() {
                                <div className="grid grid-cols-2 gap-4">
                                   <div>
                                      <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Status</p>
-                                     <span className="font-bold text-slate-850 px-2 py-0.5 bg-amber-100 text-[#978C21] rounded text-[10px] uppercase tracking-wider font-extrabold">{last.status}</span>
+                                     <span className="px-2 py-0.5 bg-amber-100 text-[#6B5D00] rounded text-[10px] uppercase tracking-wider font-extrabold">{last.status}</span>
                                   </div>
                                   {last.nextFollowUpDate && (
                                      <div>
@@ -970,7 +1089,7 @@ export default function LeadList() {
 
                       {/* Conditional Fields block: Pipeline Locked */}
                       {(formStatus === 'Pipeline Locked' || (formStatus === 'Meeting Completed' && formSubStatus === 'Pipeline Locked')) && (
-                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-[#978C21] pl-3 py-1 bg-slate-50/50 rounded-r-md">
+                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-[#978C21]/25 p-3 bg-slate-50/50 rounded-md">
                             <div className="space-y-1">
                                <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
                                <select 
@@ -1009,7 +1128,7 @@ export default function LeadList() {
 
                       {/* Conditional Fields block: Converted */}
                       {formStatus === 'Converted' && (
-                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-l-2 border-emerald-500 pl-3 py-1 bg-slate-50/50 rounded-r-md">
+                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-emerald-200 p-3 bg-slate-50/50 rounded-md">
                             <div className="space-y-1">
                                <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
                                <select 

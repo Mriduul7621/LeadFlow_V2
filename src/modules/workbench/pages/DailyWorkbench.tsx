@@ -16,12 +16,14 @@ import {
   Edit3,
   ChevronRight,
   Loader2,
+  MapPinned,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
+import { roadshowService, type Roadshow } from '../../roadshows/services/roadshowService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import type { LeadQuality } from '../../shared/types';
 import LeadQualityBadge from '../../leads/components/LeadQualityBadge';
@@ -262,6 +264,9 @@ export default function DailyWorkbench() {
   const [scheduledTomorrow, setScheduledTomorrow] = useState<ScheduledActivity[]>([]);
   const [completedToday, setCompletedToday] = useState<ScheduledActivity[]>([]);
   const [completedTodayError, setCompletedTodayError] = useState<string | null>(null);
+  const [roadshowsToday, setRoadshowsToday] = useState<Roadshow[]>([]);
+  const [roadshowsTomorrow, setRoadshowsTomorrow] = useState<Roadshow[]>([]);
+  const [roadshowError, setRoadshowError] = useState<string | null>(null);
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [qualityFilter, setQualityFilter] = useState<QualityFilterKey>('all');
@@ -279,6 +284,7 @@ export default function DailyWorkbench() {
   // featurePathMapping + permissionModule mapping). Dashboard view must NOT
   // grant mutation capability. No new permission architecture.
   const canEditScheduled = canAccess('lead_tracking', 'edit');
+  const canViewRoadshows = canAccess('roadshow_follow_up', 'view');
 
   const todayYmd = useMemo(() => getDhakaTodayYmd(), []);
   const tomorrowYmd = useMemo(() => {
@@ -296,16 +302,20 @@ export default function DailyWorkbench() {
     setFollowUpError(null);
     setScheduledError(null);
     setCompletedTodayError(null);
+    setRoadshowError(null);
     try {
       // Bounded authoritative sources: follow-ups + scheduled activities
       // No full lead list fetch, no N+1.
-      const [followUpAllRes, scheduledRangeRes, completedRes] = await Promise.allSettled([
+      const [followUpAllRes, scheduledRangeRes, completedRes, roadshowRes] = await Promise.allSettled([
         // Follow-ups: all buckets (overdue/today/upcoming) in one bounded request
         leadService.getFollowUpQueue({ bucket: 'all', limit: 200 }),
         // Scheduled: today + tomorrow (scheduled_at range, all statuses)
         scheduledActivityService.list({ from: todayYmd, to: tomorrowYmd, limit: 200 }),
         // Completed today: status completed, filter completed_at client-side
         scheduledActivityService.list({ status: 'completed', limit: 100 }),
+        canViewRoadshows
+          ? roadshowService.list({ from: todayYmd, to: tomorrowYmd, mine: true })
+          : Promise.resolve([] as Roadshow[]),
       ]);
 
       // Follow-ups
@@ -368,6 +378,16 @@ export default function DailyWorkbench() {
         // Primary workbench (follow-ups + scheduled) must still load.
       }
 
+      if (roadshowRes.status === 'fulfilled') {
+        const upcomingRoadshows = roadshowRes.value.filter(item => item.status === 'pending' || item.status === 'reschedule');
+        setRoadshowsToday(upcomingRoadshows.filter(item => isDhakaYmd(item.scheduledAt, todayYmd)));
+        setRoadshowsTomorrow(upcomingRoadshows.filter(item => isDhakaYmd(item.scheduledAt, tomorrowYmd)));
+      } else {
+        setRoadshowsToday([]);
+        setRoadshowsTomorrow([]);
+        setRoadshowError('Roadshow alerts could not be loaded.');
+      }
+
       if (followUpAllRes.status === 'rejected' && scheduledRangeRes.status === 'rejected') {
         setError('Daily work could not be loaded.');
       }
@@ -376,7 +396,7 @@ export default function DailyWorkbench() {
     } finally {
       setLoading(false);
     }
-  }, [user, todayYmd, tomorrowYmd]);
+  }, [user, todayYmd, tomorrowYmd, canViewRoadshows]);
 
   useEffect(() => {
     void load();
@@ -574,9 +594,9 @@ export default function DailyWorkbench() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div>
-          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">Daily Workbench</h1>
-          <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">Manage today's calls, meetings, follow-ups and tasks from one place.</p>
-          <p className="text-[11px] font-semibold text-stone-400 mt-1">Asia/Dhaka · {dhakaDisplay}</p>
+          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text"><span className="hidden md:inline">Daily Workbench</span><span className="md:hidden">My Work</span></h1>
+          <p className="hidden md:block text-[13px] text-stone-500 mt-2 leading-relaxed">Manage today's calls, meetings, follow-ups and tasks from one place.</p>
+          <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -599,7 +619,7 @@ export default function DailyWorkbench() {
       </div>
 
       {/* Partial failure banners */}
-      {(followUpError || scheduledError) && !error && (
+      {(followUpError || scheduledError || roadshowError) && !error && (
         <div className="space-y-2">
           {followUpError && (
             <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-[12px] px-5 py-3 text-amber-800">
@@ -611,6 +631,12 @@ export default function DailyWorkbench() {
             <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-[12px] px-5 py-3 text-amber-800">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <p className="text-[12px] font-medium">{scheduledError} Follow-ups may still be available.</p>
+            </div>
+          )}
+          {roadshowError && canViewRoadshows && (
+            <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-[12px] px-5 py-3 text-amber-800">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <p className="text-[12px] font-medium">{roadshowError}</p>
             </div>
           )}
         </div>
@@ -651,7 +677,7 @@ export default function DailyWorkbench() {
       ) : (
         <>
           {/* Daily Summary */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="hidden md:block bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Daily Summary</h2>
               <span className="text-[11px] font-semibold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{todayYmd}</span>
@@ -673,7 +699,30 @@ export default function DailyWorkbench() {
           </section>
 
           {/* Quick Filters */}
-          <div className="flex flex-wrap items-center gap-2 bg-white border border-stone-100 rounded-[12px] p-3" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          {canViewRoadshows && roadshowsToday.length > 0 && (
+            <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-5" aria-label="Roadshows today">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-bold text-stone-800">Roadshows today</h2>
+                <Link to="/roadshows" className="text-xs font-semibold text-[#756c1b] hover:underline">View all</Link>
+              </div>
+              <div className="space-y-2">
+                {roadshowsToday.map(roadshow => (
+                  <Link key={roadshow.id} to="/roadshows" className="flex min-h-14 items-center gap-3 rounded-lg border border-stone-100 bg-[#FFFCF8] px-3 py-2 hover:border-[#978C21]/30">
+                    <MapPinned className="h-4 w-4 shrink-0 text-[#756c1b]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-stone-800">{roadshow.organization}</span>
+                      <span className="block truncate text-xs text-stone-500">{roadshow.location} · {formatDhakaDue(roadshow.scheduledAt)}</span>
+                    </span>
+                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">{roadshow.status === 'reschedule' ? 'Rescheduled' : 'Pending'}</span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-stone-400" />
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Quick Filters */}
+          <div className="flex flex-nowrap md:flex-wrap items-center gap-2 overflow-x-auto bg-white border border-stone-100 rounded-[12px] p-3" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             {filterChips.map(chip => {
               const count = (filterCounts as any)[chip.key] ?? 0;
               const active = activeFilter === chip.key;
@@ -684,6 +733,7 @@ export default function DailyWorkbench() {
                   onClick={() => setActiveFilter(chip.key)}
                   className={cn(
                     'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold border transition-all duration-150',
+                    'shrink-0',
                     active ? 'bg-[#978C21] text-white border-[#978C21] shadow-sm' : 'bg-[#FFFCF8] text-stone-600 border-stone-200 hover:bg-white hover:border-stone-300',
                   )}
                 >
@@ -693,8 +743,8 @@ export default function DailyWorkbench() {
               );
             })}
             {/* Lead Quality prioritization filter (client-side narrowing over the loaded queue) */}
-            <span className="mx-1 w-px h-6 bg-stone-200" aria-hidden="true" />
-            <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wide">Quality</span>
+            <span className="mx-1 hidden md:block w-px h-6 bg-stone-200" aria-hidden="true" />
+            <span className="hidden md:inline text-[11px] font-bold text-stone-400 uppercase tracking-wide">Quality</span>
             {qualityChips.map(chip => {
               const count = qualityCounts[chip.key] ?? 0;
               const active = qualityFilter === chip.key;
@@ -706,6 +756,7 @@ export default function DailyWorkbench() {
                   data-testid={`wb-quality-filter-${chip.key}`}
                   className={cn(
                     'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold border transition-all duration-150',
+                    'hidden md:inline-flex shrink-0',
                     active ? 'bg-[#978C21] text-white border-[#978C21] shadow-sm' : 'bg-[#FFFCF8] text-stone-600 border-stone-200 hover:bg-white hover:border-stone-300',
                   )}
                 >
@@ -717,11 +768,11 @@ export default function DailyWorkbench() {
           </div>
 
           {/* Execution Queue */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <div className="flex items-end justify-between gap-4 mb-4">
               <div>
-                <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Execution Queue</h2>
-                <p className="text-[12px] text-stone-500 mt-1.5 leading-relaxed">Overdue follow-ups first, then today's work by scheduled time. Tomorrow does not enter this queue.</p>
+                <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700"><span className="hidden md:inline">Execution Queue</span><span className="md:hidden">Today</span></h2>
+                <p className="hidden md:block text-[12px] text-stone-500 mt-1.5 leading-relaxed">Overdue follow-ups first, then today's work by scheduled time. Tomorrow does not enter this queue.</p>
               </div>
               <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{qualityFilteredItems.length} items</span>
             </div>
@@ -743,17 +794,21 @@ export default function DailyWorkbench() {
                   const meta = TYPE_META[item.type];
                   const Icon = meta.icon;
                   const isSelected = selectedKey === item.key;
+                  const itemStatus = item.source === 'scheduled'
+                    ? String((item.raw as ScheduledActivity).status || 'Scheduled')
+                    : item.overdue ? 'Overdue' : 'Due today';
                   return (
                     <div
                       key={item.key}
                       className={cn(
-                        'flex items-center gap-3 px-4 py-3 rounded-[10px] border transition-all duration-150',
+                        'flex flex-wrap items-center gap-3 px-3 md:px-4 py-3 rounded-[10px] border transition-all duration-150',
                         isSelected ? 'border-[#978C21] bg-[#978C21]/[0.04] shadow-sm' : 'border-stone-100 bg-[#FFFCF8] hover:bg-white hover:border-stone-200 hover:shadow-sm',
                       )}
                     >
                       <button
                         type="button"
                         onClick={() => setSelectedKey(isSelected ? null : item.key)}
+                        aria-expanded={isSelected}
                         className="flex items-center gap-3 min-w-0 flex-1 text-left"
                       >
                         <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', meta.tone)}>
@@ -762,23 +817,25 @@ export default function DailyWorkbench() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-sm font-semibold text-stone-800 truncate">{item.leadName}</p>
-                            <LeadQualityBadge quality={item.leadQuality} />
+                            <span className="hidden md:inline-flex"><LeadQualityBadge quality={item.leadQuality} /></span>
                             {item.overdue && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[10px] font-bold text-red-700">
+                              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[10px] font-bold text-red-700">
                                 <AlertTriangle className="w-3 h-3" />
                                 Overdue
                               </span>
                             )}
                           </div>
-                          <p className="text-[11px] text-stone-500 truncate">
-                            {item.title ? `${item.title} · ` : ''}
-                            {formatDhakaDue(item.scheduledAt || '')}
-                            {item.leadStatus ? ` · ${item.leadStatus}` : ''}
+                          <p className="text-[11px] text-stone-500 truncate md:hidden">
+                            {meta.label} · {itemStatus} · {formatDhakaDue(item.scheduledAt || '')}
+                          </p>
+                          <p className="hidden md:block text-[11px] text-stone-500 truncate">
+                            {item.title ? `${item.title} · ` : ''}{formatDhakaDue(item.scheduledAt || '')}{item.leadStatus ? ` · ${item.leadStatus}` : ''}
                           </p>
                         </div>
+                        <ChevronRight className={cn('h-4 w-4 shrink-0 text-stone-400 transition-transform md:hidden', isSelected && 'rotate-90')} />
                       </button>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="hidden md:flex items-center gap-2 shrink-0">
                         <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', meta.tone)}>{meta.badge}</span>
                         {item.source === 'follow_up' ? (
                           <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-stone-50 border-stone-200 text-stone-600">Follow-up</span>
@@ -797,6 +854,20 @@ export default function DailyWorkbench() {
                           Open <ExternalLink className="w-3 h-3" />
                         </Link>
                       </div>
+                      {isSelected && (
+                        <div className="basis-full border-t border-stone-100 pt-3 pl-12 md:hidden">
+                          {item.title ? <p className="text-xs font-medium text-stone-700">{item.title}</p> : null}
+                          <p className="mt-1 text-xs text-stone-600">{meta.label} · {itemStatus} · {formatDhakaDue(item.scheduledAt || '')}</p>
+                          {item.leadStatus ? <p className="mt-1 text-xs text-stone-500">Lead status · {item.leadStatus}</p> : null}
+                          {item.assigneeName ? <p className="mt-1 text-xs text-stone-500">Assigned to · {item.assigneeName}</p> : null}
+                          <Link
+                            to={`/leads/${encodeURIComponent(item.leadId)}`}
+                            className="mt-3 inline-flex min-h-9 items-center gap-1.5 text-xs font-semibold text-[#756c1b]"
+                          >
+                            View lead <ChevronRight className="h-3.5 w-3.5" />
+                          </Link>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -919,6 +990,23 @@ export default function DailyWorkbench() {
                 <span className="text-sm font-bold text-brand-text">{tomorrowSummary.tasks}</span>
               </div>
             </div>
+            {canViewRoadshows && roadshowsTomorrow.length > 0 && (
+              <div className="mt-4 border-t border-stone-100 pt-4">
+                <h4 className="mb-2 text-xs font-semibold text-stone-700">Roadshows tomorrow</h4>
+                <div className="space-y-2">
+                  {roadshowsTomorrow.map(roadshow => (
+                    <Link key={roadshow.id} to="/roadshows" className="flex min-h-12 items-center gap-3 rounded-lg border border-stone-100 bg-[#FFFCF8] px-3 py-2 hover:border-[#978C21]/30">
+                      <MapPinned className="h-4 w-4 shrink-0 text-[#756c1b]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-semibold text-stone-800">{roadshow.organization}</span>
+                        <span className="block truncate text-[11px] text-stone-500">{roadshow.location} · {formatDhakaDue(roadshow.scheduledAt)}</span>
+                      </span>
+                      <span className="text-[10px] font-semibold text-stone-500">{roadshow.status === 'reschedule' ? 'Rescheduled' : 'Pending'}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="text-[11px] text-stone-400 mt-3">Today remains the core workbench. Task Calendar is the detailed planning view.</p>
           </section>
         </>

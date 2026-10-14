@@ -176,7 +176,7 @@ export default function Login() {
         {showSplash ? (
           <motion.section key="splash" className="leadflow-splash-screen" initial={{ opacity: 1 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} onClick={() => setShowSplash(false)} aria-label="LeadFlow splash screen">
             <div className="leadflow-splash-brand">
-              <img src="https://lh3.googleusercontent.com/d/1NrB07Qg9d6yhOib8gds5g4-HZLmbJng3" alt="Shanta Life logo" className="leadflow-splash-logo" referrerPolicy="no-referrer" />
+              <img src="/shanta-life-logo.png" alt="Shanta Life" className="leadflow-splash-logo" />
               <div className="leadflow-wordmark" aria-label="LeadFlow"><span>Lead</span><strong>Flow</strong></div>
               <p className="leadflow-tagline">More Leads. Bigger Tomorrow.</p>
             </div>

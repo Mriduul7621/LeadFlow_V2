@@ -1,33 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
-  UserPlus, 
-  Upload, 
   ClipboardList, 
-  Users, 
-  History, 
-  Settings, 
   ChevronRight,
   LogOut,
   Calendar,
   Clock,
-  Menu,
   X,
   Bell,
-  Database,
-  TrendingUp,
-  PieChart as PieIcon,
   Target,
   Lock,
   AlertCircle,
   WifiOff,
-  Gauge
+  Plus,
+  MoreHorizontal,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
 import { UserRole, SystemNotification, RolePermission } from '../modules/shared/types';
 import { cn } from '../lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { notificationService } from '../modules/notifications/services/notificationService';
 import { adminService } from '../modules/admin/services/adminService';
 import { userService } from '../modules/users/services/userService';
@@ -37,104 +29,29 @@ import {
   writeSessionCache,
 } from '../modules/shared/api/sessionCache';
 import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
-// Source-guard preservation: role menu visibility still driven by
-// `menuAccess` override (dynamic) with static `roles.includes` fallback.
-// The single check `isItemVisible` + `visibleSections` + `userRoleNormalized === 'ADMIN'` bypass must remain.
 import { resolveMenuVisibility } from './menuVisibility';
-import { DIAGNOSTICS_ADMIN_ROLES } from '../modules/auth/components/AdminRoute';
 
 interface MenuItem {
   label: string;
   icon: any;
   path: string;
-  /** Role names (case-insensitive match in resolveMenuVisibility). */
   roles: string[];
 }
 
-interface MenuSection {
-  key: string;
-  labelKey: string;
-  items: MenuItem[];
-}
-
 const ALL_ROLES = Object.values(UserRole);
-const INSIGHT_ROLES = [UserRole.ADMIN, UserRole.RO, UserRole.RM];
-const TEAM_ROLES = [
-  UserRole.ADMIN,
-  UserRole.RM,
-  UserRole.ASM,
-  UserRole.BDM,
-  UserRole.BUSINESS_EXECUTIVE,
-  UserRole.BUSINESS_HEAD,
+const PRIMARY_NAV_ITEMS: MenuItem[] = [
+  { label: 'Home', icon: LayoutDashboard, path: '/', roles: ALL_ROLES },
+  { label: 'My Work', icon: Target, path: '/workbench', roles: ALL_ROLES },
+  { label: 'Add Lead', icon: Plus, path: '/leads/new', roles: ALL_ROLES },
+  { label: 'Leads', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
+  { label: 'More', icon: MoreHorizontal, path: '/more', roles: ALL_ROLES },
 ];
-
-const sectionLabelMap: Record<string, string> = {
-  navSectionOverview: 'Overview',
-  navSectionMyWork: 'My Work',
-  navSectionLeads: 'Leads',
-  navSectionInsights: 'Insights',
-  navSectionManagement: 'Management',
-  navSectionSystem: 'System',
-};
-
-const menuSections: MenuSection[] = [
-  {
-    key: 'overview',
-    labelKey: 'navSectionOverview',
-    items: [
-      { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ALL_ROLES },
-    ],
-  },
-  {
-    key: 'mywork',
-    labelKey: 'navSectionMyWork',
-    items: [
-      { label: 'Daily Workbench', icon: Target, path: '/workbench', roles: ALL_ROLES },
-      { label: 'Activities', icon: Clock, path: '/activities', roles: ALL_ROLES },
-      { label: 'Task Calendar', icon: Calendar, path: '/task-calendar', roles: ALL_ROLES },
-      { label: 'Follow-up Queue', icon: History, path: '/follow-up', roles: ALL_ROLES },
-    ],
-  },
-  {
-    key: 'leads',
-    labelKey: 'navSectionLeads',
-    items: [
-      { label: 'Lead Workspace', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
-      { label: 'Add New Lead', icon: UserPlus, path: '/leads/new', roles: ALL_ROLES },
-      { label: 'Bulk Upload', icon: Upload, path: '/leads/upload', roles: [UserRole.ADMIN] },
-      { label: 'Lead Pool', icon: Database, path: '/leads/all', roles: [UserRole.ADMIN] },
-    ],
-  },
-  {
-    key: 'insights',
-    labelKey: 'navSectionInsights',
-    items: [
-      { label: 'Performance', icon: LayoutDashboard, path: '/execution-intelligence', roles: INSIGHT_ROLES },
-      { label: 'NCP Progress', icon: TrendingUp, path: '/ncp-progress', roles: INSIGHT_ROLES },
-      { label: 'Trends', icon: Target, path: '/trend-charts', roles: INSIGHT_ROLES },
-      { label: 'Campaigns', icon: PieIcon, path: '/campaign-breakdown', roles: INSIGHT_ROLES },
-    ],
-  },
-  {
-    key: 'management',
-    labelKey: 'navSectionManagement',
-    items: [
-      { label: 'Team', icon: Users, path: '/team', roles: TEAM_ROLES },
-      { label: 'Users', icon: Users, path: '/users', roles: [UserRole.ADMIN] },
-    ],
-  },
-  {
-    key: 'system',
-    labelKey: 'navSectionSystem',
-    items: [
-      { label: 'Settings', icon: Settings, path: '/settings', roles: ALL_ROLES },
-      // TEMPORARY admin-only diagnostics entry. Roles come from the SAME
-      // constant as the AdminRoute gate (ADMIN/SUPERADMIN), so sidebar
-      // visibility and route access can never drift apart. Non-admins can
-      // neither see nor open it.
-      { label: 'Performance Diagnostics', icon: Gauge, path: '/settings/performance-diagnostics', roles: [...DIAGNOSTICS_ADMIN_ROLES] },
-    ],
-  },
+const MORE_NAV_PATHS = [
+  '/more', '/reports', '/notifications', '/help', '/about', '/administration',
+  '/settings', '/settings/system', '/settings/performance-diagnostics',
+  '/users', '/leads/upload', '/leads/all', '/activities', '/task-calendar',
+  '/follow-up', '/team', '/execution-intelligence', '/ncp-progress',
+  '/trend-charts', '/campaign-breakdown',
 ];
 
 const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
@@ -144,10 +61,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
-  const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [rolesPermissions, setRolesPermissions] = useState<RolePermission[]>([]);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -460,17 +376,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const userRoleName = user.role || '';
   const userRoleNormalized = userRoleName.toUpperCase();
-  const isAdminUser = userRoleNormalized === 'ADMIN';
   const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
-
-  const isItemVisible = (item: MenuItem): boolean => {
-    void isAdminUser;
-    return resolveMenuVisibility(userRoleName, matchedPermission, item);
+  const isItemVisible = (item: MenuItem): boolean =>
+    resolveMenuVisibility(userRoleName, matchedPermission, item);
+  const visiblePrimaryItems = PRIMARY_NAV_ITEMS.filter(isItemVisible);
+  const isPrimaryItemActive = (path: string) => {
+    if (path === '/') return location.pathname === '/';
+    if (path === '/workbench') return location.pathname === '/workbench';
+    if (path === '/leads') {
+      return location.pathname === '/leads'
+        || (location.pathname.startsWith('/leads/') && !['/leads/new', '/leads/upload', '/leads/all'].includes(location.pathname));
+    }
+    if (path === '/leads/new') return location.pathname === '/leads/new';
+    return MORE_NAV_PATHS.some(morePath =>
+      location.pathname === morePath || location.pathname.startsWith(`${morePath}/`)
+    );
   };
-
-  const visibleSections = menuSections
-    .map(section => ({ ...section, items: section.items.filter(isItemVisible) }))
-    .filter(section => section.items.length > 0);
 
   const handleLogout = () => {
     logout();
@@ -479,153 +400,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] flex text-brand-text font-sans">
-      <motion.aside 
-        initial={false}
-        animate={{ width: isSidebarOpen ? 280 : 80 }}
-        className="hidden lg:flex flex-col bg-white border-r border-stone-100 sticky top-0 h-screen z-40 transition-all duration-150"
-        style={{ boxShadow: '1px 0 12px rgba(0,0,0,0.04)' }}
-      >
-        <div className={cn("p-6 mb-2", !isSidebarOpen && "flex justify-center")}>
-          {isSidebarOpen ? (
-            <div className="flex items-center gap-3">
-               <img 
-                 src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                 alt="Shanta Life Logo"
-                 className="h-10 w-auto object-contain"
-                 referrerPolicy="no-referrer"
-               />
-            </div>
-          ) : (
-             <div className="flex items-center justify-center">
-                <img 
-                  src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                  alt="Shanta Life Logo"
-                  className="h-7 w-auto object-contain"
-                  referrerPolicy="no-referrer"
-                />
-             </div>
-          )}
-        </div>
-
-        <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
-          {visibleSections.map((section, sectionIndex) => (
-            <React.Fragment key={section.key}>
-              {isSidebarOpen ? (
-                <div className={cn("pt-3 pb-1.5 px-3 first:pt-0", sectionIndex > 0 && "mt-1")}>
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400 select-none">
-                    {sectionLabelMap[section.labelKey] || section.labelKey}
-                  </p>
-                </div>
-              ) : (
-                sectionIndex > 0 && <div className="my-2 border-t border-stone-100" aria-hidden="true" />
-              )}
-              {section.items.map((item) => {
-                const isActive = location.pathname === item.path;
-                return (
-                  <Link
-                    key={item.path}
-                    to={item.path}
-                    title={item.label}
-                    className={cn(
-                      "flex items-center gap-3 px-3.5 py-2.5 rounded-[10px] transition-all duration-150 group relative text-[13px] font-medium",
-                      isActive 
-                        ? "bg-[#978C21] text-white shadow-sm" 
-                        : "text-stone-500 hover:text-brand-text hover:bg-stone-50"
-                    )}
-                    style={isActive ? { boxShadow: '0 2px 8px rgba(151,140,33,0.25)' } : undefined}
-                  >
-                    {isActive && (
-                      <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-[#F3702B] rounded-r-full" aria-hidden="true" />
-                    )}
-                    <item.icon className={cn("w-[18px] h-[18px] shrink-0", isActive ? "text-white" : "text-stone-400 group-hover:text-[#978C21]")} />
-                    {isSidebarOpen && <span className="whitespace-nowrap">{item.label}</span>}
-                  </Link>
-                );
-              })}
-            </React.Fragment>
-          ))}
-        </nav>
-
-        <div className="p-3 border-t border-stone-100">
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="w-full h-9 flex items-center justify-center rounded-[10px] hover:bg-stone-50 text-stone-400 transition-colors border border-transparent hover:border-stone-100"
-            aria-label={isSidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-          >
-            <ChevronRight className={cn("w-4 h-4 transition-transform duration-150", isSidebarOpen && "rotate-180")} />
-          </button>
-        </div>
-      </motion.aside>
-
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="fixed inset-0 bg-slate-900/30 z-50 lg:hidden backdrop-blur-sm"
-            />
-            <motion.aside
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ duration: 0.18 }}
-              className="fixed left-0 top-0 bottom-0 w-72 bg-white z-50 lg:hidden h-full shadow-xl border-r border-stone-100"
-            >
-              <div className="p-6 flex items-center justify-between border-b border-stone-100">
-                <div className="flex items-center">
-                   <img 
-                     src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-                     alt="Shanta Life Logo"
-                     className="h-9 w-auto object-contain"
-                     referrerPolicy="no-referrer"
-                   />
-                </div>
-                <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-stone-50 rounded-full" aria-label="Close menu">
-                  <X className="w-5 h-5 text-stone-400" />
-                </button>
-              </div>
-              <nav className="p-4 space-y-1 overflow-y-auto h-[calc(100%-5rem)]">
-                {visibleSections.map((section, sectionIndex) => (
-                  <React.Fragment key={section.key}>
-                    <div className={cn("pt-3 pb-1 px-3 first:pt-0", sectionIndex > 0 && "mt-1")}>
-                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400 select-none">
-                        {sectionLabelMap[section.labelKey] || section.labelKey}
-                      </p>
-                    </div>
-                    {section.items.map((item) => {
-                      const isActive = location.pathname === item.path;
-                      return (
-                        <Link
-                          key={item.path}
-                          to={item.path}
-                          onClick={() => setIsMobileMenuOpen(false)}
-                          className={cn(
-                            "flex items-center gap-3 px-4 py-2.5 rounded-[10px] text-sm font-medium transition-colors",
-                            isActive ? "bg-[#978C21] text-white shadow-sm" : "text-stone-500 hover:bg-stone-50 hover:text-brand-text"
-                          )}
-                        >
-                          <item.icon className="w-[18px] h-[18px]" />
-                          <span>{item.label}</span>
-                        </Link>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </nav>
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
-
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
         <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
           <div className="flex items-center gap-2 lg:hidden">
-             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 rounded-xl hover:bg-stone-50 active:scale-95 transition" aria-label="Open menu">
-                <Menu className="w-5 h-5 text-stone-700" />
-             </button>
              <img src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO" alt="Shanta Life" className="h-7 w-auto max-w-[112px] object-contain" referrerPolicy="no-referrer" />
           </div>
 
@@ -656,6 +433,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 )}
              </div>
           </div>
+
+          <nav className="leadflow-desktop-nav" aria-label="Primary navigation">
+            {visiblePrimaryItems.map(item => {
+              const active = isPrimaryItemActive(item.path);
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn('leadflow-desktop-nav-item', active && 'is-active', item.path === '/leads/new' && 'is-primary')}
+                >
+                  <item.icon className="h-4 w-4" strokeWidth={active ? 2.4 : 1.8} />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
 
           <div className="flex md:hidden items-center gap-2">
             <span className="text-xs font-mono font-semibold text-stone-600">{dhakaTime.timeStr || '--:--'}</span>
@@ -746,7 +540,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 </div>
                 
                 <div className="relative group">
-                  <button className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-stone-50 transition-colors border border-transparent hover:border-stone-100" aria-haspopup="menu" aria-label="User menu">
+                  <button
+                    onClick={() => setIsUserMenuOpen((open) => !open)}
+                    className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-stone-50 transition-colors border border-transparent hover:border-stone-100"
+                    aria-haspopup="menu"
+                    aria-expanded={isUserMenuOpen}
+                    aria-label="User menu"
+                  >
                     <div className="w-9 h-9 rounded-full bg-stone-800 flex items-center justify-center border-2 border-white shadow-sm overflow-hidden">
                       {user.avatarUrl ? (
                         <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -758,7 +558,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     </div>
                     <ChevronRight className="w-3.5 h-3.5 text-stone-400 hidden md:block rotate-90 group-hover:text-stone-600 transition-colors" />
                   </button>
-                  <div className="absolute right-0 top-[110%] w-64 bg-white rounded-[12px] shadow-xl border border-stone-100 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-all duration-150 transform origin-top-right z-50 overflow-hidden">
+                  {isUserMenuOpen && (
+                    <button
+                      type="button"
+                      className="fixed inset-0 z-40 cursor-default"
+                      aria-label="Close user menu"
+                      onClick={() => setIsUserMenuOpen(false)}
+                    />
+                  )}
+                  <div className={cn(
+                    "absolute right-0 top-[110%] w-64 bg-white rounded-[12px] shadow-xl border border-stone-100 py-2 transition-all duration-150 transform origin-top-right z-50 overflow-hidden",
+                    isUserMenuOpen
+                      ? "opacity-100 visible"
+                      : "opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible",
+                  )} role="menu" aria-label="User menu">
                     <div className="px-5 py-4 border-b border-stone-50">
                       <p className="text-xs text-stone-400 font-medium">Logged in as</p>
                       <p className="text-sm text-stone-800 font-bold truncate mt-1">{user.name}</p>
@@ -768,6 +581,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     <button 
                       onClick={handleLogout}
                       className="w-full px-5 py-3 flex items-center gap-3 text-red-600 hover:bg-red-50 text-sm font-semibold transition-colors text-left"
+                      role="menuitem"
                     >
                       <LogOut className="w-4 h-4" />
                       Logout
@@ -783,16 +597,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <nav className="leadflow-mobile-nav" aria-label="Primary mobile navigation">
-        {[
-          { label: "Home", path: "/", icon: LayoutDashboard },
-          { label: "My Work", path: "/workbench", icon: Target },
-          { label: "Leads", path: "/leads", icon: ClipboardList },
-          { label: "Add Lead", path: "/leads/new", icon: UserPlus },
-        ].map((item) => {
-          const active = item.path === "/" ? location.pathname === "/" : location.pathname === item.path || (item.path === "/leads" && location.pathname.startsWith("/leads") && location.pathname !== "/leads/new");
-          return <Link key={item.path} to={item.path} aria-current={active ? "page" : undefined} className={cn("leadflow-mobile-nav-item", active && "is-active")}><item.icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.8} /><span>{item.label}</span></Link>;
+        {visiblePrimaryItems.map(item => {
+          const active = isPrimaryItemActive(item.path);
+          return <Link key={item.path} to={item.path} aria-current={active ? "page" : undefined} className={cn("leadflow-mobile-nav-item", item.path === "/leads/new" && "leadflow-mobile-nav-item--primary", active && "is-active")}><item.icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.8} /><span>{item.label}</span></Link>;
         })}
-        <button type="button" onClick={() => setIsMobileMenuOpen(true)} className={cn("leadflow-mobile-nav-item", isMobileMenuOpen && "is-active")} aria-label="Open all sections"><Menu className="h-[19px] w-[19px]" strokeWidth={1.8} /><span>More</span></button>
       </nav>
     </div>
   );

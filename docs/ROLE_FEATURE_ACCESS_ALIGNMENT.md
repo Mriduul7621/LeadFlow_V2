@@ -2,64 +2,79 @@
 
 This document records how the **Role Feature Access** administration UI
 (the "Roles & Access" tab under **Users → User Management**) is aligned with
-the live application sidebar, routes, Dashboard, and Daily Workbench.
+the live five-tab navigation, More directories, routes, Dashboard, and Daily
+Workbench.
 
 - Editor: `src/modules/users/pages/UserManagement.tsx` (`APP_FEATURES` + `handleSaveRole`)
 - Role defaults / reconciliation: `src/modules/admin/services/adminService.ts`
-- Sidebar source of truth: `src/layouts/AppLayout.tsx`
+- Primary navigation source: `src/layouts/AppLayout.tsx`
+- More directory source: `src/modules/navigation/pages/MorePages.tsx`
 - Live route source of truth: `src/App.tsx`
 
 ---
 
-## Canonical sidebar & routes
+## Canonical navigation & routes
 
-The sidebar (`src/layouts/AppLayout.tsx`) is the authority for which screens
-exist and what they are called:
+The primary tabs are **Home**, **My Work**, **Leads**, **Add Lead**, and
+**More**. Secondary pages are grouped into More directories:
 
-| Section | Visible label | Route |
+| Navigation group | Visible label | Route |
 | --- | --- | --- |
-| Overview | Dashboard | `/` |
-| My Work | Daily Workbench | `/workbench` |
-| My Work | Activities | `/activities` |
-| My Work | Task Calendar | `/task-calendar` |
-| My Work | Follow-up Queue | `/follow-up` |
-| Leads | Lead Workspace | `/leads` |
-| Leads | Add New Lead | `/leads/new` |
-| Leads | Bulk Upload | `/leads/upload` |
-| Leads | Lead Pool | `/leads/all` |
-| Insights | Performance | `/execution-intelligence` |
-| Insights | NCP Progress | `/ncp-progress` |
-| Insights | Trends | `/trend-charts` |
-| Insights | Campaigns | `/campaign-breakdown` |
-| Management | Team | `/team` |
-| Management | Users | `/users` |
-| System | Settings | `/settings` |
+| Primary navigation | Home | `/` |
+| Primary navigation | My Work | `/workbench` |
+| Primary navigation | Leads | `/leads` |
+| Primary navigation | Add Lead | `/leads/new` |
+| Primary navigation | More | `/more` |
+| More | Profile & settings | `/settings` |
+| More | Notifications | `/notifications` |
+| More | Help & Support | `/help` |
+| More | About LeadFlow | `/about` |
+| More → Reports | Reports | `/reports` |
+| More → Reports | Activities | `/activities` |
+| More → Reports | Task Calendar | `/task-calendar` |
+| More → Reports | Follow-up Queue | `/follow-up` |
+| More → Reports | Performance / NCP Progress / Trends / Campaigns | `/execution-intelligence`, `/ncp-progress`, `/trend-charts`, `/campaign-breakdown` |
+| More → Reports | Team | `/team` |
+| More → Reports (admin only) | Performance Diagnostics | `/settings/performance-diagnostics` |
+| Administration (admin only) | User Management | `/users` |
+| Administration (admin only) | Lead Upload | `/leads/upload` |
+| Administration (admin only) | Lead Pool | `/leads/all` |
+| Administration (admin only) | System | `/settings/system` |
 
 ---
 
-## Feature Access → sidebar mapping
+## Feature Access → navigation mapping
 
 Internal permission keys are **preserved** (they are the storage contract);
-only the visible labels were updated to match the current sidebar names.
+the feature groups and visible labels match the current navigation structure.
 
-| Visible label | Internal key | Route | Enforcement | Status |
+| Visible label | Navigation group | Internal key | Route | Enforcement |
 | --- | --- | --- | --- | --- |
-| Dashboard | `dashboard` | `/` | `menuAccess['/']` | Aligned (single view flag) |
-| Daily Workbench | `workbench` | `/workbench` | `menuAccess['/workbench']` | **Added** |
-| Activities | `activities` | `/activities` | `menuAccess['/activities']` | Aligned |
-| Task Calendar | `task_calendar` | `/task-calendar` | `menuAccess['/task-calendar']` | Aligned |
-| Follow-up Queue | `follow_up_strategy` | `/follow-up` | `menuAccess['/follow-up']` | Renamed |
-| Lead Workspace | `lead_tracking` | `/leads` | `menuAccess['/leads']` | Aligned |
-| Add New Lead | `lead_generate` | `/leads/new` | `menuAccess['/leads/new']` | Renamed |
-| Bulk Upload | `lead_upload` | `/leads/upload` | `menuAccess['/leads/upload']` | Aligned |
-| Lead Pool | `all_leads` | `/leads/all` | `menuAccess['/leads/all']` | Renamed (stable standalone key) |
-| Performance | `execution_intelligence` | `/execution-intelligence` | `menuAccess['/execution-intelligence']` | Renamed |
-| NCP Progress | `ncp_progress` | `/ncp-progress` | `menuAccess['/ncp-progress']` | Aligned |
-| Trends | `trend_charts` | `/trend-charts` | `menuAccess['/trend-charts']` | Renamed |
-| Campaigns | `campaign_breakdown` | `/campaign-breakdown` | `menuAccess['/campaign-breakdown']` | Renamed |
-| Team | `team_progress` | `/team` | `menuAccess['/team']` | Renamed |
-| Users | `user_management` | `/users` | `menuAccess['/users']` | Renamed |
-| Settings | `settings_control` | `/settings` | `menuAccess['/settings']` | Aligned |
+| Dashboard | Primary navigation | `dashboard` | `/` | `menuAccess['/']` |
+| Daily Workbench | Primary navigation | `workbench` | `/workbench` | `menuAccess['/workbench']` |
+| Lead Workspace | Primary navigation | `lead_tracking` | `/leads` | `menuAccess['/leads']` |
+| Add New Lead | Primary navigation | `lead_generate` | `/leads/new` | `menuAccess['/leads/new']` |
+| Activities | More → Reports | `activities` | `/activities` | `menuAccess['/activities']` |
+| Task Calendar | More → Reports | `task_calendar` | `/task-calendar` | `menuAccess['/task-calendar']` |
+| Follow-up Queue | More → Reports | `follow_up_strategy` | `/follow-up` | `menuAccess['/follow-up']` |
+| Performance | More → Reports | `execution_intelligence` | `/execution-intelligence` | `menuAccess['/execution-intelligence']` |
+| NCP Progress | More → Reports | `ncp_progress` | `/ncp-progress` | `menuAccess['/ncp-progress']` |
+| Trends | More → Reports | `trend_charts` | `/trend-charts` | `menuAccess['/trend-charts']` |
+| Campaigns | More → Reports | `campaign_breakdown` | `/campaign-breakdown` | `menuAccess['/campaign-breakdown']` |
+| Team | More → Reports | `team_progress` | `/team` | `menuAccess['/team']` |
+| Lead Upload | Administration | `lead_upload` | `/leads/upload` | `menuAccess['/leads/upload']` |
+| Lead Pool | Administration | `all_leads` | `/leads/all` | `menuAccess['/leads/all']` |
+| User Management | Administration | `user_management` | `/users` | `menuAccess['/users']` |
+| Profile & settings | More | `settings_control` | `/settings` | `menuAccess['/settings']` |
+| Notifications | More | `notifications` | `/notifications` | `menuAccess['/notifications']` |
+| Help & Support | More | `help_support` | `/help` | `menuAccess['/help']` |
+| About LeadFlow | More | `about_leadflow` | `/about` | `menuAccess['/about']` |
+
+`/reports` is an aggregate directory rather than a separate feature toggle:
+it opens when any report/workspace entry enabled for the role is available.
+The Administration directory, System settings, and Performance Diagnostics
+remain guarded by the admin route boundary and are not grants for custom
+non-admin roles.
 
 ---
 
@@ -100,11 +115,10 @@ full access via the explicit bypass.
 | Team Progress | Team |
 | User Management | Users |
 | Lead Pool Tab | Lead Pool |
-| Sync Settings | System Connection |
 
-`view_sync` was relabeled to **System Connection** because it only gates the
-cloud database connection-status check; it does not perform data
-synchronization.
+Personal Settings is now self-service profile and password management only.
+System configuration remains in the admin-only Administration → System
+directory and is not exposed as a grant for custom non-admin roles.
 
 ### 4. Preserved leads.edit for Workbench mutations
 
@@ -210,7 +224,7 @@ Exact DB fields:
 ### Admin behavior
 
 - `ADMIN` / `SUPERADMIN` bypass every `hasPermissionCode` check and see every
-  sidebar item regardless of stored grants.
+  primary navigation and More directory item regardless of stored grants.
 - Role permission **writes** are `requireAdmin`-gated.
 - `GET /roles/:roleId/permissions` is read for any authenticated admin editing
   a role.

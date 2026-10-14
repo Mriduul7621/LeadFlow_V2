@@ -5,10 +5,10 @@
 
 Daily Workbench is an execution workspace, not another dashboard, calendar, or full lead list. It surfaces only today's actionable work and allows quick completion from one place.
 
-## Route & Sidebar
+## Route & Navigation
 - Route: `/workbench`
 - Protected: wrapped in `ProtectedRoute` (same auth/session/JWT as all other routes)
-- Sidebar location: MY WORK (first item)
+- Primary navigation: My Work
   - Order: Daily Workbench, Activities, Task Calendar, Follow-up Queue
 - Menu visibility: reuses existing `menuAccess` override + static `roles.includes` fallback + ADMIN bypass via `resolveMenuVisibility`. No Admin-only hardcode; ALL_ROLES static fallback.
 - Permission: reuses existing `dashboard.view` / `leads.view` semantics via `usePermissions`. Workbench maps to `dashboard.view` for server permission sheet, and `lead_tracking.edit` for scheduled actions. Server remains security boundary.
@@ -25,8 +25,11 @@ Daily Workbench is an execution workspace, not another dashboard, calendar, or f
 - `GET /api/scheduled-activities?status=completed&limit=100` for Completed Today (optional)
   - Filtered client-side by `completedAt` Dhaka date = today. Bounded (100) to avoid full scan.
   - This is authoritative completed scheduled data; lead_activities bulk endpoint does not exist, so we avoid N+1.
+- `GET /api/roadshows?from=<today>&to=<tomorrow>&mine=true` when the user has `roadshows.view`
+  - Shows only assigned, pending/rescheduled roadshows scheduled today or tomorrow (Asia/Dhaka).
+  - Today alerts appear above the execution queue; tomorrow alerts appear in Tomorrow Preview.
 
-No `leadService.getLeads()` full list fetch. No per-row lead detail fetch. Only 2–3 bounded requests per load, manual Refresh.
+No `leadService.getLeads()` full list fetch. No per-row lead detail fetch. At most four bounded requests per load, manual Refresh.
 
 ## Queue Composition
 Unified work queue for:
@@ -37,7 +40,7 @@ Unified work queue for:
 - today scheduled tasks (`task`)
 - today scheduled follow_up activities (`follow_up`)
 
-Tomorrow items do NOT enter today's execution queue. Tomorrow Preview shows only counts.
+Tomorrow follow-ups and scheduled activities do NOT enter today's execution queue. Tomorrow Preview shows counts and assigned Roadshow alerts.
 
 ## Sort Order
 1. overdue first (follow-up overdue)
@@ -122,6 +125,7 @@ No large duplicate list. Today remains core workbench. Task Calendar remains det
 - No `leadService.getLeads()` or `getAllLeads()` in DailyWorkbench (guarded by tests)
 - No N+1 lead detail fetches (`getLead` per row) — lead name/status already in API responses
 - Bounded requests: follow-ups all 200, scheduled range 200, completed 100
+- Assigned Roadshows are limited to today/tomorrow and are fetched only for users with Roadshow view access
 - No aggressive polling, no background intervals
 - Manual Refresh button
 - Local state patch after mutation
@@ -151,7 +155,7 @@ Uses PR #22 English-only design system:
 - Compact enterprise layout, accessible focus states, responsive grid, single-column mobile touch-friendly
 
 ## Permission Behavior
-- Sidebar: ALL_ROLES static fallback, dynamic `menuAccess['/workbench']` override if configured, ADMIN bypass preserved.
+- Primary navigation: ALL_ROLES static fallback, dynamic `menuAccess['/workbench']` override if configured, ADMIN bypass preserved.
 - Page actions: `canAccess('lead_tracking','edit')` ONLY gates Complete/Cancel/Edit/Reschedule. Server final boundary is `leads.edit` (checked in `production.routes.ts` for POST `/scheduled-activities/:id/complete`, `/cancel`, PUT `/:id`, DELETE `/:id`). `dashboard.view` alone MUST NOT expose mutation buttons; `lead_generate.edit` is not sufficient. UI hides mutation buttons when lacking edit permission, but server remains security boundary.
 - Follow-up Open Lead uses existing Lead360 which already enforces visibility. Open Lead remains allowed when visibility permits even without edit permission.
 

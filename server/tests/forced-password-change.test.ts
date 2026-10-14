@@ -237,6 +237,66 @@ describe('Forced first-login password change', () => {
 
   const token = (u: any) => signToken({ id: u.id, employeeId: u.employeeId, role: u.role, email: u.email, name: u.employeeId });
 
+  it('self-service profile updates persist contact fields without granting user-management access', async () => {
+    const original: any = await pool.query(
+      `SELECT full_name, email, phone FROM users WHERE id = $1`,
+      [normal.id]
+    );
+    try {
+      const res = await request(app)
+        .put('/api/auth/profile')
+        .set('Authorization', `Bearer ${token(normal)}`)
+        .send({ name: 'Updated Normal', email: 'normal.updated@test.com', phone: '+8801712345678' });
+
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.data.id, normal.id);
+      assert.equal(res.body.data.name, 'Updated Normal');
+      assert.equal(res.body.data.email, 'normal.updated@test.com');
+      assert.equal(res.body.data.phone, '+8801712345678');
+      assert.equal(res.body.data.password, undefined);
+
+      const saved: any = await pool.query(
+        `SELECT full_name, email, phone FROM users WHERE id = $1`,
+        [normal.id]
+      );
+      assert.deepEqual(saved.rows[0], {
+        full_name: 'Updated Normal',
+        email: 'normal.updated@test.com',
+        phone: '+8801712345678',
+      });
+    } finally {
+      await pool.query(
+        `UPDATE users SET full_name = $1, email = $2, phone = $3 WHERE id = $4`,
+        [original.rows[0].full_name, original.rows[0].email, original.rows[0].phone, normal.id]
+      );
+    }
+  });
+
+  it('self-service profile rejects role changes and duplicate email addresses', async () => {
+    const original: any = await pool.query(`SELECT full_name, email FROM users WHERE id = $1`, [normal.id]);
+    const forbidden = await request(app)
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token(normal)}`)
+      .send({ name: 'Escalated User', email: 'normal@test.com', phone: '', role: 'ADMIN' });
+    assert.equal(forbidden.status, 400);
+
+    const duplicate = await request(app)
+      .put('/api/auth/profile')
+      .set('Authorization', `Bearer ${token(normal)}`)
+      .send({ name: 'Normal User', email: 'admin@test.com', phone: '' });
+    assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+
+    const saved: any = await pool.query(`SELECT full_name, email FROM users WHERE id = $1`, [normal.id]);
+    assert.deepEqual(saved.rows[0], original.rows[0], 'rejected profile updates must not mutate the account');
+  });
+
+  it('self-service profile requires an authenticated session', async () => {
+    const res = await request(app)
+      .put('/api/auth/profile')
+      .send({ name: 'Updated', email: 'updated@test.com', phone: '' });
+    assert.equal(res.status, 401);
+  });
+
   /* ------------------------------------------------------------------ */
   /* Server-authoritative flag: login + session reflect the real DB      */
   /* ------------------------------------------------------------------ */

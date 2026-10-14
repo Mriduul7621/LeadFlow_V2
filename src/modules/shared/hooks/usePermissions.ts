@@ -148,6 +148,8 @@ export function usePermissions() {
                 ? 'settings'
                 : featureId === 'execution_intelligence' || featureId === 'ncp_progress' || featureId === 'trend_charts' || featureId === 'campaign_breakdown'
                   ? 'reports'
+                  : featureId === 'roadshow_follow_up'
+                    ? 'roadshows'
                   : featureId;
 
       // Legacy compound action keys must resolve to their canonical server
@@ -173,7 +175,7 @@ export function usePermissions() {
 
       const action = actionKey.startsWith('view') || actionKey.startsWith('explore') || actionKey.startsWith('monitor') || actionKey.startsWith('visualize') || actionKey.startsWith('evaluate')
         ? 'view'
-        : ['create', 'edit', 'delete', 'approve', 'reject', 'assign', 'transfer', 'import', 'export', 'download', 'print'].includes(actionKey)
+        : ['create', 'edit', 'delete', 'cancel', 'report', 'approve', 'reject', 'assign', 'transfer', 'import', 'export', 'download', 'print'].includes(actionKey)
           ? actionKey
           : COMPOUND_ACTION_TO_CODE[actionKey]
             ? COMPOUND_ACTION_TO_CODE[actionKey]
@@ -225,7 +227,7 @@ export function usePermissions() {
     }
 
     // Map Action Key to the 5 keys: view | create | edit | delete | upload
-    let actionType: 'view' | 'create' | 'edit' | 'delete' | 'upload' = 'view';
+    let actionType: 'view' | 'create' | 'edit' | 'delete' | 'upload' | 'cancel' | 'report' = 'view';
     const createKeys = ['capture_new_leads', 'save_draft_leads', 'assign_lead_to_anyone', 'deploy_new_teams', 'onboard_new_employees', 'bulk_generate_crm_leads', 'create'];
     const editKeys = ['perform_status_transitions', 'record_followup_logs', 'allocate_projected_ncp', 'reassign_own_leads', 'reassign_global_leads', 'manage_team_memberships', 'modify_credentials_clearance', 'toggle_activation_status', 'configure_global_metadata', 'edit'];
     const deleteKeys = ['delete_destroy_leads', 'delete'];
@@ -243,8 +245,8 @@ export function usePermissions() {
       actionType = 'view';
     } else {
       const keyNormalized = finalActionKey.toLowerCase();
-      if (['view', 'create', 'edit', 'delete', 'upload'].includes(keyNormalized)) {
-        actionType = keyNormalized as any;
+      if (['view', 'create', 'edit', 'delete', 'upload', 'cancel', 'report'].includes(keyNormalized)) {
+        actionType = keyNormalized as typeof actionType;
       }
     }
 
@@ -265,6 +267,7 @@ export function usePermissions() {
       team_management: ['/team'],
       user_management: ['/users'],
       settings_control: ['/settings'],
+      roadshow_follow_up: ['/roadshows'],
     };
 
     const targetPaths = featurePathMapping[featureId] || featurePathMapping[mappedFeatureId];
@@ -279,6 +282,9 @@ export function usePermissions() {
     const actionsMap = matchedRole.featurePermissions?.[mappedFeatureId];
     if (actionsMap) {
       if (!actionsMap.view) {
+        return false;
+      }
+      if (featureId === 'roadshow_follow_up' && finalActionKey !== 'view' && actionsMap[finalActionKey] === undefined && actionsMap[actionType] === undefined) {
         return false;
       }
       if (actionsMap[finalActionKey] !== undefined) {

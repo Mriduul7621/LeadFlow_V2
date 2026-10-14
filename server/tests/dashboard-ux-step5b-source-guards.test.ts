@@ -10,10 +10,10 @@
  *   - No fabricated avgResponseTAT / area-team list / trend series
  *   - No client getLeads()/localStorage/localDb KPI authority
  *   - Calendar + follow-up queue stay reachable from dashboard/nav
- *   - Grouped sidebar contains only real routes (no dead links)
+ *   - Five primary tabs and More directories contain only real routes
  *   - Role menuAccess still drives show/hide; admin bypass intact
  *   - No new route bypasses ProtectedRoute
- *   - Mobile sidebar still works
+ *   - Responsive primary navigation remains available
  *
  * Step 5C supersedes guards E and O: Daily Execution/Calendar now use
  * server-authoritative scheduled_activities (Asia/Dhaka, visibility-
@@ -41,26 +41,31 @@ const LAYOUT = () => read('src/layouts/AppLayout.tsx');
 const APP = () => read('src/App.tsx');
 const FOLLOWUP = () => read('src/modules/leads/pages/FollowUpStrategy.tsx');
 
-/** Every route the sidebar is allowed to reference (must exist in App.tsx). */
-const REAL_ROUTES = [
+/** Routes retained in primary navigation (must exist in App.tsx). */
+const PRIMARY_ROUTES = [
   '/',
   '/workbench',
+  '/leads/new',
+  '/leads',
+  '/more',
+];
+
+/** Legacy secondary routes retained in More → Reports / Administration. */
+const MORE_ROUTES = [
   '/activities',
   '/task-calendar',
   '/follow-up',
-  '/leads',
-  '/leads/new',
-  '/leads/upload',
-  '/leads/all',
   '/execution-intelligence',
   '/ncp-progress',
   '/trend-charts',
   '/campaign-breakdown',
   '/team',
+];
+const ADMIN_ROUTES = [
+  '/leads/upload',
+  '/leads/all',
   '/users',
-  '/settings',
-  // TEMPORARY admin-only diagnostics route (gated by AdminRoute in App.tsx).
-  '/settings/performance-diagnostics',
+  '/settings/system',
 ];
 
 /** Slice of Dashboard.tsx spanning the KPI data loader (like the Step 5 test). */
@@ -73,13 +78,12 @@ function dashboardLoadBody(): string {
   return page.slice(start, end);
 }
 
-function sidebarPaths(): string[] {
+function primaryNavigationPaths(): string[] {
   const layout = LAYOUT();
-  const paths: string[] = [];
-  const re = /path:\s*'([^']+)'/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(layout)) !== null) paths.push(m[1]);
-  return paths;
+  const start = layout.indexOf('const PRIMARY_NAV_ITEMS');
+  const end = layout.indexOf('const MORE_NAV_PATHS');
+  assert.ok(start >= 0 && end > start, 'primary navigation definition must exist');
+  return Array.from(layout.slice(start, end).matchAll(/path:\s*'([^']+)'/g), match => match[1]);
 }
 
 describe('Dashboard UX Step 5B — source guards', () => {
@@ -140,48 +144,47 @@ describe('Dashboard UX Step 5B — source guards', () => {
     const dashboard = DASHBOARD();
     assert.ok(dashboard.includes('TaskCalendar'), 'Dashboard must import TaskCalendar');
     assert.ok(dashboard.includes('<TaskCalendar'), 'Dashboard must render TaskCalendar');
-    assert.ok(LAYOUT().includes("'/task-calendar'"), 'sidebar must keep /task-calendar');
+    assert.ok(read('src/modules/navigation/pages/MorePages.tsx').includes("path: '/task-calendar'"), 'More → Reports must keep Task Calendar');
   });
 
   it('G. follow-up queue navigation remains available', () => {
-    assert.ok(LAYOUT().includes("'/follow-up'"), 'sidebar must keep /follow-up');
+    assert.ok(read('src/modules/navigation/pages/MorePages.tsx').includes("path: '/follow-up'"), 'More → Reports must keep Follow-up Queue');
     assert.ok(DASHBOARD().includes('/follow-up?bucket='), 'dashboard must deep-link follow-up buckets');
     assert.ok(FOLLOWUP().includes('useSearchParams'), 'FollowUpStrategy must read ?bucket=');
   });
 
-  it('H. grouped sidebar contains only real routes', () => {
-    const paths = sidebarPaths();
-    assert.ok(paths.length >= REAL_ROUTES.length, 'sidebar should declare all real routes');
-    const real = new Set(REAL_ROUTES);
-    for (const p of paths) {
-      assert.ok(real.has(p), `sidebar path ${p} has no matching route (dead link)`);
+  it('H. primary tabs and secondary directories match the new navigation structure', () => {
+    assert.deepEqual(primaryNavigationPaths(), PRIMARY_ROUTES);
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    for (const route of MORE_ROUTES) {
+      assert.ok(more.includes(`path: '${route}'`), `More → Reports must retain ${route}`);
     }
-    for (const p of REAL_ROUTES) {
-      assert.ok(paths.includes(p), `real route ${p} is missing from the sidebar mapping`);
+    for (const route of ADMIN_ROUTES) {
+      assert.ok(more.includes(`path: '${route}'`), `Administration must retain ${route}`);
     }
-    // No invented routes.
-    assert.ok(!paths.includes('/pipeline'), 'no Pipeline route may be invented');
+    assert.doesNotMatch(LAYOUT(), /<motion\.aside|isMobileMenuOpen|isSidebarOpen/, 'desktop sidebar and mobile drawer must be removed');
   });
 
-  it('I. role menuAccess still hides/shows grouped items correctly', () => {
+  it('I. role menuAccess still controls primary navigation visibility', () => {
     const layout = LAYOUT();
-    assert.ok(layout.includes('menuAccess'), 'dynamic menuAccess override must still drive visibility');
-    assert.ok(layout.includes('roles.includes'), 'static role fallback must still apply');
-    assert.ok(layout.includes('isItemVisible'), 'grouping must reuse a single visibility check');
-    assert.ok(layout.includes('visibleSections'), 'sections must be filtered by visible items');
+    assert.ok(layout.includes('resolveMenuVisibility'), 'role fallback must use the shared visibility resolver');
+    assert.ok(layout.includes('visiblePrimaryItems'), 'primary tabs must be filtered by visibility');
+    assert.ok(read('src/layouts/menuVisibility.ts').includes('matchedPermission.menuAccess'), 'dynamic menuAccess overrides must still drive visibility');
   });
 
   it('J. admin behavior remains intact', () => {
-    assert.ok(LAYOUT().includes("userRoleNormalized === 'ADMIN'"), 'admin bypass must remain');
+    assert.ok(read('src/layouts/menuVisibility.ts').includes("userRoleNormalized === 'ADMIN'"), 'admin bypass must remain');
   });
 
   it('K. no new route bypasses ProtectedRoute', () => {
     const app = APP();
     const protectedPaths = [
-      '/', '/workbench', '/leads/new', '/leads', '/leads/upload', '/leads/all',
+      '/', '/more', '/reports', '/administration', '/notifications', '/help', '/about',
+      '/workbench', '/leads/new', '/leads', '/leads/upload', '/leads/all',
       '/follow-up', '/task-calendar', '/activities', '/leads/:id',
       '/users', '/team', '/execution-intelligence', '/ncp-progress',
-      '/trend-charts', '/campaign-breakdown', '/settings',
+      '/trend-charts', '/campaign-breakdown', '/settings', '/settings/system',
+      '/settings/performance-diagnostics',
     ];
     for (const p of protectedPaths) {
       const idx = app.indexOf(`path: '${p}'`);
@@ -190,11 +193,12 @@ describe('Dashboard UX Step 5B — source guards', () => {
     }
   });
 
-  it('L. mobile sidebar still works', () => {
+  it('L. mobile primary navigation replaces the drawer', () => {
     const layout = LAYOUT();
-    assert.ok(layout.includes('isMobileMenuOpen'), 'mobile menu state must exist');
-    assert.ok(layout.includes('setIsMobileMenuOpen(false)'), 'mobile links must close the drawer');
-    assert.ok(layout.includes('lg:hidden'), 'mobile drawer must remain responsive');
+    assert.ok(layout.includes('aria-label="Primary mobile navigation"'), 'mobile tab bar must remain accessible');
+    assert.ok(layout.includes('leadflow-mobile-nav'), 'mobile tab bar must remain in the shell');
+    assert.ok(read('src/index.css').includes('.leadflow-mobile-nav'), 'mobile tab bar styles must remain');
+    assert.doesNotMatch(layout, /isMobileMenuOpen|isSidebarOpen/, 'no mobile drawer state remains');
   });
 
   it('M. dashboard service remains the single KPI authority', () => {

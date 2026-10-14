@@ -3,7 +3,7 @@
  * ------------------------------------------------------------------
  * Verifies:
  * - /workbench route exists and is protected
- * - sidebar MY WORK contains Daily Workbench first
+ * - primary navigation includes My Work / Daily Workbench
  * - permission/menu visibility preserved
  * - no full lead list fetch, no N+1
  * - queue composition, ordering, filters, empty/error, Dhaka, dedup
@@ -42,30 +42,22 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(src.includes('DailyWorkbench'), 'App must import DailyWorkbench');
   });
 
-  it('sidebar MY WORK contains Daily Workbench first', () => {
+  it('primary navigation includes My Work / Daily Workbench', () => {
     const src = layout();
-    assert.ok(src.includes('Daily Workbench'), 'sidebar must contain Daily Workbench label');
-    assert.ok(src.includes("path: '/workbench'"), 'sidebar must have /workbench path');
-    // Check order: Daily Workbench before Activities, Task Calendar, Follow-up Queue in mywork section
-    const myworkIdx = src.indexOf("key: 'mywork'");
-    assert.ok(myworkIdx >= 0, 'mywork section must exist');
-    const myworkSlice = src.slice(myworkIdx, myworkIdx + 800);
-    const wbIdx = myworkSlice.indexOf('Daily Workbench');
-    const actIdx = myworkSlice.indexOf('Activities');
-    const calIdx = myworkSlice.indexOf('Task Calendar');
-    const fuIdx = myworkSlice.indexOf('Follow-up Queue');
-    assert.ok(wbIdx >= 0 && actIdx >= 0 && calIdx >= 0 && fuIdx >= 0, 'all MY WORK items must exist');
-    assert.ok(wbIdx < actIdx && actIdx < calIdx && calIdx < fuIdx, 'Daily Workbench must appear first under MY WORK: Daily Workbench, Activities, Task Calendar, Follow-up Queue');
+    assert.ok(src.includes("label: 'My Work'"), 'primary tabs must contain My Work');
+    assert.ok(src.includes("path: '/workbench'"), 'My Work must route to /workbench');
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    for (const route of ['/activities', '/task-calendar', '/follow-up']) {
+      assert.ok(more.includes(`path: '${route}'`), `More → Reports must retain ${route}`);
+    }
   });
 
   it('permission/menu visibility remains correct', () => {
     const l = layout();
-    assert.ok(l.includes('menuAccess'), 'must keep menuAccess override');
-    assert.ok(l.includes('roles.includes'), 'must keep static fallback');
-    assert.ok(l.includes('isItemVisible'), 'must have single visibility check');
-    assert.ok(l.includes('visibleSections'), 'must filter sections');
-    assert.ok(l.includes("userRoleNormalized === 'ADMIN'"), 'admin bypass must remain');
-    assert.ok(menuVis().includes('ADMIN'), 'menuVisibility must preserve ADMIN bypass');
+    assert.ok(l.includes('resolveMenuVisibility'), 'primary tabs must use the shared visibility resolver');
+    assert.ok(l.includes('visiblePrimaryItems'), 'primary tabs must be filtered by visibility');
+    assert.ok(menuVis().includes('matchedPermission.menuAccess'), 'menuAccess override must remain');
+    assert.ok(menuVis().includes("userRoleNormalized === 'ADMIN'"), 'menuVisibility must preserve ADMIN bypass');
 
     const perms = permsHook();
     assert.ok(perms.includes('workbench'), 'usePermissions must include workbench mapping');
@@ -358,14 +350,14 @@ describe('Daily Workbench — source guards', () => {
   it('RBAC/menuAccess tests stay green (source guard)', () => {
     const l = read('src/layouts/AppLayout.tsx');
     assert.ok(l.includes('resolveMenuVisibility'), 'must use resolveMenuVisibility');
-    assert.ok(l.includes('menuAccess'), 'must keep menuAccess');
+    assert.ok(read('src/layouts/menuVisibility.ts').includes('matchedPermission.menuAccess'), 'must keep menuAccess');
   });
 
   it('docs/DAILY_WORKBENCH.md exists and documents required sections', () => {
     const doc = read('docs/DAILY_WORKBENCH.md');
     assert.ok(doc.includes('Daily Workbench'), 'doc must have title');
     assert.ok(doc.includes('/workbench'), 'doc must have route');
-    assert.ok(doc.includes('MY WORK'), 'doc must have sidebar location');
+    assert.ok(doc.includes('My Work'), 'doc must have primary navigation location');
     assert.ok(doc.includes('GET /api/leads/follow-ups'), 'doc must have data sources');
     assert.ok(doc.includes('GET /api/scheduled-activities'), 'doc must have scheduled activities');
     assert.ok(doc.includes('queue composition') || doc.includes('Queue Composition'), 'doc must have queue composition');

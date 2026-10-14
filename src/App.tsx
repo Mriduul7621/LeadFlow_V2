@@ -41,6 +41,7 @@ const TaskCalendar = lazy(() => import('./modules/auth/pages/TaskCalendar'));
 const Activities = lazy(() => import('./modules/leads/pages/Activities'));
 const DailyWorkbench = lazy(() => import('./modules/workbench/pages/DailyWorkbench'));
 const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
+const LeadEdit = lazy(() => import('./modules/leads/pages/LeadEdit'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
 const ExecutionIntelligence = lazy(() => import('./modules/dashboard/pages/ExecutionIntelligence'));
@@ -48,6 +49,14 @@ const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
 const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
 const CampaignBreakdown = lazy(() => import('./modules/dashboard/pages/CampaignBreakdown'));
 const Settings = lazy(() => import('./modules/settings/pages/Settings'));
+const ProfileSettings = lazy(() => import('./modules/settings/pages/ProfileSettings'));
+const MorePage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.MorePage })));
+const AdministrationPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AdministrationPage })));
+const ReportsPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.ReportsPage })));
+const NotificationsPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.NotificationsPage })));
+const HelpPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.HelpPage })));
+const AboutPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AboutPage })));
+const RoadshowPage = lazy(() => import('./modules/roadshows/pages/RoadshowPage'));
 // TEMPORARY admin-only diagnostics page (its own lazy chunk, like every
 // other feature page — see the route map below).
 const PerformanceDiagnostics = lazy(() => import('./modules/settings/pages/PerformanceDiagnostics'));
@@ -93,6 +102,34 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/"><LazyPage page={<Dashboard />} /></FeatureGate></ProtectedRoute>,
   },
   {
+    path: '/more',
+    element: <ProtectedRoute><FeatureGate route="/more"><LazyPage page={<MorePage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/reports',
+    element: <ProtectedRoute><FeatureGate route="/reports"><LazyPage page={<ReportsPage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/administration',
+    element: <ProtectedRoute><FeatureGate route="/administration"><LazyPage page={<AdminRoute><AdministrationPage /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/notifications',
+    element: <ProtectedRoute><FeatureGate route="/notifications"><LazyPage page={<NotificationsPage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/help',
+    element: <ProtectedRoute><FeatureGate route="/help"><LazyPage page={<HelpPage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/about',
+    element: <ProtectedRoute><FeatureGate route="/about"><LazyPage page={<AboutPage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/roadshows',
+    element: <ProtectedRoute><FeatureGate route="/roadshows"><LazyPage page={<RoadshowPage />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
     path: '/leads/new',
     element: <ProtectedRoute><FeatureGate route="/leads/new"><LazyPage page={<LeadGenerate />} /></FeatureGate></ProtectedRoute>,  },
   {
@@ -117,6 +154,10 @@ const router = createBrowserRouter([
     path: '/workbench',
     element: <ProtectedRoute><FeatureGate route="/workbench"><LazyPage page={<DailyWorkbench />} /></FeatureGate></ProtectedRoute>,  },
   {
+    path: '/leads/:id/edit',
+    element: <ProtectedRoute><FeatureGate route="/leads/:id/edit"><LazyPage page={<LeadEdit />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
     path: '/leads/:id',
     element: <ProtectedRoute><FeatureGate route="/leads/:id"><LazyPage page={<Lead360 />} /></FeatureGate></ProtectedRoute>,  },
   {
@@ -139,7 +180,12 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/campaign-breakdown"><LazyPage page={<CampaignBreakdown />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/settings',
-    element: <ProtectedRoute><FeatureGate route="/settings"><LazyPage page={<Settings />} /></FeatureGate></ProtectedRoute>,  },
+    element: <ProtectedRoute><FeatureGate route="/settings"><LazyPage page={<ProfileSettings />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/settings/system',
+    element: <ProtectedRoute><FeatureGate route="/settings/system"><LazyPage page={<AdminRoute><Settings /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
   {
     // TEMPORARY admin-only mobile diagnostics. Still behind the standard
     // ProtectedRoute gate, plus the ADMIN/SUPERADMIN-only AdminRoute gate

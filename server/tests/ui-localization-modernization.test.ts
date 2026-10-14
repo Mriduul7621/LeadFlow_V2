@@ -13,8 +13,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 function read(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 }
@@ -71,8 +72,9 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(visible.includes('Re-enter new password'), 'forced reset must show Re-enter new password');
     assert.ok(visible.includes('Updating password...'), 'forced reset must show Updating password...');
     assert.ok(visible.includes('Update Password & Continue'), 'forced reset must show Update Password & Continue');
-    // Sidebar uses English sectionLabelMap not t()
-    assert.ok(visible.includes('sectionLabelMap'), 'sidebar must use sectionLabelMap English');
+    // Primary navigation uses fixed English labels, not runtime translation.
+    assert.ok(visible.includes("label: 'My Work'"), 'primary navigation must use the English My Work label');
+    assert.ok(visible.includes("label: 'More'"), 'primary navigation must use the English More label');
   });
 
   it('Dashboard is English-only: no useTranslation/t(), polished literals, no leadflow-language', () => {
@@ -178,8 +180,8 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(d.includes('embedded'), 'Dashboard must pass embedded to TaskCalendar');
     const app = read('src/App.tsx');
     assert.ok(app.includes('/task-calendar'), 'App must keep /task-calendar route');
-    const la = read('src/layouts/AppLayout.tsx');
-    assert.ok(la.includes('/task-calendar'), 'sidebar must keep /task-calendar');
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    assert.ok(more.includes("path: '/task-calendar'"), 'More → Reports must keep Task Calendar');
   });
 
   it('Header: removes Dhaka Standard Time and global Sync affordance, keeps degraded indicator', () => {
@@ -271,10 +273,9 @@ describe('UI English-only & Design Modernization — source guards', () => {
 
   it('RBAC/menuAccess regression remains', () => {
     const la = layout();
-    assert.ok(la.includes('menuAccess'), 'must keep menuAccess override');
-    assert.ok(la.includes('roles.includes'), 'must keep static fallback');
-    assert.ok(la.includes('isItemVisible'), 'must have single visibility check');
-    assert.ok(la.includes('visibleSections'), 'must filter sections');
+    assert.ok(la.includes('resolveMenuVisibility'), 'must use the shared visibility resolver');
+    assert.ok(la.includes('visiblePrimaryItems'), 'must filter primary navigation items');
+    assert.ok(read('src/layouts/menuVisibility.ts').includes('matchedPermission.menuAccess'), 'must keep dynamic menuAccess override');
   });
 
   it('No full-lead fetch regression in Dashboard or leadService mutation paths', () => {

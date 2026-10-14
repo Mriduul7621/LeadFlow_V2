@@ -47,6 +47,8 @@ export default function Settings() {
   const { user, logout, login, isOfflineMode } = useAuthStore();
   const { canAccess } = usePermissions();
   const navigate = useNavigate();
+  const userRoleNormalized = (user?.role || '').toUpperCase();
+  const isSystemAdmin = ['ADMIN', 'SUPERADMIN'].includes(userRoleNormalized);
   const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>('overview');
   const [options, setOptions] = useState<DropdownOption[]>([]);
   const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
@@ -437,14 +439,10 @@ export default function Settings() {
     }
   };
 
-  const userRoleNormalized = (user?.role || '').toUpperCase();
-
   const sections = [
-    { id: 'profile', label: 'Identity Settings', icon: Users, desc: 'Manage your profile and display name', allowed: canAccess('settings_control', 'view_profile') },
-    { id: 'security', label: 'Security & Access', icon: Key, desc: 'Update passwords and verification', allowed: canAccess('settings_control', 'view_security') },
-    { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Configure real-time lead alerts', allowed: canAccess('settings_control', 'view_notifications') },
-    { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Customize dashboard layout and theme', allowed: canAccess('settings_control', 'view_system') },
-    { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Integration endpoints and health', allowed: canAccess('settings_control', 'view_sync') },
+    { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
+    { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Configure dashboard and system behavior', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
+    { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
   ].filter(section => section.allowed);
 
   return (
@@ -455,8 +453,8 @@ export default function Settings() {
             <SettingsIcon className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800">Settings</h1>
-            <p className="text-sm text-slate-500 mt-1">Manage your profile, data and system preferences</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800">System</h1>
+            <p className="text-sm text-slate-500 mt-1">Administration and workspace configuration</p>
           </div>
         </div>
 
@@ -470,7 +468,7 @@ export default function Settings() {
           >
             Overview
           </button>
-          {canAccess('admin_settings', 'configure_global_metadata') && (
+          {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('dropdowns')}
               className={cn(
@@ -481,7 +479,7 @@ export default function Settings() {
               Strategy Parameters
             </button>
           )}
-          {canAccess('admin_settings', 'configure_global_metadata') && (
+          {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('formbuilder')}
               className={cn(
@@ -492,7 +490,7 @@ export default function Settings() {
               Form Builder
             </button>
           )}
-          {canAccess('admin_settings', 'configure_global_metadata') && (
+          {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('workflow')}
               className={cn(
@@ -516,38 +514,21 @@ export default function Settings() {
             className="grid grid-cols-1 lg:grid-cols-3 gap-8"
           >
             <div className="lg:col-span-1 space-y-6">
-              <div className="bg-white p-10 rounded-sm border border-slate-100 text-center shadow-sm italic">
-                <div className="w-24 h-24 rounded-sm bg-[#978C21]/5 flex items-center justify-center text-[#978C21] text-3xl font-black mx-auto mb-6 border border-[#978C21]/10 shadow-lg overflow-hidden">
-                  {user?.avatarUrl ? (
-                    <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  ) : (
-                    user?.name.charAt(0)
-                  )}
+              <div className="bg-white p-6 rounded-sm border border-slate-100 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-[#756c1b]" />
+                  <h3 className="font-semibold text-base text-slate-800">System access</h3>
                 </div>
-                <h3 className="font-bold text-xl text-slate-800">{user?.name}</h3>
-                <p className="text-sm font-medium text-[#978C21] mt-2">{user?.role}</p>
-                
-                <div className="mt-8 pt-8 border-t border-slate-50 space-y-4">
-                  <div className="flex items-center justify-center gap-3">
-                    <div className="px-4 py-1.5 bg-emerald-50 text-emerald-600 rounded-sm text-xs font-medium border border-emerald-200 rounded-full">Active</div>
-                    <span className="text-sm text-slate-500">ID: {user?.employeeId}</span>
-                  </div>
-                  
-                  <button 
-                    onClick={handleLogout}
-                    className="w-full py-4 text-red-500 border border-red-100 hover:bg-red-50 rounded-sm font-black text-[10px] uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-2"
-                  >
-                    Terminate Session
-                  </button>
-                </div>
+                <p className="text-sm text-slate-500 mt-3">Workspace configuration for {user?.role || 'administrator'}.</p>
+                <p className="text-xs text-slate-500 mt-4 pt-4 border-t border-slate-100">Employee ID · {user?.employeeId || '—'}</p>
               </div>
 
-              <div className="bg-[#3C3C3C] p-8 rounded-sm shadow-xl italic">
+              <div className="bg-[#3C3C3C] p-6 rounded-sm">
                 <div className="flex items-center gap-3 mb-4">
                   <ShieldCheck className="w-5 h-5 text-[#978C21]" />
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">System Info</h4>
+                  <h4 className="text-sm font-semibold text-white">Access control</h4>
                 </div>
-                <p className="text-[11px] font-bold leading-relaxed text-slate-400 uppercase tracking-tight">Terminal verified as Shanta Lead Console v2.0 compliant. Secure authentication active.</p>
+                <p className="text-sm leading-6 text-stone-200">System actions remain limited to administrator roles and their existing permissions.</p>
               </div>
             </div>
 
@@ -573,7 +554,7 @@ export default function Settings() {
                     </div>
                   ))}
                   
-                  {userRoleNormalized === 'ADMIN' && (
+                  {isSystemAdmin && (
                     <div className="pt-6 space-y-4">
                       <div className="bg-white rounded-[12px] border border-stone-100 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                         <div className="flex items-center gap-4">

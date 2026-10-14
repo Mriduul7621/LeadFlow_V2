@@ -3,15 +3,15 @@ import { RolePermission } from '../modules/shared/types';
 /**
  * menuVisibility.ts
  * ------------------------------------------------------------------
- * The single, authoritative sidebar visibility check, extracted verbatim
- * from AppLayout so the exact menuAccess semantics are unit-testable:
+ * The single, authoritative navigation visibility check, extracted for
+ * the primary navigation and More directories:
  *
  *   1. ADMIN always sees everything (bypass).
  *   2. A configured dynamic role `menuAccess` entry for the path wins
  *      (explicit true OR false — a false entry hides the item).
  *   3. Otherwise the static role fallback (item.roles) applies.
  *
- * Grouping in the sidebar is purely visual and must never change this.
+ * Grouping is purely visual and must never change this.
  */
 
 export interface MenuVisibilityItem {
