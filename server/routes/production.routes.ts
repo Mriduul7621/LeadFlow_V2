@@ -1569,10 +1569,10 @@ router.post('/auth/login', async (req, res) => {
  */
 router.get('/auth/session', requireAuth, async (req: any, res) => {
   const perf = createPerf('auth.session');
-  const claim = req.currentUser || {};
-  const claimId = String(claim.id || '').trim();
-  const claimEmployeeId = String(claim.employeeId || '').trim();
-  const claimEmail = String(claim.email || '').trim();
+  const claim = req.currentUser as { id?: string; employeeId?: string; email?: string } | undefined;
+  const claimId = String(claim?.id || '').trim();
+  const claimEmployeeId = String(claim?.employeeId || '').trim();
+  const claimEmail = String(claim?.email || '').trim();
 
   if (!claimId && !claimEmployeeId && !claimEmail) {
     perf.finish(res);
@@ -1636,6 +1636,84 @@ router.get('/auth/session', requireAuth, async (req: any, res) => {
   }
   const { password: _pw, ...safeSessionUser } = demoUser;
   return sendJson(res, 200, { success: true, data: safeSessionUser });
+});
+
+router.put('/auth/profile', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const allowedFields = new Set(['name', 'email', 'phone']);
+  if (Object.keys(body).some(key => !allowedFields.has(key))) {
+    return sendJson(res, 400, { success: false, message: 'Only name, email, and phone can be changed here.' });
+  }
+
+  const name = String(body.name ?? '').trim();
+  const email = String(body.email ?? '').trim().toLowerCase();
+  const phone = String(body.phone ?? '').trim();
+  if (!name || name.length > 120) {
+    return sendJson(res, 400, { success: false, message: 'Name is required and must be 120 characters or fewer.' });
+  }
+  if (email.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return sendJson(res, 400, { success: false, message: 'Enter a valid email address.' });
+  }
+  if (phone.length > 20) {
+    return sendJson(res, 400, { success: false, message: 'Mobile number must be 20 characters or fewer.' });
+  }
+
+  const claim = req.currentUser as { id?: string; employeeId?: string; email?: string } | undefined;
+  const claimId = String(claim?.id || '').trim();
+  const claimEmployeeId = String(claim?.employeeId || '').trim();
+  const claimEmail = String(claim?.email || '').trim();
+  if (!claimId && !claimEmployeeId && !claimEmail) {
+    return sendJson(res, 401, { success: false, message: 'Your session does not identify a user.' });
+  }
+
+  if (!useDb()) {
+    if (!demoModeAllowed()) {
+      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    }
+    const user = fallbackStore.users.find(item =>
+      (claimId && String(item.id) === claimId) ||
+      (claimEmployeeId && String(item.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
+      (claimEmail && String(item.email).toLowerCase() === claimEmail.toLowerCase())
+    );
+    if (!user) return sendJson(res, 404, { success: false, message: 'User not found.' });
+    const duplicate = fallbackStore.users.some(item =>
+      item.id !== user.id && String(item.email).toLowerCase() === email
+    );
+    if (duplicate) return sendJson(res, 409, { success: false, message: 'That email address is already in use.' });
+    user.name = name;
+    user.fullName = name;
+    user.email = email;
+    user.phone = phone;
+    const { password: _password, ...safeUser } = user;
+    return sendJson(res, 200, { success: true, data: safeUser });
+  }
+
+  try {
+    const pool = getPool();
+    const existingResult = await pool.query(
+      `${USER_SELECT}
+       WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR LOWER(u.email) = LOWER($3)
+       LIMIT 1`,
+      [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
+    );
+    const existing = existingResult.rows[0];
+    if (!existing) return sendJson(res, 404, { success: false, message: 'User not found.' });
+
+    const updated = await pool.query(
+      `UPDATE users
+       SET full_name = $1, email = $2, phone = $3, updated_at = NOW()
+       WHERE id = $4
+       RETURNING id`,
+      [name, email, phone, existing.id]
+    );
+    const saved = await pool.query(`${USER_SELECT} WHERE u.id = $1 LIMIT 1`, [updated.rows[0].id]);
+    return sendJson(res, 200, { success: true, data: mapUserRow(saved.rows[0]) });
+  } catch (error: any) {
+    if (error?.code === '23505') {
+      return sendJson(res, 409, { success: false, message: 'That email address is already in use.' });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Profile update failed.' });
+  }
 });
 
 router.post('/auth/change-password', requireAuth, async (req, res) => {
@@ -7563,6 +7641,310 @@ function computeDashboardFromLeads(
   };
 }
 
+
+/* ====================================================================
+   ROADSHOWS
+==================================================================== */
+
+const ROADSHOW_STATUSES = ['pending', 'execute', 'reschedule', 'cancel'] as const;
+
+function roadshowOrganizationKey(organization: string): string {
+  return organization
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase()
+    .slice(0, 80);
+}
+
+function roadshowTimestampIso(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const text = String(value);
+  const withZone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(text) ? text : `${text.replace(' ', 'T')}Z`;
+  const date = new Date(withZone);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function roadshowPayload(row: any): any {
+  return {
+    id: row.id,
+    organization: row.organization,
+    location: row.location,
+    scheduledAt: roadshowTimestampIso(row.scheduled_at),
+    status: row.status,
+    sourceCode: row.source_code || null,
+    executedAt: row.executed_at || null,
+    createdBy: row.created_by || null,
+    updatedBy: row.updated_by || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    assignedUsers: row.assigned_users || [],
+    totalLeads: Number(row.total_leads || 0),
+    convertedLeads: Number(row.converted_leads || 0),
+    stageBreakdown: row.stage_breakdown || [],
+  };
+}
+
+async function loadRoadshows(
+  pool: any,
+  options: { from?: { y: number; m: number; d: number } | null; to?: { y: number; m: number; d: number } | null; assignedUserId?: string }
+): Promise<any[]> {
+  const where: string[] = [];
+  const params: any[] = [];
+  if (options.from) {
+    const start = dhakaStartUtc(options.from.y, options.from.m, options.from.d);
+    params.push(start.toISOString());
+    where.push(`r.scheduled_at >= $${params.length}::timestamp`);
+  }
+  if (options.to) {
+    const next = addCalendarDays(options.to.y, options.to.m, options.to.d, 1);
+    const end = dhakaStartUtc(next.y, next.m, next.d);
+    params.push(end.toISOString());
+    where.push(`r.scheduled_at < $${params.length}::timestamp`);
+  }
+  if (options.assignedUserId) {
+    params.push(options.assignedUserId);
+    where.push(`EXISTS (SELECT 1 FROM roadshow_assignees ra_filter WHERE ra_filter.roadshow_id = r.id AND ra_filter.user_id = $${params.length})`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const result = await pool.query(
+    `WITH stage_counts AS (
+       SELECT source, current_status, COUNT(*)::int AS stage_count
+         FROM leads
+        WHERE COALESCE(is_deleted, FALSE) = FALSE
+        GROUP BY source, current_status
+     )
+     SELECT r.*,
+       COUNT(DISTINCT l.id)::int AS total_leads,
+       COUNT(DISTINCT l.id) FILTER (WHERE l.current_status = 'Converted')::int AS converted_leads,
+       COALESCE(
+         json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.full_name, 'employeeId', u.employee_id))
+           FILTER (WHERE u.id IS NOT NULL), '[]'::json
+       ) AS assigned_users,
+       COALESCE(
+         json_agg(DISTINCT jsonb_build_object('status', sc.current_status, 'count', sc.stage_count))
+           FILTER (WHERE sc.current_status IS NOT NULL), '[]'::json
+       ) AS stage_breakdown
+      FROM roadshows r
+      LEFT JOIN roadshow_assignees ra ON ra.roadshow_id = r.id
+      LEFT JOIN users u ON u.id = ra.user_id
+      LEFT JOIN leads l ON l.source = r.source_code AND COALESCE(l.is_deleted, FALSE) = FALSE
+      LEFT JOIN stage_counts sc ON sc.source = r.source_code
+      ${whereSql}
+     GROUP BY r.id
+     ORDER BY r.scheduled_at ASC, r.created_at DESC`,
+    params
+  );
+  return result.rows.map(roadshowPayload);
+}
+
+router.get('/roadshows', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'roadshows.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view Roadshows.' });
+    }
+    const fromYmd = parseYmd(req.query?.from ? String(req.query.from) : null);
+    const toYmd = parseYmd(req.query?.to ? String(req.query.to) : null);
+    if (req.query?.from && !fromYmd) return sendJson(res, 400, { success: false, message: 'from must be YYYY-MM-DD.' });
+    if (req.query?.to && !toYmd) return sendJson(res, 400, { success: false, message: 'to must be YYYY-MM-DD.' });
+    const assignedUserId = req.query?.mine === 'true' ? caller.id : undefined;
+    const rows = await loadRoadshows(getPool(), { from: fromYmd, to: toYmd, assignedUserId });
+    return sendJson(res, 200, { success: true, data: rows });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Roadshows could not be loaded.' });
+  }
+});
+
+router.get('/roadshows/performance', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'roadshows.report'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view Roadshow performance.' });
+    }
+    const rows = await loadRoadshows(getPool(), {});
+    return sendJson(res, 200, { success: true, data: rows.filter(row => row.status === 'execute' && row.sourceCode) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Roadshow performance could not be loaded.' });
+  }
+});
+
+router.post('/roadshows', requireAuth, requirePermissionCode('roadshows.create'), async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  const organization = clean(req.body?.organization).slice(0, 255);
+  const location = clean(req.body?.location).slice(0, 255);
+  const scheduledAt = req.body?.scheduledAt;
+  const assignedUserIds = Array.isArray(req.body?.assignedUserIds) ? [...new Set(req.body.assignedUserIds.map((id: unknown) => clean(id)).filter(Boolean))] : [];
+  const date = typeof scheduledAt === 'string' ? new Date(scheduledAt) : null;
+  if (!organization || !location || !date || !Number.isFinite(date.getTime()) || !assignedUserIds.length) {
+    return sendJson(res, 400, { success: false, message: 'Organization, location, date/time, and at least one assignee are required.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const users = await client.query(
+        `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND COALESCE(is_active, TRUE) = TRUE`,
+        [assignedUserIds]
+      );
+      if (users.rows.length !== assignedUserIds.length) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'One or more selected assignees are unavailable.' });
+      }
+      const created = await client.query(
+        `INSERT INTO roadshows (organization, location, scheduled_at, created_by, updated_by)
+         VALUES ($1, $2, $3::timestamp, $4, $4) RETURNING id`,
+        [organization, location, date.toISOString(), caller.id]
+      );
+      const roadshowId = created.rows[0].id;
+      for (const userId of assignedUserIds) {
+        await client.query(`INSERT INTO roadshow_assignees (roadshow_id, user_id) VALUES ($1, $2)`, [roadshowId, userId]);
+      }
+      await client.query('COMMIT');
+      const rows = await loadRoadshows(pool, {});
+      return sendJson(res, 201, { success: true, data: rows.find(row => row.id === roadshowId) });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Roadshow could not be created.' });
+  }
+});
+
+router.put('/roadshows/:id', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  const id = clean(req.params.id);
+  const body = req.body || {};
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existingResult = await client.query(`SELECT * FROM roadshows WHERE id = $1 FOR UPDATE`, [id]);
+      const existing = existingResult.rows[0];
+      if (!existing) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: 'Roadshow not found.' });
+      }
+      const isAdmin = callerIsAdmin(req);
+      if (existing.status === 'execute' && !isAdmin) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 409, { success: false, message: 'Executed Roadshows are locked. Only an administrator can edit them.' });
+      }
+      if (existing.status === 'cancel' && !isAdmin) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 409, { success: false, message: 'Cancelled Roadshows cannot be changed.' });
+      }
+      const nextStatus = body.status === undefined ? existing.status : String(body.status).toLowerCase();
+      if (!ROADSHOW_STATUSES.includes(nextStatus)) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: `status must be one of ${ROADSHOW_STATUSES.join(', ')}.` });
+      }
+      const permission = nextStatus === 'cancel' ? 'roadshows.cancel' : 'roadshows.edit';
+      if (!(await hasPermissionCode(caller, permission))) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 403, { success: false, message: `You do not have permission to ${nextStatus === 'cancel' ? 'cancel' : 'edit'} Roadshows.` });
+      }
+      const organization = body.organization === undefined ? existing.organization : clean(body.organization).slice(0, 255);
+      const location = body.location === undefined ? existing.location : clean(body.location).slice(0, 255);
+      const date = body.scheduledAt === undefined ? new Date(existing.scheduled_at) : new Date(body.scheduledAt);
+      if (!organization || !location || !Number.isFinite(date.getTime())) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'Organization, location, and a valid date/time are required.' });
+      }
+      if (nextStatus === 'reschedule' && (
+        body.scheduledAt === undefined ||
+        roadshowTimestampIso(existing.scheduled_at) === date.toISOString()
+      )) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'A new date and time are required when rescheduling.' });
+      }
+      const assignedUserIds = body.assignedUserIds === undefined
+        ? null
+        : Array.isArray(body.assignedUserIds)
+          ? [...new Set(body.assignedUserIds.map((userId: unknown) => clean(userId)).filter(Boolean))]
+          : [];
+      if (assignedUserIds && assignedUserIds.length === 0) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'At least one assignee is required.' });
+      }
+      if (assignedUserIds) {
+        const users = await client.query(
+          `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND COALESCE(is_active, TRUE) = TRUE`,
+          [assignedUserIds]
+        );
+        if (users.rows.length !== assignedUserIds.length) {
+          await client.query('ROLLBACK');
+          return sendJson(res, 400, { success: false, message: 'One or more selected assignees are unavailable.' });
+        }
+      }
+
+      let sourceCode = existing.source_code as string | null;
+      if (nextStatus === 'execute' && !sourceCode) {
+        const organizationKey = roadshowOrganizationKey(organization);
+        if (!organizationKey) {
+          await client.query('ROLLBACK');
+          return sendJson(res, 400, { success: false, message: 'Organization must contain a letter or number to create a source code.' });
+        }
+        const counter = await client.query(
+          `INSERT INTO roadshow_code_counters (organization_key, last_sequence)
+           VALUES ($1, 1)
+           ON CONFLICT (organization_key)
+           DO UPDATE SET last_sequence = roadshow_code_counters.last_sequence + 1
+           RETURNING last_sequence`,
+          [organizationKey]
+        );
+        sourceCode = `${organizationKey}_${counter.rows[0].last_sequence}`;
+        await client.query(
+          `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
+           VALUES ('Source', $1, $1, COALESCE((SELECT MAX(sort_order) + 1 FROM options WHERE field_key = 'Source'), 1), FALSE, TRUE, $2::jsonb, NOW(), NOW())
+           ON CONFLICT (field_key, option_value) DO UPDATE SET is_active = TRUE, updated_at = NOW()`,
+          [sourceCode, JSON.stringify({ roadshowId: id, organization })]
+        );
+      }
+
+      await client.query(
+        `UPDATE roadshows
+            SET organization = $2, location = $3, scheduled_at = $4::timestamp,
+                status = $5::varchar, source_code = $6,
+                executed_at = CASE WHEN $5::varchar = 'execute' THEN COALESCE(executed_at, NOW()) ELSE executed_at END,
+                updated_by = $7, updated_at = NOW()
+          WHERE id = $1`,
+        [id, organization, location, date.toISOString(), nextStatus, sourceCode, caller.id]
+      );
+      if (assignedUserIds) {
+        await client.query(`DELETE FROM roadshow_assignees WHERE roadshow_id = $1`, [id]);
+        for (const userId of assignedUserIds) {
+          await client.query(`INSERT INTO roadshow_assignees (roadshow_id, user_id) VALUES ($1, $2)`, [id, userId]);
+        }
+      }
+      await client.query('COMMIT');
+      const rows = await loadRoadshows(pool, {});
+      return sendJson(res, 200, { success: true, data: rows.find(row => row.id === id) });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Roadshow could not be updated.' });
+  }
+});
 
 /* ===================================================================
    SCHEDULED ACTIVITIES — SERVER-AUTHORITATIVE CALENDAR (Step 5C)

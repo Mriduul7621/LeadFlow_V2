@@ -32,6 +32,7 @@ import { up as followupQueueIndexes } from "./migrations/038_followup_queue_inde
 import { up as scheduledActivities } from "./migrations/039_scheduled_activities.js";
 import { up as notificationReliability } from "./migrations/040_notification_reliability.js";
 import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_activity_open_index.js";
+import { up as roadshows } from "./migrations/042_roadshows.js";
 
 interface Migration {
 
@@ -211,6 +212,11 @@ const migrations: Migration[] = [
     {
         name: "Scheduled Activity Open Index",
         run: scheduledActivityOpenIndex,
+    },
+
+    {
+        name: "Roadshows",
+        run: roadshows,
     },
 
 ];

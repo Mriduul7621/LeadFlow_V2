@@ -53,10 +53,24 @@ interface AdvancedFilterPanelProps {
   onFilterChange: (filteredLeads: Lead[]) => void;
   allLeads: Lead[];
   className?: string;
+  isOpen?: boolean;
+  onOpenChange?: (isOpen: boolean) => void;
 }
 
-export default function AdvancedFilterPanel({ onFilterChange, allLeads, className }: AdvancedFilterPanelProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export default function AdvancedFilterPanel({
+  onFilterChange,
+  allLeads,
+  className,
+  isOpen: controlledIsOpen,
+  onOpenChange,
+}: AdvancedFilterPanelProps) {
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isControlled = controlledIsOpen !== undefined;
+  const isOpen = isControlled ? controlledIsOpen : internalIsOpen;
+  const setIsOpen = (nextIsOpen: boolean) => {
+    if (!isControlled) setInternalIsOpen(nextIsOpen);
+    onOpenChange?.(nextIsOpen);
+  };
   const [matchType, setMatchType] = useState<'AND' | 'OR'>('AND');
   const [rules, setRules] = useState<FilterRule[]>([]);
   const [dropdownOptions, setDropdownOptions] = useState<Record<string, string[]>>({});
@@ -322,6 +336,8 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
         onClick={() => setIsOpen(!isOpen)}
         className="w-full px-6 py-4 flex items-center justify-between bg-slate-50 border-b border-slate-100 font-black text-[11px] uppercase tracking-[0.15em] text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
         id="btn-advanced-filter-toggle"
+        aria-expanded={isOpen}
+        aria-controls="advanced-filter-content"
       >
         <span className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-[#978C21]" />
@@ -343,6 +359,7 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.25, ease: 'easeInOut' }}
             className="overflow-hidden"
+            id="advanced-filter-content"
           >
             <div className="p-6 md:p-8 space-y-6 bg-white italic border-b border-slate-50">
               

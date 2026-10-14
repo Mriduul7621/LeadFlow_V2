@@ -458,9 +458,8 @@ export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, pr
   overdueFollowUps: number;
 }) {
   return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading title="Executive Snapshot" />
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+    <>
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard label="Total Leads" value={formatCount(totalLeads)} icon={Users} variant="blue" />
         <KpiCard label="Conversion Rate" value={conversionRate} icon={Percent} variant="slate" />
         <KpiCard label="Collected NCP" value={collectedNCP} icon={Banknote} variant="emerald" />
@@ -477,7 +476,7 @@ export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, pr
           </div>
         </div>
       </div>
-    </section>
+    </>
   );
 }
 
@@ -821,7 +820,7 @@ export default function Dashboard() {
     <div className="space-y-6 pb-12 font-sans">
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div>
-          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">Dashboard</h1>
+          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">Hello, {user?.name?.trim().split(/\s+/)[0] || 'there'}</h1>
           <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">Sales performance and daily execution overview</p>
         </div>
 
@@ -994,7 +993,7 @@ export default function Dashboard() {
 
           <section className="lf-dashboard-kpis">
             <div className="lf-section-title">
-              <div><p className="lf-eyebrow">AT A GLANCE</p><h2>Core Performance</h2></div>
+              <div><h2>Core Performance</h2></div>
               <span className="lf-period-chip">{resolved.display}</span>
             </div>
             <ExecutiveSnapshot
@@ -1008,9 +1007,29 @@ export default function Dashboard() {
             />
           </section>
 
+          <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
+            <div className="lf-section-title">
+              <div>
+                <h2>Today's Focus</h2>
+                <p className="lf-section-subtitle">Your next steps, at a glance</p>
+              </div>
+              <Link to="/workbench" className="lf-view-all">My Work <ChevronRight size={16} /></Link>
+            </div>
+            <div className="lf-day-snapshot-grid">
+              <Link to="/workbench" className="lf-day-snapshot-card lf-day-snapshot-card--primary">
+                <span><CalendarClock size={16} /> Today's Activities</span>
+                <strong>{dailyLoading ? '—' : formatCount(getDailyActivities(todayFollowUps, todayScheduled).length)}</strong>
+              </Link>
+              <Link to="/follow-up?bucket=today" className="lf-day-snapshot-card">
+                <span><ClipboardCheck size={16} /> Pending Follow-ups</span>
+                <strong>{dailyLoading ? '—' : formatCount(followUpCounts.today)}</strong>
+              </Link>
+            </div>
+          </section>
+
           <section className="lf-recent-leads">
             <div className="lf-section-title">
-              <div><p className="lf-eyebrow">LATEST ACTIVITY</p><h2>Recent Leads</h2><p className="lf-section-subtitle">Your five most recently added leads</p></div>
+              <div><h2>Recent Leads</h2><p className="lf-section-subtitle">Your five most recently added leads</p></div>
               <Link to="/leads" className="lf-view-all">View all <ChevronRight size={16} /></Link>
             </div>
             {recentLeadsLoading ? (

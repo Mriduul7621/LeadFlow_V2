@@ -124,8 +124,8 @@ export const metadataService = {
   },
 
   /** Active values only, as plain strings - drop-in for the old settingsService.getOptionsByType(). */
-  async getActiveValues(type: string): Promise<string[]> {
-    const all = await this.getAllValues(type);
+  async getActiveValues(type: string, forceRefresh = false): Promise<string[]> {
+    const all = await this.getAllValues(type, forceRefresh);
     return all.filter(o => o.status === 'Active').map(o => o.label || o.value);
   },
 

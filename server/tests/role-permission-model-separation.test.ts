@@ -14,7 +14,7 @@
  *  2. Feature Access UI contains module visibility only.
  *  3. Legacy action-like duplicate sub-options are no longer exposed.
  *  4. Every canonical code exposed in the UI exists in the migration-025
- *     permission catalog (no invented codes).
+ *     permission catalog across its canonical migrations (no invented codes).
  *  5. Every canonical code exposed is enforced server-side on the mounted
  *     router (hasPermissionCode / requirePermissionCode), and every
  *     protected mutation exposed maps to an enforcement point.
@@ -61,9 +61,12 @@ function actionGroupsBlock(): string {
   return src.slice(start, end);
 }
 
-/** Canonical codes seeded by migration 025 (parsed from the migration file). */
-function migration025Codes(): string[] {
-  const src = read('server/database/migrations/025_permissions.ts');
+/** Canonical codes seeded by permission migrations (parsed from migration files). */
+function canonicalPermissionCodes(): string[] {
+  const src = [
+    read('server/database/migrations/025_permissions.ts'),
+    read('server/database/migrations/042_roadshows.ts'),
+  ].join('\n');
   const codes: string[] = [];
   const re = /\[\s*"([a-z_.]+)"/g;
   let m: RegExpExecArray | null;
@@ -128,10 +131,10 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     }
   });
 
-  it('4. Every exposed canonical code exists in the migration-025 catalog (no invented codes)', () => {
-    const known = new Set(migration025Codes());
+  it('4. Every exposed canonical code exists in the permission migrations (no invented codes)', () => {
+    const known = new Set(canonicalPermissionCodes());
     for (const code of editorCodes()) {
-      assert.ok(known.has(code), `editor code ${code} must exist in migration 025 permissions`);
+      assert.ok(known.has(code), `editor code ${code} must exist in the canonical permission migrations`);
     }
   });
 

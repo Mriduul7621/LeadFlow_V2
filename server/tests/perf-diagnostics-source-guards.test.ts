@@ -170,14 +170,14 @@ describe('Diagnostics — admin-only access control', () => {
     assert.ok(routeSlice.includes('<AdminRoute>'), 'route is wrapped in the ADMIN-only gate');
   });
 
-  it('J. sidebar entry + route gate share ONE ADMIN/SUPERADMIN role source', () => {
+  it('J. Reports entry + route gate share ONE ADMIN/SUPERADMIN role source', () => {
     const gate = read('src/modules/auth/components/AdminRoute.tsx');
     assert.match(gate, /export const DIAGNOSTICS_ADMIN_ROLES: readonly string\[\] = \['ADMIN', 'SUPERADMIN'\];/, 'the shared role constant must exist');
     assert.match(gate, /DIAGNOSTICS_ADMIN_ROLES\.includes\(normalized\)/, 'isAdminRole must decide via the shared constant');
 
-    const layout = read('src/layouts/AppLayout.tsx');
-    assert.match(layout, /import \{ DIAGNOSTICS_ADMIN_ROLES \} from '\.\.\/modules\/auth\/components\/AdminRoute';/, 'AppLayout must import the shared constant');
-    assert.match(layout, /path:\s*'\/settings\/performance-diagnostics',\s*roles:\s*\[\.\.\.DIAGNOSTICS_ADMIN_ROLES\]/, 'sidebar entry must use the same ADMIN/SUPERADMIN constant as the route gate');
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    assert.match(more, /import \{ DIAGNOSTICS_ADMIN_ROLES \} from '\.\.\/\.\.\/auth\/components\/AdminRoute';/, 'More → Reports must import the shared constant');
+    assert.match(more, /DIAGNOSTICS_ADMIN_ROLES\.includes\(role\)[\s\S]*?path: '\/settings\/performance-diagnostics'/, 'Reports entry must use the same ADMIN/SUPERADMIN constant as the route gate');
     // The non-admin redirect in the gate itself.
     assert.ok(gate.includes('<Navigate to="/settings" replace />'), 'non-admins must be redirected, not shown an empty page');
   });
@@ -484,21 +484,18 @@ describe('Diagnostics — privacy guarantees', () => {
 /* ==================================================================== */
 
 describe('Diagnostics — fresh login / session capture', () => {
-  it('U. SUPERADMIN and ADMIN both see the sidebar entry; non-admins do not (real menu rule)', async () => {
+  it('U. SUPERADMIN and ADMIN both see the Reports entry; non-admins do not', async () => {
     ensureStorageShim();
     const gate = await import('../../src/modules/auth/components/AdminRoute.js');
-    const { resolveMenuVisibility } = await import('../../src/layouts/menuVisibility.js');
-
-    // The exact sidebar entry AppLayout renders (same shared constant).
-    const entry = { path: '/settings/performance-diagnostics', roles: [...gate.DIAGNOSTICS_ADMIN_ROLES] };
-    assert.deepEqual(entry.roles, ['ADMIN', 'SUPERADMIN']);
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    assert.ok(more.includes("path: '/settings/performance-diagnostics'"), 'diagnostics entry must be present in Reports');
+    assert.ok(more.includes('DIAGNOSTICS_ADMIN_ROLES.includes(role)'), 'entry must be restricted to diagnostics admin roles');
+    assert.deepEqual(gate.DIAGNOSTICS_ADMIN_ROLES, ['ADMIN', 'SUPERADMIN']);
 
     for (const role of ['ADMIN', 'SUPERADMIN', 'admin', 'superadmin']) {
-      assert.equal(resolveMenuVisibility(role, undefined, entry), true, `${role} must SEE the diagnostics entry`);
       assert.equal(gate.resolveAdminAccess(role), 'granted', `${role} must be able to OPEN diagnostics`);
     }
     for (const role of ['RM', 'ASM', 'BDM', 'BE', 'BH', 'RO']) {
-      assert.equal(resolveMenuVisibility(role, undefined, entry), false, `${role} must NOT see the entry`);
       assert.equal(gate.resolveAdminAccess(role), 'denied', `${role} must NOT be able to open diagnostics`);
     }
   });

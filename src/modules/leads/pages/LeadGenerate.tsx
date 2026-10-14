@@ -144,7 +144,7 @@ export default function LeadGenerate() {
   useEffect(() => {
     const loadOptions = async () => {
       const types = ['Profession', 'Occupation', 'MaritalStatus', 'Area', 'Source', 'Product', 'Campaign', 'Priority'];
-      const results = await Promise.all(types.map(t => metadataService.getActiveValues(t)));
+      const results = await Promise.all(types.map(t => metadataService.getActiveValues(t, t === 'Source')));
       const newOptions: any = {};
       types.forEach((t, i) => { newOptions[t] = results[i]; });
       // Also preload values for any custom dropdown field's metadata type
@@ -205,7 +205,7 @@ export default function LeadGenerate() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto pb-24 space-y-12">
+    <div className="lead-generate-page max-w-5xl mx-auto pb-24 space-y-12">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-slate-100 pb-10">
         <div className="flex items-center gap-6">
           <div className="w-16 h-16 bg-slate-900 rounded-sm flex items-center justify-center text-[#978C21] shadow-xl">
@@ -213,7 +213,7 @@ export default function LeadGenerate() {
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Add New Lead</h1>
-            <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-3 italic">{t("leadFormSubtitle")}</p>
+            <p className="text-sm font-normal text-stone-500 mt-2">{t("leadFormSubtitle")}</p>
           </div>
         </div>
       </div>
@@ -540,14 +540,14 @@ export default function LeadGenerate() {
         )}
 
         <div className="flex items-center justify-end gap-6 mt-16 group">
-          <div className="flex items-center gap-2 mr-auto italic opacity-40">
+          <div className="flex items-center gap-2 mr-auto opacity-60">
              <ShieldCheck className="w-4 h-4 text-emerald-500" />
-             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your data is securely saved</span>
+             <span className="text-xs font-medium text-stone-500">Your data is securely saved</span>
           </div>
           <button 
             type="submit" 
             disabled={isSubmitting}
-            className="w-64 py-5 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-widest transition-all rounded-sm shadow-2xl flex items-center justify-center gap-4 group italic disabled:opacity-50"
+            className="w-64 py-5 bg-slate-900 hover:bg-black text-white text-sm font-semibold tracking-normal transition-all rounded-sm shadow-2xl flex items-center justify-center gap-4 group disabled:opacity-50"
           >
             {isSubmitting ? t('loading') : (
               <>

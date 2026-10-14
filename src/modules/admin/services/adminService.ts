@@ -131,6 +131,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
     // ADMIN/SUPERADMIN still get full access via the explicit bypass below;
     // an admin must grant /workbench to non-admin roles explicitly.
     workbench: { view: false },
+    roadshow_follow_up: { view: false },
     activities: { view: true },
     task_calendar: { view: true },
     follow_up_strategy: { view: true },
@@ -168,6 +169,7 @@ export function ensureFeaturePermissions(role: RolePermission): RolePermission {
         let route = '';
         if (feat === 'dashboard') route = '/';
         else if (feat === 'workbench') route = '/workbench';
+        else if (feat === 'roadshow_follow_up') route = '/roadshows';
         else if (feat === 'lead_generate') route = '/leads/new';
         else if (feat === 'lead_upload') route = '/leads/upload';
         else if (feat === 'all_leads') route = '/leads/all';

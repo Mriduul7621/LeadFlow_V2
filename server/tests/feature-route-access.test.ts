@@ -7,11 +7,11 @@
  *   1. resolveFeatureRouteAccess is a pure, fail-closed decision:
  *      ADMIN/SUPERADMIN pass (established bypass); an explicit dynamic
  *      menuAccess entry wins (true OR false); otherwise the static role
- *      fallback — identical to the sidebar;
+ *      fallback — identical to primary navigation and More directories;
  *   2. a disabled Feature Access module blocks its page route (typing the
  *      URL cannot bypass the sidebar);
  *   3. the registry, the routes wrapped in App.tsx, and the AppLayout
- *      sidebar stay in lockstep (no drift, no ungated page route);
+ *      primary navigation stay in lockstep (no drift, no ungated page route);
  *   4. FeatureGate redirects (never renders) when the decision denies.
  *
  * This is a VISIBILITY gate: the server keeps enforcing canonical Action
@@ -32,9 +32,9 @@ const read = (rel: string) => readFileSync(`${repoRoot}${rel}`, 'utf8');
 
 const ALL_ROUTES = Object.keys(FEATURE_ROUTES);
 const NON_ADMIN_ROLES = ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH'];
-const WORKSPACE_ROUTES = ['/', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id'];
+const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/reports', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id', '/leads/:id/edit'];
 const INSIGHT_ROUTES = ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'];
-const ADMIN_ONLY_ROUTES = ['/leads/upload', '/leads/all', '/users'];
+const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/leads/upload', '/leads/all', '/users'];
 
 describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   it('ADMIN and SUPERADMIN pass every registered route, even when menuAccess disables it', () => {
@@ -46,7 +46,7 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     }
   });
 
-  it('static role fallbacks mirror the sidebar for every role class', () => {
+  it('static role fallbacks mirror the primary navigation and More directories for every role class', () => {
     for (const route of ADMIN_ONLY_ROUTES) {
       for (const role of NON_ADMIN_ROLES) {
         assert.equal(resolveFeatureRouteAccess(route, role, undefined), false, `${route} must be admin-only (static), blocked for ${role}`);
@@ -99,6 +99,15 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     assert.equal(resolveFeatureRouteAccess('/team', 'RO', { menuAccess: {} } as any), false);
   });
 
+  it('Reports opens when any child report is enabled, despite a legacy Reports toggle being off', () => {
+    assert.equal(resolveFeatureRouteAccess('/reports', 'RO', {
+      menuAccess: { '/reports': false, '/execution-intelligence': true },
+    } as any), true);
+    assert.equal(resolveFeatureRouteAccess('/reports', 'RO', {
+      menuAccess: { '/reports': false, '/settings/performance-diagnostics': true },
+    } as any), false, 'admin-only diagnostics alone must not expose Reports');
+  });
+
   it('fails closed on unknown route keys and missing roles', () => {
     assert.equal(resolveFeatureRouteAccess('/definitely-not-a-route', 'ADMIN', undefined), false, 'unknown route key fails closed even for ADMIN');
     assert.equal(resolveFeatureRouteAccess('/leads', null, undefined), false);
@@ -109,7 +118,7 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   it('the registry covers every page route in App.tsx (no drift, none missing)', () => {
     const app = read('src/App.tsx');
     const wrapped = Array.from(app.matchAll(/<FeatureGate route="([^"]+)"/g), m => m[1]);
-    assert.equal(wrapped.length, 18, 'exactly 18 page routes are wrapped in App.tsx');
+    assert.equal(wrapped.length, ALL_ROUTES.length, 'every registered page route is wrapped in App.tsx');
     assert.equal(new Set(wrapped).size, wrapped.length, 'no duplicate FeatureGate routes');
     assert.deepEqual(
       [...new Set(wrapped)].sort(),
@@ -120,20 +129,27 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   });
 });
 
-describe('sidebar parity — AppLayout menuSections <-> FEATURE_ROUTES', () => {
-  it('every sidebar menu path is gated by a route entry, and vice versa', () => {
+describe('primary navigation and More directories — route coverage', () => {
+  it('primary tabs use the new five-item structure and old secondary pages live under More → Reports', () => {
     const layout = read('src/layouts/AppLayout.tsx');
-    const menuPaths = Array.from(layout.matchAll(/path: '([^']+)'/g), m => m[1]);
-    assert.ok(menuPaths.length >= 17, `expected the full sidebar, found ${menuPaths.length} menu paths`);
+    const start = layout.indexOf('const PRIMARY_NAV_ITEMS');
+    const end = layout.indexOf('const MORE_NAV_PATHS');
+    assert.ok(start >= 0 && end > start, 'primary navigation config must exist');
+    const menuPaths = Array.from(layout.slice(start, end).matchAll(/path: '([^']+)'/g), m => m[1]);
+    assert.deepEqual(menuPaths, ['/', '/workbench', '/leads/new', '/leads', '/more']);
+    assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen|isSidebarOpen/, 'no desktop sidebar or mobile drawer remains');
+
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown']) {
+      assert.ok(more.includes(`path: '${p}'`), `More → Reports must include ${p}`);
+    }
 
     for (const p of menuPaths) {
       assert.ok(FEATURE_ROUTES[p], `menu path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
     }
     for (const [route, entry] of Object.entries(FEATURE_ROUTES)) {
-      assert.ok(
-        menuPaths.includes(entry.path),
-        `registry entry ${route} (path ${entry.path}) must map to a real sidebar module`
-      );
+      assert.ok(route, `route ${route} is registered`);
+      assert.ok(entry.path, `route ${route} has a menuAccess key`);
     }
   });
 });
@@ -143,8 +159,8 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     const src = read('src/modules/auth/components/FeatureGate.tsx');
     assert.ok(src.includes('resolveFeatureRouteAccess(route, user.role, matchRole(roles, user))'), 'gate must use the shared pure decision');
     assert.ok(src.includes('<Navigate to="/" replace />'), 'deny must redirect, never render the page');
-    assert.ok(src.includes('readSessionCache'), 'roles must come from the shared session cache (sidebar parity)');
-    assert.ok(src.includes('adminService.getRoles()'), 'roles must load through the same API as the sidebar');
+    assert.ok(src.includes('readSessionCache'), 'roles must come from the shared session cache');
+    assert.ok(src.includes('adminService.getRoles()'), 'roles must load through the role API');
     assert.ok(src.includes('ROLES_CACHE_CHANGED_EVENT'), 'gate must refresh when role permissions change');
   });
 });

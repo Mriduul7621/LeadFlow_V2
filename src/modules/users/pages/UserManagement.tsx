@@ -47,6 +47,9 @@ interface FeatureMeta {
   key: string;
   label: string;
   desc: string;
+  group: string;
+  path: string;
+  defaultEnabled?: boolean;
 }
 
 const APP_FEATURES: FeatureMeta[] = [
@@ -54,63 +57,96 @@ const APP_FEATURES: FeatureMeta[] = [
     key: 'dashboard',
     label: 'Dashboard',
     desc: 'View performance summary, pipeline, follow-up discipline and daily execution.',
+    group: 'Primary navigation',
+    path: '/',
   },
   {
     key: 'workbench',
     label: 'Daily Workbench',
     desc: "Manage today's calls, meetings, follow-ups and tasks from one execution workspace.",
+    group: 'Primary navigation',
+    path: '/workbench',
   },
   {
     key: 'activities',
     label: 'Activities',
-    desc: 'View lead activity history and execution records.',
+    desc: 'Open the activity history from More → Reports.',
+    group: 'More → Reports',
+    path: '/activities',
   },
   {
     key: 'task_calendar',
     label: 'Task Calendar',
-    desc: 'View and manage scheduled calls, meetings, follow-ups and tasks.',
+    desc: 'View scheduled calls, meetings, follow-ups and tasks from More → Reports.',
+    group: 'More → Reports',
+    path: '/task-calendar',
   },
   {
     key: 'follow_up_strategy',
     label: 'Follow-up Queue',
-    desc: 'View overdue, today and upcoming follow-ups.',
+    desc: 'View overdue, today and upcoming follow-ups from More → Reports.',
+    group: 'More → Reports',
+    path: '/follow-up',
   },
   {
     key: 'lead_tracking',
     label: 'Lead Workspace',
     desc: 'Open the lead workspace; what the role can do inside it follows Action Permissions.',
+    group: 'Primary navigation',
+    path: '/leads',
   },
   {
     key: 'lead_generate',
     label: 'Add New Lead',
     desc: 'Open the manual lead creation page; creating leads is governed by the Leads Create action.',
+    group: 'Primary navigation',
+    path: '/leads/new',
   },
   {
     key: 'lead_upload',
     label: 'Bulk Upload',
     desc: 'Open the bulk upload page; importing is governed by the Leads Import action.',
+    group: 'Administration',
+    path: '/leads/upload',
   },
   {
     key: 'all_leads',
     label: 'Lead Pool',
     desc: 'Open the lead pool; actual data scope still follows server Data Visibility.',
+    group: 'Administration',
+    path: '/leads/all',
   },
-  { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.' },
-  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.' },
-  { key: 'trend_charts', label: 'Trends', desc: 'View available performance trend analytics.' },
-  { key: 'campaign_breakdown', label: 'Campaigns', desc: 'View campaign-level lead performance.' },
-  { key: 'team_progress', label: 'Team', desc: 'View reporting hierarchy and team information.' },
+  { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.', group: 'More → Reports', path: '/execution-intelligence' },
+  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.', group: 'More → Reports', path: '/ncp-progress' },
+  { key: 'trend_charts', label: 'Trends', desc: 'View available performance trend analytics.', group: 'More → Reports', path: '/trend-charts' },
+  { key: 'campaign_breakdown', label: 'Campaigns', desc: 'View campaign-level lead performance.', group: 'More → Reports', path: '/campaign-breakdown' },
+  { key: 'team_progress', label: 'Team', desc: 'View reporting hierarchy and team information from More → Reports.', group: 'More → Reports', path: '/team' },
   {
     key: 'user_management',
     label: 'Users',
     desc: 'Open the Users workspace (employees, departments, roles, hierarchy); administration actions follow Action Permissions.',
+    group: 'Administration',
+    path: '/users',
   },
   {
     key: 'settings_control',
     label: 'Settings',
-    desc: 'Open Settings (profile, security, notifications, system); parameter management follows Action Permissions.',
+    desc: 'Open Personal Settings (name, mobile, email and password); administration and system tools remain admin-only.',
+    group: 'More',
+    path: '/settings',
   },
+  {
+    key: 'roadshow_follow_up',
+    label: 'Roadshow Follow-up',
+    desc: 'Plan and track assigned roadshows, with a separate performance report.',
+    group: 'More',
+    path: '/roadshows',
+  },
+  { key: 'notifications', label: 'Notifications', desc: 'View and manage personal notifications.', group: 'More', path: '/notifications', defaultEnabled: true },
+  { key: 'help_support', label: 'Help & Support', desc: 'Open product help and support information.', group: 'More', path: '/help', defaultEnabled: true },
+  { key: 'about_leadflow', label: 'About LeadFlow', desc: 'View information about LeadFlow.', group: 'More', path: '/about', defaultEnabled: true },
 ];
+const APP_FEATURE_GROUPS = [...new Set(APP_FEATURES.map(feature => feature.group))];
 
 /* ------------------------------------------------------------------ */
 /*  Canonical action permissions (permissions × role_permissions).     */
@@ -182,6 +218,16 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
       { code: 'workflow.manage', label: 'Manage Workflow Rules', desc: 'Configure lead status transition rules (follow-up flow). Self-service password change and the forced first-login reset are NOT governed by this.' },
     ],
   },
+  {
+    module: 'Roadshows',
+    items: [
+      { code: 'roadshows.view', label: 'View', desc: 'Open Roadshow Follow-up and view roadshow status.' },
+      { code: 'roadshows.create', label: 'Create', desc: 'Schedule roadshows and assign active users.' },
+      { code: 'roadshows.edit', label: 'Edit', desc: 'Update pending roadshows, reschedule, or execute them. Executed roadshows are locked for non-admins.' },
+      { code: 'roadshows.cancel', label: 'Cancel', desc: 'Cancel a pending or rescheduled roadshow.' },
+      { code: 'roadshows.report', label: 'Performance report', desc: 'View collected lead totals and lead-status breakdowns by executed roadshow.' },
+    ],
+  },
 ];
 
 /* Which Feature Access module toggles keep each action group active.
@@ -195,6 +241,7 @@ const ACTION_MODULE_FEATURE_KEYS: Record<string, string[]> = {
   'Departments': ['user_management'],
   'Hierarchy & Teams': ['user_management', 'team_progress'],
   'Settings': ['settings_control'],
+  'Roadshows': ['roadshow_follow_up'],
 };
 
 /* ================================================================== */
@@ -465,7 +512,14 @@ export default function UserManagement() {
     setRoleFormName(role.roleName);
     setRoleFormSlug(role.roleId);
     setRoleFormVisibility((role.dataVisibility as any) || 'Own');
-    setRoleFormFeatures(role.featurePermissions || {});
+    const features: Record<string, Record<string, boolean>> = { ...(role.featurePermissions || {}) };
+    APP_FEATURES.forEach(feature => {
+      if (typeof features[feature.key]?.view === 'boolean') return;
+      const configuredVisibility = role.menuAccess?.[feature.path];
+      const view = configuredVisibility ?? Boolean(feature.defaultEnabled);
+      features[feature.key] = { ...features[feature.key], view };
+    });
+    setRoleFormFeatures(features);
     setRoleFormActions({});
     // Load the canonical action grants for this role (server-authoritative,
     // persisted in role_permissions — never reconstructed from localStorage).
@@ -521,6 +575,15 @@ export default function UserManagement() {
         isCustom: selectedRole ? selectedRole.isCustom : true,
         menuAccess: {
           '/': featureOn('dashboard'),
+          '/more': true,
+          '/reports': [
+            'activities', 'task_calendar', 'follow_up_strategy', 'team_progress',
+            'execution_intelligence', 'ncp_progress', 'trend_charts', 'campaign_breakdown',
+          ].some(featureOn),
+          '/administration': isAdm,
+          '/notifications': featureOn('notifications'),
+          '/help': featureOn('help_support'),
+          '/about': featureOn('about_leadflow'),
           '/workbench': featureOn('workbench'),
           '/leads/new': featureOn('lead_generate'),
           '/leads/upload': featureOn('lead_upload'),
@@ -536,6 +599,8 @@ export default function UserManagement() {
           '/team': featureOn('team_progress'),
           '/users': featureOn('user_management') || isAdm,
           '/settings': featureOn('settings_control') || isAdm,
+          '/settings/system': isAdm,
+          '/roadshows': featureOn('roadshow_follow_up'),
         },
         dataVisibility: roleFormVisibility,
         // Legacy `actions` JSONB, now derived from the canonical grants so
@@ -1107,41 +1172,48 @@ export default function UserManagement() {
                       is configured under Action Permissions below.
                     </p>
 
-                    <div className="space-y-3">
-                      {APP_FEATURES.map(item => {
-                        const feat = roleFormFeatures[item.key] || { view: false };
-                        const isOn = !!feat.view;
-                        return (
-                          <div key={item.key} className={cn(
-                            "border rounded-lg overflow-hidden transition-all",
-                            isOn ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
-                          )}>
-                            <div className="p-3 flex items-center justify-between bg-slate-50/50">
-                              <div>
-                                <span className="text-sm font-medium text-slate-800">{item.label}</span>
-                                <p className="text-xs text-slate-400">{item.desc}</p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRoleFormFeatures({
-                                    ...roleFormFeatures,
-                                    [item.key]: { ...feat, view: !isOn },
-                                  });
-                                }}
-                                className={cn(
-                                  "px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
-                                  isOn
-                                    ? "bg-[#978C21] text-white border-[#978C21]"
-                                    : "bg-white text-slate-400 border-slate-200"
-                                )}
-                              >
-                                {isOn ? '✓ Enabled' : 'Disabled'}
-                              </button>
-                            </div>
+                    <div className="space-y-5">
+                      {APP_FEATURE_GROUPS.map(group => (
+                        <section key={group} className="space-y-2">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{group}</h4>
+                          <div className="space-y-2">
+                            {APP_FEATURES.filter(item => item.group === group).map(item => {
+                              const feat = roleFormFeatures[item.key] || { view: false };
+                              const isOn = !!feat.view;
+                              return (
+                                <div key={item.key} className={cn(
+                                  "border rounded-lg overflow-hidden transition-all",
+                                  isOn ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
+                                )}>
+                                  <div className="p-3 flex items-center justify-between bg-slate-50/50">
+                                    <div>
+                                      <span className="text-sm font-medium text-slate-800">{item.label}</span>
+                                      <p className="text-xs text-slate-400">{item.desc}</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRoleFormFeatures({
+                                          ...roleFormFeatures,
+                                          [item.key]: { ...feat, view: !isOn },
+                                        });
+                                      }}
+                                      className={cn(
+                                        "px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
+                                        isOn
+                                          ? "bg-[#978C21] text-white border-[#978C21]"
+                                          : "bg-white text-slate-400 border-slate-200"
+                                      )}
+                                    >
+                                      {isOn ? '✓ Enabled' : 'Disabled'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        );
-                      })}
+                        </section>
+                      ))}
                     </div>
                   </div>
                 </div>

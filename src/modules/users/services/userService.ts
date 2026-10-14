@@ -87,6 +87,17 @@ export const userService = {
     return saved;
   },
 
+  async updateOwnProfile(profile: { name: string; email: string; phone: string }): Promise<User> {
+    const saved = await apiRequest<User>('/api/auth/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    cacheUser(saved);
+    invalidateUsersReferenceCache();
+    return saved;
+  },
+
   async updateUser(userId: string, data: Partial<User>): Promise<User | null> {
     const saved = await apiRequest<User>(`/api/users/${encodeURIComponent(userId)}`, {
       method: 'PUT',

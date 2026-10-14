@@ -7,13 +7,11 @@ import type { RolePermission } from '../modules/shared/types';
  * ------------------------------------------------------------------
  * Feature Access (Layer B) at the ROUTE level.
  *
- * The sidebar already hides menu items whose module toggle is off
- * (`AppLayout` + `resolveMenuVisibility`); this module enforces the
- * SAME decision at the route so a page cannot be reached merely by
- * typing its URL when the corresponding Feature Access module is
- * disabled for the caller's role.
+ * Primary navigation and More directories use module visibility toggles;
+ * this module enforces the same decision at each route so a page cannot be
+ * reached merely by typing its URL when its Feature Access module is off.
  *
- * Semantics are intentionally identical to the sidebar:
+ * Semantics follow the current navigation:
  *   1. ADMIN / SUPERADMIN always pass (established bypass — the server
  *      treats SUPERADMIN like ADMIN in every authz helper).
  *   2. A dynamic role `menuAccess` entry for the route's module path
@@ -25,7 +23,7 @@ import type { RolePermission } from '../modules/shared/types';
  * every request regardless of what a page renders.
  */
 
-/** Static role fallbacks — must stay aligned with AppLayout menuSections. */
+/** Static role fallbacks — must stay aligned with the primary navigation and More directories. */
 const ALL_ROLES: string[] = Object.values(UserRole);
 const INSIGHT_ROLES: string[] = [UserRole.ADMIN, UserRole.RO, UserRole.RM];
 const TEAM_ROLES: string[] = [
@@ -38,13 +36,24 @@ const TEAM_ROLES: string[] = [
 ];
 const ADMIN_ONLY: string[] = [UserRole.ADMIN];
 const DIAGNOSTICS_ADMIN_ROLES: string[] = ['ADMIN', 'SUPERADMIN'];
+const REPORT_SECTION_PATHS = [
+  '/reports',
+  '/activities',
+  '/task-calendar',
+  '/follow-up',
+  '/team',
+  '/execution-intelligence',
+  '/ncp-progress',
+  '/trend-charts',
+  '/campaign-breakdown',
+];
 
 export interface FeatureRouteEntry {
   /** Route key used by FeatureGate (router path pattern). */
   route: string;
-  /** menuAccess path key — exactly the sidebar item's path. */
+  /** menuAccess path key — exactly the navigation item's path. */
   path: string;
-  /** Static role fallback (sidebar parity). */
+  /** Static role fallback (navigation parity). */
   roles: string[];
 }
 
@@ -55,6 +64,13 @@ export interface FeatureRouteEntry {
  */
 export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/': { route: '/', path: '/', roles: ALL_ROLES },
+  '/more': { route: '/more', path: '/more', roles: ALL_ROLES },
+  '/reports': { route: '/reports', path: '/reports', roles: ALL_ROLES },
+  '/administration': { route: '/administration', path: '/administration', roles: DIAGNOSTICS_ADMIN_ROLES },
+  '/notifications': { route: '/notifications', path: '/notifications', roles: ALL_ROLES },
+  '/help': { route: '/help', path: '/help', roles: ALL_ROLES },
+  '/about': { route: '/about', path: '/about', roles: ALL_ROLES },
+  '/roadshows': { route: '/roadshows', path: '/roadshows', roles: ALL_ROLES },
   '/workbench': { route: '/workbench', path: '/workbench', roles: ALL_ROLES },
   '/activities': { route: '/activities', path: '/activities', roles: ALL_ROLES },
   '/task-calendar': { route: '/task-calendar', path: '/task-calendar', roles: ALL_ROLES },
@@ -63,6 +79,7 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/leads/new': { route: '/leads/new', path: '/leads/new', roles: ALL_ROLES },
   '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY },
   '/leads/all': { route: '/leads/all', path: '/leads/all', roles: ADMIN_ONLY },
+  '/leads/:id/edit': { route: '/leads/:id/edit', path: '/leads', roles: ALL_ROLES },
   '/execution-intelligence': { route: '/execution-intelligence', path: '/execution-intelligence', roles: INSIGHT_ROLES },
   '/ncp-progress': { route: '/ncp-progress', path: '/ncp-progress', roles: INSIGHT_ROLES },
   '/trend-charts': { route: '/trend-charts', path: '/trend-charts', roles: INSIGHT_ROLES },
@@ -70,6 +87,7 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/team': { route: '/team', path: '/team', roles: TEAM_ROLES },
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
   '/settings': { route: '/settings', path: '/settings', roles: ALL_ROLES },
+  '/settings/system': { route: '/settings/system', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/settings/performance-diagnostics': {
     route: '/settings/performance-diagnostics',
     path: '/settings/performance-diagnostics',
@@ -82,8 +100,8 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
 /**
  * Pure route-level Feature Access decision (directly unit-testable).
  * `matchedPermission` is the caller's role permission profile (as the
- * sidebar resolves it); undefined => static role fallback, exactly like
- * the sidebar before any dynamic data has loaded.
+ * navigation resolves it); undefined => static role fallback, exactly like
+ * the navigation before any dynamic data has loaded.
  */
 export function resolveFeatureRouteAccess(
   routeKey: string,
@@ -95,6 +113,9 @@ export function resolveFeatureRouteAccess(
   const role = String(userRoleName || '').trim().toUpperCase();
   if (!role) return false; // no role: fail closed
   if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
+  if (routeKey === '/reports' && REPORT_SECTION_PATHS.some(path =>
+    matchedPermission?.menuAccess?.[path] === true
+  )) return true;
   return resolveMenuVisibility(userRoleName, matchedPermission, {
     path: entry.path,
     roles: entry.roles,
