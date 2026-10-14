@@ -32,7 +32,7 @@ export function getPool(): Pool {
     // fallback for local/dev environments that do not define POSTGRES_URL.\n    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
     if (!connectionString) {
-        throw new Error("DATABASE_URL environment variable is missing.");
+        throw new Error("Database connection string is not configured. Set POSTGRES_URL or DATABASE_URL in the Vercel environment.");
     }
 
     if (isPGliteUrl(connectionString)) {
