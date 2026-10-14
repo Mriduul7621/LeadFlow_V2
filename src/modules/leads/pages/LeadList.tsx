@@ -598,10 +598,26 @@ export default function LeadList() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
+        <div className="lf-mobile-lead-list" aria-label="Lead prospects">
+  {filteredLeads.length > 0 ? filteredLeads.map((lead) => (
+    <button key={lead.id} type="button" className="lf-mobile-lead-row" onClick={() => navigate('/leads/' + lead.id)} aria-label={'Open details for ' + (lead.prospectName || 'Unknown Prospect')}>
+      <span className="lf-mobile-lead-avatar" aria-hidden="true">
+        {String(lead.prospectName || 'U').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
+      </span>
+      <span className="lf-mobile-lead-copy">
+        <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
+        <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
+        <span className="lf-mobile-lead-status">{lead.currentStatus || 'Untouched'}</span>
+      </span>
+      <ChevronRight className="lf-mobile-lead-arrow" size={19} aria-hidden="true" />
+    </button>
+  )) : <div className="lf-mobile-lead-empty">No prospects match your filters.</div>}
+</div>
+
+<div className="lf-desktop-lead-table overflow-x-auto">
+  <table className="w-full text-left">
             <thead>
-              <tr className="bg-[#3C3C3C] text-white italic">
+              <tr className="bg-[#F8F8F5] text-slate-600">
                 <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Owner / Next Action</th>
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Campaign / Source</th>
@@ -611,23 +627,23 @@ export default function LeadList() {
                 <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50 italic">
+            <tbody className="divide-y divide-slate-100">
               {filteredLeads.length > 0 ? filteredLeads.map((lead, idx) => (
                 <motion.tr 
                   key={lead.id}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.05 }}
-                  className="group hover:bg-[#FBFAF8] transition-all cursor-pointer relative"
+                  className="group hover:bg-[#FBFAF8] transition-colors cursor-pointer relative"
                   onClick={() => setSelectedLead(lead)}
                 >
                   <td className="px-8 py-6">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-sm bg-slate-100 flex items-center justify-center text-primary font-black text-xs shrink-0 border border-slate-200 uppercase italic transition-all group-hover:bg-[#978C21] group-hover:text-white">
+                      <div className="w-10 h-10 rounded-xl bg-[#F7F5E9] flex items-center justify-center text-[#817719] font-bold text-xs shrink-0 border border-[#EAE7D6] transition-colors group-hover:bg-[#978C21] group-hover:text-white">
                         {String(lead.prospectName || 'U').split(' ').map(n => n[0] || '').join('')}
                       </div>
                       <div>
-                        <div className="font-black text-brand-text text-[13px] group-hover:text-[#978C21] transition-colors tracking-tight uppercase italic flex items-center gap-2">
+                        <div className="font-bold text-brand-text text-[13px] group-hover:text-[#817719] transition-colors tracking-tight flex items-center gap-2">
                            {lead.prospectName || 'Unknown Prospect'}
                            {(lead.collectedNCP || 0) > 100000 && <span className="w-2 h-2 rounded-full bg-[#978C21]" />}
                            <button
@@ -682,7 +698,7 @@ export default function LeadList() {
                     })()}
                   </td>
                   <td className="px-6 py-6 text-right">
-                    <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center justify-end gap-1.5 opacity-100 transition-opacity">
                        <button 
                          onClick={(e) => { e.stopPropagation(); setSelectedLead(lead); }}
                          className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
