@@ -28,8 +28,9 @@ export function getPool(): Pool {
     }
 
     // Prefer Vercel/Supabase POSTGRES_URL (the managed pooled endpoint) for
-    // serverless request concurrency. DATABASE_URL remains a compatibility
-    // fallback for local/dev environments that do not define POSTGRES_URL.\n    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+    // Keep the existing DATABASE_URL as the default; use POSTGRES_URL only when
+    // the deployment explicitly configures it.
+    const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
     if (!connectionString) {
         throw new Error("Database connection string is not configured. Set POSTGRES_URL or DATABASE_URL in the Vercel environment.");
