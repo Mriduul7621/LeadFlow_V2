@@ -4,7 +4,12 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 
 import { initializeDatabase } from './server/database/initialize.js';
-import { checkDatabaseHealth, isDatabaseConfigured, getPool } from './server/database/connection.js';
+import {
+  checkDatabaseHealth,
+  isDatabaseConfigured,
+  getPool,
+  resolveConnectionString,
+} from './server/database/connection.js';
 import productionRoutes from './server/routes/production.routes.js';
 import {
   applyProductionHttpSecurity,
@@ -46,27 +51,52 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VER
  */
 applyProductionHttpSecurity(app, { production: IS_PRODUCTION });
 
-let dbInitialized = false;
-let dbInitializationAttempted = false;
+/**
+ * One-time database bootstrap for the long-lived runtime.
+ *
+ * Started at module evaluation (while the HTTP server and, in development,
+ * Vite are still warming up) instead of on the first request; every caller
+ * awaits the SAME promise, so a request can never trigger a second
+ * initialization and the work overlaps startup instead of sitting in front
+ * of a user's request.
+ *
+ * The cost is bounded by the schema ledger: an up-to-date schema costs a
+ * handful of round trips (see database/migrationLedger.ts). Setting
+ * LEADFLOW_RUNTIME_MIGRATIONS=off reduces this to a reachability check for
+ * deployments whose pipeline runs `npm run migrate:production`.
+ */
+let dbInitializationPromise: Promise<void> | null = null;
 
-app.use(async (req, res, next) => {
-  if (!isDatabaseConfigured() || dbInitializationAttempted) {
+function ensureDatabaseInitialized(): Promise<void> {
+  if (!isDatabaseConfigured()) return Promise.resolve();
+  if (!dbInitializationPromise) {
+    dbInitializationPromise = initializeDatabase()
+      .then(result => {
+        console.log(
+          `✅ Database initialized in ${Math.round(result.durationMs)} ms` +
+            ` (${result.noOp ? 'schema current, baseline data present' : 'work applied'})`
+        );
+      })
+      .catch((error: any) => {
+        // Non-fatal, as before: the readiness endpoint and the
+        // database-backed routes stay honest about a failed bootstrap.
+        console.error('⚠️ Database initialization failed:', error?.message || error);
+        // Allow a later request to retry a failed bootstrap.
+        dbInitializationPromise = null;
+      });
+  }
+  return dbInitializationPromise;
+}
+
+// Boot-time kickoff — overlaps migrations/seeds with server startup.
+void ensureDatabaseInitialized();
+
+app.use(async (_req, _res, next) => {
+  if (!isDatabaseConfigured()) {
     next();
     return;
   }
-
-  dbInitializationAttempted = true;
-
-  if (!dbInitialized) {
-    try {
-      await initializeDatabase();
-      dbInitialized = true;
-      console.log('✅ Database initialized');
-    } catch (error) {
-      console.error('⚠️ Database initialization failed:', error);
-    }
-  }
-
+  await ensureDatabaseInitialized();
   next();
 });
 

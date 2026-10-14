@@ -849,6 +849,21 @@ const LEAD_SELECT = `
   LEFT JOIN users ab ON ab.id = l.assigned_by
 `;
 
+/**
+ * Upper bound for GET /leads (the client's shared "visible leads" read).
+ *
+ * Unchanged by default — this is a documented tuning knob, not a behavior
+ * change: at 5000 rows the JSON payload is already ~1.2 MB (≈78 KiB gzipped)
+ * and the client mirrors it into localStorage on every call, so
+ * deployments with very large books can lower it (LEADS_LIST_MAX_ROWS)
+ * once their pages pass an explicit `limit`, without a code change.
+ */
+function resolveLeadsListMaxRows(): number {
+  const configured = Number(process.env.LEADS_LIST_MAX_ROWS);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(Math.floor(configured), 5000);
+  return 5000;
+}
+
 function mapHierarchyRow(row: any) {
   return {
     id: row.id,
@@ -2549,8 +2564,11 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
 
-    const canCreate = await hasPermissionCode(caller, 'users.create');
-    const canEdit = await hasPermissionCode(caller, 'users.edit');
+    // Independent codes: one round trip of latency instead of two.
+    const [canCreate, canEdit] = await Promise.all([
+      hasPermissionCode(caller, 'users.create'),
+      hasPermissionCode(caller, 'users.edit'),
+    ]);
 
     // For validate, we check at least one permission, but per-row errors will surface missing perms
     if (mode === 'createOnly' && !canCreate) {
@@ -2629,8 +2647,11 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
 
-    const canCreate = await hasPermissionCode(caller, 'users.create');
-    const canEdit = await hasPermissionCode(caller, 'users.edit');
+    // Independent codes: one round trip of latency instead of two.
+    const [canCreate, canEdit] = await Promise.all([
+      hasPermissionCode(caller, 'users.create'),
+      hasPermissionCode(caller, 'users.edit'),
+    ]);
 
     if (mode === 'createOnly' && !canCreate) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
@@ -4457,8 +4478,10 @@ router.post('/notifications', requireAuth, async (req, res) => {
     if (!caller) {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
-    const canAssign = await hasPermissionCode(caller, 'leads.assign');
-    const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
+    const [canAssign, canTransfer] = await Promise.all([
+      hasPermissionCode(caller, 'leads.assign'),
+      hasPermissionCode(caller, 'leads.transfer'),
+    ]);
     if (!canAssign && !canTransfer) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to notify another user.' });
     }
@@ -4981,13 +5004,18 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
-    // Permission check: leads.view
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
-      perf.span('authz.permission');
+    // Permission check + visibility scope. Both derive from the caller and
+    // are independent, so they overlap instead of costing two serial round
+    // trips. The 403 is still returned before any row is read.
+    const [canViewLeads, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller),
+    ]);
+    perf.span('authz.permission');
+    if (!canViewLeads) {
       perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
-    perf.span('authz.permission');
 
     const params: any[] = [];
     const where: string[] = ['l.is_deleted = FALSE'];
@@ -5010,7 +5038,6 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       params.push(`%${String(search)}%`);
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
     }
-    const visibility = await resolveCallerVisibility(caller);
     perf.span('authz.visibility');
     if (!visibility.all) {
       params.push(visibility.userIds);
@@ -5019,8 +5046,9 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       // server-resolved users.id values) — see buildDashboardVisibilitySql.
       where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
     }
+    const listLimit = resolveLeadsListMaxRows();
     const result = await pool.query(
-      `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT 5000`,
+      `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT ${listLimit}`,
       params
     );
     perf.span('db.query');
@@ -5227,10 +5255,12 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       existingLead && assignmentRequested && assignmentChanged && existingAssignmentKey && targetAssignmentKey
     );
     if (assignmentRequested && (assignmentChanged || createAssignmentToOther)) {
-      const canAssign = await hasPermissionCode(caller, 'leads.assign');
-      const canTransfer = isExistingOwnerTransfer
-        ? await hasPermissionCode(caller, 'leads.transfer')
-        : false;
+      const [canAssign, canTransfer] = await Promise.all([
+        hasPermissionCode(caller, 'leads.assign'),
+        isExistingOwnerTransfer
+          ? hasPermissionCode(caller, 'leads.transfer')
+          : Promise.resolve(false),
+      ]);
       const authorized = isExistingOwnerTransfer ? (canAssign || canTransfer) : canAssign;
       if (!authorized) {
         perf.span('authz.permissions');
@@ -5672,15 +5702,19 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
     }
     const visibility = await resolveCallerVisibility(caller);
 
-    // Permission checks: fetched ONCE for the whole request (never per row).
-    const canImport = await hasPermissionCode(caller, 'leads.import');
-    const canCreate = await hasPermissionCode(caller, 'leads.create');
+    // Permission checks: fetched ONCE for the whole request (never per row)
+    // and in ONE parallel batch — the five codes are independent, so this is
+    // one round trip of latency instead of five sequential ones.
+    const [canImport, canCreate, canEdit, canAssign, canTransfer] = await Promise.all([
+      hasPermissionCode(caller, 'leads.import'),
+      hasPermissionCode(caller, 'leads.create'),
+      hasPermissionCode(caller, 'leads.edit'),
+      hasPermissionCode(caller, 'leads.assign'),
+      hasPermissionCode(caller, 'leads.transfer'),
+    ]);
     if (!canImport && !canCreate) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
     }
-    const canEdit = await hasPermissionCode(caller, 'leads.edit');
-    const canAssign = await hasPermissionCode(caller, 'leads.assign');
-    const canTransfer = await hasPermissionCode(caller, 'leads.transfer');
 
     /* ---- 1. Map rows (real spreadsheet headers + legacy API shape) ---- */
     const rows: ImportRow[] = incoming.map((raw, index) =>
@@ -6448,7 +6482,15 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     if (!caller) {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+    // Independent of each other and both derived from the caller: overlap
+    // them so the queue costs one round trip of authorization latency
+    // instead of two. Request-scoped memoization keeps the later
+    // resolveCallerVisibility() call free.
+    const [canViewQueue, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller),
+    ]);
+    if (!canViewQueue) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
 
@@ -6477,7 +6519,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     offset = Math.floor(offset);
 
     const bounds = getDhakaBusinessDayBounds(new Date());
-    const visibility = await resolveCallerVisibility(caller);
+    // `visibility` was resolved with the permission check above (request-
+    // scoped memo — no second lookup).
 
     let assignedFilter: { userId: string; employeeId: string } | null = null;
     let assignedOutOfScope = false;
@@ -6639,23 +6682,30 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const tomorrowLit = bounds.tomorrowStartIso.replace(/'/g, "''");
     const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
 
+    // --- one aggregate round trip, and a SARGABLE list predicate ---------
+    // `CASE WHEN ... = 'today'` cannot use idx_leads_assigned_next_follow_up_active
+    // (038): the expression forces a full scan before the filter. The
+    // half-open range below is logically identical — the buckets are
+    // 'overdue' (< todayStart), 'today' [todayStart, tomorrowStart) and
+    // 'upcoming' (>= tomorrowStart) — but leaves next_follow_up_at bare, so
+    // the partial index serves the page query directly.
+    const bucketRangePredicate =
+      bucket === 'overdue'
+        ? `l.next_follow_up_at < '${todayLit}'::timestamp`
+        : bucket === 'today'
+          ? `l.next_follow_up_at >= '${todayLit}'::timestamp AND l.next_follow_up_at < '${tomorrowLit}'::timestamp`
+          : bucket === 'upcoming'
+            ? `l.next_follow_up_at >= '${tomorrowLit}'::timestamp`
+            : null;
+
     const countSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${where.join(' AND ')} GROUP BY 1`;
-    const countRes = await pool.query(countSql, params);
-    const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
-    for (const row of countRes.rows) {
-      const b = String(row.bucket);
-      const c = Number(row.cnt) || 0;
-      if (b === 'overdue' || b === 'today' || b === 'upcoming') counts[b] = c;
-      counts.all += c;
-    }
-
-    const listWhere = bucket === 'all' ? where : [...where, `${bucketExpr} = '${bucket}'`];
-    const totalRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM leads l WHERE ${listWhere.join(' AND ')}`, params);
-    const total = Number(totalRes.rows[0]?.cnt || 0);
-
-    params.push(limit, offset);
-    const pLimit = params.length - 1;
-    const pOffset = params.length;
+    // The bucket aggregate already carries the exact total for each bucket,
+    // so the extra per-bucket COUNT is redundant: the page query is issued
+    // in parallel with the aggregate and the total is read from it.
+    const listWhere = bucketRangePredicate ? [...where, bucketRangePredicate] : where;
+    const listParams = [...params, limit, offset];
+    const pLimit = listParams.length - 1;
+    const pOffset = listParams.length;
 
     const listSql = `
       SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.area, l.priority,
@@ -6682,7 +6732,27 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       ORDER BY l.next_follow_up_at ASC
       LIMIT $${pLimit} OFFSET $${pOffset}
     `;
-    const listRes = await pool.query(listSql, params);
+    // Both statements are started before either is awaited: the page and the
+    // bucket counts do not depend on each other, so they cost one round trip
+    // of latency instead of two. (Previously the list ran only after BOTH
+    // the bucket aggregate and a redundant per-bucket COUNT had returned.)
+    const [countRes, listRes] = await Promise.all([
+      pool.query(countSql, params),
+      pool.query(listSql, listParams),
+    ]);
+
+    const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    for (const row of countRes.rows) {
+      const b = String(row.bucket);
+      const c = Number(row.cnt) || 0;
+      if (b === 'overdue' || b === 'today' || b === 'upcoming') counts[b] = c;
+      counts.all += c;
+    }
+    // `bucket=all` is the sum of every bucket; a specific bucket reads its
+    // own exact count. Identical numbers to the previous COUNT query, one
+    // fewer round trip.
+    const total = counts[(bucket as keyof typeof counts)] ?? 0;
+
     // Lead Quality for the page: two bulk signal queries for all returned
     // leads — never per-lead. Scores attach to visible rows only.
     const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
@@ -8037,7 +8107,11 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
   try {
     const caller = await getCallerDbInfo(req);
     if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+    const [canViewSchedule, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller),
+    ]);
+    if (!canViewSchedule) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
 
@@ -8068,7 +8142,8 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     if (!Number.isFinite(offset) || offset < 0) offset = 0;
     offset = Math.floor(offset);
 
-    const visibility = await resolveCallerVisibility(caller);
+    // `visibility` was resolved together with the permission check above
+    // (request-scoped memo — no second lookup).
 
     // assignedTo NARROWING filter — never widens visibility
     let assignedFilter: { userId: string; employeeId: string } | null = null;
@@ -9171,9 +9246,13 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
 
-    // Fail closed: require dashboard.view or leads.view (admin bypass inside hasPermissionCode).
-    const canDashboard = await hasPermissionCode(caller, 'dashboard.view');
-    const canLeads = await hasPermissionCode(caller, 'leads.view');
+    // Fail closed: require dashboard.view or leads.view (admin bypass inside
+    // hasPermissionCode). Both checks are memoized per request and
+    // independent, so they share one round trip of latency instead of two.
+    const [canDashboard, canLeads] = await Promise.all([
+      hasPermissionCode(caller, 'dashboard.view'),
+      hasPermissionCode(caller, 'leads.view'),
+    ]);
     perf.span('authz.permission');
     if (!canDashboard && !canLeads) {
       perf.finish(res);
