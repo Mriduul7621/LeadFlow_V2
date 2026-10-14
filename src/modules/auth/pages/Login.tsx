@@ -2,7 +2,7 @@ import React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Lock, User as UserIcon, LogIn, ShieldCheck, ArrowRight, ArrowLeft, Mail } from 'lucide-react';
+import { Lock, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -47,9 +47,6 @@ function getDesignationFromRole(role: UserRole): string {
   }
 }
 
-// @ts-ignore
-import bgImage from '../../../assets/images/income_planner_bg_1779253838380.png';
-
 const loginSchema = z.object({
   username: z.string().min(3, 'Employee ID is required'),
   password: z.string().min(5, 'Password must be at least 5 characters'),
@@ -68,7 +65,7 @@ const setupSchema = z.object({
 
 export default function Login() {
   const navigate = useNavigate();
-  const [showForm, setShowForm] = React.useState(false);
+  const [showSplash, setShowSplash] = React.useState(true);
   const [isFirstTimeSetup, setIsFirstTimeSetup] = React.useState(false);
   const [checkingSetup, setCheckingSetup] = React.useState(true);
   const isAuthenticated = useAuthStore(state => state.isAuthenticated);
@@ -101,6 +98,11 @@ export default function Login() {
 
   React.useEffect(() => {
     checkUserCount();
+  }, []);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setShowSplash(false), 1700);
+    return () => window.clearTimeout(timer);
   }, []);
 
   React.useEffect(() => {
@@ -169,292 +171,54 @@ export default function Login() {
   };
 
   return (
-    <div 
-      className="min-h-screen bg-black flex flex-col items-center justify-between p-6 sm:p-8 relative overflow-hidden select-none font-sans"
-      id="login-page-container"
-    >
-      <div 
-        className="absolute inset-0 bg-cover bg-center opacity-85 transition-opacity duration-700 mix-blend-luminosity pointer-events-none scale-105"
-        style={{ backgroundImage: `url(${bgImage})` }}
-        id="login-bg-overlay"
-      />
-      <div 
-        className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/60 to-black/90 pointer-events-none"
-        id="login-dark-gradient"
-      />
-
-      <div className="absolute bottom-6 left-8 z-20 hidden md:flex flex-col items-start gap-1" id="system-ready-indicator">
-        <span className="text-sm text-slate-400 opacity-70">System Ready</span>
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-ping" />
-          <span className="text-sm text-slate-400 opacity-80">
-            {isFirstTimeSetup ? 'Setup Required' : 'Secure Node Online'}
-          </span>
-        </div>
-      </div>
-
-      <div className="absolute bottom-6 right-8 z-20 hidden md:block" id="system-shield-indicator">
-        <ShieldCheck className="w-5 h-5 text-slate-500 opacity-40 hover:opacity-80 transition-opacity" />
-      </div>
-
-      <div className="flex-1 w-full flex flex-col items-center justify-center relative z-10 max-w-xl mx-auto" id="login-inner-wrap">
-        
-        <motion.div
-          initial={{ opacity: 0, y: -25 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-          className="mb-8 flex justify-center items-center select-none"
-          id="company-logo-container"
-        >
-          <img 
-            src="https://lh3.googleusercontent.com/d/1NrB07Qg9d6yhOib8gds5g4-HZLmbJng3"
-            alt="Shanta Life Logo"
-            className="h-24 md:h-28 w-auto object-contain transition-all duration-300"
-            referrerPolicy="no-referrer"
-          />
-        </motion.div>
-
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          className="inline-flex items-center gap-2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-sm text-slate-300 mb-8 select-none tracking-wide"
-          id="institutional-pill-badge"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-[#978C21] animate-pulse"></span>
-          Institutional Lead Management
-        </motion.div>
-
-        <AnimatePresence mode="wait">
-          {!showForm ? (
-            <motion.div
-              key="presentation"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.4 }}
-              className="w-full flex flex-col items-center justify-center text-center space-y-6"
-              id="presentation-panel"
-            >
-              <div className="space-y-1" id="headline-wrapper">
-                <h1 className="text-6xl sm:text-7xl font-black tracking-tight text-white uppercase leading-none select-none">
-                  LEAD
-                </h1>
-                <h1 className="text-6xl sm:text-7xl font-black tracking-tight text-[#978C21] uppercase leading-none select-none">
-                  FLOW
-                </h1>
+    <div id="login-page-container" className="leadflow-auth-root">
+      <AnimatePresence mode="wait" initial={false}>
+        {showSplash ? (
+          <motion.section key="splash" className="leadflow-splash-screen" initial={{ opacity: 1 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} onClick={() => setShowSplash(false)} aria-label="LeadFlow splash screen">
+            <div className="leadflow-splash-brand">
+              <img src="https://lh3.googleusercontent.com/d/1NrB07Qg9d6yhOib8gds5g4-HZLmbJng3" alt="Shanta Life logo" className="leadflow-splash-logo" referrerPolicy="no-referrer" />
+              <div className="leadflow-wordmark" aria-label="LeadFlow"><span>Lead</span><strong>Flow</strong></div>
+              <p className="leadflow-tagline">More Leads. Bigger Tomorrow.</p>
+            </div>
+            <div className="leadflow-splash-leaves" aria-hidden="true"><span className="leaf leaf-one" /><span className="leaf leaf-two" /><span className="leaf leaf-three" /></div>
+            <div className="leadflow-splash-footer">
+              <img src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO" alt="" referrerPolicy="no-referrer" />
+              <span>Shanta Life</span>
+            </div>
+          </motion.section>
+        ) : (
+          <motion.section key="login" className="leadflow-login-screen" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
+            <div className="leadflow-login-content">
+              <div className="leadflow-login-heading">
+                <h1>{isFirstTimeSetup ? 'Welcome' : 'Welcome Back'}</h1>
+                <p>{isFirstTimeSetup ? 'Set up your LeadFlow account' : 'Sign in to your LeadFlow account'}</p>
               </div>
-
-              <h2 className="text-base sm:text-lg font-semibold text-white tracking-wide select-none">
-                Smart Lead Management System
-              </h2>
-
-              <p className="text-slate-300 text-xs sm:text-sm font-medium leading-relaxed max-w-sm select-none opacity-80 decoration-none">
-                Track your leads, manage your team, and boost your sales — all in one place.
-              </p>
-
-              <div className="pt-4" id="cta-button-container">
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setShowForm(true)}
-                  className="px-8 py-3.5 bg-[#978C21] hover:bg-[#a59924] text-white rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-[#978C21]/20 group cursor-pointer"
-                  id="login-now-btn"
-                >
-                  {isFirstTimeSetup ? 'Initialize Console' : 'Get Started'} 
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </motion.button>
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key={isFirstTimeSetup ? "setup-form" : "login-form"}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.4 }}
-              className="w-full max-w-sm bg-black/40 backdrop-blur-2xl border border-white/10 p-8 sm:p-10 rounded-2xl shadow-2xl relative overflow-hidden"
-              id="glassmorphic-form-panel"
-            >
-              <div className="absolute top-0 left-0 w-full h-1.5 bg-[#978C21]" id="border-accent" />
-
-              {isFirstTimeSetup ? (
-                <>
-                  <div className="text-center mb-6" id="setup-header">
-                    <h2 className="text-2xl font-bold text-white tracking-tight">Admin Setup</h2>
-                    <p className="text-[#978C21] text-sm mt-1">Create the first admin account</p>
-                  </div>
-
-                  <form onSubmit={handleSetupSubmit(onSetupSubmit)} className="space-y-4" id="setup-credentials-form">
-                    <div className="space-y-1" id="setup-name-group">
-                      <label className="text-sm font-medium text-slate-300 block">Full Name</label>
-                      <div className="relative group">
-                        <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...registerSetup('fullName')}
-                          type="text" 
-                          className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500"
-                          placeholder="e.g. Mohammad Rahim"
-                          autoComplete="off"
-                        />
-                      </div>
-                      {setupErrors.fullName && <p className="text-[10px] text-red-400 font-bold">{setupErrors.fullName.message as string}</p>}
-                    </div>
-
-                    <div className="space-y-1" id="setup-empid-group">
-                      <label className="text-sm font-medium text-slate-300 block">Employee ID</label>
-                      <div className="relative group">
-                        <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...registerSetup('employeeId')}
-                          type="text" 
-                          className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500 uppercase tracking-wider"
-                          placeholder="e.g. ADMIN or ADM001"
-                          autoComplete="off"
-                        />
-                      </div>
-                      {setupErrors.employeeId && <p className="text-[10px] text-red-400 font-bold">{setupErrors.employeeId.message as string}</p>}
-                    </div>
-
-                    <div className="space-y-1" id="setup-email-group">
-                      <label className="text-sm font-medium text-slate-300 block">Email Address</label>
-                      <div className="relative group">
-                        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...registerSetup('email')}
-                          type="email" 
-                          className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-500"
-                          placeholder="e.g. admin@company.com"
-                          autoComplete="off"
-                        />
-                      </div>
-                      {setupErrors.email && <p className="text-[10px] text-red-400 font-bold">{setupErrors.email.message as string}</p>}
-                    </div>
-
-                    <div className="space-y-1" id="setup-password-group">
-                      <label className="text-sm font-medium text-slate-300 block">Password</label>
-                      <div className="relative group">
-                        <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...registerSetup('password')}
-                          type="password" 
-                          className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-600"
-                          placeholder="Enter password"
-                        />
-                      </div>
-                      {setupErrors.password && <p className="text-[10px] text-red-400 font-bold">{setupErrors.password.message as string}</p>}
-                    </div>
-
-                    <div className="space-y-1" id="setup-confirmpassword-group">
-                      <label className="text-sm font-medium text-slate-300 block">Confirm Password</label>
-                      <div className="relative group">
-                        <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...registerSetup('confirmPassword')}
-                          type="password" 
-                          className="w-full pl-11 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-xs font-semibold text-white placeholder-slate-600"
-                          placeholder="Enter password"
-                        />
-                      </div>
-                      {setupErrors.confirmPassword && <p className="text-[10px] text-red-400 font-bold">{setupErrors.confirmPassword.message as string}</p>}
-                    </div>
-
-                    <button 
-                      type="submit" 
-                      disabled={isSetupSubmitting}
-                      className="w-full py-3 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
-                      id="setup-submit-btn"
-                    >
-                      {isSetupSubmitting ? (
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      ) : (
-                        <>
-                          <ShieldCheck className="w-4 h-4" />
-                          Create Admin Account
-                        </>
-                      )}
-                    </button>
+              <div className="leadflow-login-form">
+                {isFirstTimeSetup ? (
+                  <form onSubmit={handleSetupSubmit(onSetupSubmit)} className="leadflow-credentials-form">
+                    <div className="leadflow-login-field"><label htmlFor="setup-full-name">Full Name</label><input id="setup-full-name" {...registerSetup('fullName')} type="text" placeholder="Enter your full name" autoComplete="name" />{setupErrors.fullName && <p className="leadflow-field-error">{setupErrors.fullName.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="setup-employee-id">Employee ID</label><input id="setup-employee-id" {...registerSetup('employeeId')} type="text" placeholder="Enter your employee ID" autoComplete="off" />{setupErrors.employeeId && <p className="leadflow-field-error">{setupErrors.employeeId.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="setup-email">Email Address</label><input id="setup-email" {...registerSetup('email')} type="email" placeholder="Enter your email address" autoComplete="email" />{setupErrors.email && <p className="leadflow-field-error">{setupErrors.email.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="setup-password">Password</label><input id="setup-password" {...registerSetup('password')} type="password" placeholder="Create a password" autoComplete="new-password" />{setupErrors.password && <p className="leadflow-field-error">{setupErrors.password.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="setup-confirm-password">Confirm Password</label><input id="setup-confirm-password" {...registerSetup('confirmPassword')} type="password" placeholder="Confirm your password" autoComplete="new-password" />{setupErrors.confirmPassword && <p className="leadflow-field-error">{setupErrors.confirmPassword.message as string}</p>}</div>
+                    <button type="submit" disabled={isSetupSubmitting} className="leadflow-login-submit">{isSetupSubmitting ? <span className="leadflow-spinner" /> : <><ShieldCheck size={16} /> Create Admin Account</>}</button>
                   </form>
-                </>
-              ) : (
-                <>
-                  <div className="text-center mb-8" id="form-header">
-                    <h2 className="text-2xl font-black text-white uppercase tracking-tight">Welcome Back</h2>
-                    <p className="text-[#978C21] text-[10px] font-bold uppercase tracking-widest mt-1">Login with your credentials</p>
-                  </div>
-
-                  <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" id="credential-form">
-                    
-                    <div className="space-y-2" id="username-field-group">
-                      <label className="text-sm font-medium text-slate-300 block">Employee ID</label>
-                      <div className="relative group">
-                        <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...register('username')}
-                          type="text" 
-                          className="w-full pl-11 pr-4 py-3.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-sm font-semibold text-white placeholder-slate-500 uppercase tracking-wider"
-                          placeholder="Enter your ID (e.g. RM001)"
-                          autoComplete="off"
-                        />
-                      </div>
-                      {errors.username && <p className="text-xs text-red-400 font-bold">{errors.username.message as string}</p>}
-                    </div>
-
-                    <div className="space-y-2" id="password-field-group">
-                      <label className="text-sm font-medium text-slate-300 block">Password</label>
-                      <div className="relative group">
-                        <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-[#978C21] transition-colors" />
-                        <input 
-                          {...register('password')}
-                          type="password" 
-                          className="w-full pl-11 pr-4 py-3.5 bg-white/5 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] transition-all text-sm font-semibold text-white placeholder-slate-600"
-                          placeholder="Enter your password"
-                        />
-                      </div>
-                      {errors.password && <p className="text-xs text-red-400 font-bold">{errors.password.message as string}</p>}
-                    </div>
-
-                    <button 
-                      type="submit" 
-                      disabled={isSubmitting}
-                      className="w-full py-4 mt-2 bg-[#978C21] hover:bg-[#a59924] text-white rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#978C21]/15 cursor-pointer active:scale-[0.98]"
-                      id="form-submit-btn"
-                    >
-                      {isSubmitting ? (
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      ) : (
-                        <>
-                          <LogIn className="w-4 h-4" />
-                          Login
-                        </>
-                      )}
-                    </button>
+                ) : (
+                  <form onSubmit={handleSubmit(onSubmit)} className="leadflow-credentials-form" id="credential-form">
+                    <div className="leadflow-login-field"><label htmlFor="employee-id">Employee ID</label><input id="employee-id" {...register('username')} type="text" placeholder="Enter your employee ID" autoComplete="username" autoCapitalize="characters" />{errors.username && <p className="leadflow-field-error">{errors.username.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="employee-password">Password</label><div className="leadflow-password-wrap"><input id="employee-password" {...register('password')} type="password" placeholder="Enter your password" autoComplete="current-password" /><Lock size={16} aria-hidden="true" /></div>{errors.password && <p className="leadflow-field-error">{errors.password.message as string}</p>}</div>
+                    <div className="leadflow-login-options"><label className="leadflow-remember"><input type="checkbox" /> <span>Remember Me</span></label><button type="button" className="leadflow-forgot" onClick={() => toast.info('Please contact your administrator to reset your password.')}>Forgot Password?</button></div>
+                    <button type="submit" disabled={isSubmitting || checkingSetup} className="leadflow-login-submit" id="form-submit-btn">{isSubmitting ? <span className="leadflow-spinner" /> : 'Login'}</button>
                   </form>
-                </>
-              )}
-
-              <div className="mt-8 pt-6 border-t border-white/5 flex justify-center text-center" id="form-back-nav">
-                <button 
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="text-sm text-slate-400 hover:text-[#978C21] transition-colors font-medium flex items-center gap-2 cursor-pointer"
-                  id="back-trigger"
-                >
-                  <ArrowLeft className="w-3 h-3" /> Back to home
-                </button>
+                )}
+                <p className="leadflow-login-help">Don’t have an account? Contact your admin</p>
               </div>
-
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-      </div>
-
-      <div className="relative z-10 w-full text-center pb-2 select-none" id="login-footer">
-        <p className="text-sm text-slate-500 opacity-70">
-          © 2024 Shanta Life Insurance. All Rights Reserved.
-        </p>
-      </div>
+            </div>
+            <div className="leadflow-login-silhouette" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div>
+            <footer className="leadflow-auth-footer">© 2026 Shanta Life Insurance. All Rights Reserved.</footer>
+          </motion.section>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

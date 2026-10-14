@@ -515,3 +515,380 @@
     font-size: 12px;
   }
 }
+
+
+/* Reference-matched LeadFlow splash and authentication screens */
+.leadflow-auth-root {
+  min-height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  background: #FDFBF7;
+  color: #26332D;
+  font-family: "Open Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+.leadflow-splash-screen {
+  position: relative;
+  display: flex;
+  min-height: 100dvh;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(180deg, #FFFDF8 0%, #FBFAF1 64%, #F4F1E1 100%);
+  cursor: pointer;
+}
+.leadflow-splash-brand {
+  z-index: 2;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 22px 8vh;
+  text-align: center;
+  transform: translateY(-2vh);
+}
+.leadflow-splash-logo {
+  display: block;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 9px;
+  object-fit: contain;
+  object-position: center;
+  mix-blend-mode: multiply;
+}
+.leadflow-wordmark {
+  color: #182B25;
+  font-size: clamp(36px, 10vw, 48px);
+  font-weight: 800;
+  line-height: 1.04;
+  letter-spacing: -2.2px;
+}
+.leadflow-wordmark strong {
+  color: #F3702B;
+  font-weight: 800;
+}
+.leadflow-tagline {
+  margin: 5px 0 0;
+  color: #5D665D;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.leadflow-splash-leaves {
+  position: absolute;
+  z-index: 0;
+  right: -9%;
+  bottom: 7%;
+  left: -9%;
+  height: 39%;
+  pointer-events: none;
+  opacity: .95;
+}
+.leadflow-splash-leaves .leaf {
+  position: absolute;
+  display: block;
+  border-radius: 100% 0 100% 0;
+  transform-origin: bottom center;
+}
+.leadflow-splash-leaves .leaf-one {
+  left: 8%;
+  bottom: -7%;
+  width: 57%;
+  height: 76%;
+  transform: rotate(-24deg);
+  background: linear-gradient(135deg, rgba(223, 229, 194, .28), rgba(192, 205, 151, .62));
+}
+.leadflow-splash-leaves .leaf-two {
+  left: 31%;
+  bottom: -15%;
+  width: 58%;
+  height: 92%;
+  transform: rotate(20deg);
+  background: linear-gradient(135deg, rgba(220, 228, 192, .75), rgba(242, 235, 204, .22));
+}
+.leadflow-splash-leaves .leaf-three {
+  right: -1%;
+  bottom: -22%;
+  width: 44%;
+  height: 79%;
+  transform: rotate(42deg);
+  background: linear-gradient(135deg, rgba(249, 218, 190, .18), rgba(243, 112, 43, .30));
+}
+.leadflow-splash-footer {
+  position: absolute;
+  z-index: 2;
+  bottom: max(28px, env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #29392D;
+  font-size: 12px;
+  font-weight: 700;
+}
+.leadflow-splash-footer img {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+}
+.leadflow-login-screen {
+  position: relative;
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  padding: max(52px, calc(env(safe-area-inset-top) + 34px)) 24px max(22px, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, #FFFDF8 0%, #FFFFFF 54%, #F7F5E9 100%);
+}
+.leadflow-login-content {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+}
+.leadflow-login-heading {
+  margin-bottom: 30px;
+}
+.leadflow-login-heading h1 {
+  margin: 0 0 6px;
+  color: #222D27;
+  font-size: 27px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -.65px;
+}
+.leadflow-login-heading p {
+  margin: 0;
+  color: #74796F;
+  font-size: 13px;
+  font-weight: 500;
+}
+.leadflow-login-form {
+  width: 100%;
+}
+.leadflow-credentials-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.leadflow-login-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.leadflow-login-field > label {
+  color: #333D35;
+  font-size: 12px;
+  font-weight: 700;
+}
+.leadflow-login-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 45px;
+  padding: 0 12px;
+  border: 1px solid #E4E5DC;
+  border-radius: 7px;
+  outline: none;
+  background: rgba(255,255,255,.88);
+  color: #26332D;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(32, 44, 32, .025);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.leadflow-login-field input::placeholder {
+  color: #A1A49A;
+  font-weight: 400;
+}
+.leadflow-login-field input:focus {
+  border-color: #978C21;
+  box-shadow: 0 0 0 3px rgba(151, 140, 33, .12);
+}
+.leadflow-password-wrap {
+  position: relative;
+}
+.leadflow-password-wrap input {
+  padding-right: 38px;
+}
+.leadflow-password-wrap > svg {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  color: #858A7F;
+  transform: translateY(-50%);
+}
+.leadflow-login-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: -4px;
+}
+.leadflow-remember {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #596153;
+  font-size: 10px;
+  font-weight: 600;
+}
+.leadflow-remember input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #817719;
+}
+.leadflow-forgot {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #817719;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.leadflow-login-submit {
+  display: inline-flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: #817719;
+  color: #FFFFFF;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 4px 10px rgba(129, 119, 25, .15);
+  cursor: pointer;
+  transition: background .16s ease, transform .16s ease;
+}
+.leadflow-login-submit:hover {
+  background: #716913;
+}
+.leadflow-login-submit:active {
+  transform: scale(.99);
+}
+.leadflow-login-submit:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+.leadflow-field-error {
+  margin: -2px 0 0;
+  color: #C43C32;
+  font-size: 10px;
+  font-weight: 600;
+}
+.leadflow-login-help {
+  margin: 17px 0 0;
+  color: #7E8277;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 500;
+}
+.leadflow-auth-footer {
+  position: relative;
+  z-index: 2;
+  margin-top: auto;
+  padding-top: 28px;
+  color: #878A7D;
+  text-align: center;
+  font-size: 10px;
+}
+.leadflow-login-silhouette {
+  position: absolute;
+  right: -3%;
+  bottom: 3%;
+  left: -3%;
+  z-index: 0;
+  display: flex;
+  height: 16%;
+  align-items: flex-end;
+  justify-content: space-around;
+  overflow: hidden;
+  opacity: .16;
+  pointer-events: none;
+}
+.leadflow-login-silhouette span {
+  position: relative;
+  width: 11%;
+  height: 58%;
+  border-radius: 48% 48% 5% 5%;
+  background: #A4B17B;
+}
+.leadflow-login-silhouette span::before {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #A4B17B;
+  content: "";
+  transform: translateX(-50%);
+}
+.leadflow-login-silhouette span:nth-child(2n) {
+  height: 74%;
+  background: #B9C59A;
+}
+.leadflow-login-silhouette span:nth-child(2n)::before {
+  background: #B9C59A;
+}
+.leadflow-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,.45);
+  border-top-color: #FFFFFF;
+  border-radius: 50%;
+  animation: leadflow-spin .7s linear infinite;
+}
+@keyframes leadflow-spin {
+  to { transform: rotate(360deg); }
+}
+@media (min-width: 768px) {
+  .leadflow-splash-screen,
+  .leadflow-login-screen {
+    min-height: 100vh;
+  }
+  .leadflow-login-screen {
+    justify-content: center;
+    padding-top: 40px;
+  }
+  .leadflow-login-heading {
+    margin-bottom: 32px;
+  }
+  .leadflow-login-content {
+    max-width: 380px;
+  }
+  .leadflow-splash-footer {
+    bottom: 34px;
+  }
+}
+@media (max-height: 680px) {
+  .leadflow-login-screen {
+    padding-top: 24px;
+  }
+  .leadflow-login-heading {
+    margin-bottom: 20px;
+  }
+  .leadflow-credentials-form {
+    gap: 14px;
+  }
+  .leadflow-login-field input {
+    min-height: 40px;
+  }
+}
