@@ -166,6 +166,43 @@ module-eval warm-up, now bounded at a few round trips.
   a self-sustaining startup request loop. The event is reserved for
   save/delete mutations.
 
+### 2.5 Dashboard wiring completion (follow-up commit)
+
+Making the network fast is only half of the perceived fix: the routed
+Dashboard (`src/modules/dashboard/pages/Dashboard.tsx`) had sections that
+were **fetched but never rendered**, and one section that could never leave
+its loading state. That is also why 13 pre-existing tests were red on
+`main` — the guards were right, the screen was incomplete.
+
+* **Today's Focus** now renders the server-authoritative
+  `TodayTomorrowPanel` (overdue/today/upcoming counts from
+  `GET /api/dashboard` plus the already-fetched follow-up-queue and
+  2-day scheduled-activity lists) instead of two dead count cells. No new
+  request: every figure was already in memory.
+* **Recent Leads** — the section was stuck on its skeleton forever because
+  `recentLeadsLoading` was never resolved. It now reads the capped,
+  newest-first projection of the local mirror of server data
+  (`localDb.getRecentLeads(5)`): zero requests, no second authority, and
+  an honest empty state on a first-ever visit. The KPI loader is explicitly
+  forbidden from touching the mirror (guard: perf-phase2 G).
+* **Lead Quality**, **Trend/Team Performance**, **Sales Pipeline**,
+  **Follow-Up Discipline** and **Needs Attention** are rendered again,
+  bound to the SAME `GET /api/dashboard` payload (`metrics.quality`,
+  `metrics.trendData`, `metrics.teamStats`, `statusCounts`) — no extra
+  fetch, and `noUnusedLocals` is clean again (11 dead bindings removed).
+* **Task Calendar** is mounted last, inside its Suspense boundary and only
+  once `calendarReady` flips (primary content settled), so the heavy
+  calendar chunk and its own request stay off the critical path.
+* **Guards repaired, not deleted.** Several source guards still described
+  the pre-redesign layout (18 routes, `TodayTomorrowPanel` rendered
+  directly, old login hero copy, `Lead Workspace` / `Lead Pool` shell
+  labels, a dead `const formattedDateRange` slice anchor that made two
+  tests vacuous). They now assert the shipped structure with the same or
+  stronger guarantees — e.g. the route guard compares *every*
+  `ProtectedRoute` / `<LazyPage>` against the gated-route count instead of
+  a magic `18`, and the loader-slice guards now fail loudly if their
+  boundary marker disappears.
+
 ---
 
 ## 3. Measured result

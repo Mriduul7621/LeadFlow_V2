@@ -332,7 +332,24 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
   });
 
   it('adds no full lead fetch or new daily requests; summaries use only the existing loaded arrays', () => {
-    assert.doesNotMatch(source, /\bgetLeads\s*\(|\bfetch\s*\(|\blocalDb\b|\blocalStorage\b/);
+    // No network read may be introduced by the presentation layer.
+    assert.doesNotMatch(source, /\bfetch\s*\(/);
+    assert.doesNotMatch(source, /\bgetLeads\s*\(/);
+    assert.ok(!source.includes('localStorage'), 'no direct localStorage access');
+    // The ONE permitted local source is the read-only mirror of server data
+    // (`localDb.getLeads()`), used by Recent Leads: it performs no request,
+    // and it is explicitly forbidden inside the KPI loader (perf-phase2 G
+    // enforces the same boundary).
+    assert.equal(
+      (source.match(/localDb\.getRecentLeads\(/g) || []).length,
+      1,
+      'exactly one capped mirror read (Recent Leads) — never a second data source',
+    );
+    {
+      const kpiStart = source.indexOf('const loadDashboardData');
+      const kpiEnd = source.indexOf('const loadDailyExecution');
+      assert.ok(!source.slice(kpiStart, kpiEnd).includes('localDb'), 'the KPI loader must not read the mirror');
+    }
     assert.equal((source.match(/leadService\.getFollowUpQueue\(/g) || []).length, 2);
     assert.equal((source.match(/scheduledActivityService\.list\(/g) || []).length, 1);
     assert.match(source, /getFollowUpQueue\(\{ bucket: 'today', limit: 50 \}\)/);
