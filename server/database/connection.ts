@@ -27,7 +27,9 @@ export function getPool(): Pool {
         return pglitePool as unknown as Pool;
     }
 
-    // Prefer Vercel/Supabase POSTGRES_URL (the managed pooled endpoint) for\n    // serverless request concurrency. DATABASE_URL remains a compatibility\n    // fallback for local/dev environments that do not define POSTGRES_URL.\n    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+    // Prefer Vercel/Supabase POSTGRES_URL (the managed pooled endpoint) for
+    // serverless request concurrency. DATABASE_URL remains a compatibility
+    // fallback for local/dev environments that do not define POSTGRES_URL.\n    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
     if (!connectionString) {
         throw new Error("DATABASE_URL environment variable is missing.");
