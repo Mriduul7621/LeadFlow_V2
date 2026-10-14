@@ -6647,25 +6647,13 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
 
     const countSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${where.join(' AND ')} GROUP BY 1`;
-    const countRes = await pool.query(countSql, params);
-    perf.span('db.countBuckets');
-    const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
-    for (const row of countRes.rows) {
-      const b = String(row.bucket);
-      const c = Number(row.cnt) || 0;
-      if (b === 'overdue' || b === 'today' || b === 'upcoming') counts[b] = c;
-      counts.all += c;
-    }
-
     const listWhere = bucket === 'all' ? where : [...where, `${bucketExpr} = '${bucket}'`];
-    const totalRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM leads l WHERE ${listWhere.join(' AND ')}`, params);
-    perf.span('db.countTotal');
-    const total = Number(totalRes.rows[0]?.cnt || 0);
-
-    params.push(limit, offset);
-    const pLimit = params.length - 1;
-    const pOffset = params.length;
-
+    // The bucket counts already provide the exact total for the requested
+    // bucket. Keep list parameters separate so the count and page queries
+    // can run concurrently without mutating a shared parameter array.
+    const listParams = [...params, limit, offset];
+    const pLimit = listParams.length - 1;
+    const pOffset = listParams.length;
     const listSql = `
       SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.area, l.priority,
              l.current_status, l.next_follow_up_at, l.last_contacted_at,
@@ -6691,8 +6679,28 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       ORDER BY l.next_follow_up_at ASC
       LIMIT $${pLimit} OFFSET $${pOffset}
     `;
-    const listRes = await pool.query(listSql, params);
-    perf.span('db.list');
+    const measureQuery = async <T,>(label: string, query: () => Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        return await query();
+      } finally {
+        perf.measure(label, Date.now() - startedAt);
+      }
+    };
+    const [countRes, listRes] = await Promise.all([
+      measureQuery('db.countBuckets', () => pool.query(countSql, params)),
+      measureQuery('db.list', () => pool.query(listSql, listParams)),
+    ]);
+    perf.span('db.queries');
+    const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    for (const row of countRes.rows) {
+      const b = String(row.bucket);
+      const c = Number(row.cnt) || 0;
+      if (b === 'overdue' || b === 'today' || b === 'upcoming') counts[b] = c;
+      counts.all += c;
+    }
+    const total = counts[bucket as keyof typeof counts];
+    
     // Lead Quality for the page: two bulk signal queries for all returned
     // leads — never per-lead. Scores attach to visible rows only.
     const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
@@ -8220,15 +8228,12 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
 
     const whereSql = where.join(' AND ');
-    const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
-    perf.span('db.countTotal');
-    const total = Number(countRes.rows[0]?.cnt || 0);
-
-    params.push(limit, offset);
-    const pLimit = params.length - 1;
-    const pOffset = params.length;
-    const listRes = await pool.query(
-      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status,
+    // Count and page reads share filters but are independent; use separate
+    // parameter arrays and execute concurrently to avoid an extra round trip.
+    const listParams = [...params, limit, offset];
+    const pLimit = listParams.length - 1;
+    const pOffset = listParams.length;
+    const listSql = `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status,
               l.next_follow_up_at AS lead_next_follow_up_at, l.last_contacted_at AS lead_last_contacted_at,
               l.created_at AS lead_created_at, l.expected_premium AS lead_expected_premium,
               l.custom_fields->>'interestedAmount' AS lead_interested_amount
@@ -8236,10 +8241,21 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
        JOIN leads l ON l.id = sa.lead_id
        WHERE ${whereSql}
        ORDER BY sa.scheduled_at ASC
-       LIMIT $${pLimit} OFFSET $${pOffset}`,
-      params
-    );
-    perf.span('db.list');
+       LIMIT $${pLimit} OFFSET $${pOffset}`;
+    const measureQuery = async <T,>(label: string, query: () => Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        return await query();
+      } finally {
+        perf.measure(label, Date.now() - startedAt);
+      }
+    };
+    const [countRes, listRes] = await Promise.all([
+      measureQuery('db.countTotal', () => pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params)),
+      measureQuery('db.list', () => pool.query(listSql, listParams)),
+    ]);
+    perf.span('db.queries');
+    const total = Number(countRes.rows[0]?.cnt || 0);
     // Parent-lead quality for the page: two bulk signal queries over the
     // distinct parent leads — never per-row.
     const parentIds = Array.from(
