@@ -731,7 +731,11 @@
   justify-content: flex-start;
   overflow: hidden;
   padding: max(52px, calc(env(safe-area-inset-top) + 34px)) 24px max(22px, env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, #FFFDF8 0%, #FFFFFF 54%, #F7F5E9 100%);
+  background-color: #FDFBF3;
+  background-image: linear-gradient(rgba(255, 255, 255, .16), rgba(255, 255, 255, .16)), url("/login-background.png");
+  background-position: center bottom;
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 .leadflow-login-content {
   position: relative;
@@ -894,45 +898,6 @@
   color: #878A7D;
   text-align: center;
   font-size: 10px;
-}
-.leadflow-login-silhouette {
-  position: absolute;
-  right: -3%;
-  bottom: 3%;
-  left: -3%;
-  z-index: 0;
-  display: flex;
-  height: 16%;
-  align-items: flex-end;
-  justify-content: space-around;
-  overflow: hidden;
-  opacity: .16;
-  pointer-events: none;
-}
-.leadflow-login-silhouette span {
-  position: relative;
-  width: 11%;
-  height: 58%;
-  border-radius: 48% 48% 5% 5%;
-  background: #A4B17B;
-}
-.leadflow-login-silhouette span::before {
-  position: absolute;
-  top: -26px;
-  left: 50%;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #A4B17B;
-  content: "";
-  transform: translateX(-50%);
-}
-.leadflow-login-silhouette span:nth-child(2n) {
-  height: 74%;
-  background: #B9C59A;
-}
-.leadflow-login-silhouette span:nth-child(2n)::before {
-  background: #B9C59A;
 }
 .leadflow-spinner {
   width: 16px;

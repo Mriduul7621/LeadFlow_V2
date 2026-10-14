@@ -214,7 +214,6 @@ export default function Login() {
                 <p className="leadflow-login-help">Don’t have an account? Contact your admin</p>
               </div>
             </div>
-            <div className="leadflow-login-silhouette" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div>
             <footer className="leadflow-auth-footer">© 2026 Shanta Life Insurance. All Rights Reserved.</footer>
           </motion.section>
         )}
