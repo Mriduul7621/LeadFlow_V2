@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import type { Lead } from '../../shared/types';
 import {
   Users,
   Inbox,
@@ -683,6 +684,8 @@ export default function Dashboard() {
   const [todayScheduled, setTodayScheduled] = useState<ScheduledActivity[]>([]);
   const [tomorrowScheduled, setTomorrowScheduled] = useState<ScheduledActivity[]>([]);
   const [dailyLoading, setDailyLoading] = useState(true);
+  const [recentLeads, setRecentLeads] = useState<Lead[]>([]);
+  const [recentLeadsLoading, setRecentLeadsLoading] = useState(true);
 
   const loadDashboardData = useCallback(async () => {
     if (!user) {
@@ -989,68 +992,54 @@ export default function Dashboard() {
       ) : (
         <>
 
-          {/* ==== Executive Snapshot ==== */}
-          <ExecutiveSnapshot
-            totalLeads={totalLeads}
-            conversionRate={metrics?.conversionRate || '0.0%'}
-            collectedNCP={formatMoney(metrics?.collected ?? 0)}
-            projectedNCP={formatMoney(metrics?.projected ?? 0)}
-            activeLeads={metrics?.activeLeads ?? 0}
-            pipelineLocked={metrics?.pipelineLocked ?? 0}
-            overdueFollowUps={followUpCounts.overdue}
-          />
-
-          {/* ==== Today & Tomorrow ==== */}
-          <TodayTomorrowPanel
-            todayFollowUps={todayFollowUps}
-            tomorrowFollowUps={tomorrowFollowUps}
-            todayScheduled={todayScheduled}
-            tomorrowScheduled={tomorrowScheduled}
-            dailyLoading={dailyLoading}
-          />
-
-          {/* ==== Sales Pipeline ==== */}
-          <SalesPipeline statusCounts={statusCounts} totalLeads={totalLeads} />
-
-          {/* ==== Lead Quality (server-computed band distribution) ==== */}
-          <LeadQualitySnapshot quality={metrics?.quality} />
-
-          {/* ==== Follow-up Discipline ==== */}
-          <FollowUpDiscipline
-            overdue={followUpCounts.overdue}
-            dueToday={followUpCounts.today}
-            upcoming={followUpCounts.upcoming}
-            total={followUpCounts.all}
-          />
-
-          {/* ==== Needs Attention ==== */}
-          <NeedsAttentionSection untouched={statusCounts['Untouched'] ?? 0} />
-
-          {/* ==== Performance Insights ==== */}
-          <PerformanceInsights
-            trendData={metrics?.trendData}
-            teamStats={metrics?.teamStats}
-          />
-
-          {/* ==== Task Calendar (last section — deferred: primary KPIs,
-              Today/Tomorrow execution, pipeline, follow-up discipline,
-              needs-attention and insights are all usable before this
-              section's chunk and 90-day window load) ==== */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6 overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <SectionHeading title="Task Calendar" desc="Planned activities for today and tomorrow" />
-            <div className="sr-only">Task Calendar</div>
-            {calendarReady ? (
-              <Suspense fallback={<TaskCalendarPlaceholder />}>
-                <TaskCalendar embedded={true} />
-              </Suspense>
-            ) : (
-              <TaskCalendarPlaceholder />
-            )}
-            <div className="mt-4 flex justify-end">
-              <Link to="/task-calendar" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-                Open Calendar <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
+          <section className="lf-dashboard-kpis">
+            <div className="lf-section-title">
+              <div><p className="lf-eyebrow">AT A GLANCE</p><h2>Core Performance</h2></div>
+              <span className="lf-period-chip">{resolved.display}</span>
             </div>
+            <ExecutiveSnapshot
+              totalLeads={totalLeads}
+              conversionRate={metrics?.conversionRate || '0.0%'}
+              collectedNCP={formatMoney(metrics?.collected ?? 0)}
+              projectedNCP={formatMoney(metrics?.projected ?? 0)}
+              activeLeads={metrics?.activeLeads ?? 0}
+              pipelineLocked={metrics?.pipelineLocked ?? 0}
+              overdueFollowUps={followUpCounts.overdue}
+            />
+          </section>
+
+          <section className="lf-recent-leads">
+            <div className="lf-section-title">
+              <div><p className="lf-eyebrow">LATEST ACTIVITY</p><h2>Recent Leads</h2><p className="lf-section-subtitle">Your five most recently added leads</p></div>
+              <Link to="/leads" className="lf-view-all">View all <ChevronRight size={16} /></Link>
+            </div>
+            {recentLeadsLoading ? (
+              <div className="lf-recent-empty">Loading recent leads…</div>
+            ) : recentLeads.length === 0 ? (
+              <div className="lf-recent-empty">
+                <Users size={26} />
+                <strong>No recent leads yet</strong>
+                <span>Newly added leads will appear here.</span>
+                {canCreateLead && <Link to="/leads/new" className="lf-primary-action"><Plus size={16} /> Add your first lead</Link>}
+              </div>
+            ) : (
+              <div className="lf-recent-list">
+                {recentLeads.map((lead) => (
+                  <Link to={`/leads/${lead.id}`} key={lead.id} className="lf-recent-row">
+                    <div className="lf-lead-avatar">{(lead.prospectName || lead.customerName || 'L').trim().charAt(0).toUpperCase()}</div>
+                    <div className="lf-lead-main">
+                      <strong>{lead.prospectName || lead.customerName || 'Unnamed lead'}</strong>
+                      <span>{lead.mobile || 'No phone number'}{lead.area ? ` · ${lead.area}` : ''}</span>
+                    </div>
+                    <div className="lf-lead-meta">
+                      <span className="lf-status-pill">{lead.status || 'New'}</span>
+                      <small>{lead.timestamp ? new Date(lead.timestamp).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) : '—'}</small>
+                    </div>
+                    <ChevronRight className="lf-row-chevron" size={17} />
+                  </Link>
+                ))}
+              </div>
+            )}
           </section>
 
         </>
