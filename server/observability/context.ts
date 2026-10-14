@@ -40,9 +40,9 @@ export interface RequestObservabilityContext {
   /** Accumulated instrumented PostgreSQL time in ms (rounded at read time). */
   dbDurationMs: number;
   /** Time spent waiting to acquire a pooled PostgreSQL client. */
-  dbAcquireDurationMs: number;
+  dbAcquireDurationMs?: number;
   /** Highest observed pool queue length in this request. */
-  dbPoolWaitingCount: number;
+  dbPoolWaitingCount?: number;
 }
 
 const storage = new AsyncLocalStorage<RequestObservabilityContext>();
