@@ -61,4 +61,16 @@ describe('Performance diagnostics — database query breakdown', () => {
     }
   });
 
+  it('uses sargable timestamp ranges for follow-up bucket list queries', () => {
+    const routes = read('server/routes/production.routes.ts');
+    const start = routes.indexOf("router.get('/leads/follow-ups'");
+    const end = routes.indexOf("GET /leads/:id", start);
+    const route = routes.slice(start, end);
+    assert.ok(route.includes('const bucketRangePredicate'), 'missing sargable follow-up range predicate');
+    assert.ok(route.includes("l.next_follow_up_at < '${todayLit}'::timestamp"), 'overdue should use a direct timestamp range');
+    assert.ok(route.includes("l.next_follow_up_at >= '${todayLit}'::timestamp AND l.next_follow_up_at < '${tomorrowLit}'::timestamp"), 'today should use a half-open timestamp range');
+    assert.ok(route.includes("l.next_follow_up_at >= '${tomorrowLit}'::timestamp"), 'upcoming should use a direct timestamp range');
+    assert.ok(route.includes('const listWhere = bucketRangePredicate ? [...where, bucketRangePredicate] : where'), 'bucket filter should use the sargable range');
+  });
+
 });
