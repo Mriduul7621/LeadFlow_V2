@@ -6442,13 +6442,19 @@ const FOLLOWUP_QUEUE_MAX_LIMIT = 200;
 const FOLLOWUP_QUEUE_DEFAULT_LIMIT = 50;
 
 router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
+  const perf = createPerf('leads.followups');
   if (sendDbUnavailable(res)) return;
   try {
     const caller = await getCallerDbInfo(req);
+    perf.span('authz.caller');
     if (!caller) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+    const canViewLeads = await hasPermissionCode(caller, 'leads.view');
+    perf.span('authz.permission');
+    if (!canViewLeads) {
+      perf.finish(res);
       return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
     }
 
@@ -6478,6 +6484,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
 
     const bounds = getDhakaBusinessDayBounds(new Date());
     const visibility = await resolveCallerVisibility(caller);
+    perf.span('authz.visibility');
 
     let assignedFilter: { userId: string; employeeId: string } | null = null;
     let assignedOutOfScope = false;
@@ -6641,6 +6648,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
 
     const countSql = `SELECT ${bucketExpr} AS bucket, COUNT(*)::int AS cnt FROM leads l WHERE ${where.join(' AND ')} GROUP BY 1`;
     const countRes = await pool.query(countSql, params);
+    perf.span('db.countBuckets');
     const counts = { overdue: 0, today: 0, upcoming: 0, all: 0 };
     for (const row of countRes.rows) {
       const b = String(row.bucket);
@@ -6651,6 +6659,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
 
     const listWhere = bucket === 'all' ? where : [...where, `${bucketExpr} = '${bucket}'`];
     const totalRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM leads l WHERE ${listWhere.join(' AND ')}`, params);
+    perf.span('db.countTotal');
     const total = Number(totalRes.rows[0]?.cnt || 0);
 
     params.push(limit, offset);
@@ -6683,6 +6692,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       LIMIT $${pLimit} OFFSET $${pOffset}
     `;
     const listRes = await pool.query(listSql, params);
+    perf.span('db.list');
     // Lead Quality for the page: two bulk signal queries for all returned
     // leads — never per-lead. Scores attach to visible rows only.
     const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
@@ -6690,6 +6700,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       fetchActivityQualitySignals(pool, queueIds),
       fetchScheduledQualitySignals(pool, queueIds),
     ]);
+    perf.span('db.qualitySignals');
     const items = listRes.rows.map((row: any) => {
       const cf = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
       const nfd = row.next_follow_up_at;
@@ -6725,6 +6736,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       };
     });
 
+    perf.finish(res);
     return sendJson(res, 200, {
       success: true,
       data: {
@@ -6738,6 +6750,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       },
     });
   } catch (error: any) {
+    perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Follow-up queue fetch failed.' });
   }
 });
@@ -9333,11 +9346,19 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     const qualityVisibilitySql = buildDashboardVisibilitySql(visibility, qualityParams);
 
     // Team Performance deferred (Step 5B): do not invent teams from area text.
+    const measurePromise = async <T,>(label: string, promise: Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        return await promise;
+      } finally {
+        perf.measure(label, Date.now() - startedAt);
+      }
+    };
     const [metricRes, fuRes, agentRes, qualityAgg] = await Promise.all([
-      pool.query(metricSql, metricParams),
-      pool.query(fuCountSql, fuParams),
-      pool.query(agentSql, agentParams),
-      aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList),
+      measurePromise('db.metricQuery', pool.query(metricSql, metricParams)),
+      measurePromise('db.followUpCounts', pool.query(fuCountSql, fuParams)),
+      measurePromise('db.agentQuery', pool.query(agentSql, agentParams)),
+      measurePromise('db.qualityAggregate', aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList)),
     ]);
     perf.span('db.queries');
 
