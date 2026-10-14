@@ -5046,7 +5046,15 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       // server-resolved users.id values) — see buildDashboardVisibilitySql.
       where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
     }
-    const listLimit = resolveLeadsListMaxRows();
+    // An explicit, smaller `limit` is honoured (the dashboard's "Recent
+    // Leads" strip asks for 5 rows instead of the full max), while the
+    // configured ceiling is always the hard cap — a caller can only ever
+    // ask for FEWER rows than the deployment allows.
+    const maxRows = resolveLeadsListMaxRows();
+    const requested = Number(req.query?.limit);
+    const listLimit = Number.isFinite(requested) && requested > 0
+      ? Math.min(Math.floor(requested), maxRows)
+      : maxRows;
     const result = await pool.query(
       `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT ${listLimit}`,
       params

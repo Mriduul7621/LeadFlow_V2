@@ -332,9 +332,17 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
   });
 
   it('adds no full lead fetch or new daily requests; summaries use only the existing loaded arrays', () => {
-    // No network read may be introduced by the presentation layer.
+    // No network read may be introduced by the presentation layer — with the
+    // single, explicitly BOUNDED exception of the Recent Leads strip: it asks
+    // for five rows (never the full list) and only when the local mirror is
+    // empty. The KPI loader must remain free of every lead read (below).
     assert.doesNotMatch(source, /\bfetch\s*\(/);
-    assert.doesNotMatch(source, /\bgetLeads\s*\(/);
+    assert.doesNotMatch(source, /\bgetLeads\s*\(/, 'the full lead list must never be fetched here');
+    assert.equal(
+      (source.match(/leadService\.getRecentLeads\(5\)/g) || []).length,
+      1,
+      'exactly one bounded recent-leads read (limit 5)',
+    );
     assert.ok(!source.includes('localStorage'), 'no direct localStorage access');
     // The ONE permitted local source is the read-only mirror of server data
     // (`localDb.getLeads()`), used by Recent Leads: it performs no request,

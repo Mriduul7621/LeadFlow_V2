@@ -31,6 +31,7 @@ import { leadService, type FollowUpQueueItem } from '../../leads/services/leadSe
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
+import SectionErrorBoundary from '../../shared/components/SectionErrorBoundary';
 import { localDb } from '../../../services/localDb';
 
 /** -------------------------------------------------------------
@@ -788,12 +789,50 @@ export default function Dashboard() {
    */
   useEffect(() => {
     if (!user) return;
-    try {
-      setRecentLeads(localDb.getRecentLeads(5));
-    } catch {
-      setRecentLeads([]);
+    let cancelled = false;
+
+    const readMirror = () => {
+      try {
+        return localDb.getRecentLeads(5);
+      } catch {
+        return [] as Lead[];
+      }
+    };
+
+    const mirrored = readMirror();
+    if (mirrored.length > 0) {
+      setRecentLeads(mirrored);
+      setRecentLeadsLoading(false);
+      return;
     }
-    setRecentLeadsLoading(false);
+
+    /**
+     * First visit on this device: the mirror is still empty, so the section
+     * would show "no leads yet" even though the account has leads. Fetch the
+     * five newest rows ONCE — explicitly bounded (limit 5), issued only after
+     * the critical startup has settled so it can never compete with the KPI
+     * request, and never written into the mirror by this call (see
+     * leadService.getRecentLeads). From the next load onward the mirror — or
+     * this same bounded request — answers instantly.
+     */
+    const load = async () => {
+      try {
+        const newest = await leadService.getRecentLeads(5);
+        if (!cancelled) setRecentLeads((newest || []).slice(0, 5));
+      } catch {
+        if (!cancelled) setRecentLeads([]);
+      } finally {
+        if (!cancelled) setRecentLeadsLoading(false);
+      }
+    };
+
+    waitForCriticalStartup()
+      .then(load)
+      .catch(() => { void load(); });
+
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
   useEffect(() => {
@@ -1101,9 +1140,14 @@ export default function Dashboard() {
               primary content has settled (calendarReady), inside a Suspense
               boundary, so the KPI area never waits on it. */}
           <div className="lf-mobile-calendar">
-            <Suspense fallback={<TaskCalendarPlaceholder />}>
-              {calendarReady && <TaskCalendar embedded={true} />}
-            </Suspense>
+            {/* A failure inside the optional calendar must never blank the
+                whole Home screen (it renders its placeholder instead); the
+                primary content above is unaffected. */}
+            <SectionErrorBoundary fallback={<TaskCalendarPlaceholder />}>
+              <Suspense fallback={<TaskCalendarPlaceholder />}>
+                {calendarReady && <TaskCalendar embedded={true} />}
+              </Suspense>
+            </SectionErrorBoundary>
             <Link to="/task-calendar" className="lf-view-all">Open full calendar <ChevronRight size={16} /></Link>
           </div>
 
