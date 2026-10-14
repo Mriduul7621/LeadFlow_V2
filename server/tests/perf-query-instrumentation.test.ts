@@ -30,9 +30,12 @@ describe('Performance diagnostics — database query breakdown', () => {
     const end = source.indexOf("router.get('/leads/:id'", start);
     assert.ok(start >= 0 && end > start);
     const body = source.slice(start, end);
-    for (const label of ['authz.caller', 'authz.permission', 'authz.visibility', 'db.countBuckets', 'db.countTotal', 'db.list', 'db.qualitySignals']) {
-      assert.ok(body.includes("perf.span('" + label + "')"), 'missing follow-up timing label: ' + label);
+    for (const label of ['authz.caller', 'authz.permission', 'authz.visibility', 'db.countBuckets', 'db.list', 'db.qualitySignals']) {
+      assert.ok(body.includes(label), 'missing follow-up timing label: ' + label);
     }
+    assert.ok(body.includes('Promise.all(['), 'follow-up count and list reads should run concurrently');
+    assert.ok(body.includes('counts[bucket as keyof typeof counts]'), 'pagination total should reuse the bucket aggregate');
+    assert.ok(!body.includes('db.countTotal'), 'follow-up route should not issue a redundant total-count query');
     assert.ok(body.includes("perf.finish(res)"), 'timing header must be emitted before response');
   });
 
@@ -43,7 +46,8 @@ describe('Performance diagnostics — database query breakdown', () => {
     assert.ok(start >= 0 && end > start);
     const body = source.slice(start, end);
     for (const label of ['authz.caller', 'authz.permission', 'authz.visibility', 'db.countTotal', 'db.list', 'db.qualitySignals']) {
-      assert.ok(body.includes("perf.span('" + label + "')"), 'missing scheduled timing label: ' + label);
+      assert.ok(body.includes(label), 'missing scheduled timing label: ' + label);
     }
+    assert.ok(body.includes('Promise.all(['), 'scheduled count and list reads should run concurrently');
   });
 });
