@@ -2,6 +2,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission } from '../types';
 import { readSessionCache, writeSessionCache } from '../api/sessionCache';
 import { coalesceGet } from '../api/coalesce';
+import { waitForShellStartup } from '../api/startupPriority';
 import { ROLES_CACHE_CHANGED_EVENT } from '../utils/localCacheEvents';
 import { useEffect, useState } from 'react';
 
@@ -74,6 +75,15 @@ export function usePermissions() {
       }
 
       try {
+        // This permission sheet controls optional client-side actions, not
+        // authentication or server authorization. On the first Dashboard
+        // load, defer it until the critical KPI request settles so it does
+        // not compete for the browser's limited mobile connection pool.
+        // AppLayout releases the same gate immediately on non-Dashboard
+        // routes, so navigation there is not held behind a Dashboard.
+        await waitForShellStartup();
+        if (cancelled) return;
+
         // GET read: many pages mount usePermissions on the same tick and a
         // TTL expiry can overlap a remount — share one round-trip.
         const permPath = `/api/users/${encodeURIComponent(user.id)}/permissions`;
