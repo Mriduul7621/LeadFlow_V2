@@ -52,6 +52,7 @@ import { up as scheduledActivities } from "./migrations/039_scheduled_activities
 import { up as notificationReliability } from "./migrations/040_notification_reliability.js";
 import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_activity_open_index.js";
 import { up as roadshows } from "./migrations/042_roadshows.js";
+import { up as proposalSentStatus } from "./migrations/043_proposal_sent_status.js";
 
 import {
   loadLedger,
@@ -143,6 +144,8 @@ const migrations: Migration[] = [
     { id: "041_scheduled_activity_open_index", name: "Scheduled Activity Open Index", run: scheduledActivityOpenIndex },
 
     { id: "042_roadshows", name: "Roadshows", run: roadshows },
+
+    { id: "043_proposal_sent_status", name: "Proposal Sent Status", run: proposalSentStatus },
 
 ];
 
