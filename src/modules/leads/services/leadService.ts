@@ -3,7 +3,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { localDb } from '../../../services/localDb';
 import { userService } from '../../users/services/userService';
 import { filterLeadsByScope } from '../../users/utils/dataScope';
-import { apiRequest, ApiError } from '../../shared/api/http';
+import { apiRequest, apiRequestEnvelope, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
 import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 
@@ -99,7 +99,7 @@ function cacheLead(lead: Lead): void {
 }
 
 export const leadService = {
-  async createLead(leadData: Omit<Lead, 'id'>): Promise<Lead> {
+  async createLead(leadData: Omit<Lead, 'id'>, options: { onMatch?: (info: { matchedBy: 'leadCode' | 'mobile' }) => void } = {}): Promise<Lead> {
     const leadDataWithId = leadData as Lead;
     const id = leadDataWithId.id || `lead_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const payload: Lead = {
@@ -122,11 +122,19 @@ export const leadService = {
     }
     if (!payload.assignedBy) payload.assignedBy = currentEmployeeId();
 
-    const saved = await apiRequest<Lead>('/api/leads', {
+    // F12: the server upserts on a matching mobile number (documented
+    // behaviour), so "created" can quietly mean "the existing lead was
+    // overwritten". The response says which one happened and the caller is
+    // told, instead of a bare success toast.
+    const envelope = await apiRequestEnvelope<Lead>('/api/leads', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    const saved = (envelope.data ?? (envelope as any)) as Lead;
+    if (envelope.matchedBy === 'leadCode' || envelope.matchedBy === 'mobile') {
+      options.onMatch?.({ matchedBy: envelope.matchedBy });
+    }
     cacheLead(saved);
 
     // Assignment notifications are now created server-side inside the
