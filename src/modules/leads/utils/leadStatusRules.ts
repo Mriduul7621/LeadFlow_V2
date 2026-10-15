@@ -3,7 +3,7 @@ import {
   normalizeStatusKey,
   requireNumber,
   type RequiredFieldViolation,
-} from '../../shared/utils/statusFieldRules';
+} from '../../shared/utils/statusFieldRules.js';
 
 /**
  * leadStatusRules.ts

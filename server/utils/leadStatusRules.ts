@@ -3,7 +3,7 @@ import {
   leadStatusViolationMessage,
   ruleForLeadStatus,
   validateLeadStatusFields,
-} from '../../src/modules/leads/utils/leadStatusRules';
+} from '../../src/modules/leads/utils/leadStatusRules.js';
 
 /**
  * leadStatusRules (server wrapper) — F6 enforcement.
