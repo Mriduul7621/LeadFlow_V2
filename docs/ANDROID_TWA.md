@@ -65,6 +65,11 @@ build opens the already-live Vercel URL and is fully usable for internal
 testing; the site-side `assetlinks.json` is host-independent (it names the
 package + signing certificate only), so App Links verify there too.
 
+The package id stays `com.saudalmahi.leadflow` in every variant, so a variant
+build **replaces** the branded install (same app, higher `versionCode`) rather
+than sitting next to it — uninstall it before going back to the branded APK if
+you want both.
+
 ## Verifying a build
 
 ```bash

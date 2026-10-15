@@ -23,7 +23,8 @@ android {
         // republished on every push to main, and Android refuses to install an
         // update whose versionCode is not higher than the installed one. A
         // local build without the property keeps the plain 1.
-        versionCode ((project.findProperty('versionCode') ?: 1) as Integer)
+        def ciVersionCode = (project.findProperty('versionCode') ?: '1').toString()
+        versionCode (ciVersionCode.isInteger() ? ciVersionCode.toInteger() : 1)
         versionName '1.0.0'
         // Host the wrapper opens. The branded domain is the default; CI can
         // build a variant against another host with -PappHost=<host> (see
