@@ -274,6 +274,61 @@ describe('Phase F — Effective Access parity with the enforcement path', () => 
     assert.equal(missing.status, 404);
   });
 
+  it('an ADMIN role reports EVERY canonical action as allowed, and a deny cannot be stored on it', async () => {
+    // ADMIN bypasses the matrix (first branch of hasPermissionCode), so a screen
+    // built from the stored rows would draw unchecked boxes describing the
+    // opposite of what happens. The read derives the truth instead.
+    const before = await request(app)
+      .get('/api/roles/ADMIN/permissions')
+      .set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(before.status, 200, JSON.stringify(before.body));
+    assert.equal(before.body.adminBypass, true, 'the payload says why everything is allowed');
+    assert.ok(before.body.data.length > 20, 'the full canonical matrix is listed');
+    assert.equal(
+      before.body.data.every((r: any) => r.allowed === true),
+      true,
+      'every action of a bypassing role is allowed'
+    );
+
+    // Try to store a deny on ADMIN — the write must coerce it to the truth.
+    const wrote = await request(app)
+      .put('/api/roles/ADMIN/permissions')
+      .set('Authorization', `Bearer ${adminT()}`)
+      .send({ permissions: [{ code: 'leads.view', allowed: false }] });
+    assert.equal(wrote.status, 200, JSON.stringify(wrote.body));
+    assert.equal(wrote.body.adminBypass, true);
+
+    const after = await request(app)
+      .get('/api/roles/ADMIN/permissions')
+      .set('Authorization', `Bearer ${adminT()}`);
+    const leadsView = after.body.data.find((r: any) => r.code === 'leads.view');
+    assert.equal(leadsView.allowed, true, 'a deny on a bypassing role can never be the stored answer');
+
+    // and the boundary agrees — an ADMIN really can still read leads
+    const adminUser = await pool.query(`SELECT id, role_id FROM users WHERE UPPER(employee_id) = 'ADMIN1' LIMIT 1`);
+    const can = await hasPermissionCode(
+      { id: adminUser.rows[0].id, role_id: adminUser.rows[0].role_id, role_code: 'ADMIN', department_id: null } as any,
+      'leads.view'
+    );
+    assert.equal(can, true, 'hasPermissionCode allows a bypassing role before any grant row is read');
+
+    // a NON-bypassing role is untouched by the coercion
+    const officerWrite = await request(app)
+      .put('/api/roles/OFFICER/permissions')
+      .set('Authorization', `Bearer ${adminT()}`)
+      .send({ permissions: [{ code: 'leads.view', allowed: false }] });
+    assert.equal(officerWrite.status, 200);
+    assert.equal(officerWrite.body.adminBypass, false);
+    const officerRead = await request(app)
+      .get('/api/roles/OFFICER/permissions')
+      .set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(
+      officerRead.body.data.find((r: any) => r.code === 'leads.view').allowed,
+      false,
+      'a normal role keeps its real deny'
+    );
+  });
+
   it('the resolver is pure: it never invents a code and never trusts a malformed row', () => {
     const empty = resolveEffectivePermissions([]);
     assert.deepEqual(empty.permissions, []);

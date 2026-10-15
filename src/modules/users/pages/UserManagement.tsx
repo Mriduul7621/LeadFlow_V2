@@ -328,9 +328,10 @@ export default function UserManagement() {
   const [showRoleForm, setShowRoleForm] = useState(false);
 
   // ---- Role templates (F16 Phase F) ----
-  // `available` is false on a database without migration 047: the baselines are
-  // still listed (they are derived from the roles, not stored), but saving a new
-  // snapshot is impossible and the screen says so instead of throwing.
+  // There are NO built-in templates: this list is exactly the snapshots an
+  // administrator saved. `available` is false on a database without migration
+  // 047 — then nothing can be stored yet, and the screen says so instead of
+  // throwing.
   const [roleTemplates, setRoleTemplates] = useState<RoleTemplate[]>([]);
   const [templatesAvailable, setTemplatesAvailable] = useState(false);
   const [showTemplateForm, setShowTemplateForm] = useState(false);
@@ -344,6 +345,12 @@ export default function UserManagement() {
   // it (the endpoint is admin-only). The button follows the same rule, so
   // nobody is offered a screen that would answer 403.
   const isPlatformAdmin = ['ADMIN', 'SUPERADMIN'].includes(String(currentUser?.role || '').toUpperCase());
+  // The role currently open in the editor, if it bypasses the permission matrix.
+  // ADMIN/SUPERADMIN are allowed EVERYTHING before a single grant row is read
+  // (`hasPermissionCode`), so their editor must show every action as granted —
+  // and must not offer a toggle that could "deny" something that is allowed.
+  const editingRoleCode = String(selectedRole?.roleId || roleFormSlug || '').toUpperCase();
+  const editingBypassRole = editingRoleCode === 'ADMIN' || editingRoleCode === 'SUPERADMIN';
 
   // ---- Hierarchy (company-wide reporting ladder) states ----
   const [hierConfig, setHierConfig] = useState<HierarchyConfig | null>(null);
@@ -710,7 +717,10 @@ export default function UserManagement() {
     setSelectedRole(role);
     setRoleFormName(role.roleName);
     setRoleFormSlug(role.roleId);
-    setRoleFormVisibility((role.dataVisibility as any) || 'Own');
+    // ADMIN / SUPERADMIN see the whole organization — say so instead of
+    // repeating whatever the row happens to hold.
+    const bypass = ['ADMIN', 'SUPERADMIN'].includes(String(role.roleId || '').toUpperCase());
+    setRoleFormVisibility(bypass ? 'Organization' : ((role.dataVisibility as any) || 'Own'));
     const features: Record<string, Record<string, boolean>> = { ...(role.featurePermissions || {}) };
     APP_FEATURES.forEach(feature => {
       if (typeof features[feature.key]?.view === 'boolean') return;
@@ -722,6 +732,15 @@ export default function UserManagement() {
     setRoleFormActions({});
     // Load the canonical action grants for this role (server-authoritative,
     // persisted in role_permissions — never reconstructed from localStorage).
+    if (bypass) {
+      // Never ask for an answer the server derives: a bypassing role is allowed
+      // every canonical action, so the editor opens fully granted and the
+      // toggles are locked. (The API agrees on both the read and the write.)
+      const allOn: Record<string, boolean> = {};
+      ACTION_PERMISSION_GROUPS.forEach(g => g.items.forEach(i => { allOn[i.code] = true; }));
+      setRoleFormActions(allOn);
+      return;
+    }
     adminService
       .getRolePermissions(role.roleId)
       .then(grants => {
@@ -774,8 +793,7 @@ export default function UserManagement() {
 
   const handleUseTemplate = (template: RoleTemplate) => {
     setSelectedRole(null);
-    // "Manager baseline" becomes "Manager"; a saved snapshot keeps its own name.
-    setRoleFormName(template.source === 'system' ? template.name.replace(/\s+baseline$/i, '') : template.name);
+    setRoleFormName(template.name);
     // The Role ID stays EMPTY on purpose: the role save upserts on the role id,
     // so a prefilled id could quietly overwrite an existing role. The
     // administrator names the new role deliberately.
@@ -787,7 +805,7 @@ export default function UserManagement() {
     setRoleFormActions(actions);
     // Pages: the template's own page set wins where it has an opinion; where it
     // has none the shipped default applies — the exact rule `applyRoleToForm`
-    // uses, so loading a role and loading its baseline land on the same screen.
+    // uses, so a role and its snapshot land on the same screen.
     const features: Record<string, Record<string, boolean>> = {};
     APP_FEATURES.forEach(feature => {
       const configured = template.menuAccess?.[feature.path];
@@ -850,7 +868,9 @@ export default function UserManagement() {
       // single source of truth the server enforces.
       const grants = ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => ({
         code: i.code,
-        allowed: !!roleFormActions[i.code],
+        // A bypassing role is coerced to "allowed" by the server as well — the
+        // two answers must not differ.
+        allowed: isAdm ? true : !!roleFormActions[i.code],
       })));
       const granted = (code: string) => grants.some(g => g.code === code && g.allowed);
       const featureOn = (key: string) => !!roleFormFeatures?.[key]?.view;
@@ -859,6 +879,7 @@ export default function UserManagement() {
         roleId: slug,
         roleName: roleFormName.trim(),
         isCustom: selectedRole ? selectedRole.isCustom : true,
+
         menuAccess: {
           '/': featureOn('dashboard'),
           '/more': true,
@@ -888,7 +909,7 @@ export default function UserManagement() {
           '/settings/system': isAdm,
           '/roadshows': featureOn('roadshow_follow_up'),
         },
-        dataVisibility: roleFormVisibility,
+        dataVisibility: isAdm ? 'Organization' : roleFormVisibility,
         // Legacy `actions` JSONB, now derived from the canonical grants so
         // the stored proxy values match what the server actually enforces.
         actions: {
@@ -1379,11 +1400,11 @@ export default function UserManagement() {
                   <div className="flex items-start gap-2">
                     <Sparkles className="w-4 h-4 text-[#978C21] mt-0.5" />
                     <div>
-                      <h3 className="text-sm font-semibold text-slate-800">Start from a template</h3>
+                      <h3 className="text-sm font-semibold text-slate-800">Start from a saved template</h3>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        A baseline reads the standard role live, so it can never drift from what that role holds.
-                        A saved template is a snapshot you took on purpose. Either way the editor opens with every
-                        toggle visible and nothing is saved until you save it.
+                        These are the templates an administrator saved — nothing is built in and nothing is
+                        hardcoded. Loading one fills the editor with the snapshot; every toggle stays visible and
+                        nothing is saved until you save the role yourself.
                       </p>
                     </div>
                   </div>
@@ -1400,25 +1421,22 @@ export default function UserManagement() {
                         >
                           <span className="block text-xs font-medium text-slate-700">{template.name}</span>
                           <span className="block text-[10px] text-slate-400">
-                            {template.source === 'system' ? 'baseline · live' : 'saved snapshot'} ·{' '}
-                            {template.grants.length} action{template.grants.length === 1 ? '' : 's'} ·{' '}
+                            saved snapshot · {template.grants.length} action{template.grants.length === 1 ? '' : 's'} ·{' '}
                             {template.dataVisibility}
                           </span>
                         </button>
-                        {template.source === 'saved' && (
-                          <button
-                            onClick={() => handleDeleteTemplate(template)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete this saved template"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleDeleteTemplate(template)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete this template"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
                     {!templatesAvailable && (
                       <p className="text-[11px] text-slate-400 self-center">
-                        Saving your own snapshots needs migration 047 on this database; the baselines above work without it.
+                        This database has no template storage yet (migration 047), so nothing can be saved or listed.
                       </p>
                     )}
                   </div>
@@ -1593,23 +1611,30 @@ export default function UserManagement() {
                   {/* 2. Data visibility */}
                   <div>
                     <label className="text-sm font-medium text-slate-600 mb-2 block">2. Data Visibility</label>
-                    <p className="text-xs text-slate-400 mb-2 -mt-1">Which records the role can access.</p>
+                    <p className="text-xs text-slate-400 mb-2 -mt-1">
+                      {editingBypassRole
+                        ? `${editingRoleCode} bypasses the permission matrix, so this role always sees the entire organization.`
+                        : 'Which records the role can access.'}
+                    </p>
                     <div className="grid grid-cols-2 gap-2">
                       {(['Own', 'DownTeam', 'FullTeam', 'Organization'] as const).map(scope => {
                         const desc = scope === 'Own' ? 'Only own data'
                           : scope === 'DownTeam' ? 'Own + team below'
                           : scope === 'FullTeam' ? 'All team data'
                           : 'Entire organization';
+                        const selected = editingBypassRole ? scope === 'Organization' : roleFormVisibility === scope;
                         return (
                           <button
                             key={scope}
                             type="button"
+                            disabled={editingBypassRole}
                             onClick={() => setRoleFormVisibility(scope)}
                             className={cn(
                               "p-2.5 border rounded-lg text-xs text-left transition-all",
-                              roleFormVisibility === scope
+                              selected
                                 ? "border-[#978C21] bg-[#978C21]/5 text-[#978C21] font-medium"
-                                : "border-slate-200 text-slate-500 hover:border-slate-300"
+                                : "border-slate-200 text-slate-500 hover:border-slate-300",
+                              editingBypassRole && "disabled:opacity-60 cursor-not-allowed"
                             )}
                           >
                             <span className="block font-medium">{scope}</span>
@@ -1696,6 +1721,13 @@ export default function UserManagement() {
                     Feature Access controls whether the module is available. Action Permissions
                     control what the role can do inside it.
                   </p>
+                  {editingBypassRole && (
+                    <p className="text-xs text-[#978C21] bg-[#978C21]/10 border border-[#978C21]/20 rounded-lg px-3 py-2 mt-2">
+                      {editingRoleCode} bypasses the permission matrix: every action is always allowed and cannot be
+                      switched off. For a role with a chosen set of permissions, create a normal role and tick exactly
+                      what it needs.
+                    </p>
+                  )}
                 </div>
                 {ACTION_PERMISSION_GROUPS.map(group => {
                   const featureKeys = ACTION_MODULE_FEATURE_KEYS[group.module] || [];
@@ -1715,7 +1747,7 @@ export default function UserManagement() {
                       </div>
                       <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {group.items.map(item => {
-                          const isOn = !!roleFormActions[item.code];
+                          const isOn = editingBypassRole ? true : !!roleFormActions[item.code];
                           return (
                             <label key={item.code} className={cn(
                               "flex items-start gap-2 p-2 rounded-md",
@@ -1724,9 +1756,9 @@ export default function UserManagement() {
                               <input
                                 type="checkbox"
                                 checked={isOn}
-                                disabled={!groupActive}
+                                disabled={!groupActive || editingBypassRole}
                                 onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
-                                className="mt-0.5 w-4 h-4 accent-[#978C21] disabled:opacity-50"
+                                className="mt-0.5 w-4 h-4 accent-[#978C21] disabled:opacity-60"
                               />
                               <div>
                                 <span className="text-xs font-medium text-slate-700">{item.label}</span>

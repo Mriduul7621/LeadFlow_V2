@@ -247,7 +247,15 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
   it('8. Dependency rule: hidden modules mark action groups inactive (grants preserved)', () => {
     const src = userMgmt();
     assert.ok(src.includes('const ACTION_MODULE_FEATURE_KEYS'), 'module→group activity mapping must exist');
-    assert.ok(src.includes('disabled={!groupActive}'), 'inactive groups must disable the checkboxes visually');
+    // A hidden module must disable its checkboxes. The exact expression may grow
+    // extra arms (e.g. Phase F locks ADMIN's toggles because that role bypasses
+    // the matrix), so the guard matches the CONDITION rather than one literal:
+    // whatever else is in there, `!groupActive` has to be part of it.
+    assert.match(
+      src,
+      /disabled=\{[^}]*!groupActive[^}]*\}/,
+      'inactive groups must disable the checkboxes visually'
+    );
     // The wording must stay accurate: hiding a module only removes UI reach.
     // It must NOT claim grants "have no effect" — the API still enforces
     // saved grants regardless of Feature Access.

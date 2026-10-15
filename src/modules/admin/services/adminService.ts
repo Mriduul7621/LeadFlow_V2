@@ -241,16 +241,15 @@ function cachedRoles(): RolePermission[] {
 }
 
 /**
- * F16 Phase F — a role template as the API returns it. `source: 'system'`
- * entries are DERIVED live from the shipped standard roles (their id is
- * `system:<ROLE_CODE>` and they cannot be deleted); `'saved'` entries are
- * snapshots an administrator stored.
+ * F16 Phase F — a role template as the API returns it: a snapshot an
+ * ADMINISTRATOR saved from a role. There are no built-in templates — the list
+ * is exactly what an admin chose to keep.
  */
 export interface RoleTemplate {
   id: string;
   name: string;
   description: string;
-  source: 'system' | 'saved';
+  /** The role the snapshot was taken from (informational). */
   roleCode: string | null;
   dataVisibility: string;
   grants: string[];
@@ -295,7 +294,7 @@ export interface EffectiveAccess {
 
 export const adminService = {
   // --- ROLES & PERMISSIONS WORKSPACE ---
-  /** F16 Phase F: baselines (derived live) + saved snapshots. */
+  /** F16 Phase F: the templates administrators saved (nothing built in). */
   async getRoleTemplates(): Promise<{ available: boolean; templates: RoleTemplate[] }> {
     const body = await apiRequest<{ available: boolean; templates: RoleTemplate[] }>('/api/role-templates');
     return { available: body?.available !== false, templates: Array.isArray(body?.templates) ? body.templates : [] };

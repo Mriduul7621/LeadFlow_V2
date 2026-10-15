@@ -4137,16 +4137,41 @@ router.delete('/departments/:id', requireAuth, requirePermissionCode('department
    ROLES
 ==================================================================== */
 
+/**
+ * Does this role bypass the permission matrix outright? (mirrors the very first
+ * branch of `hasPermissionCode()` — ADMIN and SUPERADMIN are allowed everything
+ * before any grant row is consulted). Takes a pool OR a transaction client.
+ */
+async function roleBypassesMatrix(
+  client: { query: (sql: string, params?: any[]) => Promise<any> },
+  roleCodeOrId: string,
+): Promise<boolean> {
+  try {
+    const res: any = await client.query(
+      'SELECT role_code FROM roles WHERE UPPER(role_code) = UPPER($1) OR id::text = $1 LIMIT 1',
+      [roleCodeOrId],
+    );
+    const code = normalizeRole(res?.rows?.[0]?.role_code);
+    return code === 'ADMIN' || code === 'SUPERADMIN';
+  } catch {
+    // Fail closed on the coercion question too: an unreadable role is NOT
+    // treated as a bypassing role.
+    return false;
+  }
+}
+
 /* ====================================================================
    ROLE TEMPLATES  (F16 Phase F)
    --------------------------------------------------------------------
-   GET    /role-templates        – baselines (derived live from the shipped
-                                   standard roles) + saved snapshots
+   GET    /role-templates        – the templates administrators saved
    POST   /role-templates        – save a role's CURRENT access under a name
    DELETE /role-templates/:id    – remove a saved template
-   Applying a template is a CLIENT action on purpose: it fills the role
-   editor, the admin reviews every toggle, and the save goes through the one
-   existing write path. Nothing here grants access by itself.
+
+   There are NO built-in templates: the list is exactly what an administrator
+   chose to keep, so nothing here can disagree with a role. Applying one is a
+   CLIENT action on purpose — it fills the role editor, every toggle stays
+   visible, and the save goes through the one existing write path. Nothing in
+   this block grants access by itself.
 ==================================================================== */
 router.get('/role-templates', requireAuth, requirePermissionCode('roles.manage'), async (_req, res) => {
   if (sendDbUnavailable(res)) return;
@@ -4225,9 +4250,7 @@ router.delete('/role-templates/:id', requireAuth, requirePermissionCode('roles.m
     if (!removed) {
       return sendJson(res, 404, {
         success: false,
-        // Baseline templates are DERIVED, not rows: there is nothing stored to
-        // delete, and the message says so instead of a bare 404.
-        message: 'No saved template with that id. Standard-role baselines are derived from the roles themselves and cannot be deleted.',
+        message: 'No saved template with that id.',
       });
     }
     await logAccessChange({
@@ -4272,9 +4295,15 @@ router.post('/roles', requireAuth, requirePermissionCode('roles.manage'), async 
   }
   const roleCode = roleIdRaw.toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, 30);
   if (!roleCode) return sendJson(res, 400, { success: false, message: 'Invalid role ID' });
-  const dataVisibility = ['Own', 'DownTeam', 'FullTeam', 'Organization'].includes(payload.dataVisibility)
-    ? payload.dataVisibility
-    : 'Own';
+  // A bypassing role (ADMIN / SUPERADMIN) sees the whole organization whatever
+  // the dropdown says — storing "Own" next to it would leave a row that
+  // describes the opposite of reality, so the truth is what gets stored.
+  const bypassesMatrix = roleCode === 'ADMIN' || roleCode === 'SUPERADMIN';
+  const dataVisibility = bypassesMatrix
+    ? 'Organization'
+    : ['Own', 'DownTeam', 'FullTeam', 'Organization'].includes(payload.dataVisibility)
+      ? payload.dataVisibility
+      : 'Own';
   const menuAccess = payload.menuAccess && typeof payload.menuAccess === 'object' ? payload.menuAccess : null;
   const actions = payload.actions && typeof payload.actions === 'object' ? payload.actions : null;
   const featurePermissions = payload.featurePermissions && typeof payload.featurePermissions === 'object' ? payload.featurePermissions : null;
@@ -4394,6 +4423,14 @@ router.get('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
     );
     const roleId = roleResult.rows[0]?.id;
     if (!roleId) return sendJson(res, 404, { success: false, message: 'Role not found' });
+
+    // ADMIN / SUPERADMIN bypass the permission matrix entirely (see
+    // hasPermissionCode), so every action of such a role is ALLOWED for real —
+    // reporting the stored rows would draw a screen full of unchecked boxes
+    // that describes the opposite of what happens. The answer is derived, and
+    // derived from the same rule the boundary uses.
+    const adminBypass = await roleBypassesMatrix(pool, req.params.roleId);
+
     const result = await pool.query(
       `SELECT p.permission_code, p.module_name, p.action_name,
               COALESCE(rp.is_allowed, FALSE) AS is_allowed
@@ -4404,11 +4441,12 @@ router.get('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
     );
     return sendJson(res, 200, {
       success: true,
+      adminBypass,
       data: result.rows.map((r: any) => ({
         code: r.permission_code,
         module: r.module_name,
         action: r.action_name,
-        allowed: r.is_allowed === true,
+        allowed: adminBypass ? true : r.is_allowed === true,
       })),
     });
   } catch (error: any) {
@@ -4437,6 +4475,12 @@ router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
       await client.query('ROLLBACK');
       return sendJson(res, 404, { success: false, message: 'Role not found' });
     }
+    // A bypassing role cannot hold a deny: accepting `allowed: false` here would
+    // store a row that says "refused" while the boundary allows everything —
+    // exactly the false answer this layer must never produce. The write is
+    // coerced to the truth instead of being rejected (the admin's screen has
+    // these toggles locked anyway).
+    const adminBypass = await roleBypassesMatrix(client, req.params.roleId);
     for (const grant of grants) {
       const code = clean(grant?.code || grant?.permissionCode);
       if (!code) continue;
@@ -4444,14 +4488,15 @@ router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
       // codes are skipped (never invented) — fail closed by construction.
       const perm = await client.query('SELECT id FROM permissions WHERE permission_code = $1', [code]);
       if (!perm.rows[0]) continue;
-      applied.push({ code, allowed: grant.allowed === true });
+      const allowed = adminBypass ? true : grant.allowed === true;
+      applied.push({ code, allowed });
       await client.query(
         `INSERT INTO role_permissions (role_id, permission_id, is_allowed, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
          ON CONFLICT (role_id, permission_id) DO UPDATE SET
            is_allowed = EXCLUDED.is_allowed,
            updated_at = NOW()`,
-        [roleId, perm.rows[0].id, grant.allowed === true]
+        [roleId, perm.rows[0].id, allowed]
       );
     }
     await client.query('COMMIT');
@@ -4464,7 +4509,7 @@ router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
       entityId: roleId,
       metadata: { roleId: req.params.roleId, ...summarizeAccessChanges(applied) },
     });
-    return sendJson(res, 200, { success: true, message: 'Role permissions saved' });
+    return sendJson(res, 200, { success: true, adminBypass, message: 'Role permissions saved' });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Permission save failed' });
