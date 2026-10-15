@@ -2,7 +2,8 @@ import React, { Suspense, lazy } from 'react';
 import {
   createBrowserRouter,
   RouterProvider,
-  Navigate
+  Navigate,
+  useLocation
 } from 'react-router-dom';
 import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
@@ -84,10 +85,16 @@ function RouteFallback() {
  * failing AFTER a deployment (stale hashed chunk → rejection) recovers
  * with one guarded reload instead of unmounting the app — see
  * modules/shared/components/ChunkErrorBoundary.tsx.
+ *
+ * `resetKey` (the live location) lets the boundary clear a caught render
+ * error when the user navigates away, so one broken page cannot keep the
+ * error card on every other route for the rest of the session.
  */
 function LazyPage({ page }: { page: React.ReactElement }) {
+  const location = useLocation();
+  const resetKey = `${location.pathname}${location.search}`;
   return (
-    <ChunkErrorBoundary>
+    <ChunkErrorBoundary resetKey={resetKey}>
       <Suspense fallback={<RouteFallback />}>{page}</Suspense>
     </ChunkErrorBoundary>
   );

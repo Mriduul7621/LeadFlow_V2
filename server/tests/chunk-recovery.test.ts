@@ -326,10 +326,65 @@ describe('Chunk recovery — wiring source guards', () => {
     );
     const lazyPage = app.slice(app.indexOf('function LazyPage'));
     assert.ok(lazyPage, 'LazyPage must still exist');
-    const boundary = lazyPage.indexOf('<ChunkErrorBoundary>');
+    // The boundary element may carry the route-change reset prop; what
+    // matters is the nesting: boundary OUTSIDE, Suspense inside.
+    const boundary = lazyPage.indexOf('<ChunkErrorBoundary');
     const suspense = lazyPage.indexOf('<Suspense fallback=');
     assert.ok(boundary !== -1 && suspense !== -1 && boundary < suspense,
       'the boundary must wrap the Suspense boundary so route chunk failures are caught');
+    // ...and the reset key must be the LIVE location, so navigating away
+    // from a crashed route clears the card (session-long breakage fix).
+    assert.ok(lazyPage.includes('resetKey={resetKey}'),
+      'LazyPage must hand the boundary a location-derived resetKey');
+    assert.ok(lazyPage.includes('useLocation()'),
+      'the reset key must come from the current router location');
+  });
+
+  it('M2. a route change resets the boundary; the same route keeps the card', () => {
+    const boundary: any = new ChunkErrorBoundary({ children: null, resetKey: '/leads' });
+    boundary.state = ChunkErrorBoundary.getDerivedStateFromError(new Error('boom'));
+
+    // Ordinary re-render on the SAME route: the error must survive, or a
+    // genuinely broken page would remount in a loop.
+    const sameRoute = (ChunkErrorBoundary as any).getDerivedStateFromProps(
+      { resetKey: '/leads' },
+      { phase: 'runtimeError', resetKey: '/leads' },
+    );
+    assert.equal(sameRoute, null, 'no state change while the route is unchanged');
+
+    // Real navigation: the card must clear so the next page can render.
+    const moved = (ChunkErrorBoundary as any).getDerivedStateFromProps(
+      { resetKey: '/workbench' },
+      { phase: 'runtimeError', resetKey: '/leads' },
+    );
+    assert.deepEqual(moved, { phase: 'normal', resetKey: '/workbench' },
+      'a new route key clears the caught error');
+
+    // A chunk notice resets exactly the same way.
+    const movedFromNotice = (ChunkErrorBoundary as any).getDerivedStateFromProps(
+      { resetKey: '/leads' },
+      { phase: 'staleChunk', resetKey: '/dashboard' },
+    );
+    assert.deepEqual(movedFromNotice, { phase: 'normal', resetKey: '/leads' },
+      'the stale-chunk notice also clears on navigation');
+  });
+
+  it('M3. the route-change reset never reloads or logs', () => {
+    const boundary = read('src/modules/shared/components/ChunkErrorBoundary.tsx');
+    const reset = boundary.slice(
+      boundary.indexOf('getDerivedStateFromProps'),
+      boundary.indexOf('componentDidCatch'),
+    );
+    // Prose may of course explain the rule; the executable lines must not
+    // reload or log anything.
+    const code = reset
+      .split('\n')
+      .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
+      .join('\n');
+    assert.ok(code.includes("phase: 'normal'"), 'the reset returns the normal phase');
+    assert.ok(!code.includes('recoverFromChunkError'), 'a navigation is not a recovery event');
+    assert.ok(!code.includes('reload'), 'a navigation must never trigger a reload');
+    assert.ok(!code.includes('console.'), 'the reset stays silent');
   });
 
   it('N. the route-splitting contract of Phase 2 is untouched', () => {
