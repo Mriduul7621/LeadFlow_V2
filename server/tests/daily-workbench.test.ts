@@ -326,9 +326,25 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(!dash.includes('FollowUpDiscipline'), 'Follow-up Discipline must not be embedded on Home');
     assert.ok(!dash.includes('NeedsAttentionSection'), 'Needs Attention must not be embedded on Home');
     assert.ok(!dash.includes('TaskCalendar'), 'the Task Calendar must not be embedded on Home');
+    assert.ok(!dash.includes('LeadQualitySnapshot'), 'the Lead Quality snapshot moved to the Sales Pipeline page');
     const pipelinePage = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
     assert.ok(pipelinePage.includes('dashboardService.getDashboard'), 'the pipeline page must keep the server-authoritative source');
     assert.ok(app().includes("path: '/task-calendar'"), 'the calendar must stay reachable at /task-calendar');
+  });
+
+  it('Roadshow count sits with the today/tomorrow counters on Home and My Work, permission-gated', () => {
+    const dash = dashboard();
+    assert.ok(dash.includes("canAccess('roadshow_follow_up', 'view')"), 'Home must gate the roadshow alerts by permission');
+    assert.ok(dash.includes('roadshowService.list'), 'the roadshow count must come from the server read');
+    assert.ok(dash.includes('roadshowCounts={roadshowCounts}'), 'Home must feed the roadshow row into Today & Tomorrow');
+    assert.ok(!/setRoadshowCounts\(\{\s*today: 0/.test(dash), 'a failed read must not fabricate a zero');
+
+    const wb = workbench();
+    assert.ok(wb.includes('Roadshows Today'), 'My Work must carry the today count');
+    assert.ok(wb.includes('data-roadshow-count={tomorrowSummary.roadshows}'), 'My Work must carry the tomorrow count');
+    assert.ok(wb.includes('roadshowsToday: canViewRoadshows ? roadshowsToday.length : 0'), 'today count must be gated');
+    assert.ok(wb.includes('roadshows: canViewRoadshows ? roadshowsTomorrow.length : 0'), 'tomorrow count must be gated');
+    assert.ok(wb.includes('data-roadshow-count={roadshowsToday.length}'), 'the mobile alert list must show how many are due');
   });
 
   it('PR #19 performance hardening preserved', () => {

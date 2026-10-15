@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, RefreshCw, TrendingUp } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
+import LeadQualitySnapshot from '../components/LeadQualitySnapshot';
 import BackButton from '../../shared/components/BackButton';
 
 /**
@@ -16,6 +17,10 @@ import BackButton from '../../shared/components/BackButton';
  * visibility-scoped). Nothing here is derived from client lead lists and
  * no new endpoint was added, so the page inherits the dashboard's role and
  * data visibility rules exactly.
+ *
+ * The Lead Quality snapshot moved here from Home (2026-10): it is the same
+ * server-computed scope aggregate of that same payload, now shown next to
+ * the stage board it explains, instead of on the personal work page.
  */
 
 const PIPELINE_STAGES = [
@@ -135,6 +140,8 @@ export default function SalesPipelinePage() {
           </div>
         </section>
       )}
+
+      {!loading && <LeadQualitySnapshot quality={metrics?.quality} />}
 
       <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Where to go next</h2>

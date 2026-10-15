@@ -279,6 +279,29 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
     }
   });
 
+  it('adds the Roadshows count next to Calls/Meetings/Follow-ups/Tasks, per day, only with access', () => {
+    // Without roadshow access the row must not exist at all (no false zero).
+    const without = render(React.createElement(TodayTomorrowPanel, populatedDays));
+    for (const day of ['Today', 'Tomorrow'] as const) {
+      assert.ok(!('Roadshows' in counts(dayMarkup(without, day))), `${day} must not claim a roadshow count without access`);
+    }
+    const html = render(React.createElement(TodayTomorrowPanel, {
+      ...populatedDays,
+      roadshowCounts: { today: 2, tomorrow: 1 },
+    }));
+    const today = counts(dayMarkup(html, 'Today'));
+    const tomorrow = counts(dayMarkup(html, 'Tomorrow'));
+    assert.equal(today.Roadshows, 2, 'today must show the loaded roadshow count');
+    assert.equal(tomorrow.Roadshows, 1, 'tomorrow must show the loaded roadshow count');
+    // The four activity counters keep their exact values next to the new row.
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(today).filter(([label]) => label !== 'Roadshows')),
+      { Calls: 2, Meetings: 1, 'Follow-ups': 2, Tasks: 1 },
+    );
+    assert.match(dayMarkup(html, 'Today'), /data-roadshow-count="2"/, 'the today row carries its own count attribute');
+    assert.doesNotMatch(dayMarkup(html, 'Today'), /Roadshows[\s\S]{0,40}No activities scheduled/);
+  });
+
   it('keeps every overdue/today/upcoming bucket reachable without the retired card', () => {
     // The three-bucket card was removed from Home; the buckets themselves are
     // still first-class destinations. The Overdue KPI card links into the

@@ -417,8 +417,10 @@ export default function DailyWorkbench() {
       tasksToday,
       completedToday: completedToday.length,
       completedTodayUnavailable: !!completedTodayError,
+      // Open roadshows for today — only meaningful with roadshow access.
+      roadshowsToday: canViewRoadshows ? roadshowsToday.length : 0,
     };
-  }, [overdueFollowUps, scheduledToday, todayFollowUps, completedToday, completedTodayError]);
+  }, [overdueFollowUps, scheduledToday, todayFollowUps, completedToday, completedTodayError, canViewRoadshows, roadshowsToday]);
 
   const tomorrowSummary = useMemo(() => {
     const calls = scheduledTomorrow.filter(a => (a.activityType || (a as any).activity_type) === 'call').length;
@@ -426,8 +428,14 @@ export default function DailyWorkbench() {
     const tasks = scheduledTomorrow.filter(a => (a.activityType || (a as any).activity_type) === 'task').length;
     const followUpSched = scheduledTomorrow.filter(a => (a.activityType || (a as any).activity_type) === 'follow_up').length;
     const followUps = tomorrowFollowUps.length + followUpSched;
-    return { calls, meetings, tasks, followUps };
-  }, [scheduledTomorrow, tomorrowFollowUps]);
+    return {
+      calls,
+      meetings,
+      tasks,
+      followUps,
+      roadshows: canViewRoadshows ? roadshowsTomorrow.length : 0,
+    };
+  }, [scheduledTomorrow, tomorrowFollowUps, canViewRoadshows, roadshowsTomorrow]);
 
   const selectedItem = useMemo(() => {
     if (!selectedKey) return null;
@@ -621,12 +629,15 @@ export default function DailyWorkbench() {
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Daily Summary</h2>
               <span className="text-[11px] font-semibold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{todayYmd}</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className={cn('grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3', canViewRoadshows ? 'lg:grid-cols-7' : 'lg:grid-cols-6')}>
               <SummaryCard label="Overdue Follow-ups" value={String(summary.overdue)} icon={AlertTriangle} variant="red" sub="Due before today" />
               <SummaryCard label="Calls Today" value={String(summary.callsToday)} icon={Phone} variant="blue" />
               <SummaryCard label="Meetings Today" value={String(summary.meetingsToday)} icon={Video} variant="orange" />
               <SummaryCard label="Follow-ups Today" value={String(summary.followUpsToday)} icon={History} variant="emerald" />
               <SummaryCard label="Tasks Today" value={String(summary.tasksToday)} icon={ClipboardCheck} variant="olive" />
+              {canViewRoadshows && (
+                <SummaryCard label="Roadshows Today" value={String(summary.roadshowsToday)} icon={MapPinned} variant="slate" sub="Open roadshows" />
+              )}
               <SummaryCard
                 label="Completed Today"
                 value={summary.completedTodayUnavailable ? '—' : String(summary.completedToday)}
@@ -641,7 +652,12 @@ export default function DailyWorkbench() {
           {canViewRoadshows && roadshowsToday.length > 0 && (
             <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-5" aria-label="Roadshows today">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-sm font-bold text-stone-800">Roadshows today</h2>
+                <h2 className="text-sm font-bold text-stone-800">
+                  Roadshows today
+                  <span className="ml-2 rounded-full border border-stone-100 bg-stone-50 px-2 py-0.5 text-[11px] font-bold text-stone-500" data-roadshow-count={roadshowsToday.length}>
+                    {roadshowsToday.length}
+                  </span>
+                </h2>
                 <Link to="/roadshows" className="text-xs font-semibold text-[#756c1b] hover:underline">View all</Link>
               </div>
               <div className="space-y-2">
@@ -854,7 +870,7 @@ export default function DailyWorkbench() {
                 Open Calendar <ChevronRight className="w-3.5 h-3.5" />
               </Link>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className={cn('grid grid-cols-2 gap-3', canViewRoadshows ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
               <div className="rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 flex items-center justify-between">
                 <span className="text-[11px] font-semibold text-stone-500">Calls</span>
                 <span className="text-sm font-bold text-brand-text">{tomorrowSummary.calls}</span>
@@ -871,6 +887,12 @@ export default function DailyWorkbench() {
                 <span className="text-[11px] font-semibold text-stone-500">Tasks</span>
                 <span className="text-sm font-bold text-brand-text">{tomorrowSummary.tasks}</span>
               </div>
+              {canViewRoadshows && (
+                <div className="rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 flex items-center justify-between" data-roadshow-count={tomorrowSummary.roadshows}>
+                  <span className="text-[11px] font-semibold text-stone-500">Roadshows</span>
+                  <span className="text-sm font-bold text-brand-text">{tomorrowSummary.roadshows}</span>
+                </div>
+              )}
             </div>
             {canViewRoadshows && roadshowsTomorrow.length > 0 && (
               <div className="mt-4 border-t border-stone-100 pt-4">
