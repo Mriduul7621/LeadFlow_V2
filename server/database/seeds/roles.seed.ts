@@ -2,6 +2,11 @@ import { query } from "../connection.js";
 
 export const DEFAULT_ROLES: Array<{ code: string; name: string; level: number; description: string }> = [
     { code: "ADMIN", name: "Administrator", level: 1, description: "Full system access" },
+    // Level 1 of the reporting ladder. It used to be created lazily by the
+    // first request that needed it, which meant a brand-new install had no
+    // CEO row at the moment the default access was applied — the role then
+    // existed with no grants and 'Own' visibility (F3/F4 for one role).
+    { code: "CEO", name: "Chief Executive Officer", level: 1, description: "Executive oversight across the organisation" },
     { code: "MANAGER", name: "Manager", level: 2, description: "Manages teams and team leads" },
     { code: "TEAM_LEAD", name: "Team Lead", level: 3, description: "Leads a team of employees" },
     { code: "EMPLOYEE", name: "Employee", level: 4, description: "Standard employee" },
