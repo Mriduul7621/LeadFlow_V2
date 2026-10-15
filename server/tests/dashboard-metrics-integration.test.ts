@@ -112,7 +112,7 @@ async function setupSchema(pool: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -217,7 +217,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
       }
     }
 
-    const statuses = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
     for (let i = 0; i < statuses.length; i++) {
       await pool.query(`INSERT INTO options (field_key, option_value, option_label, sort_order, is_active) VALUES ('FollowUpStatus', $1, $1, $2, true) ON CONFLICT DO NOTHING`, [statuses[i], i + 1]);
     }
@@ -289,7 +289,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
         opts.name,
         opts.mobile,
         opts.assignedTo,
-        opts.status || 'Untouched',
+        opts.status || 'New',
         opts.nextAt ?? null,
         opts.deleted === true,
         JSON.stringify(custom),
@@ -304,13 +304,13 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
   const bounds = () => getDhakaBusinessDayBounds(new Date());
 
   it('A. Own user sees only own dashboard lead counts', async () => {
-    await insertLead({ code: 'a1', name: 'A1', mobile: '01720000001', assignedTo: employeeA.id, status: 'Untouched', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'a1', name: 'A1', mobile: '01720000001', assignedTo: employeeA.id, status: 'New', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'a2', name: 'A2', mobile: '01720000002', assignedTo: employeeA.id, status: 'Contacted', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'b1', name: 'B1', mobile: '01720000003', assignedTo: employeeB.id, status: 'Converted', custom: { assignedTo: 'EMPB' } });
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.data.totalLeads, 2);
-    assert.equal(res.body.data.statusCounts.Untouched, 1);
+    assert.equal(res.body.data.statusCounts.New, 1);
     assert.equal(res.body.data.statusCounts.Contacted, 1);
     assert.equal(res.body.data.statusCounts.Converted || 0, 0);
   });
@@ -325,7 +325,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
   });
 
   it('C. Organization user sees organization metrics', async () => {
-    await insertLead({ code: 'o1', name: 'O1', mobile: '01720000006', assignedTo: employeeA.id, status: 'Untouched', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'o1', name: 'O1', mobile: '01720000006', assignedTo: employeeA.id, status: 'New', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'o2', name: 'O2', mobile: '01720000007', assignedTo: employeeB.id, status: 'Converted', custom: { assignedTo: 'EMPB' } });
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(adminUser)}`);
     assert.equal(res.status, 200);
@@ -361,7 +361,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
 
   it('G. converted count/rate is correct', async () => {
     await insertLead({ code: 'g1', name: 'G1', mobile: '01720000014', assignedTo: employeeA.id, status: 'Converted', custom: { assignedTo: 'EMPA' } });
-    await insertLead({ code: 'g2', name: 'G2', mobile: '01720000015', assignedTo: employeeA.id, status: 'Untouched', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'g2', name: 'G2', mobile: '01720000015', assignedTo: employeeA.id, status: 'New', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'g3', name: 'G3', mobile: '01720000016', assignedTo: employeeA.id, status: 'Contacted', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'g4', name: 'G4', mobile: '01720000017', assignedTo: employeeA.id, status: 'Converted', custom: { assignedTo: 'EMPA' } });
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
@@ -430,14 +430,14 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
   });
 
   it('M. status breakdown equals actual visible rows', async () => {
-    await insertLead({ code: 'm1', name: 'M1', mobile: '01720000022', assignedTo: employeeA.id, status: 'Untouched', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'm1', name: 'M1', mobile: '01720000022', assignedTo: employeeA.id, status: 'New', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'm2', name: 'M2', mobile: '01720000023', assignedTo: employeeA.id, status: 'Contacted', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'm3', name: 'M3', mobile: '01720000024', assignedTo: employeeA.id, status: 'Interested', custom: { assignedTo: 'EMPA' } });
     await insertLead({ code: 'm4', name: 'M4', mobile: '01720000025', assignedTo: employeeB.id, status: 'Interested', custom: { assignedTo: 'EMPB' } });
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);
     const sc = res.body.data.statusCounts;
     const sum =
-      (sc.Untouched || 0) +
+      (sc.New || 0) +
       (sc.Contacted || 0) +
       (sc.Interested || 0) +
       (sc['No Response'] || 0) +
@@ -449,7 +449,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
       (sc.Converted || 0) +
       (sc['Not Interested'] || 0);
     assert.equal(sum, res.body.data.totalLeads);
-    assert.equal(sc.Untouched, 1);
+    assert.equal(sc.New, 1);
     assert.equal(sc.Contacted, 1);
     assert.equal(sc.Interested, 1);
   });
@@ -477,7 +477,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
   });
 
   it('Q. forged role/employee/assignedTo params cannot widen dashboard', async () => {
-    await insertLead({ code: 'forge', name: 'Forge', mobile: '01720000033', assignedTo: employeeA.id, status: 'Untouched', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'forge', name: 'Forge', mobile: '01720000033', assignedTo: employeeA.id, status: 'New', custom: { assignedTo: 'EMPA' } });
     const res = await request(app)
       .get('/api/dashboard?role=ADMIN&employeeId=EMPA&assignedTo=EMPA')
       .set('Authorization', `Bearer ${token(employeeB)}`);
@@ -587,7 +587,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
       name: 'Trend A',
       mobile: '01720000039',
       assignedTo: employeeA.id,
-      status: 'Untouched',
+      status: 'New',
       custom: { assignedTo: 'EMPA' },
     });
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token(employeeA)}`);

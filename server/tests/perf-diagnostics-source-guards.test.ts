@@ -332,7 +332,7 @@ describe('Diagnostics — recorder behavior', () => {
 /* ==================================================================== */
 
 const SENSITIVE_URL =
-  '/api/leads?search=SECRET-LEAD-NAME&contact=SECRET-PHONE-0171&email=SECRET-EMAIL@x.com&token=SECRET-QUERY-TOKEN&page=2&limit=50&status=Untouched';
+  '/api/leads?search=SECRET-LEAD-NAME&contact=SECRET-PHONE-0171&email=SECRET-EMAIL@x.com&token=SECRET-QUERY-TOKEN&page=2&limit=50&status=New';
 
 describe('Diagnostics — privacy guarantees', () => {
   it('O. Authorization/token/request-body/response-body never reach storage even when present on the request', async () => {
@@ -376,7 +376,7 @@ describe('Diagnostics — privacy guarantees', () => {
     assert.ok(entry.path.startsWith('/api/leads?'), 'path + query KEYS are kept for diagnosis');
     assert.ok(entry.path.includes('page=2'), 'page stays readable');
     assert.ok(entry.path.includes('limit=50'), 'limit stays readable');
-    assert.ok(entry.path.includes('status=Untouched'), 'safe status filter stays readable');
+    assert.ok(entry.path.includes('status=New'), 'safe status filter stays readable');
     assert.ok(entry.path.includes('search=…'), 'search values are redacted');
     assert.ok(entry.path.includes('contact=…'), 'contact values are redacted');
     assert.ok(entry.path.includes('email=…'), 'email values are redacted');

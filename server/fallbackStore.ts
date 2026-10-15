@@ -184,7 +184,7 @@ export const fallbackStore = {
     { key: 'follow_up_type', label: 'Follow-up Type', description: 'Follow-up categories', isSystem: true, sortOrder: 8 },
   ] as FallbackMetadataType[],
   options: [
-    { id: 'status_untouched', type: 'lead_status', value: 'Untouched', label: 'Untouched', status: 'Active', sortOrder: 1 },
+    { id: 'status_untouched', type: 'lead_status', value: 'New', label: 'New', status: 'Active', sortOrder: 1 },
     { id: 'status_contacted', type: 'lead_status', value: 'Contacted', label: 'Contacted', status: 'Active', sortOrder: 2 },
     { id: 'status_no_response', type: 'lead_status', value: 'No Response', label: 'No Response', status: 'Active', sortOrder: 3 },
     { id: 'status_busy', type: 'lead_status', value: 'Busy', label: 'Busy', status: 'Active', sortOrder: 4 },

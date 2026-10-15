@@ -86,7 +86,7 @@ An attacker attempts to insert a custom lead assigned to a non-existent Employee
   "prospectName": "Target Account",
   "mobile": "01700000000",
   "assignedTo": "NON_EXISTENT_ID",
-  "currentStatus": "Untouched",
+  "currentStatus": "New",
   "projectedNCP": 100000,
   "collectedNCP": 0,
   "creationDate": "2026-06-10T23:24:39Z"
@@ -95,7 +95,7 @@ An attacker attempts to insert a custom lead assigned to a non-existent Employee
 *Expected Result: Blocked. Relational integrity rules require exists() checks on assigned employee.*
 
 ### Attack 7: Status Shortcutting / Skipping Transitions
-An agent attempts to transition a lead's status directly from `Untouched` to `Converted` without recording follow-ups.
+An agent attempts to transition a lead's status directly from `New` to `Converted` without recording follow-ups.
 ```json
 // Path: /leads/lead_555
 {

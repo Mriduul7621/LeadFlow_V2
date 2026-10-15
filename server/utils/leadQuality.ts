@@ -84,7 +84,7 @@ export const LEAD_QUALITY_STATUS_POINTS: Record<string, { points: number; label:
   Interested: { points: 15, label: 'Customer interested' },
   'Follow-up Set': { points: 10, label: 'Follow-up set' },
   Contacted: { points: 5, label: 'Contacted' },
-  Untouched: { points: 0, label: 'Untouched' },
+  New: { points: 0, label: 'New' },
   Busy: { points: -2, label: 'Customer busy' },
   'No Response': { points: -8, label: 'No response' },
 };
@@ -162,7 +162,7 @@ export interface LeadQualityResult {
  */
 export function canonicalizeQualityStatus(raw: unknown): string {
   const text = String(raw ?? '').trim();
-  if (!text) return 'Untouched';
+  if (!text) return 'New';
   const resolved = resolveImportStatus(text, DEFAULT_STATUS_DICTIONARY);
   if (resolved.ok && resolved.status) return resolved.status;
   return text;

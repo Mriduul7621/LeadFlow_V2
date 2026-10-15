@@ -18,7 +18,7 @@ function lead(overrides: Record<string, unknown> = {}) {
   return {
     id: 'lead-1',
     assignedTo: '',
-    currentStatus: 'Untouched',
+    currentStatus: 'New',
     ...overrides,
   } as any;
 }

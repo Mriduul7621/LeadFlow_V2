@@ -65,7 +65,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 
 const TERMINAL = ['Converted', 'Not Interested'];
-const ACTIVE = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked'];
+const ACTIVE = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked'];
 
 /* ====================================================================
    Shared isolated database
@@ -178,7 +178,7 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
     // A soft-deleted row that must NEVER surface.
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, current_status, assigned_to, created_by, is_deleted)
-       VALUES ('DEL1', 'Deleted One', '01719999999', 'Untouched', $1, $1, TRUE)`,
+       VALUES ('DEL1', 'Deleted One', '01719999999', 'New', $1, $1, TRUE)`,
       [assignables[0]]
     );
 

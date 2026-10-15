@@ -78,7 +78,7 @@ describe('Roadshow Follow-up API', () => {
       customer_name VARCHAR(255) NOT NULL,
       mobile VARCHAR(30) NOT NULL,
       source VARCHAR(100),
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       is_deleted BOOLEAN DEFAULT FALSE
     )`);
     await pool.query(`CREATE TABLE IF NOT EXISTS options (

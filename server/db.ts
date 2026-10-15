@@ -319,7 +319,7 @@ export async function initializeDatabase() {
       const existingStatuses = await client.query("SELECT COUNT(*) as count FROM options WHERE type = 'FollowUpStatus'");
       if (parseInt(existingStatuses.rows[0].count, 10) === 0) {
         const defaultStatuses: Array<{ value: string; color: string; isWon?: boolean; isLost?: boolean; isTerminal?: boolean }> = [
-          { value: 'Untouched', color: 'slate' },
+          { value: 'New', color: 'slate' },
           { value: 'Contacted', color: 'blue' },
           { value: 'No Response', color: 'amber' },
           { value: 'Busy', color: 'orange' },

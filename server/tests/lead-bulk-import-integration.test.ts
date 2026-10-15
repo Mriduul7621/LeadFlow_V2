@@ -14,7 +14,7 @@ import { getPGliteInstanceAsync, createPGlitePoolAsync, resetPGlite } from '../d
  * historical/current-state lead spreadsheet:
  *  - exact real headers accepted (incl. "Assigned To")
  *  - authoritative assignee resolution (active users only)
- *  - status/date/remarks preservation (never silently "Untouched")
+ *  - status/date/remarks preservation (never silently "New")
  *  - deterministic duplicate handling (phone primary, email secondary)
  *  - server-side audit actor (spoof-proof)
  *  - transaction commits / failure never fakes success
@@ -123,7 +123,7 @@ async function setupSchema(pool: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -261,7 +261,7 @@ describe('Bulk Lead Import - Real PostgreSQL Integration', () => {
     await pool.query(`DELETE FROM leads`);
     await pool.query(`DELETE FROM options`);
     // Canonical status dictionary (as the metadata engine would seed it)
-    const statuses = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
     for (let i = 0; i < statuses.length; i++) {
       await pool.query(
         `INSERT INTO options (field_key, option_value, option_label, sort_order, is_active) VALUES ('FollowUpStatus', $1, $1, $2, TRUE)`,
@@ -334,13 +334,13 @@ describe('Bulk Lead Import - Real PostgreSQL Integration', () => {
     assert.equal(row.assigned_to, null, 'blank spreadsheet assignment stays unassigned');
   });
 
-  it('D. Initial Status is preserved and NOT replaced by Untouched', async () => {
+  it('D. Initial Status is preserved and NOT replaced by New', async () => {
     const res = await importRows([realSheetRow({ 'Follow up': '', 'Follow up date': '' })]);
     assert.equal(res.status, 200);
     const row = await leadByMobile('8801557586634');
     assert.equal(row.current_status, 'No Response', 'Initial Status must win when no Follow up exists (case-insensitive match)');
     assert.equal(row.custom_fields.initialStatus, 'No Response');
-    assert.notEqual(row.current_status, 'Untouched');
+    assert.notEqual(row.current_status, 'New');
   });
 
   it('E. Follow up value is preserved according to the existing status model', async () => {
@@ -355,7 +355,7 @@ describe('Bulk Lead Import - Real PostgreSQL Integration', () => {
     assert.ok(Array.isArray(row.status_history) && row.status_history.length === 0, 'no fabricated history events');
   });
 
-  it('E2. Unknown status is a row-level error, not a silent Untouched', async () => {
+  it('E2. Unknown status is a row-level error, not a silent New', async () => {
     const res = await importRows([realSheetRow({ 'Initial Status': 'Totally Made Up Status' })]);
     assert.equal(res.status, 200);
     assert.equal(res.body.data.failed, 1);

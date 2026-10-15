@@ -63,7 +63,7 @@ describe('Lead Quality — pure formula', () => {
   });
 
   it('bare untouched lead scores base 35 / Cold with no factors', () => {
-    const r = calculateLeadQuality({ status: 'Untouched', now: NOW });
+    const r = calculateLeadQuality({ status: 'New', now: NOW });
     assert.equal(r.score, 35);
     assert.equal(r.band, 'Cold');
     assert.equal(r.isTerminal, false);
@@ -81,7 +81,7 @@ describe('Lead Quality — pure formula', () => {
       ['Interested', 50, 'Developing'],
       ['Follow-up Set', 45, 'Developing'],
       ['Contacted', 40, 'Developing'],
-      ['Untouched', 35, 'Cold'],
+      ['New', 35, 'Cold'],
       ['Busy', 33, 'Cold'],
       ['No Response', 27, 'Cold'],
     ];
@@ -132,7 +132,7 @@ describe('Lead Quality — pure formula', () => {
   it('status aliases resolve like bulk import; custom statuses stay neutral', () => {
     assert.equal(canonicalizeQualityStatus('Unreachable'), 'No Response');
     assert.equal(canonicalizeQualityStatus('Follow up'), 'Follow-up Set');
-    assert.equal(canonicalizeQualityStatus(''), 'Untouched');
+    assert.equal(canonicalizeQualityStatus(''), 'New');
     assert.equal(calculateLeadQuality({ status: 'Unreachable', now: NOW }).score, 27);
     assert.equal(calculateLeadQuality({ status: 'Follow up', now: NOW }).score, 45);
     const custom = calculateLeadQuality({ status: 'VIP Nurture', now: NOW });
@@ -143,39 +143,39 @@ describe('Lead Quality — pure formula', () => {
 
   it('recency ladder: fresh bonus, neutral week, stale penalties + attention', () => {
     const touchedToday = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-09-12T00:30:00Z', now: NOW,
+      status: 'New', createdAt: '2026-09-12T00:30:00Z', now: NOW,
     });
     assert.equal(touchedToday.score, 40);
     assert.equal(touchedToday.band, 'Developing');
     assert.ok(touchedToday.positiveFactors.some(f => f.label === 'Touched within the last day' && f.points === 5));
 
     const twoDays = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-09-10T00:00:00Z', now: NOW,
+      status: 'New', createdAt: '2026-09-10T00:00:00Z', now: NOW,
     });
     assert.equal(twoDays.score, 38);
     assert.ok(twoDays.positiveFactors.some(f => f.label === 'Touched 2 days ago' && f.points === 3));
 
     const week = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-09-05T12:00:00Z', now: NOW,
+      status: 'New', createdAt: '2026-09-05T12:00:00Z', now: NOW,
     });
     assert.equal(week.score, 35);
     assert.deepEqual(week.attentionReasons, []);
 
     const fortnight = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-08-29T12:00:00Z', now: NOW,
+      status: 'New', createdAt: '2026-08-29T12:00:00Z', now: NOW,
     });
     assert.equal(fortnight.score, 27);
     assert.ok(fortnight.negativeFactors.some(f => f.label === 'No progress in 14 days' && f.points === -8));
     assert.deepEqual(fortnight.attentionReasons, []);
 
     const twentyDays = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-08-23T12:00:00Z', now: NOW,
+      status: 'New', createdAt: '2026-08-23T12:00:00Z', now: NOW,
     });
     assert.equal(twentyDays.score, 20);
     assert.deepEqual(twentyDays.attentionReasons, ['No meaningful progress in 20 days']);
 
     const stale = calculateLeadQuality({
-      status: 'Untouched', createdAt: '2026-07-01T12:00:00Z', now: NOW,
+      status: 'New', createdAt: '2026-07-01T12:00:00Z', now: NOW,
     });
     assert.equal(stale.score, 13);
     assert.ok(stale.attentionReasons.some(r => r.includes('going stale')));
@@ -184,7 +184,7 @@ describe('Lead Quality — pure formula', () => {
 
   it('recency uses the freshest touch across contact/activity/creation', () => {
     const r = calculateLeadQuality({
-      status: 'Untouched',
+      status: 'New',
       createdAt: '2026-07-01T12:00:00Z',
       lastContactedAt: '2026-09-12T00:30:00Z',
       now: NOW,
@@ -193,59 +193,59 @@ describe('Lead Quality — pure formula', () => {
   });
 
   it('engagement bonus is capped (volume alone cannot make Hot)', () => {
-    const capped = calculateLeadQuality({ status: 'Untouched', meaningfulEngagementCount: 10, now: NOW });
+    const capped = calculateLeadQuality({ status: 'New', meaningfulEngagementCount: 10, now: NOW });
     assert.equal(capped.score, 44);
     assert.ok(capped.positiveFactors.some(f => f.points === 9 && f.label.includes('(capped)')));
-    const single = calculateLeadQuality({ status: 'Untouched', meaningfulEngagementCount: 1, now: NOW });
+    const single = calculateLeadQuality({ status: 'New', meaningfulEngagementCount: 1, now: NOW });
     assert.equal(single.score, 38);
     assert.ok(single.positiveFactors.some(f => f.label === 'Customer showed buying interest (1 interaction)'));
   });
 
   it('failed-contact penalty is capped and raises attention at 3+', () => {
-    const heavy = calculateLeadQuality({ status: 'Untouched', failedContactCount: 5, now: NOW });
+    const heavy = calculateLeadQuality({ status: 'New', failedContactCount: 5, now: NOW });
     assert.equal(heavy.score, 26);
     assert.ok(heavy.negativeFactors.some(f => f.points === -9 && f.label.includes('(capped)')));
     assert.deepEqual(heavy.attentionReasons, ['Repeated unanswered contact (5 attempts)']);
-    const light = calculateLeadQuality({ status: 'Untouched', failedContactCount: 2, now: NOW });
+    const light = calculateLeadQuality({ status: 'New', failedContactCount: 2, now: NOW });
     assert.equal(light.score, 29);
     assert.deepEqual(light.attentionReasons, []);
   });
 
   it('explicit investment interest is a flat bonus, never a penalty', () => {
     const withAmount = calculateLeadQuality({
-      status: 'Untouched', hasInvestmentAmount: true, investmentAmount: 50000, now: NOW,
+      status: 'New', hasInvestmentAmount: true, investmentAmount: 50000, now: NOW,
     });
     assert.equal(withAmount.score, 38);
     assert.ok(withAmount.positiveFactors.some(f => f.points === 3 && f.label.includes('50,000')));
-    const without = calculateLeadQuality({ status: 'Untouched', now: NOW });
+    const without = calculateLeadQuality({ status: 'New', now: NOW });
     assert.equal(without.score, 35);
   });
 
   it('scheduled next action earns a bonus; overdue earns penalties + attention', () => {
     const scheduled = calculateLeadQuality({
-      status: 'Untouched', nextFollowUpAt: '2026-09-20T00:00:00Z', now: NOW,
+      status: 'New', nextFollowUpAt: '2026-09-20T00:00:00Z', now: NOW,
     });
     assert.equal(scheduled.score, 40);
     assert.ok(scheduled.positiveFactors.some(f => f.label === 'Next action scheduled' && f.points === 5));
 
     const overdue2 = calculateLeadQuality({
-      status: 'Untouched', nextFollowUpAt: '2026-09-10T00:00:00Z', now: NOW,
+      status: 'New', nextFollowUpAt: '2026-09-10T00:00:00Z', now: NOW,
     });
     assert.equal(overdue2.score, 30);
     assert.deepEqual(overdue2.attentionReasons, ['Next action overdue by 2 days']);
 
     const overdue3 = calculateLeadQuality({
-      status: 'Untouched', nextFollowUpAt: '2026-09-09T00:00:00Z', now: NOW,
+      status: 'New', nextFollowUpAt: '2026-09-09T00:00:00Z', now: NOW,
     });
     assert.equal(overdue3.score, 30);
 
     const overdue4 = calculateLeadQuality({
-      status: 'Untouched', nextFollowUpAt: '2026-09-08T00:00:00Z', now: NOW,
+      status: 'New', nextFollowUpAt: '2026-09-08T00:00:00Z', now: NOW,
     });
     assert.equal(overdue4.score, 25);
 
     const overdue10 = calculateLeadQuality({
-      status: 'Untouched', nextFollowUpAt: '2026-09-02T00:00:00Z', now: NOW,
+      status: 'New', nextFollowUpAt: '2026-09-02T00:00:00Z', now: NOW,
     });
     assert.equal(overdue10.score, 20);
     assert.deepEqual(overdue10.attentionReasons, ['Next action overdue by 10 days']);
@@ -253,7 +253,7 @@ describe('Lead Quality — pure formula', () => {
 
   it('earliest planned action wins across follow-up and scheduled activity', () => {
     const r = calculateLeadQuality({
-      status: 'Untouched',
+      status: 'New',
       nextFollowUpAt: '2026-09-20T00:00:00Z',
       nextScheduledAt: '2026-09-10T00:00:00Z',
       now: NOW,

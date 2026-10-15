@@ -191,7 +191,7 @@ export default function LeadGenerate() {
         noOfChildren: childPresence ? data.noOfChildren : '0',
         assignedTo: user.employeeId,
         assignedBy: user.employeeId,
-        currentStatus: 'Untouched',
+        currentStatus: 'New',
         projectedNCP: 0,
         collectedNCP: 0,
         creationDate: new Date().toISOString(),

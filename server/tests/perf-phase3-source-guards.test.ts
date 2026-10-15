@@ -478,7 +478,7 @@ describe('Performance Phase 3 — users/options session cache behavior', () => {
           JSON.stringify({
             success: true,
             data: [
-              { type: 'FollowUpStatus', value: 'Untouched', label: 'Untouched', status: 'Active', sortOrder: 1 },
+              { type: 'FollowUpStatus', value: 'New', label: 'New', status: 'Active', sortOrder: 1 },
               { type: 'Product', value: 'Term', label: 'Term', status: 'Active', sortOrder: 1 },
             ],
           }),
@@ -545,7 +545,7 @@ describe('Performance Phase 3 — users/options session cache behavior', () => {
     const { resetSessionCacheForTests, writeSessionCache, readSessionCache } = await import('../../src/modules/shared/api/sessionCache.js');
     resetSessionCacheForTests();
     writeSessionCache('users:alice', [{ id: 'u1' }]);
-    writeSessionCache('options:alice', [{ type: 'FollowUpStatus', value: 'Untouched' }]);
+    writeSessionCache('options:alice', [{ type: 'FollowUpStatus', value: 'New' }]);
     writeSessionCache('roles:alice', [{ roleId: 'ADMIN' }]);
     assert.ok(readSessionCache('users:alice'));
     assert.ok(readSessionCache('options:alice'));

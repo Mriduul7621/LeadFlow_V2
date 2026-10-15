@@ -34,7 +34,7 @@ const DEFAULT_TYPES: Array<{ key: string; label: string; description: string; is
 
 const DEFAULT_OPTIONS: DefaultOption[] = [
   // Lead status pipeline (must stay ordered - kanban columns rely on it)
-  { type: "FollowUpStatus", value: "Untouched", meta: { color: "slate", isWon: false, isLost: false, isTerminal: false } },
+  { type: "FollowUpStatus", value: "New", meta: { color: "slate", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Contacted", meta: { color: "blue", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "No Response", meta: { color: "amber", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Busy", meta: { color: "orange", isWon: false, isLost: false, isTerminal: false } },

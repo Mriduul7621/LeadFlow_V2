@@ -346,7 +346,7 @@ export function isValidEmail(value: unknown): boolean {
  * otherwise the canonical dictionary comes from the database.
  */
 export const DEFAULT_STATUS_DICTIONARY = [
-  'Untouched', 'Contacted', 'No Response', 'Busy', 'Interested',
+  'New', 'Contacted', 'No Response', 'Busy', 'Interested',
   'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked',
   'Converted', 'Not Interested',
 ];
@@ -386,7 +386,30 @@ export function normalizeStatusKey(value: unknown): string {
 const LEGACY_STATUS_ALIASES: Record<string, string> = {
   unreachable: 'No Response',
   followup: 'Follow-up Set',
+  // The first pipeline stage was renamed "Untouched" -> "New" (migration 044).
+  // Spreadsheets exported before the rename keep importing cleanly: the alias
+  // only resolves when "New" exists in the dictionary, so an admin-configured
+  // list without it stays authoritative (and the value fails validation).
+  untouched: 'New',
 };
+
+/**
+ * Value-level legacy aliases, independent of a dictionary. Used by the
+ * read paths (queue/list `?status=` filters) so a bookmark or an
+ * already-installed client that still asks for the pre-rename first stage
+ * keeps getting the right rows. Write paths keep using the
+ * dictionary-scoped table above.
+ */
+const LEGACY_STATUS_VALUE_ALIASES: Record<string, string> = {
+  untouched: 'New',
+};
+
+/** Map a legacy status spelling to its canonical value ('' for blank). */
+export function canonicalizeLegacyStatusValue(value: unknown): string {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  return LEGACY_STATUS_VALUE_ALIASES[normalizeStatusKey(raw)] ?? raw;
+}
 
 export interface ImportStatusResolution {
   /** false = value is not a canonical status nor a known legacy alias. */
@@ -404,7 +427,7 @@ export interface ImportStatusResolution {
  *     target exists in the
  *     dictionary                 -> the canonical target
  *  4. anything else              -> NOT ok (caller reports an error —
- *     never silently converted to "Untouched")
+ *     never silently converted to "New")
  * Pure and shared by the bulk-import preview and the import itself, so the
  * preview can never disagree with what the server will actually store.
  */

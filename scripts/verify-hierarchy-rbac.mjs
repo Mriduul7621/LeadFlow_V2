@@ -310,7 +310,7 @@ async function main() {
     log('\nF. Leads + server-side visibility scoping:');
     const mkLead = async (employeeId, code) => req('POST', '/api/leads', {
       token: admin,
-      body: { leadCode: code, customerName: `Customer ${code}`, mobile: '01700000000', assignedTo: employeeId, currentStatus: 'Untouched' },
+      body: { leadCode: code, customerName: `Customer ${code}`, mobile: '01700000000', assignedTo: employeeId, currentStatus: 'New' },
     });
     await mkLead(EXEC_X, `LX${stamp}`);
     await mkLead(EXEC_Y, `LY${stamp}`);

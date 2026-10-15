@@ -19,7 +19,7 @@ import BackButton from '../../shared/components/BackButton';
  */
 
 const PIPELINE_STAGES = [
-  'Untouched',
+  'New',
   'Contacted',
   'Interested',
   'Meeting Fixed',
@@ -114,7 +114,7 @@ export default function SalesPipelinePage() {
           <div className="mb-4 flex items-end justify-between gap-4">
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Stage board</h2>
-              <p className="mt-1.5 text-[12px] text-stone-500">Untouched → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted</p>
+              <p className="mt-1.5 text-[12px] text-stone-500">New → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted</p>
             </div>
             <TrendingUp className="hidden h-5 w-5 shrink-0 text-[#978C21] md:block" />
           </div>

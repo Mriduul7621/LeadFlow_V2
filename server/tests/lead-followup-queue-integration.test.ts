@@ -112,7 +112,7 @@ async function setupSchema(pool: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -215,7 +215,7 @@ describe('Follow-up Queue — GET /api/leads/follow-ups (Step 4B)', () => {
         await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`, [roleId, permIds[code]]);
       }
     }
-    const statuses = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
     for (let i = 0; i < statuses.length; i++) {
       await pool.query(`INSERT INTO options (field_key, option_value, option_label, sort_order, is_active) VALUES ('FollowUpStatus', $1, $1, $2, true) ON CONFLICT DO NOTHING`, [statuses[i], i + 1]);
     }
@@ -399,6 +399,21 @@ describe('Follow-up Queue — GET /api/leads/follow-ups (Step 4B)', () => {
     const res = await request(app).get('/api/leads/follow-ups?bucket=all&status=Busy').set('Authorization', `Bearer ${token(employeeA)}`);
     assert.equal(res.body.data.items.length, 1);
     assert.equal(res.body.data.items[0].id, 'busy_a');
+  });
+
+  it('M2. a pre-rename ?status=Untouched request still returns the New-stage rows', async () => {
+    const b = bounds();
+    const todayAt = new Date(b.todayStart.getTime() + 2 * 3600000).toISOString();
+    await insertLead({ code: 'new_a', name: 'New A', mobile: '01710000020', assignedTo: employeeA.id, nextAt: todayAt, status: 'New', custom: { assignedTo: 'EMPA' } });
+    await insertLead({ code: 'busy_c', name: 'Busy C', mobile: '01710000021', assignedTo: employeeA.id, nextAt: todayAt, status: 'Busy', custom: { assignedTo: 'EMPA' } });
+    const canonical = await request(app).get('/api/leads/follow-ups?bucket=all&status=New').set('Authorization', `Bearer ${token(employeeA)}`);
+    const legacy = await request(app).get('/api/leads/follow-ups?bucket=all&status=Untouched').set('Authorization', `Bearer ${token(employeeA)}`);
+    const ids = (r: any) => r.body.data.items.map((i: any) => i.id).sort();
+    assert.equal(canonical.status, 200);
+    assert.equal(legacy.status, 200);
+    assert.ok(ids(canonical).includes('new_a'), 'the canonical spelling returns the New-stage row');
+    assert.deepEqual(ids(legacy), ids(canonical), 'the legacy spelling must resolve to the same rows, never to none');
+    assert.ok(!ids(legacy).includes('busy_c'), 'other statuses stay excluded either way');
   });
 
   it('N. pagination/limit is bounded', async () => {

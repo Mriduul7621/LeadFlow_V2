@@ -278,7 +278,7 @@ export default function LeadUpload() {
           assignedTo: assignedTo,
           assignedBy: assignedTo ? 'ADMIN' : '',
           assignedDate: assignedTo && !assignedDate ? new Date().toISOString() : assignedDate,
-          currentStatus: 'Untouched' as any,
+          currentStatus: 'New' as any,
           projectedNCP: 0,
           collectedNCP: 0,
           creationDate: creationDate,

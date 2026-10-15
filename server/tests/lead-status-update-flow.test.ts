@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_STATUS_DICTIONARY } from '../routes/leadImport.js';
 
 const root = path.resolve(process.cwd());
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8').replaceAll('\r\n', '\n');
@@ -61,10 +62,16 @@ test('E. statuses are dictionary-driven, and Proposal Sent exists in the diction
   const page = read('src/modules/leads/pages/LeadUpdate.tsx');
   assert.ok(page.includes('preloadLeadStatuses()'), 'the form reads the canonical status list (never hardcoded)');
   const migration = read('server/database/migrations/043_proposal_sent_status.ts');
+  const rename = read('server/database/migrations/044_rename_untouched_status.ts');
   assert.ok(migration.includes("FollowUpStatus") && migration.includes("Proposal Sent"), 'migration 043 inserts the Proposal Sent option');
-  for (const st of ['Untouched', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Proposal Sent', 'Converted', 'Not Interested']) {
+  for (const st of ['Interested', 'Follow-up Set', 'Meeting Fixed', 'Proposal Sent', 'Converted', 'Not Interested']) {
     assert.ok(migration.includes(`"${st}"`), `migration 043 covers the canonical status ${st}`);
   }
+  // The first pipeline stage is created by 043 and renamed to "New" by 044 —
+  // the taxonomy must be covered by the migration pair, not by either alone.
+  assert.ok(rename.includes('FollowUpStatus'), 'migration 044 targets the status dictionary');
+  assert.ok(rename.includes("'New'"), 'migration 044 lands on the canonical first stage New');
+  assert.ok(DEFAULT_STATUS_DICTIONARY[0] === 'New', 'the default dictionary starts at New');
   assert.ok(/WHERE NOT EXISTS/.test(migration), 'the migration is idempotent per status');
   const registry = read('server/database/runMigrations.ts');
   assert.ok(registry.includes('043_proposal_sent_status'), 'migration 043 is registered in the migration list');

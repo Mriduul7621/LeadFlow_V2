@@ -364,7 +364,7 @@ describe('Canonical action permissions — server enforcement on mounted routes'
     assert.equal(options.status, 403, 'settings.manage (options) must be enforced');
 
     const workflow = await request(app).post('/api/workflow-rules').set(auth)
-      .send({ status: 'Untouched', allowedNextStatuses: ['Converted'] });
+      .send({ status: 'New', allowedNextStatuses: ['Converted'] });
     assert.equal(workflow.status, 403, 'workflow.manage must be enforced');
 
     // The role permission matrix itself stays admin-only.
@@ -501,7 +501,7 @@ describe('Canonical action permissions — server enforcement on mounted routes'
 
     await grant([{ code: 'workflow.manage', allowed: true }]);
     const rule = await request(app).post('/api/workflow-rules').set(officerAuth)
-      .send({ status: 'Untouched', allowedNextStatuses: ['Contacted'] });
+      .send({ status: 'New', allowedNextStatuses: ['Contacted'] });
     assert.equal(rule.status, 200, `workflow.manage must enable workflow rule edits: ${JSON.stringify(rule.body)}`);
   });
 

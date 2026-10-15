@@ -282,7 +282,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
  * admin-configured options and its errors are shown alongside.
  */
 export const DEFAULT_STATUS_DICTIONARY = [
-  'Untouched', 'Contacted', 'No Response', 'Busy', 'Interested',
+  'New', 'Contacted', 'No Response', 'Busy', 'Interested',
   'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked',
   'Converted', 'Not Interested',
 ];
@@ -301,6 +301,9 @@ export function normalizeStatusKey(value: unknown): string {
 const LEGACY_STATUS_ALIASES: Record<string, string> = {
   unreachable: 'No Response',
   followup: 'Follow-up Set',
+  // The first pipeline stage was renamed "Untouched" -> "New" (migration 044);
+  // this mirror keeps pre-rename spreadsheets importing cleanly.
+  untouched: 'New',
 };
 
 export interface ImportStatusResolution {
@@ -404,7 +407,7 @@ export function mapRowForPreview(raw: Record<string, any>, index: number): Previ
   // import time (case-insensitive canonical match + the shared legacy alias
   // table), and the SAME error messages, so the preview can never disagree
   // with the actual import. Unknown values fail locally - they are never
-  // silently converted to "Untouched" here or on the server.
+  // silently converted to "New" here or on the server.
   const initialResolution = resolveImportStatus(initialStatus);
   if (initialStatus && !initialResolution.ok) {
     issues.push(`Initial Status "${initialStatus}" is not a valid status`);

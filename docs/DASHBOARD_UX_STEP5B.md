@@ -23,7 +23,7 @@ The Dashboard is ordered top-to-bottom as follows:
      server-authoritative today, and non-functional fake filters are forbidden.
 
 2. **Primary KPI row** (server `GET /api/dashboard` only)
-   - Total Leads · Untouched · Due Today · Overdue · Converted.
+   - Total Leads · New · Due Today · Overdue · Converted.
    - `Due Today` / `Overdue` read `followUpCounts.today` / `followUpCounts.overdue`.
 
 3. **Secondary KPI row**
@@ -34,7 +34,7 @@ The Dashboard is ordered top-to-bottom as follows:
 
 4. **Sales Pipeline**
    - Canonical stages from existing `current_status` values:
-     `Untouched → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted`.
+     `New → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted`.
    - Counts come from `statusCounts`; each stage shows count + % of visible total.
    - No per-stage NCP is fabricated (the server does not provide it).
 
@@ -60,7 +60,7 @@ The Dashboard is ordered top-to-bottom as follows:
 
 7. **Needs Attention**
    - Only items derivable from authoritative fields today:
-     - Untouched leads → `/leads`
+     - New leads → `/leads`
      - Overdue follow-ups → `/follow-up?bucket=overdue`
    - Advanced rules (untouched >24h, overdue >3 days, inactive pipeline,
      no-next-action scoring) are **not** implemented and are represented by the
