@@ -67,6 +67,30 @@ export interface OrganogramNode {
   directReports: number;
 }
 
+/**
+ * F16 Phase D — department health shipped with the ladder config: which
+ * departments have no head, which are empty, whose mirror team drifted out of
+ * step with its memberships, and who belongs to no department at all.
+ * `available: false` means the database has no department-members layer yet —
+ * the screen then says so instead of showing invented zeros.
+ */
+export interface DepartmentHealth {
+  available: boolean;
+  totalDepartments: number;
+  headless: Array<{ id: string; name: string; memberCount: number; coHeadCount: number }>;
+  empty: Array<{ id: string; name: string }>;
+  teamDrift: Array<{
+    id: string;
+    name: string;
+    teamId: string | null;
+    membershipCount: number;
+    rosterCount: number;
+    issues: string[];
+  }>;
+  membersWithoutDepartment: Array<{ employeeId: string; fullName: string }>;
+  multiDepartmentHeads: Array<{ employeeId: string; fullName: string; departmentCount: number }>;
+}
+
 /** Company-wide reporting ladder configuration (admin-managed). */
 export interface HierarchyConfig {
   levels: Array<{
@@ -74,6 +98,8 @@ export interface HierarchyConfig {
     roles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
   }>;
   unassignedRoles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
+  /** Phase D department health (absent on a pre-046 database). */
+  departments?: DepartmentHealth;
   setup: {
     totalUsers: number;
     usersWithManager: number;

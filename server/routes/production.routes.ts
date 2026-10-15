@@ -5,7 +5,7 @@ import { isWeakJwtSecret } from '../config/env.js';
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
-import { computeHierarchyHealth } from '../utils/hierarchyHealth.js';
+import { computeDepartmentHealth, computeHierarchyHealth, emptyDepartmentHealth } from '../utils/hierarchyHealth.js';
 import {
   UNASSIGNED_LEVEL,
   resolveRoleLevel,
@@ -28,8 +28,11 @@ import {
 import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRules.js';
 import {
   closeUserMemberships,
+  getMembershipDepartmentMap,
+  getUserDepartmentIds,
   hasDepartmentMirrorLayer,
   setDepartmentHeads,
+  setUserExtraMemberships,
   syncMirrorTeam,
   syncUserDepartmentMembership,
 } from '../utils/departmentMirror.js';
@@ -780,9 +783,35 @@ async function buildHierarchyConfig() {
   // stored manager_id values.
   const health = computeHierarchyHealth(usersResult.rows as any, levelMap);
 
+  // F16 Phase D — department health. One department = one mirror team, a
+  // roster that equals its memberships and a leader that equals its primary
+  // head; plus the questions an admin asks first: which departments have
+  // nobody in charge, which are empty, who belongs to no department at all.
+  // A database without migration 046 reports the block as unavailable
+  // instead of inventing zeros that look like "all good".
+  let departmentHealth = emptyDepartmentHealth(0);
+  if (await hasDepartmentMirrorLayer(pool)) {
+    const [deptRows, membershipRows, teamRows] = await Promise.all([
+      pool.query(`SELECT id, department_name AS name, is_active FROM departments ORDER BY department_name ASC`),
+      pool.query(`SELECT department_id, user_id, is_active, is_primary_head, is_head FROM department_members`),
+      pool.query(`SELECT id, department_id, leader_id, member_ids FROM teams WHERE is_department_mirror`),
+    ]);
+    departmentHealth = computeDepartmentHealth({
+      departments: deptRows.rows as any,
+      memberships: membershipRows.rows as any,
+      mirrorTeams: teamRows.rows as any,
+      users: usersResult.rows as any,
+      levelByRoleCode: levelMap,
+    });
+  } else {
+    const countRows = await pool.query(`SELECT COUNT(*)::int AS count FROM departments WHERE is_active IS NOT FALSE`);
+    departmentHealth = emptyDepartmentHealth(countRows.rows[0]?.count ?? 0);
+  }
+
   return {
     levels,
     unassignedRoles,
+    departments: departmentHealth,
     setup: {
       totalUsers: health.totalUsers,
       usersWithManager: health.usersWithManager,
@@ -821,6 +850,13 @@ function mapUserRow(row: any, managerEmployeeId?: string | null) {
     isActive: !isInactive,
     designation: row.designation || '',
     departmentId: row.department_id || '',
+    /**
+     * F16 Phase D: the person's ACTIVE department memberships (primary seat
+     * plus any extra one). The client's FullTeam mirror reads this, so a head
+     * who leads several departments sees all of them; when the memberships
+     * were not attached the list is empty and the primary column stands.
+     */
+    departmentIds: Array.isArray(row.department_ids) ? row.department_ids.map(String) : [],
     teamId: row.team_id || '',
     managerId: managerEmployeeId || row.manager_employee_id || '',
     reportingManagerId: managerEmployeeId || row.manager_employee_id || '',
@@ -842,6 +878,21 @@ const USER_SELECT = `
   LEFT JOIN roles r ON r.id = u.role_id
   LEFT JOIN users m ON m.id = u.manager_id
 `;
+
+/**
+ * Attach a person's active department memberships before `mapUserRow`, so
+ * every user payload that reaches the client carries the same membership list
+ * the server's data-visibility layer uses (F16 Phase D). One indexed query;
+ * a database without migration 046 simply attaches an empty list.
+ */
+async function withMembershipDepartments(
+  exec: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  row: any
+): Promise<any> {
+  if (!row?.id) return { ...row, department_ids: [] };
+  const ids = await getUserDepartmentIds(exec, String(row.id));
+  return { ...row, department_ids: ids };
+}
 
 function mapDepartmentRow(row: any) {
   return {
@@ -1649,7 +1700,10 @@ router.post('/auth/login', async (req, res) => {
     const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
     logAuthLoginSuccess({ userId: user.id, role });
     perf.finish(res);
-    return sendJson(res, 200, { token, user: mapUserRow(user, user.manager_employee_id) });
+    // The session profile carries the caller's own memberships: the client
+    // mirrors the server's FullTeam scope from this payload.
+    const sessionRow = await withMembershipDepartments(pool, user);
+    return sendJson(res, 200, { token, user: mapUserRow(sessionRow, sessionRow.manager_employee_id) });
   } catch (error: any) {
     perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Login failed' });
@@ -1713,7 +1767,8 @@ router.get('/auth/session', requireAuth, async (req: any, res) => {
         return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
       }
       perf.finish(res);
-      return sendJson(res, 200, { success: true, data: mapUserRow(row, row.manager_employee_id) });
+      const sessionRow = await withMembershipDepartments(getPool(), row);
+      return sendJson(res, 200, { success: true, data: mapUserRow(sessionRow, sessionRow.manager_employee_id) });
     } catch (error: any) {
       perf.finish(res);
       return sendJson(res, dbErrorStatus(error), {
@@ -2007,8 +2062,15 @@ router.get('/users', requireAuth, async (_req, res) => {
     return sendJson(res, 200, users);
   }
   try {
-    const result = await getPool().query(`${USER_SELECT} ORDER BY u.created_at DESC`);
-    return sendJson(res, 200, result.rows.map(row => mapUserRow(row, row.manager_employee_id)));
+    const pool = getPool();
+    const result = await pool.query(`${USER_SELECT} ORDER BY u.created_at DESC`);
+    // One bulk membership query for the whole roster (never N+1): the client
+    // needs each person's member departments to mirror the server's scope.
+    const memberships = await getMembershipDepartmentMap(pool);
+    return sendJson(res, 200, result.rows.map(row => mapUserRow(
+      { ...row, department_ids: memberships.get(String(row.id)) || [] },
+      row.manager_employee_id
+    )));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'User fetch failed' });
   }
@@ -2096,7 +2158,8 @@ router.get('/users/:id', requireAuth, async (req, res) => {
       [req.params.id, uuid || null]
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'User not found' });
-    return sendJson(res, 200, mapUserRow(result.rows[0], result.rows[0].manager_employee_id));
+    const row = await withMembershipDepartments(getPool(), result.rows[0]);
+    return sendJson(res, 200, mapUserRow(row, row.manager_employee_id));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'User fetch failed' });
   }
@@ -2194,6 +2257,11 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
     }
     const hash = payload.password ? await bcrypt.hash(String(payload.password), 10) : null;
     const departmentId = await resolveDepartmentId(payload.departmentId);
+    const extraDepartments = await normalizeExtraDepartmentIds(payload.departmentIds);
+    if (extraDepartments.error) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: extraDepartments.error });
+    }
     // Unknown team references must fail loudly instead of being silently
     // dropped to NULL (the UI would otherwise show a team that the
     // database does not have).
@@ -2259,11 +2327,16 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
     // in the SAME transaction — a user can never exist "in" a department
     // without being on its roster.
     await syncUserDepartmentMembership(client, row.id, departmentId || null);
+    // Extra seats (a person may belong to more than one department) are
+    // written in the same transaction: the roster, the mirror team and the
+    // visibility answer all move together or not at all.
+    await setUserExtraMemberships(client, row.id, departmentId || null, extraDepartments.ids || []);
     await client.query('COMMIT');
     const fresh = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
     const roleCode = await roleCodeOf(freshRow.role_id);
-    const mapped = mapUserRow({ ...freshRow, role_code: roleCode, role_name: roleCode });
+    const created = await withMembershipDepartments(pool, freshRow);
+    const mapped = mapUserRow({ ...created, role_code: roleCode, role_name: roleCode });
     return sendJson(res, 201, { success: true, data: mapped });
   } catch (error: any) {
     // Any failure after BEGIN — including a reporting-chain recomputation
@@ -2391,6 +2464,13 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
       ? await resolveRoleId(incomingRole)
       : existing.role_id;
     const departmentId = payload.departmentId !== undefined ? await resolveDepartmentId(payload.departmentId) : existing.department_id;
+    const extraDepartments = payload.departmentIds !== undefined
+      ? await normalizeExtraDepartmentIds(payload.departmentIds)
+      : { ids: null as string[] | null, error: null as string | null };
+    if (extraDepartments.error) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 400, { success: false, message: extraDepartments.error });
+    }
     let teamId = existing.team_id;
     if (payload.teamId !== undefined) {
       const updateTeamRef = clean(payload.teamId);
@@ -2479,12 +2559,16 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
       await closeUserMemberships(client, existing.id);
     } else {
       await syncUserDepartmentMembership(client, row.id, departmentId || null);
+      if (extraDepartments.ids !== null) {
+        await setUserExtraMemberships(client, row.id, departmentId || null, extraDepartments.ids);
+      }
     }
     await client.query('COMMIT');
     const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
     const roleCode = await roleCodeOf(freshRow.role_id);
-    const mapped = mapUserRow({ ...freshRow, role_code: roleCode, role_name: roleCode });
+    const freshWithMemberships = await withMembershipDepartments(getPool(), freshRow);
+    const mapped = mapUserRow({ ...freshWithMemberships, role_code: roleCode, role_name: roleCode });
     return sendJson(res, 200, { success: true, data: mapped });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -3395,6 +3479,40 @@ async function resolveDepartmentId(ref: any): Promise<string | null> {
     [uuid || value, value]
   );
   return result.rows[0]?.id || null;
+}
+
+/**
+ * The EXTRA department seats of a person (`departmentIds` on the user
+ * payload) — every department besides the primary one. A person may hold a
+ * seat in more than one department (design decision (2)), which is what lets
+ * one head lead several departments (decision (1)) and lets their "my team"
+ * visibility span every department they actually belong to.
+ *
+ * `undefined` means the field was not sent at all: existing extra seats are
+ * then left alone (so an older client, or any partial update, can never
+ * silently drop a seat). A sent list — including an empty one — REPLACES the
+ * extra seats. References are resolved exactly like `departmentId` (uuid,
+ * code or name) so the UI may send whichever it has.
+ */
+async function normalizeExtraDepartmentIds(
+  raw: any
+): Promise<{ ids: string[] | null; error: string | null }> {
+  if (raw === undefined) return { ids: null, error: null };
+  if (raw === null) return { ids: [], error: null };
+  if (!Array.isArray(raw)) {
+    return { ids: null, error: 'Department memberships must be sent as a list of departments.' };
+  }
+  const ids: string[] = [];
+  for (const ref of raw) {
+    const value = clean(ref);
+    if (!value) continue;
+    const resolved = await resolveDepartmentId(value);
+    if (!resolved) {
+      return { ids: null, error: `Unknown department "${value}" in the department membership list.` };
+    }
+    ids.push(resolved);
+  }
+  return { ids: Array.from(new Set(ids)), error: null };
 }
 
 const fallbackDepartments: Array<{ id: string; name: string; code?: string; description?: string; isActive?: boolean; createdDate: string }> = [];

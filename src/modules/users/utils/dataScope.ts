@@ -17,7 +17,12 @@ import { Lead, RolePermission, User } from '../../shared/types';
  *  - 'Own'          -> only records the user personally owns/created
  *  - 'DownTeam'     -> the user + everyone under them in the manager
  *                      reporting chain (their team, direct + indirect)
- *  - 'FullTeam'     -> everyone in the user's department (all teams)
+ *  - 'FullTeam'     -> everyone in the user's DEPARTMENT(S) (all teams of
+ *                      each). "My departments" are the user's ACTIVE
+ *                      memberships (`departmentIds`), because one head may
+ *                      lead several departments (F16 Phase D) — the single
+ *                      `departmentId` column alone would show a
+ *                      multi-department head only one team.
  *  - 'Organization' -> everyone across the whole company
  */
 
@@ -79,7 +84,7 @@ export function resolveUserScope(user: Pick<User, 'role'>, roles: RolePermission
  * given their resolved scope.
  */
 export function getVisibleEmployeeIds(
-  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId'>,
+  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId' | 'departmentIds'>,
   allUsers: User[],
   roles: RolePermission[]
 ): string[] {
@@ -90,10 +95,11 @@ export function getVisibleEmployeeIds(
   }
 
   if (scope === 'FullTeam') {
-    const deptId = currentUser.primaryDepartmentId || currentUser.departmentId;
-    if (deptId) {
+    const myDepartments = departmentIdsOf(currentUser);
+    if (myDepartments.size > 0) {
       return allUsers
-        .filter(u => (u.primaryDepartmentId || u.departmentId) === deptId)
+        .filter(u => departmentIdsOf(u).size > 0
+          && [...departmentIdsOf(u)].some(id => myDepartments.has(id)))
         .map(u => u.employeeId);
     }
     // No department assigned - fall back to reporting-chain downline.
@@ -109,13 +115,33 @@ export function getVisibleEmployeeIds(
 }
 
 /**
+ * The departments a person belongs to, as seen by the client: the active
+ * membership list when the API sent one (`departmentIds`), plus the primary
+ * department column as a fallback for cached/older payloads. Mirrors
+ * `server/authz.ts` — a person is in my team when EITHER side says so.
+ */
+export function departmentIdsOf(
+  user: Pick<User, 'departmentId' | 'primaryDepartmentId' | 'departmentIds'>
+): Set<string> {
+  const ids = new Set<string>();
+  for (const id of [
+    ...(Array.isArray(user?.departmentIds) ? user.departmentIds : []),
+    user?.primaryDepartmentId,
+    user?.departmentId,
+  ]) {
+    if (id && String(id).trim()) ids.add(String(id));
+  }
+  return ids;
+}
+
+/**
  * Filters a list of leads down to only what the current user is
  * permitted to view, based on assignment (assignedTo/assignedBy) and
  * their resolved hierarchy scope.
  */
 export function filterLeadsByScope(
   leads: Lead[],
-  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId'> | null | undefined,
+  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId' | 'departmentIds'> | null | undefined,
   allUsers: User[],
   roles: RolePermission[]
 ): Lead[] {
@@ -135,7 +161,7 @@ export function filterLeadsByScope(
  */
 export function filterUsersByScope(
   users: User[],
-  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId'> | null | undefined,
+  currentUser: Pick<User, 'employeeId' | 'role' | 'departmentId' | 'primaryDepartmentId' | 'departmentIds'> | null | undefined,
   roles: RolePermission[]
 ): User[] {
   if (!currentUser?.employeeId) return users;

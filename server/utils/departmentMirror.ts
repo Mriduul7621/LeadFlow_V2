@@ -270,6 +270,69 @@ export async function syncUserDepartmentMembership(
   }
 }
 
+/**
+ * Replace a person's EXTRA (non-primary) department memberships with exactly
+ * `extraDepartmentIds` — the admin-facing half of decision (2) in the
+ * user-management design: one primary department plus optional extra seats.
+ *
+ * A person with a seat in two departments can HEAD both (decision (1): one
+ * head, many departments), and their "my team" visibility follows every
+ * active seat. Seats that are dropped are CLOSED (is_active = FALSE +
+ * left_at), never deleted, and a dropped seat also releases any head flag on
+ * it — a head can never be somebody who left the department.
+ *
+ * Only non-primary rows are touched: the primary seat is owned by
+ * `syncUserDepartmentMembership`. Every affected mirror team is re-synced in
+ * the same transaction, so a team roster can never disagree with the
+ * membership table. Returns the person's active department ids afterwards.
+ */
+export async function setUserExtraMemberships(
+  client: any,
+  userId: string,
+  primaryDepartmentId: string | null,
+  extraDepartmentIds: string[]
+): Promise<string[]> {
+  if (!(await hasDepartmentMirrorLayer(client))) return [];
+  const wanted = Array.from(new Set((extraDepartmentIds || []).filter(Boolean)))
+    .filter(id => id !== primaryDepartmentId);
+
+  const before = await client.query(
+    `SELECT department_id FROM department_members
+      WHERE user_id = $1 AND is_active AND NOT is_primary`,
+    [userId]
+  );
+  const beforeIds: string[] = before.rows.map((r: any) => r.department_id);
+
+  await client.query(
+    `UPDATE department_members
+        SET is_active = FALSE, left_at = NOW(), updated_at = NOW(),
+            is_head = FALSE, is_primary_head = FALSE
+      WHERE user_id = $1 AND is_active AND NOT is_primary
+        AND NOT (department_id = ANY($2::uuid[]))`,
+    [userId, wanted]
+  );
+
+  if (wanted.length > 0) {
+    await client.query(
+      `INSERT INTO department_members (department_id, user_id, is_primary, is_active, is_head, is_primary_head, joined_at, left_at, created_at, updated_at)
+       SELECT seat, $1, FALSE, TRUE, FALSE, FALSE, NOW(), NULL, NOW(), NOW()
+         FROM unnest($2::uuid[]) AS seat
+       ON CONFLICT (department_id, user_id) DO UPDATE SET
+         is_active = TRUE,
+         is_primary = FALSE,
+         left_at = NULL,
+         updated_at = NOW()`,
+      [userId, wanted]
+    );
+  }
+
+  const touched = new Set<string>([...beforeIds, ...wanted]);
+  for (const id of touched) {
+    await syncMirrorTeam(client, id);
+  }
+  return getUserDepartmentIds(client, userId);
+}
+
 /** Close every active membership of a person (departure / deactivation). */
 export async function closeUserMemberships(client: any, userId: string): Promise<void> {
   if (!(await hasDepartmentMirrorLayer(client))) return;
@@ -287,6 +350,49 @@ export async function closeUserMemberships(client: any, userId: string): Promise
   for (const row of rows.rows) {
     await syncMirrorTeam(client, row.department_id);
   }
+}
+
+/**
+ * Every department `userId` is an ACTIVE member of (primary seat or extra
+ * seat) — the product truth behind "my team" visibility. Returns an empty
+ * list when migration 046 is not installed, so callers can fall back to the
+ * legacy `users.department_id` column.
+ */
+export async function getUserDepartmentIds(client: any, userId: string): Promise<string[]> {
+  if (!userId || !(await hasDepartmentMirrorLayer(client))) return [];
+  try {
+    const rows = await client.query(
+      `SELECT department_id FROM department_members WHERE user_id = $1 AND is_active`,
+      [userId]
+    );
+    return rows.rows.map((r: any) => String(r.department_id)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Active memberships for EVERY member, keyed by user id — one query for the
+ * whole roster (the users list needs it per row, and a per-row query would
+ * turn a list read into N+1).
+ */
+export async function getMembershipDepartmentMap(client: any): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (!(await hasDepartmentMirrorLayer(client))) return map;
+  try {
+    const rows = await client.query(
+      `SELECT user_id, department_id FROM department_members WHERE is_active`
+    );
+    for (const r of rows.rows) {
+      const key = String(r.user_id);
+      const list = map.get(key) || [];
+      list.push(String(r.department_id));
+      map.set(key, list);
+    }
+  } catch {
+    /* layer absent mid-flight: treat as "no memberships known" */
+  }
+  return map;
 }
 
 export interface DepartmentHeadAssignment {
