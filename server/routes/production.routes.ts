@@ -38,6 +38,14 @@ import {
 } from '../utils/departmentMirror.js';
 import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
+  fetchInactiveOwnersWithOpenLeads,
+  fetchOpenLeadCountMap,
+  hasLeadsTable,
+  summarizeOpenLeads,
+  transferOpenLeads,
+  TERMINAL_STATUSES,
+} from '../utils/userDeactivation.js';
+import {
   mapSpreadsheetRow,
   normalizePhoneKey,
   parseAmount,
@@ -808,10 +816,38 @@ async function buildHierarchyConfig() {
     departmentHealth = emptyDepartmentHealth(countRows.rows[0]?.count ?? 0);
   }
 
+  // Phase E — lead ownership health: people who are already switched off yet
+  // still own open leads. The deactivation guard stops NEW cases; this list is
+  // how pre-existing ones (legacy data, an import that archived somebody) are
+  // found and fixed from the same screen.
+  let ownership: {
+    available: boolean;
+    inactiveOwnersWithOpenLeads: Array<{ employeeId: string; fullName: string; openLeadCount: number }>;
+    totalOpenLeads: number;
+  } = { available: false, inactiveOwnersWithOpenLeads: [], totalOpenLeads: 0 };
+  try {
+    if (await hasLeadsTable(pool)) {
+      const inactiveOwners = await fetchInactiveOwnersWithOpenLeads(pool);
+      const openTotal = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM leads l
+          WHERE l.is_deleted = FALSE AND l.current_status <> ALL($1::text[])`,
+        [TERMINAL_STATUSES]
+      );
+      ownership = {
+        available: true,
+        inactiveOwnersWithOpenLeads: inactiveOwners,
+        totalOpenLeads: openTotal.rows[0]?.count ?? 0,
+      };
+    }
+  } catch (error: any) {
+    console.warn('Ownership health unavailable:', error?.message || error);
+  }
+
   return {
     levels,
     unassignedRoles,
     departments: departmentHealth,
+    ownership,
     setup: {
       totalUsers: health.totalUsers,
       usersWithManager: health.usersWithManager,
@@ -857,6 +893,14 @@ function mapUserRow(row: any, managerEmployeeId?: string | null) {
      * were not attached the list is empty and the primary column stands.
      */
     departmentIds: Array.isArray(row.department_ids) ? row.department_ids.map(String) : [],
+    /**
+     * Phase E: how many OPEN leads this person owns (null when the caller
+     * did not load the counts). The Users screen warns before a deactivation;
+     * the server refuses one that would strand them either way.
+     */
+    openLeadCount: row.open_lead_count === undefined || row.open_lead_count === null
+      ? null
+      : Number(row.open_lead_count),
     teamId: row.team_id || '',
     managerId: managerEmployeeId || row.manager_employee_id || '',
     reportingManagerId: managerEmployeeId || row.manager_employee_id || '',
@@ -892,6 +936,19 @@ async function withMembershipDepartments(
   if (!row?.id) return { ...row, department_ids: [] };
   const ids = await getUserDepartmentIds(exec, String(row.id));
   return { ...row, department_ids: ids };
+}
+
+/**
+ * Phase E: attach each person's open-lead count to a whole roster in ONE
+ * aggregate query (never one query per row), so the client can warn about a
+ * deactivation before it is submitted. A database without a `leads` table
+ * simply leaves the counts at null.
+ */
+async function withOpenLeadCounts(exec: any, rows: any[]): Promise<any[]> {
+  if (!rows || rows.length === 0) return rows;
+  const ids = rows.map(r => String(r.id)).filter(Boolean);
+  const counts = await fetchOpenLeadCountMap(exec, ids);
+  return rows.map(r => ({ ...r, open_lead_count: counts.get(String(r.id)) ?? 0 }));
 }
 
 function mapDepartmentRow(row: any) {
@@ -2067,7 +2124,8 @@ router.get('/users', requireAuth, async (_req, res) => {
     // One bulk membership query for the whole roster (never N+1): the client
     // needs each person's member departments to mirror the server's scope.
     const memberships = await getMembershipDepartmentMap(pool);
-    return sendJson(res, 200, result.rows.map(row => mapUserRow(
+    const withCounts = await withOpenLeadCounts(pool, result.rows);
+    return sendJson(res, 200, withCounts.map(row => mapUserRow(
       { ...row, department_ids: memberships.get(String(row.id)) || [] },
       row.manager_employee_id
     )));
@@ -2159,7 +2217,8 @@ router.get('/users/:id', requireAuth, async (req, res) => {
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'User not found' });
     const row = await withMembershipDepartments(getPool(), result.rows[0]);
-    return sendJson(res, 200, mapUserRow(row, row.manager_employee_id));
+    const [withCount] = await withOpenLeadCounts(getPool(), [row]);
+    return sendJson(res, 200, mapUserRow(withCount || row, row.manager_employee_id));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'User fetch failed' });
   }
@@ -2464,6 +2523,24 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
       ? await resolveRoleId(incomingRole)
       : existing.role_id;
     const departmentId = payload.departmentId !== undefined ? await resolveDepartmentId(payload.departmentId) : existing.department_id;
+
+    // Phase E: nobody may be switched off while they still own open leads.
+    // The check runs BEFORE any write, so a refused deactivation leaves the
+    // account (and every membership) exactly as it was.
+    const deactivation = await resolveDeactivationTransfer(client, {
+      userId: existing.id,
+      employeeId: existing.employee_id,
+      departmentId,
+      managerId: existing.manager_id,
+      willBeActive: status,
+      transferRef: payload.transferLeadsTo,
+      actingUserId: req.currentUser?.id,
+      actingEmployeeId: req.currentUser?.employeeId,
+    });
+    if (deactivation.error) {
+      await client.query('ROLLBACK');
+      return sendJson(res, deactivation.error.status, deactivation.error.body);
+    }
     const extraDepartments = payload.departmentIds !== undefined
       ? await normalizeExtraDepartmentIds(payload.departmentIds)
       : { ids: null as string[] | null, error: null as string | null };
@@ -2563,13 +2640,59 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
         await setUserExtraMemberships(client, row.id, departmentId || null, extraDepartments.ids);
       }
     }
+    // Phase E: the hand-over rides in the SAME transaction as the
+    // deactivation — either the person is off and their book has a new owner,
+    // or nothing happened at all.
+    const transfer = deactivation.target
+      ? await transferOpenLeads(client, {
+          fromUserId: existing.id,
+          fromEmployeeId: existing.employee_id,
+          toUserId: deactivation.target.id,
+          toEmployeeId: deactivation.target.employeeId,
+          actorUserId: req.currentUser?.id || null,
+          actorEmployeeId: req.currentUser?.employeeId || 'SYSTEM',
+          note: status === false
+            ? `Transferred when ${existing.employee_id} was deactivated`
+            : `Transferred while editing ${existing.employee_id}`,
+        })
+      : null;
     await client.query('COMMIT');
     const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
     const roleCode = await roleCodeOf(freshRow.role_id);
     const freshWithMemberships = await withMembershipDepartments(getPool(), freshRow);
-    const mapped = mapUserRow({ ...freshWithMemberships, role_code: roleCode, role_name: roleCode });
-    return sendJson(res, 200, { success: true, data: mapped });
+    const [freshWithCount] = await withOpenLeadCounts(getPool(), [freshWithMemberships]);
+    const mapped = mapUserRow({ ...(freshWithCount || freshWithMemberships), role_code: roleCode, role_name: roleCode });
+    // The ledger entry lands AFTER the commit (best-effort, like the other
+    // access changes): a deactivation is an access event, and the number of
+    // leads that moved with it belongs in the record.
+    if (status === false && existing.is_active !== false) {
+      await logAccessChange({
+        actorId: req.currentUser?.id,
+        targetUserId: existing.id,
+        actionCode: 'user-deactivated',
+        entityType: 'user',
+        entityId: existing.id,
+        metadata: {
+          employeeId: existing.employee_id,
+          transferredLeads: transfer?.transferred ?? 0,
+          transferTargetEmployeeId: deactivation.target?.employeeId || null,
+        },
+      });
+    }
+    return sendJson(res, 200, {
+      success: true,
+      data: mapped,
+      ...(transfer
+        ? {
+            transfer: {
+              transferred: transfer.transferred,
+              toEmployeeId: deactivation.target?.employeeId || '',
+              notified: transfer.notified,
+            },
+          }
+        : {}),
+    });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     if (error?.code === '23505') {
@@ -2618,6 +2741,34 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
       await client.query('ROLLBACK');
       return sendJson(res, 409, { success: false, message: 'You cannot delete the last active administrator account.' });
     }
+    // Phase E: a removed account must not leave live leads behind. Same rule
+    // and same hand-over path as a deactivation (the request may carry
+    // `transferLeadsTo` in the body, or ?transferLeadsTo= for a plain DELETE).
+    const removal = await resolveDeactivationTransfer(client, {
+      userId: existing.id,
+      employeeId: existing.employee_id,
+      departmentId: existing.department_id,
+      managerId: existing.manager_id,
+      willBeActive: false,
+      transferRef: req.body?.transferLeadsTo ?? req.query?.transferLeadsTo,
+      actingUserId: req.currentUser?.id,
+      actingEmployeeId: req.currentUser?.employeeId,
+    });
+    if (removal.error) {
+      await client.query('ROLLBACK');
+      return sendJson(res, removal.error.status, removal.error.body);
+    }
+    const removalTransfer = removal.target
+      ? await transferOpenLeads(client, {
+          fromUserId: existing.id,
+          fromEmployeeId: existing.employee_id,
+          toUserId: removal.target.id,
+          toEmployeeId: removal.target.employeeId,
+          actorUserId: req.currentUser?.id || null,
+          actorEmployeeId: req.currentUser?.employeeId || 'SYSTEM',
+          note: `Transferred when ${existing.employee_id} was removed`,
+        })
+      : null;
     await client.query('DELETE FROM hierarchies WHERE user_id = $1', [existing.id]).catch(() => undefined);
     await client.query('DELETE FROM notifications WHERE user_id = $1', [existing.id]).catch(() => undefined);
     // Phase C: close memberships FIRST so the mirror teams lose the member
@@ -2625,7 +2776,36 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
     await closeUserMemberships(client, existing.id);
     await client.query('DELETE FROM users WHERE id = $1', [existing.id]);
     await client.query('COMMIT');
-    return sendJson(res, 200, { success: true, message: 'User deleted' });
+    // target_user_id is left NULL on purpose: the row it pointed at is gone
+    // (the FK is ON DELETE SET NULL anyway), so the employee id is recorded
+    // in the metadata where it stays readable.
+    if (removalTransfer) {
+      await logAccessChange({
+        actorId: req.currentUser?.id,
+        targetUserId: null,
+        actionCode: 'user-deleted',
+        entityType: 'user',
+        entityId: existing.id,
+        metadata: {
+          employeeId: existing.employee_id,
+          transferredLeads: removalTransfer.transferred,
+          transferTargetEmployeeId: removal.target?.employeeId || null,
+        },
+      });
+    }
+    return sendJson(res, 200, {
+      success: true,
+      message: 'User deleted',
+      ...(removalTransfer
+        ? {
+            transfer: {
+              transferred: removalTransfer.transferred,
+              toEmployeeId: removal.target?.employeeId || '',
+              notified: removalTransfer.notified,
+            },
+          }
+        : {}),
+    });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     if (error?.code === '23503') {
@@ -3513,6 +3693,131 @@ async function normalizeExtraDepartmentIds(
     ids.push(resolved);
   }
   return { ids: Array.from(new Set(ids)), error: null };
+}
+
+/**
+ * Phase E — the mandatory-transfer rule, in ONE place, used by both the
+ * update and the delete path.
+ *
+ * A person may not end up switched off (or removed) while they still own OPEN
+ * leads: ownership would keep pointing at an account nobody can log in with,
+ * so the leads would be followed up by nobody and the follow-up queue would
+ * quietly lose them. Every deactivation checklist runs freeze -> export ->
+ * reassign -> deactivate, and the industry rule is that the reassignment is a
+ * human decision — the system never picks a new owner on its own.
+ *
+ * Call it BEFORE writing. Three outcomes:
+ *
+ *   - the person owns no open leads            -> { target: null }, the write
+ *                                                 proceeds untouched;
+ *   - they own leads and no target was chosen   -> 409 + `code:
+ *     LEADS_REQUIRE_TRANSFER` with the count, a sample of the leads and the
+ *     suggested replacements, so the client can ask the administrator;
+ *   - a target was chosen                       -> the target is validated
+ *     (must exist, must be ACTIVE, cannot be the departing person) and handed
+ *     back for `transferOpenLeads`.
+ *
+ * An explicitly chosen target is honoured even when the person stays active
+ * (an administrator may legitimately hand over a book of business).
+ */
+async function resolveDeactivationTransfer(
+  client: any,
+  opts: {
+    userId: string;
+    employeeId: string;
+    departmentId?: string | null;
+    managerId?: string | null;
+    willBeActive: boolean;
+    transferRef: any;
+    actingUserId?: string | null;
+    actingEmployeeId?: string | null;
+  }
+): Promise<{
+  target: { id: string; employeeId: string; fullName: string } | null;
+  summary: { count: number; sample: any[] };
+  error: { status: number; body: any } | null;
+}> {
+  const empty = { count: 0, sample: [] as any[] };
+  const ref = clean(opts.transferRef);
+  const summary = await summarizeOpenLeads(client, opts.userId);
+
+  if (!ref) {
+    if (opts.willBeActive) return { target: null, summary, error: null };
+    if (summary.count === 0) return { target: null, summary, error: null };
+
+    // Suggestions: the people best placed to take the book over — the same
+    // department first (they already see these customers' region of the
+    // business), then the departing person's own manager.
+    const suggested = summary.available
+      ? await client.query(
+          `SELECT u.id, u.employee_id, u.full_name, r.role_code
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+            WHERE u.is_active = TRUE
+              AND u.id <> $1
+              AND (u.department_id = $2::uuid OR u.id = $3::uuid)
+            ORDER BY (u.id = $3::uuid) DESC, u.employee_id ASC
+            LIMIT 8`,
+          [opts.userId, opts.departmentId || null, opts.managerId || null]
+        )
+      : { rows: [] as any[] };
+
+    return {
+      target: null,
+      summary,
+      error: {
+        status: 409,
+        body: {
+          success: false,
+          code: 'LEADS_REQUIRE_TRANSFER',
+          message:
+            `This person still owns ${summary.count} open lead${summary.count === 1 ? '' : 's'}. ` +
+            'Choose who takes them over before deactivating the account.',
+          leadCount: summary.count,
+          leads: summary.sample,
+          suggestions: suggested.rows.map((r: any) => ({
+            userId: r.id,
+            employeeId: r.employee_id,
+            fullName: r.full_name,
+            roleCode: r.role_code || '',
+            isManager: opts.managerId ? String(r.id) === String(opts.managerId) : false,
+          })),
+        },
+      },
+    };
+  }
+
+  const targetId = await resolveUserId(ref);
+  if (!targetId) {
+    return { target: null, summary, error: { status: 400, body: { success: false, message: `Unknown user "${ref}" to transfer leads to.` } } };
+  }
+  if (String(targetId) === String(opts.userId)) {
+    return { target: null, summary, error: { status: 400, body: { success: false, message: 'Leads cannot be transferred to the person being deactivated.' } } };
+  }
+  const targetRow = await client.query(
+    `SELECT u.id, u.employee_id, u.full_name, u.is_active FROM users u WHERE u.id = $1 LIMIT 1`,
+    [targetId]
+  );
+  const target = targetRow.rows[0];
+  if (!target) {
+    return { target: null, summary, error: { status: 400, body: { success: false, message: 'The selected user could not be found.' } } };
+  }
+  if (target.is_active === false) {
+    return {
+      target: null,
+      summary,
+      error: {
+        status: 400,
+        body: { success: false, message: `${target.full_name} is deactivated — pick an active colleague to take these leads over.` },
+      },
+    };
+  }
+
+  return {
+    target: { id: String(target.id), employeeId: String(target.employee_id), fullName: String(target.full_name) },
+    summary,
+    error: null,
+  };
 }
 
 const fallbackDepartments: Array<{ id: string; name: string; code?: string; description?: string; isActive?: boolean; createdDate: string }> = [];
