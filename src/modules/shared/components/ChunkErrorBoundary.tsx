@@ -31,24 +31,52 @@ import { useTranslation } from '../utils/translations';
 type BoundaryPhase = 'normal' | 'staleChunk' | 'runtimeError';
 
 class ChunkErrorBoundary extends React.Component<
-  { children: React.ReactNode },
+  { children: React.ReactNode; resetKey?: string },
   { phase: BoundaryPhase }
 > {
   // React owns both members; declared explicitly because this repo runs
   // without bundled React type declarations (no @types/react).
-  declare props: { children: React.ReactNode };
-  declare state: { phase: BoundaryPhase };
+  declare props: { children: React.ReactNode; resetKey?: string };
+  declare state: { phase: BoundaryPhase; resetKey?: string };
 
   private autoReloadStarted = false;
 
-  constructor(props: { children: React.ReactNode }) {
+  constructor(props: { children: React.ReactNode; resetKey?: string }) {
     super(props);
-    this.state = { phase: 'normal' };
+    // `resetKey` is part of the state so getDerivedStateFromProps can tell
+    // a real route change from an ordinary re-render.
+    this.state = { phase: 'normal', resetKey: props.resetKey };
     this.handleManualReload = this.handleManualReload.bind(this);
   }
 
   static getDerivedStateFromError(error: unknown): { phase: BoundaryPhase } {
     return { phase: isChunkLoadError(error) ? 'staleChunk' : 'runtimeError' };
+  }
+
+  /**
+   * Route-change reset.
+   * ------------------------------------------------------------------
+   * The boundary is rendered once per route element, but React REUSES the
+   * instance across in-app navigations (the app shell stays mounted), so
+   * without this a caught render error outlived its page: the user moved
+   * to another route and still saw the previous page's "Something went
+   * wrong" card — one crash effectively broke the whole session until a
+   * full reload.
+   *
+   * `resetKey` is the live location (path+search) supplied by `LazyPage`.
+   * A real route change clears the error so the new page gets a clean
+   * attempt; if that page throws too, React's error path immediately
+   * re-enters `getDerivedStateFromError`, so a genuinely broken page
+   * still shows the card instead of a blank screen. Same key => state is
+   * left alone (returning null keeps React from re-rendering for
+   * nothing).
+   */
+  static getDerivedStateFromProps(
+    props: { resetKey?: string },
+    state: { phase: BoundaryPhase; resetKey?: string },
+  ): { phase: BoundaryPhase; resetKey?: string } | null {
+    if (state.resetKey === props.resetKey) return null;
+    return { phase: 'normal', resetKey: props.resetKey };
   }
 
   componentDidCatch(error: unknown): void {

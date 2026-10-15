@@ -81,25 +81,24 @@ export default function LeadGenerate() {
   const { t, language } = useTranslation();
   const { canAccess, userRole } = usePermissions();
 
-  if (!canAccess('lead_generate', 'create')) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-200 rounded-sm max-w-xl mx-auto space-y-6 animate-in fade-in duration-300 mt-12">
-        <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
-          <AlertCircle className="w-8 h-8" />
-        </div>
-        <div className="space-y-2">
-          <span className="text-sm font-medium text-[#978C21]">{t("accessRestricted")}</span>
-          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
-          <p className="text-xs text-slate-500 leading-relaxed font-sans">
-            {t('accessDeniedMsg')}
-          </p>
-        </div>
-        <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature lead_generate.create Required
-        </div>
-      </div>
-    );
-  }
+  /**
+   * Capability check — EVALUATED, never early-returned, before the hooks.
+   *
+   * `canAccess()` is NOT synchronous for non-admin roles: the role matrix
+   * arrives one tick later (localStorage read in usePermissions' effect,
+   * then a server permission sheet). Returning the AccessDenied tree
+   * BEFORE the hooks below therefore made the first render shorter than
+   * the second one, and React aborted the page with error #310
+   * ("Rendered more hooks than during the previous render") for every
+   * MANAGER / TEAM_LEAD / EMPLOYEE — and the route boundary then kept the
+   * whole session showing "Something went wrong" until a full reload.
+   *
+   * The decision is still enforced, exactly as strictly as before; it is
+   * simply enforced AFTER the hook list (see the single `if` below), so
+   * the hook order is identical on every render.
+   */
+  const mayCreateLead = canAccess('lead_generate', 'create');
+
   const [options, setOptions] = useState<any>({});
   const [fieldConfigs, setFieldConfigs] = useState<FormField[]>([]);
   const fieldConfigMap = useMemo(() => {
@@ -157,8 +156,12 @@ export default function LeadGenerate() {
       customDropdownTypes.forEach((t, i) => { newOptions[t] = customResults[i]; });
       setOptions(newOptions);
     };
+    // A user without the capability never sees the form, so the option
+    // dictionaries are not worth a request for them. The guard is inside
+    // the effect (not around it) so the hook list stays unconditional.
+    if (!mayCreateLead) return;
     loadOptions();
-  }, []);
+  }, [mayCreateLead]);
 
   const maritalStatus = watch('maritalStatus');
   const selectedDivision = watch('division');
@@ -172,6 +175,31 @@ export default function LeadGenerate() {
   useEffect(() => {
     setValue('thana', '');
   }, [selectedDistrict, setValue]);
+
+  /**
+   * The capability gate — placed after EVERY hook call on purpose.
+   * Reordering this above the hooks re-introduces React #310; see the
+   * `mayCreateLead` note at the top of the component.
+   */
+  if (!mayCreateLead) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-200 rounded-sm max-w-xl mx-auto space-y-6 animate-in fade-in duration-300 mt-12">
+        <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <div className="space-y-2">
+          <span className="text-sm font-medium text-[#978C21]">{t("accessRestricted")}</span>
+          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
+          <p className="text-xs text-slate-500 leading-relaxed font-sans">
+            {t('accessDeniedMsg')}
+          </p>
+        </div>
+        <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
+          Strict Security Level: Feature lead_generate.create Required
+        </div>
+      </div>
+    );
+  }
 
   const divisions = Object.keys(BANGLADESH_GEOGRAPHY);
   const districts = selectedDivision ? Object.keys(BANGLADESH_GEOGRAPHY[selectedDivision] || {}) : [];
