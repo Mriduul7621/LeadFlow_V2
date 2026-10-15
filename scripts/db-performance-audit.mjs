@@ -118,7 +118,7 @@ async function seed() {
     await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [userIds[i % 10], userIds[i]]);
   }
 
-  const statuses = ['Untouched','Contacted','No Response','Busy','Interested','Follow-up Set','Meeting Fixed','Converted','Not Interested'];
+  const statuses = ['New','Contacted','No Response','Busy','Interested','Follow-up Set','Meeting Fixed','Converted','Not Interested'];
   const now = Date.now();
   const BATCH = 2000;
   for (let start = 0; start < LEADS; start += BATCH) {

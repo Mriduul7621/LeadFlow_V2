@@ -119,7 +119,7 @@ async function setupSchema(pool: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -195,7 +195,7 @@ describe('GET /api/leads — server-side visibility enforcement', () => {
     const leadCode = `lead_${mobile}`;
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, assigned_by, created_by, updated_by, current_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $6, 'Untouched')`,
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'New')`,
       [leadCode, name, mobile, assignedToUserId, createdByUserId || assignedToUserId, createdByUserId || assignedToUserId]
     );
     return leadCode;
@@ -431,7 +431,7 @@ describe('GET /api/leads — server-side visibility enforcement', () => {
   it('G. Existing filters compose with visibility (AND, not OR): status filter narrows within scope', async () => {
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, assigned_by, created_by, updated_by, current_status)
-       VALUES ('lead_status1', 'Manager Lead Untouched', '01710000060', $1, $1, $1, $1, 'Untouched')`,
+       VALUES ('lead_status1', 'Manager Lead New', '01710000060', $1, $1, $1, $1, 'New')`,
       [managerA.id]
     );
     await pool.query(
@@ -442,13 +442,13 @@ describe('GET /api/leads — server-side visibility enforcement', () => {
     // Out-of-scope lead with the same status, must never appear regardless of filter.
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, assigned_by, created_by, updated_by, current_status)
-       VALUES ('lead_status3', 'Sibling Lead Untouched', '01710000062', $1, $1, $1, $1, 'Untouched')`,
+       VALUES ('lead_status3', 'Sibling Lead New', '01710000062', $1, $1, $1, $1, 'New')`,
       [managerB.id]
     );
 
     const res = await request(app)
       .get('/api/leads')
-      .query({ status: 'Untouched' })
+      .query({ status: 'New' })
       .set('Authorization', `Bearer ${tokenFor(managerA)}`);
 
     assert.equal(res.status, 200);

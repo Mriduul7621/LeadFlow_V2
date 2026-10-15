@@ -111,7 +111,7 @@ async function setupSchema(pool: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -226,7 +226,7 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     }
 
     // Seed FollowUpStatus dictionary (canonical)
-    const statuses = ['Untouched', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
     for (let i = 0; i < statuses.length; i++) {
       await pool.query(`INSERT INTO options (field_key, option_value, option_label, sort_order, is_active) VALUES ('FollowUpStatus', $1, $1, $2, true) ON CONFLICT DO NOTHING`, [statuses[i], i + 1]);
     }
@@ -478,7 +478,7 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     // Create lead as employeeA via admin token but assignedTo employeeA
     // Simpler: create lead as employeeB then try as employeeA with no edit perm? But employeeA has no edit perm now.
     // Let's have employeeA try to update a lead they own (created via admin directly inserted as employeeA visible)
-    const leadRowInsert: any = await pool.query(`INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, created_by, updated_by, current_status) VALUES ($1, $2, $3, $4, $4, $4, 'Untouched') RETURNING lead_code`, [`perm_${Date.now()}`, 'Perm Test', '01700001014', employeeA.id]);
+    const leadRowInsert: any = await pool.query(`INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, created_by, updated_by, current_status) VALUES ($1, $2, $3, $4, $4, $4, 'New') RETURNING lead_code`, [`perm_${Date.now()}`, 'Perm Test', '01700001014', employeeA.id]);
     const leadCode = leadRowInsert.rows[0].lead_code;
     const tokenA = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
     const res = await request(app).post(`/api/leads/${leadCode}/follow-up`).set('Authorization', `Bearer ${tokenA}`).send({ status: 'Contacted', remarks: 'perm test' });
@@ -665,7 +665,7 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     const leadCode = `legacy_${Date.now()}`;
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, created_by, updated_by, current_status, status_history, is_deleted) VALUES ($1, $2, $3, $4, $4, $4, $5, '[]'::jsonb, false)`,
-      [leadCode, 'Legacy Prospect', '01700001022', employeeA.id, 'Untouched']
+      [leadCode, 'Legacy Prospect', '01700001022', employeeA.id, 'New']
     );
     // Verify no activities
     const leadRow: any = await pool.query(`SELECT id FROM leads WHERE lead_code = $1`, [leadCode]);

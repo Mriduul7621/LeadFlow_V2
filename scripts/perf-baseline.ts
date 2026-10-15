@@ -69,7 +69,7 @@ async function main() {
   const inDays = (days: number, h = 10) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, 0, 0, 0); return d.toISOString(); };
   for (let i = 0; i < 40; i++) {
     const next = i % 4 === 0 ? inDays(-2) : i % 4 === 1 ? todayAt(9 + (i % 8)) : i % 4 === 2 ? inDays(1) : null;
-    const status = i % 5 === 0 ? 'Untouched' : i % 5 === 1 ? 'Contacted' : i % 5 === 2 ? 'Interested' : i % 5 === 3 ? 'Meeting Fixed' : 'Converted';
+    const status = i % 5 === 0 ? 'New' : i % 5 === 1 ? 'Contacted' : i % 5 === 2 ? 'Interested' : i % 5 === 3 ? 'Meeting Fixed' : 'Converted';
     await pool.query(
       `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, created_by, updated_by, current_status, custom_fields, follow_up_count, next_follow_up_at, is_deleted)
        VALUES ($1, $2, $3, $4, $4, $4, $5, $6::jsonb, 0, $7, FALSE)`,

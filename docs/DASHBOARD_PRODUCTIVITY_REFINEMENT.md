@@ -12,13 +12,13 @@ and creating a decision-oriented CRM workspace.
 
 | Metric | Removed From | Now Located |
 |--------|-------------|-------------|
-| Untouched | Top KPI row | Pipeline stage + Needs Attention section |
+| New | Top KPI row | Pipeline stage + Needs Attention section |
 | Due Today | Top KPI row | Today & Tomorrow panel + Follow-up Discipline |
 | Converted | Top KPI row | Pipeline stage (last item) |
 
 ### Rationale:
 
-- **Untouched** → Redundant at top level; meaningful in Pipeline (leads not yet engaged) and Needs Attention (action required)
+- **New** → Redundant at top level; meaningful in Pipeline (leads not yet engaged) and Needs Attention (action required)
 - **Due Today** → Better positioned in operational Today/Tomorrow panel where users act on immediate follow-ups; also in Follow-up Discipline compact view
 - **Converted** → Canonical pipeline stage — naturally belongs in Sales Pipeline visualization
 
@@ -43,7 +43,7 @@ and creating a decision-oriented CRM workspace.
 
 **Removed from top snapshot (moved deliberately):**
 
-- Untouched → Pipeline / Needs Attention
+- New → Pipeline / Needs Attention
 - Due Today → Today / Tomorrow + Follow-up Discipline
 - Converted → Pipeline stage
 
@@ -95,7 +95,7 @@ top-level Follow-up Health cards
 
 **Canonical stages (unchanged):**
 
-Untouched → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted
+New → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted
 
 **Shows:** count + percentage of visible total for each stage
 
@@ -103,7 +103,7 @@ Untouched → Contacted → Interested → Meeting Fixed → Meeting Completed �
 
 - Stage progression feels connected visually
 - Converted uses success tone
-- Untouched uses neutral/olive tone
+- New uses neutral/olive tone
 - Restrained accent/progress bars
 
 **Lead Status Distribution section removed** — it materially duplicates the same
@@ -132,7 +132,7 @@ completion rates, discipline scores, SLA scores, or trends.
 
 **Current signals (authoritative only):**
 
-- **Untouched Leads** → `statusCounts.Untouched`, links to `/leads`
+- **New Leads** → `statusCounts.New`, links to `/leads`
 - No Overdue Follow-ups row here: the high-level exception stays in Executive
   Snapshot and its operational context stays in Follow-up Discipline.
 
@@ -208,7 +208,7 @@ Task Calendar provides the detailed view.
 - Executive Snapshot: strongest numeric emphasis, subtle semantic accent, concise labels
 - Today/Tomorrow: visually prominent, two clearly separated day groups, activity-type badges
 - Pipeline: stage progression with restrained accent/progress; Converted success tone,
-  Untouched neutral/olive
+  New neutral/olive
 - Needs Attention: warning emphasis only where genuinely needed; do not make entire page
   red/orange
 - Follow-up Discipline: semantic colors (red/amber/blue) for overdue/due today/upcoming
@@ -318,7 +318,7 @@ Added 26 focused regressions in
 - Exact source-ID duplicates are removed; no lead/name/time heuristic merging
 - All loaded rows remain available beyond six items per source
 - Daily-loading and refresh skeletons cannot show false empty messages or zero counts
-- Needs Attention contains only Untouched Leads; overdue queue navigation is preserved
+- Needs Attention contains only New Leads; overdue queue navigation is preserved
 - `rounded-[10px]` replaces the typo on the Add Lead action
 - No full lead fetch or additional daily requests
 - Final section order is preserved with Task Calendar last

@@ -133,7 +133,7 @@ describe('per-user cache scoping (localDb)', () => {
     storageBacking.set('shanta_leads', JSON.stringify([leadA1]));
     storageBacking.set('shanta_users', JSON.stringify([userA]));
     storageBacking.set('shanta_notifications', JSON.stringify([userA]));
-    storageBacking.set('shanta_options', JSON.stringify({ lead_status: ['Untouched'] }));
+    storageBacking.set('shanta_options', JSON.stringify({ lead_status: ['New'] }));
 
     clearLegacyGlobalCaches();
     assert.ok(!storageBacking.has('shanta_leads'), 'legacy unscoped leads must be purged');
@@ -143,7 +143,7 @@ describe('per-user cache scoping (localDb)', () => {
 
     // Options remain usable by everyone (documented: not user-scoped).
     setLocalDbUserIdProvider(() => 'USER_B');
-    assert.deepEqual(localDb.getOptionsByType('lead_status'), ['Untouched']);
+    assert.deepEqual(localDb.getOptionsByType('lead_status'), ['New']);
   });
 });
 

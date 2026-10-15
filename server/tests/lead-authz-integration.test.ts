@@ -302,7 +302,7 @@ describe('Lead API Authorization - Route Level', () => {
           { id: 'assign_1', toEmployeeId: 'EMPA', changedBy: 'EMPB', date: new Date().toISOString() },
         ],
         statusHistory: [
-          { status: 'Untouched', date: new Date().toISOString(), updatedBy: 'EMPB' },
+          { status: 'New', date: new Date().toISOString(), updatedBy: 'EMPB' },
         ],
       });
 

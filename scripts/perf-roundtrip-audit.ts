@@ -124,7 +124,7 @@ async function main() {
     d.setHours(hour, 30, 0, 0);
     return d.toISOString();
   };
-  const statuses = ['Untouched', 'Contacted', 'Interested', 'Meeting Fixed', 'Follow-up Set', 'Converted', 'No Response', 'Busy'];
+  const statuses = ['New', 'Contacted', 'Interested', 'Meeting Fixed', 'Follow-up Set', 'Converted', 'No Response', 'Busy'];
   const insertLead = (i: number) =>
     originalQuery(
       `INSERT INTO leads (lead_code, customer_name, mobile, email, area, occupation, priority, assigned_to, created_by, updated_by,

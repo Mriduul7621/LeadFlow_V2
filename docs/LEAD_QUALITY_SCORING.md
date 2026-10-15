@@ -30,7 +30,7 @@ score = clamp(0, 100, BASE + status + recency + engagement
 | 1 | Status | Interested | +15 | `Customer interested` |
 | 1 | Status | Follow-up Set | +10 | `Follow-up set` |
 | 1 | Status | Contacted | +5 | `Contacted` |
-| 1 | Status | Untouched / unknown custom | 0 | none (neutral) |
+| 1 | Status | New / unknown custom | 0 | none (neutral) |
 | 1 | Status | Busy | −2 | `Customer busy` |
 | 1 | Status | No Response (incl. legacy `Unreachable` alias) | −8 | `No response` |
 | 2 | Recency (max of last-contacted, last history event, created) | touched ≤ 1 Dhaka day ago | +5 | `Touched within the last day` |

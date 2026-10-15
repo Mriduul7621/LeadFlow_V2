@@ -210,7 +210,7 @@ describe('Performance & latency hardening — server behavior', () => {
         previous_assigned_to UUID,
         last_contacted_at TIMESTAMP,
         next_follow_up_at TIMESTAMP,
-        current_status VARCHAR(255) DEFAULT 'Untouched',
+        current_status VARCHAR(255) DEFAULT 'New',
         status_history JSONB DEFAULT '[]'::jsonb,
         assignment_history JSONB DEFAULT '[]'::jsonb,
         documents JSONB DEFAULT '[]'::jsonb,

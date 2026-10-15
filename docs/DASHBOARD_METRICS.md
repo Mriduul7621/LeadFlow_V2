@@ -44,7 +44,7 @@ predicate as leads list / follow-up queue.
 
 Canonical `current_status` values only (no silent merges):
 
-- Untouched, Contacted, No Response, Busy, Interested, Follow-up Set,
+- New, Contacted, No Response, Busy, Interested, Follow-up Set,
   Meeting Fixed, Meeting Completed, Pipeline Locked, Converted, Not Interested
 
 **Active leads** = total − Converted − Not Interested  
@@ -98,7 +98,7 @@ No N+1 lead fetches for metrics.
     "totalLeads": 0,
     "activeLeads": 0,
     "converted": 0,
-    "statusCounts": { "Untouched": 0, "Converted": 0 },
+    "statusCounts": { "New": 0, "Converted": 0 },
     "projected": 0,
     "collected": 0,
     "sumAssured": 0,

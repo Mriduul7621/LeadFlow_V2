@@ -31,12 +31,12 @@ This document describes the UI/UX + visual design modernization delivered in **P
 ### 2.1 Dashboard — top to bottom (final)
 
 1. **Header + unified date-range control** — title `Dashboard` + subtitle `Sales performance at a glance. Track outcomes by period.` + single popover control (`Today / WTD / MTD / LMTD / YTD / Custom / All Time`) + `Add Lead` + `Refresh`.
-2. **Primary KPI summary** — Total · Untouched · Due Today · Overdue · Converted (reads `GET /api/dashboard` + `followUpCounts` only).
+2. **Primary KPI summary** — Total · New · Due Today · Overdue · Converted (reads `GET /api/dashboard` + `followUpCounts` only).
 3. **Secondary KPI summary** — Projected NCP · Collected NCP · Conversion Rate · Active Leads.
 4. **Sales Pipeline** — canonical `current_status` stages with `statusCounts` counts + % of total.
 5. **Today & Tomorrow Actions** — server follow-up queue (`GET /api/leads/follow-ups?bucket=`) + server `scheduled_activities` (`GET /api/scheduled-activities?from=&to=`, `Asia/Dhaka`) never `leadService.getLeads()`.
 6. **Follow-up Health** — Overdue / Due Today / Upcoming cards linking to `/follow-up?bucket=`.
-7. **Needs Attention** — Untouched + Overdue quick entrances with plain-business English.
+7. **Needs Attention** — New + Overdue quick entrances with plain-business English.
 8. **Analytics / Support** — Trend (empty: “No trend data available”), Team Performance, Lead Status Distribution.
 9. **Task Calendar — last major section** — embedded calendar (`TaskCalendar embedded`) + `Open Calendar → /task-calendar`.
 

@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
  *  Issue 2 (status):  legacy values ("No response", "Unreachable", "Follow up",
  *                     "Not interested", "Interested") resolve to the EXISTING
  *                     canonical FollowUpStatus options; unknown values still
- *                     fail clearly (never silently "Untouched").
+ *                     fail clearly (never silently "New").
  *  Issue 3 (parity):  the client preview and the server import must apply the
  *                     SAME date + status resolution rules, and the intended
  *                     calendar date must be what PostgreSQL stores.
@@ -202,7 +202,25 @@ describe('Bulk import statuses — legacy aliases resolve identically in preview
     }
   });
 
-  it('G. Unknown statuses FAIL on both sides — never silently converted to Untouched', () => {
+  it('The pre-rename first stage "Untouched" still resolves to "New" (server == preview)', () => {
+    for (const legacy of ['Untouched', 'untouched', 'UNTOUCHED ', 'un-touched!']) {
+      const server = resolveImportStatus(legacy, DEFAULT_STATUS_DICTIONARY);
+      const client = resolveImportStatusClient(legacy, CLIENT_DEFAULT_STATUS_DICTIONARY);
+      assert.equal(server.ok, true, `"${legacy}" must keep importing after the rename (server)`);
+      assert.equal(client.ok, true, `"${legacy}" must keep previewing after the rename (preview)`);
+      assert.equal(server.status, 'New', `"${legacy}" must land on the renamed canonical stage`);
+      assert.equal(client.status, server.status, 'preview and server must agree on the legacy first stage');
+    }
+    // Same dictionary-scoped rule as every other alias: an admin who removed
+    // "New" from the options makes the legacy value fail instead of guessing.
+    assert.equal(resolveImportStatus('Untouched', ['Contacted', 'Interested']).ok, false);
+    assert.equal(resolveImportStatusClient('Untouched', ['Contacted', 'Interested']).ok, false);
+    // The new canonical spelling needs no alias at all, in any casing.
+    assert.deepEqual(resolveImportStatus('New', DEFAULT_STATUS_DICTIONARY), { ok: true, status: 'New' });
+    assert.deepEqual(resolveImportStatus('new', DEFAULT_STATUS_DICTIONARY), { ok: true, status: 'New' });
+  });
+
+  it('G. Unknown statuses FAIL on both sides — never silently converted to New', () => {
     for (const unknown of ['Totally Made Up Status', 'Maybe Later', 'Ghosted']) {
       const server = resolveImportStatus(unknown, DEFAULT_STATUS_DICTIONARY);
       const client = resolveImportStatusClient(unknown, CLIENT_DEFAULT_STATUS_DICTIONARY);
@@ -219,18 +237,18 @@ describe('Bulk import statuses — legacy aliases resolve identically in preview
   it('Admin-configured dictionaries stay authoritative: an alias whose canonical target is absent still fails', () => {
     // An admin removed "Follow-up Set" from the options — "Follow up" must
     // NOT resolve to something else or silently pass.
-    const server = resolveImportStatus('Follow up', ['Untouched', 'Contacted', 'No Response']);
-    const client = resolveImportStatusClient('Follow up', ['Untouched', 'Contacted', 'No Response']);
+    const server = resolveImportStatus('Follow up', ['New', 'Contacted', 'No Response']);
+    const client = resolveImportStatusClient('Follow up', ['New', 'Contacted', 'No Response']);
     assert.equal(server.ok, false);
     assert.equal(client.ok, false);
     // An admin removed "No Response" — "Unreachable" must fail too.
-    assert.equal(resolveImportStatus('Unreachable', ['Untouched', 'Interested']).ok, false);
-    assert.equal(resolveImportStatusClient('Unreachable', ['Untouched', 'Interested']).ok, false);
+    assert.equal(resolveImportStatus('Unreachable', ['New', 'Interested']).ok, false);
+    assert.equal(resolveImportStatusClient('Unreachable', ['New', 'Interested']).ok, false);
     // Canonical values (any casing) keep resolving without aliases.
     assert.deepEqual(resolveImportStatus('no response', ['No Response']), { ok: true, status: 'No Response' });
   });
 
-  it('Blank statuses stay blank on both sides (no fake Untouched substitution)', () => {
+  it('Blank statuses stay blank on both sides (no fake New substitution)', () => {
     assert.deepEqual(resolveImportStatus('', DEFAULT_STATUS_DICTIONARY), { ok: true, status: '' });
     assert.deepEqual(resolveImportStatusClient(''), { ok: true, status: '' });
     const preview = mapRowForPreview(legacySheetRow({ 'Initial Status': '', 'Follow up': '' }), 0);
@@ -333,7 +351,7 @@ async function setupSchema(p: any) {
       previous_assigned_to UUID,
       last_contacted_at TIMESTAMP,
       next_follow_up_at TIMESTAMP,
-      current_status VARCHAR(255) DEFAULT 'Untouched',
+      current_status VARCHAR(255) DEFAULT 'New',
       status_history JSONB DEFAULT '[]'::jsonb,
       assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb,
@@ -499,7 +517,7 @@ describe('Bulk import — preview/server consistency on the real import path (PG
     assert.equal(lead.custom_fields.followUpStatus, 'Follow-up Set');
     assert.equal(lead.custom_fields.initialStatusRaw, 'No response');
     assert.equal(lead.custom_fields.followUpStatusRaw, 'Follow up');
-    assert.notEqual(lead.current_status, 'Untouched');
+    assert.notEqual(lead.current_status, 'New');
 
     // Preview and server agreed: the preview resolved the same current status.
     const previewRow = mapRowForPreview(row, 0);

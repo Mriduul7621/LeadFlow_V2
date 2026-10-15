@@ -209,7 +209,7 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
         converted_at TIMESTAMP,
         lost_at TIMESTAMP,
         lost_reason TEXT,
-        current_status VARCHAR(255) DEFAULT 'Untouched',
+        current_status VARCHAR(255) DEFAULT 'New',
         status_history JSONB DEFAULT '[]'::jsonb,
         assignment_history JSONB DEFAULT '[]'::jsonb,
         documents JSONB DEFAULT '[]'::jsonb,
@@ -403,7 +403,7 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
     const mkLead = async (code: string, name: string, assigneeId: string, creatorId: string) => {
       const r = await pool.query(
         `INSERT INTO leads (lead_code, customer_name, mobile, assigned_to, assigned_by, created_by, updated_by, current_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $6, 'Untouched') RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6, $6, 'New') RETURNING id`,
         [code, name, `017${code.slice(-8)}`, assigneeId, creatorId, creatorId]
       );
       return r.rows[0].id;
@@ -584,7 +584,7 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
     // which the visibility clause then excludes -> empty. It can never
     // return a lead outside her scope.
     const narrowed = await request(app)
-      .get('/api/leads?assignedTo=BOB&status=Untouched')
+      .get('/api/leads?assignedTo=BOB&status=New')
       .set('Authorization', `Bearer ${aliceT()}`);
     assert.equal(narrowed.status, 200);
     const ids = narrowed.body.map((l: any) => l.id);
