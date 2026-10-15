@@ -125,55 +125,50 @@ describe('Phase F — role templates', () => {
     await closePool();
   });
 
-  it('a baseline template IS the role: derived live, nothing stored', async () => {
-    const storedBefore = await pool.query(`SELECT COUNT(*)::int AS n FROM role_templates`);
+  it('ships NO built-in templates: an empty list on a fresh install is the answer', async () => {
+    const storedBefore = (await pool.query(`SELECT COUNT(*)::int AS n FROM role_templates`)).rows[0].n;
+    assert.equal(storedBefore, 0, 'fixture assumption: nothing saved yet');
+
     const templates = await getTemplates();
-
-    const manager = find(templates, 'system:MANAGER');
-    assert.deepEqual([...manager.grants].sort(), await managerGrantsFromDb(), 'baseline grants must equal the live role grants');
-    assert.equal(manager.source, 'system');
-    assert.equal(manager.roleCode, 'MANAGER');
-
-    const roleRow = await pool.query(`SELECT data_visibility, menu_access FROM roles WHERE id = $1`, [managerRoleId]);
-    assert.equal(manager.dataVisibility, roleRow.rows[0].data_visibility);
-    assert.deepEqual(manager.menuAccess, roleRow.rows[0].menu_access || {});
-
+    assert.deepEqual(templates, [], 'the catalogue must be exactly what an administrator saved — no invented defaults');
     assert.equal(
       (await pool.query(`SELECT COUNT(*)::int AS n FROM role_templates`)).rows[0].n,
-      storedBefore.rows[0].n,
-      'listing baselines must not write rows — a stored copy is exactly the drift this design rejects'
+      0,
+      'listing must not write anything either'
     );
   });
 
-  it('ADMIN / SUPERADMIN are never offered as a starting point', async () => {
+  it('no derived / system entry exists — the shipped roles themselves are the starting point', async () => {
+    // The previous shape (a `system:` baseline per standard role, derived live)
+    // is gone on purpose: a template list that mixes derived defaults with the
+    // admin's own work is two answers to "what does this job need" — the drift
+    // class F16 §3.3 records. The shipped ROLES remain, untouched, and can be
+    // opened with Configure to start from what they hold.
     const templates = await getTemplates();
-    assert.equal(templates.some(t => String(t.roleCode || '').toUpperCase() === 'ADMIN'), false);
-    assert.equal(templates.some(t => String(t.roleCode || '').toUpperCase() === 'SUPERADMIN'), false);
-    assert.ok(templates.length > 0, 'every other shipped role is offered');
+    assert.equal(
+      templates.some(x => String(x.id).startsWith('system:') || ('source' in x && (x as any).source === 'system')),
+      false,
+      'no derived/system entries may exist'
+    );
+    const roles = await pool.query(`SELECT COUNT(*)::int AS n FROM roles`);
+    assert.ok(roles.rows[0].n >= 9, 'the shipped roles themselves are untouched and remain the real starting point');
   });
 
-  it('editing the role edits its baseline in the same breath (the drift fix)', async () => {
-    const before = find(await getTemplates(), 'system:MANAGER');
-    // leads.delete is a canonical code MANAGER does NOT hold by default (it can
-    // clean its own list, not remove records) — so granting it MUST show up.
-    assert.equal(before.grants.includes('leads.delete'), false, 'fixture assumption: MANAGER cannot delete leads by default');
-
-    const granted = await request(app)
-      .put('/api/roles/MANAGER/permissions')
+  it('an ADMIN-like save of a normal role is what fills the catalogue — nothing else can', async () => {
+    const before = await getTemplates();
+    assert.deepEqual(before, [], 'still empty: only an explicit save may create an entry');
+    const res = await request(app)
+      .post('/api/role-templates')
       .set('Authorization', `Bearer ${adminT()}`)
-      .send({ permissions: [{ code: 'leads.delete', allowed: true }] });
-    assert.equal(granted.status, 200, JSON.stringify(granted.body));
-
-    const after = find(await getTemplates(), 'system:MANAGER');
-    assert.equal(after.grants.includes('leads.delete'), true,
-      'a baseline that does not follow the role is a second source of truth — the whole point of deriving it live');
-    assert.deepEqual([...after.grants].sort(), await managerGrantsFromDb());
-
-    // put it back so the snapshot test below snapshots the seeded shape
+      .send({ name: 'Onboarding — field executive', fromRole: 'MANAGER' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const templates = await getTemplates();
+    assert.deepEqual(templates.map(x => x.name), ['Onboarding — field executive']);
+    assert.equal(templates[0].roleCode, 'MANAGER', 'the snapshot records which role it came from (informational)');
     await request(app)
-      .put('/api/roles/MANAGER/permissions')
-      .set('Authorization', `Bearer ${adminT()}`)
-      .send({ permissions: [{ code: 'leads.delete', allowed: false }] });
+      .delete(`/api/role-templates/${templates[0].id}`)
+      .set('Authorization', `Bearer ${adminT()}`);
+    assert.deepEqual(await getTemplates(), [], 'and removing it empties the catalogue again');
   });
 
   it('a saved template snapshots the role from the DATABASE — a client cannot invent grants', async () => {
@@ -195,7 +190,7 @@ describe('Phase F — role templates', () => {
       });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     const saved = res.body.data;
-    assert.equal(saved.source, 'saved');
+    assert.equal('source' in saved, false, 'a template carries no derived/system provenance any more — only what an admin saved');
     assert.deepEqual([...saved.grants].sort(), await managerGrantsFromDb(), 'the snapshot is the role, not the request body');
     const roleVisibility = (await pool.query(`SELECT data_visibility FROM roles WHERE id = $1`, [managerRoleId])).rows[0].data_visibility;
     assert.equal(saved.dataVisibility, roleVisibility, 'the snapshot takes the role’s data scope as well');
@@ -230,10 +225,11 @@ describe('Phase F — role templates', () => {
       .send({ permissions: [{ code: 'leads.delete', allowed: true }] });
 
     const templates = await getTemplates();
-    const saved = templates.find(t => t.name === 'Manager baseline v1');
-    const baseline = find(templates, 'system:MANAGER');
+    const saved = templates.find(x => x.name === 'Manager baseline v1');
+    assert.ok(saved, 'the saved template must still be listed');
     assert.equal(saved.grants.includes('leads.delete'), false, 'a snapshot is a point in time — that is what an administrator asked for');
-    assert.equal(baseline.grants.includes('leads.delete'), true, 'the baseline follows the role immediately');
+    // and the ROLE itself did move on — the snapshot simply does not follow it
+    assert.equal((await managerGrantsFromDb()).includes('leads.delete'), true, 'the role holds the new grant while the snapshot does not');
 
     await request(app)
       .put('/api/roles/MANAGER/permissions')
@@ -264,15 +260,14 @@ describe('Phase F — role templates', () => {
     assert.equal(unknown.status, 400);
   });
 
-  it('deleting: a saved template goes away, a baseline says why it cannot', async () => {
+  it('deleting: a saved template goes away, an unknown id is a plain 404', async () => {
     const templates = await getTemplates();
-    const saved = templates.find(t => t.name === 'Manager baseline v1');
+    const saved = templates.find(x => x.name === 'Manager baseline v1');
 
-    const baselineDelete = await request(app)
+    const unknown = await request(app)
       .delete('/api/role-templates/system:MANAGER')
       .set('Authorization', `Bearer ${adminT()}`);
-    assert.equal(baselineDelete.status, 404);
-    assert.match(String(baselineDelete.body.message), /derived/i, 'the message must explain that there is no stored row');
+    assert.equal(unknown.status, 404, 'nothing derived exists to delete');
 
     const removed = await request(app)
       .delete(`/api/role-templates/${saved.id}`)

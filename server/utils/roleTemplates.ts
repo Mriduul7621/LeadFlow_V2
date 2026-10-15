@@ -1,36 +1,28 @@
 /**
  * roleTemplates.ts — F16 Phase F (user-management §6 Phase F, part 1).
  * ------------------------------------------------------------------
- * Two families of role template, and the difference matters:
+ * A role template is what an ADMINISTRATOR saved: a named snapshot of one
+ * role's access (data visibility + granted canonical action codes + the page
+ * set) that the next hire's role can start from.
  *
- *   SYSTEM ("baseline") templates are DERIVED LIVE from the shipped standard
- *   roles — a template with the id `system:MANAGER` reads the `MANAGER` role's
- *   CURRENT grants, visibility and page set on every call. Nothing is copied,
- *   so an administrator who narrows MANAGER in Roles & Access narrows the
- *   baseline template in the same breath. This is the structural fix for the
- *   drift class F16 §3.3 describes (two hand-kept copies of "what a manager
- *   holds" answering differently).
+ * There are deliberately NO built-in templates. The product ships no
+ * "Manager baseline", no hardcoded entitlement list and no second copy of
+ * "what a manager can do": the shipped roles themselves are the starting
+ * point (open one and press Configure), and everything in the picker is
+ * something an administrator chose to keep. A template list that mixed
+ * invented defaults with the admin's own work would be exactly the drift
+ * class F16 §3.3 records — two answers to one question.
  *
- *   SAVED templates are snapshots the administrator chose to keep (table
- *   `role_templates`, migration 047): "this exact configuration, under this
- *   name, so the next hire's role starts here".
- *
- * Neither kind grants anything by itself. A template is loaded into the role
+ * A template never grants anything by itself: it is loaded into the role
  * editor, every toggle stays visible, and the save goes through the ONE
  * existing write path (POST /api/roles + PUT /api/roles/:id/permissions).
- * Templates that silently re-shape roles later would be a second source of
- * truth — exactly what the permission layer must not have.
  */
-
-/** Roles that are never offered as a starting point (they bypass the matrix). */
-const SYSTEM_ROLE_CODES = ['ADMIN', 'SUPERADMIN'];
 
 export interface RoleTemplate {
   id: string;
   name: string;
   description: string;
-  source: 'system' | 'saved';
-  /** The role the snapshot came from (system templates: the live role). */
+  /** The role the snapshot was taken from (informational). */
   roleCode: string | null;
   dataVisibility: string;
   /** Canonical permission codes that are ALLOWED in this template. */
@@ -59,61 +51,7 @@ function parseMenuAccess(raw: any): Record<string, boolean> {
   return out;
 }
 
-/**
- * One template per shipped standard role, built from what that role holds
- * RIGHT NOW. Rows without any grant still appear (a legitimate starting
- * point: "this role holds nothing") — the list is a catalogue, not a
- * recommendation.
- */
-export async function listBaselineTemplates(client: any): Promise<RoleTemplate[]> {
-  const roles = await client.query(
-    `SELECT id, role_code, role_name, description, data_visibility, menu_access
-       FROM roles
-      WHERE UPPER(role_code) <> ALL($1::text[])
-      ORDER BY hierarchy_level ASC NULLS LAST, role_code ASC`,
-    [SYSTEM_ROLE_CODES]
-  );
-  if (roles.rows.length === 0) return [];
-
-  const grants = await client.query(
-    `SELECT r.role_code, p.permission_code
-       FROM role_permissions rp
-       JOIN roles r ON r.id = rp.role_id
-       JOIN permissions p ON p.id = rp.permission_id
-      WHERE rp.is_allowed = TRUE
-      ORDER BY p.permission_code ASC`
-  );
-  const byRole = new Map<string, string[]>();
-  for (const row of grants.rows) {
-    const code = String(row.role_code || '').toUpperCase();
-    const list = byRole.get(code) || [];
-    list.push(String(row.permission_code));
-    byRole.set(code, list);
-  }
-
-  return roles.rows.map((role: any) => {
-    const code = String(role.role_code || '').toUpperCase();
-    const granted = byRole.get(code) || [];
-    const menuAccess = parseMenuAccess(role.menu_access);
-    const pageCount = Object.values(menuAccess).filter(Boolean).length;
-    return {
-      id: `system:${code}`,
-      name: `${role.role_name || code} baseline`,
-      description:
-        `${granted.length} action${granted.length === 1 ? '' : 's'}` +
-        (pageCount > 0 ? `, ${pageCount} page${pageCount === 1 ? '' : 's'}` : ', pages not configured') +
-        `, ${role.data_visibility || 'Own'} data scope — exactly what the ${code} role holds right now.`,
-      source: 'system' as const,
-      roleCode: code,
-      dataVisibility: role.data_visibility || 'Own',
-      grants: granted,
-      menuAccess,
-      createdAt: null,
-    };
-  });
-}
-
-/** Templates the administrator saved (newest first). */
+/** The administrator's templates (newest first). Nothing else exists. */
 export async function listSavedTemplates(client: any): Promise<RoleTemplate[]> {
   if (!(await hasRoleTemplatesLayer(client))) return [];
   const rows = await client.query(
@@ -125,7 +63,6 @@ export async function listSavedTemplates(client: any): Promise<RoleTemplate[]> {
     id: String(row.id),
     name: String(row.template_name || ''),
     description: String(row.description || ''),
-    source: 'saved' as const,
     roleCode: row.source_role_code || null,
     dataVisibility: row.data_visibility || 'Own',
     grants: Array.isArray(row.grants) ? row.grants.map(String) : [],
@@ -134,12 +71,13 @@ export async function listSavedTemplates(client: any): Promise<RoleTemplate[]> {
   }));
 }
 
-/** Everything the picker shows: saved first (an admin's own work), then baselines. */
+/** Everything the picker shows: the administrator's own saved templates.
+ *  `available` says whether this database can STORE one (migration 047);
+ *  an empty list on a fresh install is the correct, honest answer. */
 export async function listRoleTemplates(client: any): Promise<{ available: boolean; templates: RoleTemplate[] }> {
   const available = await hasRoleTemplatesLayer(client);
-  const saved = await listSavedTemplates(client);
-  const baseline = await listBaselineTemplates(client);
-  return { available, templates: [...saved, ...baseline] };
+  const templates = await listSavedTemplates(client);
+  return { available, templates };
 }
 
 /**
@@ -198,7 +136,6 @@ export async function saveRoleTemplate(
     id: String(saved.id),
     name: String(saved.template_name),
     description: String(saved.description || ''),
-    source: 'saved',
     roleCode: saved.source_role_code || null,
     dataVisibility: saved.data_visibility || 'Own',
     grants: Array.isArray(saved.grants) ? saved.grants.map(String) : [],
@@ -207,7 +144,7 @@ export async function saveRoleTemplate(
   };
 }
 
-/** Remove a saved template. Baseline templates are not rows — nothing to delete. */
+/** Remove a template. Ids that are not rows of this table simply answer false. */
 export async function deleteRoleTemplate(client: any, id: string): Promise<boolean> {
   if (!(await hasRoleTemplatesLayer(client))) return false;
   const res = await client.query(`DELETE FROM role_templates WHERE id::text = $1 RETURNING id`, [id]);
