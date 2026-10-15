@@ -1,5 +1,16 @@
 plugins { id 'com.android.application' }
 
+// androidbrowserhelper 2.5.0 pulls kotlin-stdlib-jdk7/jdk8:1.6.21 while
+// androidx.appcompat:1.7.0 pulls kotlin-stdlib:1.8.22 — the mix trips
+// :checkDebugDuplicateClasses. Pin all stdlib artifacts to one version.
+configurations.all {
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+    }
+}
+
 android {
     namespace 'com.saudalmahi.leadflow'
     compileSdk 34
