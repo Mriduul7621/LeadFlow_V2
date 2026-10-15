@@ -141,6 +141,12 @@ export interface Team {
   leaderId: string; // Employee ID of manager/leader
   memberIds: string[]; // List of Employee IDs assigned
   createdDate: string;
+  /**
+   * F16 Phase C: a DEPARTMENT MIRROR team is created, renamed and
+   * re-rostered by its department. It is listed like any other team, but the
+   * generic team endpoints refuse to edit or delete it.
+   */
+  isDepartmentMirror?: boolean;
 }
 
 export interface StatusHistoryEntry {
