@@ -24,7 +24,7 @@
 
             <meta-data
                 android:name="android.support.customtabs.trusted.DEFAULT_URL"
-                android:value="https://app.saudalmahi.com" />
+                android:value="https://${appHost}" />
 
             <meta-data
                 android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR"
@@ -39,7 +39,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="app.saudalmahi.com" />
+                <data android:scheme="https" android:host="${appHost}" />
             </intent-filter>
         </activity>
     </application>
