@@ -23,6 +23,7 @@ import {
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useRoadshowAccess } from '../../shared/hooks/useRoadshowAccess';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
@@ -30,6 +31,8 @@ import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
 import { localDb } from '../../../services/localDb';
 import { roadshowService, type Roadshow } from '../../roadshows/services/roadshowService';
+import NoAccessYet from '../../shared/components/NoAccessYet';
+import { isForbiddenError } from '../../shared/api/forbidden';
 
 /** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
@@ -466,8 +469,9 @@ export default function Dashboard() {
   const { canAccess } = usePermissions();
   const canCreateLead = canAccess('lead_generate', 'create');
   // Roadshow alerts are only rendered for users who may open the roadshow
-  // page at all — the same gate the workbench uses.
-  const canViewRoadshows = canAccess('roadshow_follow_up', 'view');
+  // page at all. Shared predicate with My Work (useRoadshowAccess) so the
+  // two views can never disagree about the same user.
+  const canViewRoadshows = useRoadshowAccess();
 
   const [period, setPeriod] = useState<PeriodKey>('TODAY');
   const [customStart, setCustomStart] = useState<string>(() => {
@@ -497,6 +501,9 @@ export default function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // F3: the KPI read answering 403 means "this role has no grant yet", which
+  // needs an explanation — not the generic retry card.
+  const [forbidden, setForbidden] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
   const [todayFollowUps, setTodayFollowUps] = useState<FollowUpQueueItem[]>([]);
@@ -515,6 +522,7 @@ export default function Dashboard() {
     }
     setLoading(true);
     setError(null);
+    setForbidden(false);
     try {
       const r = resolveRange(period, customStart, customEnd);
       let query: { period: string; selectedDate?: string; startDate?: string; endDate?: string } = { period: 'ALL' };
@@ -527,9 +535,13 @@ export default function Dashboard() {
       }
       const data = await dashboardService.getDashboard(query);
       setMetrics(data);
-    } catch {
+    } catch (err) {
       setMetrics(null);
-      setError('Dashboard data could not be loaded.');
+      if (isForbiddenError(err)) {
+        setForbidden(true);
+      } else {
+        setError('Dashboard data could not be loaded.');
+      }
     } finally {
       setLoading(false);
       // STARTUP_CRITICAL = GET /api/dashboard — release Tier 2/3 waiters
@@ -855,7 +867,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {error && (
+      {forbidden ? (
+        <NoAccessYet
+          module="the dashboard"
+          hint="Today and Tomorrow, the KPI grid and the recent-leads strip all read the dashboard endpoint."
+        />
+      ) : error && (
         <div className="flex items-center justify-between gap-4 bg-red-50 border border-red-200 rounded-[12px] px-5 py-4">
           <div className="flex items-center gap-3 text-red-700">
             <AlertTriangle className="w-5 h-5" />
@@ -874,7 +891,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {loading ? (
+      {forbidden ? null : loading ? (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
             {Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)}

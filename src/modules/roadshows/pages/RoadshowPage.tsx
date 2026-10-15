@@ -11,6 +11,8 @@ import {
   type RoadshowInput,
   type RoadshowStatus,
 } from '../services/roadshowService';
+import NoAccessYet from '../../shared/components/NoAccessYet';
+import { isForbiddenError } from '../../shared/api/forbidden';
 
 type TabKey = 'status' | 'add' | 'performance';
 interface RoadshowFormState {
@@ -105,6 +107,8 @@ export default function RoadshowPage() {
   const [performanceLoading, setPerformanceLoading] = useState(false);
   const [performanceError, setPerformanceError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // F3: a 403 from /api/roadshows is a missing grant, not a failed fetch.
+  const [forbidden, setForbidden] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -118,10 +122,16 @@ export default function RoadshowPage() {
   const loadRoadshows = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    setForbidden(false);
     try {
       setRoadshows(await roadshowService.list());
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Roadshows could not be loaded.');
+      if (isForbiddenError(error)) {
+        setRoadshows([]);
+        setForbidden(true);
+      } else {
+        setLoadError(error instanceof Error ? error.message : 'Roadshows could not be loaded.');
+      }
     } finally {
       setLoading(false);
     }
@@ -330,7 +340,9 @@ export default function RoadshowPage() {
 
       {activeTab === 'status' && !editingId && (
         <section className="space-y-3">
-          {loadError && (
+          {forbidden ? (
+            <NoAccessYet module="Roadshow Follow-up" hint="Roadshows are a separate grant from the leads module." />
+          ) : loadError && (
             <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               <span>{loadError}</span>
               <button type="button" onClick={() => void loadRoadshows()} className="font-semibold underline underline-offset-2">Retry</button>
@@ -338,7 +350,7 @@ export default function RoadshowPage() {
           )}
           {loading ? (
             <p className="py-12 text-center text-sm text-stone-500">Loading Roadshows…</p>
-          ) : loadError ? null : roadshows.length === 0 ? (
+          ) : forbidden || loadError ? null : roadshows.length === 0 ? (
             <div className="border-y border-stone-100 bg-white px-4 py-12 text-center">
               <MapPinned className="mx-auto h-7 w-7 text-stone-400" />
               <p className="mt-3 text-sm font-semibold text-stone-700">No Roadshows added</p>

@@ -334,7 +334,12 @@ describe('Daily Workbench — source guards', () => {
 
   it('Roadshow count sits with the today/tomorrow counters on Home and My Work, permission-gated', () => {
     const dash = dashboard();
-    assert.ok(dash.includes("canAccess('roadshow_follow_up', 'view')"), 'Home must gate the roadshow alerts by permission');
+    // The gate is now the SHARED predicate (useRoadshowAccess) so Home and My
+    // Work can never disagree for the same user; the capability it checks is
+    // still roadshow_follow_up.view (asserted in the hook's own test file).
+    assert.ok(dash.includes('useRoadshowAccess()'), 'Home must gate the roadshow alerts through the shared predicate');
+    assert.ok(read('src/modules/shared/hooks/useRoadshowAccess.ts').includes("canAccess('roadshow_follow_up', 'view')"),
+      'the shared predicate must check roadshow_follow_up.view');
     assert.ok(dash.includes('roadshowService.list'), 'the roadshow count must come from the server read');
     assert.ok(dash.includes('roadshowCounts={roadshowCounts}'), 'Home must feed the roadshow row into Today & Tomorrow');
     assert.ok(!/setRoadshowCounts\(\{\s*today: 0/.test(dash), 'a failed read must not fabricate a zero');

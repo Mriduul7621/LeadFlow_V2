@@ -5,6 +5,8 @@ import { cn } from '../../../lib/utils';
 import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import LeadQualitySnapshot from '../components/LeadQualitySnapshot';
 import BackButton from '../../shared/components/BackButton';
+import NoAccessYet from '../../shared/components/NoAccessYet';
+import { isForbiddenError } from '../../shared/api/forbidden';
 
 /**
  * SalesPipelinePage — the pipeline board that used to sit on Home.
@@ -39,15 +41,24 @@ export default function SalesPipelinePage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // F3: a 403 is a permissions gap, not a failure — say so instead of
+  // showing a red "try again" card that can never succeed.
+  const [forbidden, setForbidden] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setForbidden(false);
     try {
       const data = await dashboardService.getDashboard();
       setMetrics(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load the sales pipeline.');
+      if (isForbiddenError(err)) {
+        setMetrics(null);
+        setForbidden(true);
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not load the sales pipeline.');
+      }
     } finally {
       setLoading(false);
     }
@@ -75,7 +86,7 @@ export default function SalesPipelinePage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full border border-stone-100 bg-[#FFFCF8] px-3 py-1.5 text-[11px] font-bold text-stone-600">
-            {formatCount(totalLeads)} total leads
+            {forbidden ? '—' : `${formatCount(totalLeads)} total leads`}
           </span>
           <button
             type="button"
@@ -89,7 +100,9 @@ export default function SalesPipelinePage() {
         </div>
       </div>
 
-      {error && (
+      {forbidden ? (
+        <NoAccessYet module="the sales pipeline" hint="Pipeline stages come from the dashboard read, which your role cannot see yet." />
+      ) : error && (
         <div className="flex items-center justify-between gap-4 rounded-[12px] border border-red-200 bg-red-50 px-5 py-4">
           <div className="flex items-center gap-3 text-red-700">
             <AlertTriangle className="h-5 w-5" />
@@ -108,7 +121,7 @@ export default function SalesPipelinePage() {
         </div>
       )}
 
-      {loading && !metrics ? (
+      {forbidden ? null : loading && !metrics ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="min-h-[118px] animate-pulse rounded-[12px] border border-stone-100 bg-white p-5" />

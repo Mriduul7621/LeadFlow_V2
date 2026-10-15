@@ -32,6 +32,8 @@ import { userService } from '../../users/services/userService';
 import { settingsService } from '../../../services/settingsService';
 import { toast } from 'sonner';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
+import NoAccessYet from '../../shared/components/NoAccessYet';
+import { isForbiddenError } from '../../shared/api/forbidden';
 
 export default function AllLeads() {
   const { user } = useAuthStore();
@@ -51,6 +53,9 @@ export default function AllLeads() {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [campaignOptions, setCampaignOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  // F3: GET /api/leads answering 403 means the role holds no leads.view yet —
+  // an empty register needs an explanation, not a silent empty table.
+  const [forbidden, setForbidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
@@ -118,6 +123,7 @@ export default function AllLeads() {
   const loadData = async () => {
     if (!user) return;
     setLoading(true);
+    setForbidden(false);
     try {
       // The server derives the caller and Data Visibility from the session.
       // Never impersonate ADMIN or send a role query from this page.
@@ -138,7 +144,12 @@ export default function AllLeads() {
       const campaigns = await settingsService.getOptionsByType('Campaign');
       setCampaignOptions(campaigns);
     } catch (err) {
-      toast.error('Initialization matrix sync failure');
+      if (isForbiddenError(err)) {
+        setLeads([]);
+        setForbidden(true);
+      } else {
+        toast.error('Initialization matrix sync failure');
+      }
     } finally {
       setLoading(false);
     }
@@ -550,7 +561,13 @@ export default function AllLeads() {
                   </tr>
                </thead>
                <tbody className="divide-y divide-slate-50 text-[11px] text-slate-700 font-medium">
-                  {loading ? (
+                  {forbidden ? (
+                     <tr>
+                        <td colSpan={8} className="p-0">
+                           <NoAccessYet module="the leads list" hint="Leads are the shared register: an admin can grant your role leads.view in Roles &amp; Access." />
+                        </td>
+                     </tr>
+                  ) : loading ? (
                      <tr>
                         <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
                            🔄 Cataloging operational records data...

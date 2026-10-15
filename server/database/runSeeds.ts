@@ -12,6 +12,7 @@
  */
 
 import { seedRoles } from "./seeds/roles.seed.js";
+import { applyDefaultRoleAccess } from "./roleAccessDefaults.js";
 import { seedMetadata } from "./seeds/metadata.seed.js";
 import { seedWorkflow } from "./seeds/workflow.seed.js";
 import { seedLeadStatus } from "./seeds/status.seed.js";
@@ -46,6 +47,13 @@ export async function runSeeds(): Promise<SeedRunResult> {
     console.log("========================================");
 
     await seedRoles();
+
+    // The standard roles exist from this point on: hand them the default
+    // capability set (guarded + idempotent — see roleAccessDefaults.ts).
+    // On a fresh install migration 045 runs BEFORE the roles are seeded, so
+    // this is where the defaults actually land; on an existing install the
+    // migration already applied them and this is a handful of no-op counts.
+    await applyDefaultRoleAccess();
 
     await seedMetadata();
 
