@@ -289,6 +289,22 @@ export default function UserManagement() {
   const [deptFormName, setDeptFormName] = useState('');
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
 
+  // ---- Lead hand-over (Phase E: nobody is switched off while they still
+  //      own open leads — the server refuses, the admin picks the successor
+  //      here, and the same modal cleans up a person who was already off) ----
+  const [handover, setHandover] = useState<{
+    kind: 'update' | 'delete';
+    userId: string;
+    userName: string;
+    leadCount: number;
+    leads: Array<{ leadCode: string; customerName: string; mobile: string; currentStatus: string }>;
+    suggestions: Array<{ userId: string; employeeId: string; fullName: string; roleCode: string; isManager: boolean }>;
+    targetId: string;
+    /** The exact body the server refused, replayed with the chosen successor. */
+    pendingPayload?: any;
+  } | null>(null);
+  const [savingHandover, setSavingHandover] = useState(false);
+
   // ---- Department heads (Phase C: one primary head + optional co-heads) ----
   const [headDept, setHeadDept] = useState<Department | null>(null);
   const [headForm, setHeadForm] = useState<{ primaryUserId: string; coHeadUserIds: string[] }>({
@@ -381,6 +397,41 @@ export default function UserManagement() {
     setIsUserModalOpen(true);
   };
 
+  /** Turn the server's refusal into the picker (never a dead-end toast). */
+  const openHandover = (
+    kind: 'update' | 'delete',
+    user: { id: string; name: string },
+    refused: any,
+    pendingPayload?: any
+  ) => {
+    const suggestions = Array.isArray(refused?.suggestions) ? refused.suggestions : [];
+    setHandover({
+      kind,
+      userId: user.id,
+      userName: user.name,
+      leadCount: Number(refused?.leadCount) || (Array.isArray(refused?.leads) ? refused.leads.length : 0),
+      leads: Array.isArray(refused?.leads) ? refused.leads : [],
+      suggestions,
+      targetId: suggestions[0]?.userId || '',
+      pendingPayload,
+    });
+  };
+
+  const isHandoverRefusal = (err: unknown): any | null =>
+    err instanceof ApiError && err.status === 409 && (err.data as any)?.code === 'LEADS_REQUIRE_TRANSFER'
+      ? err.data
+      : null;
+
+  /** The single write path for "save this user", with or without a hand-over. */
+  const submitUser = async (payload: any, transferLeadsTo?: string) => {
+    const body: any = transferLeadsTo ? { ...payload, transferLeadsTo } : payload;
+    if (editingUser) {
+      await userService.updateUser(editingUser.id, body);
+      return;
+    }
+    await userService.createUser(body);
+  };
+
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.name.trim() || !userForm.employeeId.trim() || !userForm.email.trim()) {
@@ -414,9 +465,12 @@ export default function UserManagement() {
       return out;
     };
 
+    // Declared outside the try so the Phase E refusal handler can replay the
+    // EXACT body the server rejected (a retry must not rebuild it).
+    let payload: User & { departmentIds?: any } = null as any;
     try {
       const uid = editingUser ? editingUser.id : `u_${Date.now()}`;
-      const payload: User = {
+      payload = {
         id: uid,
         name: userForm.name.trim(),
         employeeId: cleanEmpId,
@@ -440,7 +494,7 @@ export default function UserManagement() {
       };
 
       if (editingUser) {
-        await userService.updateUser(uid, payload as any);
+        await submitUser(payload as any);
         toast.success(`${payload.name}'s profile has been updated.`);
       } else {
         await userService.createUser(payload);
@@ -450,7 +504,45 @@ export default function UserManagement() {
       setIsUserModalOpen(false);
       await loadData();
     } catch (err) {
-      toast.error('Could not save. Please check your database connection.');
+      // Phase E: switching somebody off does not silently strand their book.
+      // The server answers 409 with the leads and the suggested successors;
+      // the picker opens on top of the form (the form stays filled).
+      const refusal = isHandoverRefusal(err);
+      if (refusal) {
+        openHandover('update', { id: editingUser?.id || '', name: userForm.name.trim() }, refusal, {
+          ...(payload as any),
+        });
+        return;
+      }
+      toast.error(err instanceof ApiError ? err.message : 'Could not save. Please check your database connection.');
+    }
+  };
+
+  /** Finish a deactivation/removal after the successor was chosen. */
+  const confirmHandover = async () => {
+    if (!handover || !handover.targetId) {
+      toast.error('Choose who takes these leads over.');
+      return;
+    }
+    setSavingHandover(true);
+    try {
+      if (handover.kind === 'delete') {
+        await userService.deleteUser(handover.userId, handover.targetId);
+      } else {
+        await submitUser(handover.pendingPayload || {}, handover.targetId);
+      }
+      const target = handover.suggestions.find(s => s.userId === handover.targetId);
+      toast.success(
+        `${handover.leadCount} lead${handover.leadCount === 1 ? '' : 's'} transferred to ` +
+        `${target?.fullName || 'the selected colleague'}.`
+      );
+      setHandover(null);
+      setIsUserModalOpen(false);
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not complete the hand-over.');
+    } finally {
+      setSavingHandover(false);
     }
   };
 
@@ -461,7 +553,13 @@ export default function UserManagement() {
         toast.success(`${name} has been removed.`);
         await loadData();
       } catch (e) {
-        toast.error('Could not delete. Please try again.');
+        // Phase E: removal has the same rule as deactivation.
+        const refusal = isHandoverRefusal(e);
+        if (refusal) {
+          openHandover('delete', { id, name }, refusal);
+          return;
+        }
+        toast.error(e instanceof ApiError ? e.message : 'Could not delete. Please try again.');
       }
     }
   };
@@ -1597,6 +1695,57 @@ export default function UserManagement() {
             );
           })()}
 
+          {/* Lead-ownership health (Phase E): the deactivation guard stops new
+              cases only — anybody switched off BEFORE that rule still holds
+              live leads, and this is where they surface. The fix is the same
+              journey as any deactivation: open the person, pick the successor,
+              save (which transfers the book). */}
+          {hierConfig?.ownership && hierConfig.ownership.available && (
+            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-medium text-slate-700">Lead ownership</span>
+                <span className="text-xs text-slate-500">
+                  {hierConfig.ownership.totalOpenLeads} open lead
+                  {hierConfig.ownership.totalOpenLeads === 1 ? '' : 's'} across the organization
+                </span>
+              </div>
+              {hierConfig.ownership.inactiveOwnersWithOpenLeads.length === 0 ? (
+                <p className="text-xs text-emerald-600">
+                  Nobody who is switched off still owns an open lead — every live lead has an owner who can work it.
+                </p>
+              ) : (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-amber-800">
+                    {hierConfig.ownership.inactiveOwnersWithOpenLeads.length} deactivated
+                    {hierConfig.ownership.inactiveOwnersWithOpenLeads.length === 1 ? ' person still owns' : ' people still own'} open leads.
+                  </p>
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    These accounts cannot log in, so nobody is following their leads up. Open the person in{' '}
+                    <span className="font-semibold">Employees</span>, choose who takes the leads over and save — the same
+                    transfer step the deactivation flow uses.
+                  </p>
+                  <ul className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                    {hierConfig.ownership.inactiveOwnersWithOpenLeads.map(o => (
+                      <li key={o.employeeId} className="text-xs text-amber-800">
+                        <button
+                          type="button"
+                          className="font-medium underline decoration-dotted"
+                          onClick={() => {
+                            const row = users.find(u => u.employeeId === o.employeeId);
+                            if (row) openEditUser(row);
+                          }}
+                        >
+                          {o.fullName || o.employeeId} ({o.employeeId})
+                        </button>
+                        {' '}— {o.openLeadCount} open lead{o.openLeadCount === 1 ? '' : 's'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Ladder levels */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
             {hierConfig && hierConfig.levels.length > 0 ? (
@@ -1851,6 +2000,20 @@ export default function UserManagement() {
                       <option value="Inactive">Inactive</option>
                     </select>
                   </div>
+                  {/* Phase E: say it BEFORE the save, not as a refusal after it.
+                      The count is the server's (roster payload), never guessed. */}
+                  {editingUser && (editingUser as any).openLeadCount > 0 && userForm.status === 'Inactive' && (
+                    <div className="sm:col-span-2 bg-amber-50 border border-amber-300 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-amber-800">
+                        {(editingUser as any).openLeadCount} open lead
+                        {(editingUser as any).openLeadCount === 1 ? '' : 's'} still belong to {editingUser.name}.
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        A deactivated account cannot work them, so saving will ask you to pick the colleague who takes
+                        them over — the leads move with their history intact.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Password section */}
@@ -1890,6 +2053,110 @@ export default function UserManagement() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Lead hand-over modal (Phase E). Opened by the server's refusal, so it
+          always shows the REAL count and the real lead rows — the administrator
+          decides who takes the book over; nothing is auto-assigned. */}
+      <AnimatePresence>
+        {handover && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+            onClick={() => (savingHandover ? undefined : setHandover(null))}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800">
+                  {handover.kind === 'delete' ? 'Transfer leads before removing' : 'Transfer leads before deactivating'}
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-medium text-slate-700">{handover.userName}</span> still owns{' '}
+                  <span className="font-medium text-slate-700">{handover.leadCount} open lead{handover.leadCount === 1 ? '' : 's'}</span>
+                  . Pick the colleague who takes them over.
+                </p>
+              </div>
+
+              {handover.leads.length > 0 && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 max-h-40 overflow-auto">
+                  <ul className="space-y-1">
+                    {handover.leads.map(l => (
+                      <li key={l.leadCode || l.mobile} className="text-xs text-slate-600">
+                        <span className="font-medium text-slate-700">{l.customerName || 'Unnamed'}</span>
+                        {l.mobile ? ` · ${l.mobile}` : ''}
+                        {l.currentStatus ? ` · ${l.currentStatus}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  {handover.leadCount > handover.leads.length && (
+                    <p className="text-[11px] text-slate-400 mt-2">
+                      Showing the {handover.leads.length} most recent of {handover.leadCount}.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="text-sm font-medium text-slate-600 mb-1 block">New owner</label>
+                <select
+                  value={handover.targetId}
+                  onChange={e => setHandover({ ...handover, targetId: e.target.value })}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                >
+                  <option value="">Select a colleague…</option>
+                  {/* Suggested first (same department, then the person's own
+                      manager); every other active employee stays selectable. */}
+                  {handover.suggestions.map(s => (
+                    <option key={s.userId} value={s.userId}>
+                      {s.fullName} — {s.employeeId} — {s.roleCode}{s.isManager ? ' (current manager)' : ''}
+                    </option>
+                  ))}
+                  {users
+                    .filter(u => u.status !== 'Inactive'
+                      && u.id !== handover.userId
+                      && !handover.suggestions.some(s => s.userId === u.id))
+                    .map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} — {u.employeeId}{u.role ? ` — ${u.role}` : ''}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-xs text-slate-400 mt-1">
+                  Every transferred lead keeps its history: the previous owner, the new owner, who made the change and when.
+                </p>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-1">
+                <button
+                  type="button"
+                  disabled={savingHandover}
+                  onClick={() => setHandover(null)}
+                  className="px-5 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingHandover || !handover.targetId}
+                  onClick={confirmHandover}
+                  className="px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {savingHandover
+                    ? 'Transferring…'
+                    : `Transfer ${handover.leadCount} lead${handover.leadCount === 1 ? '' : 's'} & ${handover.kind === 'delete' ? 'remove' : 'deactivate'}`}
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}

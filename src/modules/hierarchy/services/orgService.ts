@@ -92,6 +92,19 @@ export interface DepartmentHealth {
 }
 
 /** Company-wide reporting ladder configuration (admin-managed). */
+export interface LeadOwnershipHealth {
+  /** false when the deployment has no leads table to inspect. */
+  available: boolean;
+  /**
+   * Deactivated people who still own OPEN leads — the drift the deactivation
+   * guard cannot stop retroactively (legacy data, an import that archived
+   * somebody). Fixing one is the same journey: open the person, pick the
+   * colleague who takes the book over, save.
+   */
+  inactiveOwnersWithOpenLeads: Array<{ employeeId: string; fullName: string; openLeadCount: number }>;
+  totalOpenLeads: number;
+}
+
 export interface HierarchyConfig {
   levels: Array<{
     level: number;
@@ -100,6 +113,8 @@ export interface HierarchyConfig {
   unassignedRoles: Array<{ roleId: string; roleName: string; employeeCount: number }>;
   /** Phase D department health (absent on a pre-046 database). */
   departments?: DepartmentHealth;
+  /** Phase E lead-ownership health: people switched off but still owning leads. */
+  ownership?: LeadOwnershipHealth;
   setup: {
     totalUsers: number;
     usersWithManager: number;

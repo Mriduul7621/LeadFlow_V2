@@ -164,8 +164,15 @@ export const userService = {
     return users.find(u => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
   },
 
-  async deleteUser(userId: string): Promise<void> {
-    await apiRequest(`/api/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+  /**
+   * DELETE /api/users/:id — `transferLeadsTo` names the colleague who takes
+   * over the person's open leads. The server refuses the removal without it
+   * while open leads remain (Phase E), so the UI always sends the choice it
+   * collected from the administrator.
+   */
+  async deleteUser(userId: string, transferLeadsTo?: string): Promise<void> {
+    const query = transferLeadsTo ? `?transferLeadsTo=${encodeURIComponent(transferLeadsTo)}` : '';
+    await apiRequest(`/api/users/${encodeURIComponent(userId)}${query}`, { method: 'DELETE' });
     localDb.deleteUser(userId);
     invalidateUsersReferenceCache();
   },
