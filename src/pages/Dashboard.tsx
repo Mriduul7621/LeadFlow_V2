@@ -638,7 +638,7 @@ export default function Dashboard() {
 
       // Campaign stats breakdown
       const statuses = [
-        'New', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested', 
+        'New', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
         'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked'
       ];
       const colors = ['#e2e8f0', '#0F172A', '#334155', '#64748B', '#94A3B8', '#1E293B', '#CBD5E1', '#978C21', '#475569'];
