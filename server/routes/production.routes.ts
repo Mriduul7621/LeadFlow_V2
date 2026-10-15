@@ -236,6 +236,71 @@ function callerIsAdmin(req: any): boolean {
 }
 
 /**
+ * Access-change audit (F16 Phase B / §7 of the user-management design note).
+ *
+ * Why these writes exist: "which admin changed whose access, and when" is
+ * exactly what an audit trail is for, and this product answered 403s for
+ * every read on a database where nobody had opened Roles & Access yet —
+ * so access changes are the first thing anyone will argue about later.
+ * Today the only audit writers were the password-change flow and the bulk
+ * user import; role/permission edits left no trace at all.
+ *
+ * Best-effort by design: a minimal schema in the wild may lack
+ * `audit_logs` (some fixtures predate migration 032), and an audit write
+ * failing must NEVER turn a successful access change into a 500 — the
+ * same lesson as the `granted_at` regression. Failures are logged, the
+ * mutation stands.
+ *
+ * `metadata` is capped so one bulk edit cannot post an unbounded JSONB
+ * document: the arrays carry at most AUDIT_CHANGE_CAP entries and always
+ * carry the true totals.
+ */
+const AUDIT_CHANGE_CAP = 50;
+
+function summarizeAccessChanges(changes: Array<{ code: string; allowed: boolean }>): {
+  total: number;
+  granted: string[];
+  denied: string[];
+  truncated: boolean;
+} {
+  const granted = changes.filter(c => c.allowed).map(c => c.code);
+  const denied = changes.filter(c => !c.allowed).map(c => c.code);
+  return {
+    total: changes.length,
+    granted: granted.slice(0, AUDIT_CHANGE_CAP),
+    denied: denied.slice(0, AUDIT_CHANGE_CAP),
+    truncated: granted.length > AUDIT_CHANGE_CAP || denied.length > AUDIT_CHANGE_CAP,
+  };
+}
+
+async function logAccessChange(entry: {
+  actorId?: string | null;
+  targetUserId?: string | null;
+  actionCode: string;
+  entityType: string;
+  entityId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!useDb()) return; // demo mode has no ledger to write to
+  try {
+    await getPool().query(
+      `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        entry.actorId || null,
+        entry.targetUserId || null,
+        entry.actionCode,
+        entry.entityType,
+        entry.entityId || null,
+        JSON.stringify(entry.metadata || {}),
+      ]
+    );
+  } catch (error: any) {
+    console.warn(`Access-change audit write failed (${entry.actionCode}):`, error?.message || error);
+  }
+}
+
+/**
  * requireAuth + canonical permission grant (permissions × role_permissions
  * × user_permissions, resolved through hasPermissionCode).
  *
@@ -3194,6 +3259,7 @@ router.get('/users/:id/permissions', requireAuth, requireSelfOrAdmin('id'), asyn
 
 router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permissions.manage'), async (req, res) => {
   const overrides = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
+  const applied: Array<{ code: string; allowed: boolean }> = [];
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     return sendJson(res, 200, { success: true, message: 'Permission overrides saved (demo mode)' });
@@ -3214,6 +3280,7 @@ router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permiss
       if (!code) continue;
       const permResult = await client.query('SELECT id FROM permissions WHERE permission_code = $1', [code]);
       if (!permResult.rows[0]) continue;
+      applied.push({ code, allowed: override.allowed === true });
       if (override.allowed === null || override.allowed === undefined) {
         await client.query('DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2', [userId, permResult.rows[0].id]);
       } else {
@@ -3237,6 +3304,16 @@ router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permiss
       }
     }
     await client.query('COMMIT');
+    // The per-user override is the sharpest access tool in the product
+    // (it beats the role grant); the ledger records who used it, on whom.
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      targetUserId: userId,
+      actionCode: 'user-permission-overrides-update',
+      entityType: 'user',
+      entityId: userId,
+      metadata: { ...summarizeAccessChanges(applied) },
+    });
     return sendJson(res, 200, { success: true, message: 'User permission overrides saved' });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -3441,6 +3518,24 @@ router.post('/roles', requireAuth, requirePermissionCode('roles.manage'), async 
         actions ? JSON.stringify(actions) : null,
         featurePermissions ? JSON.stringify(featurePermissions) : null]
     );
+    // Ledger: a role save moves page visibility, data visibility and the
+    // feature matrix in one shot — the widest access change in the editor.
+    const menuPaths = menuAccess && typeof menuAccess === 'object'
+      ? Object.entries(menuAccess).filter(([, value]) => value === true).map(([path]) => path)
+      : [];
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'role-save',
+      entityType: 'role',
+      entityId: result.rows[0]?.id || null,
+      metadata: {
+        roleId: roleCode,
+        dataVisibility,
+        menuPathsGranted: menuPaths.slice(0, AUDIT_CHANGE_CAP),
+        menuPathsTruncated: menuPaths.length > AUDIT_CHANGE_CAP,
+        featurePermissionsProvided: featurePermissions !== null,
+      },
+    });
     return sendJson(res, 200, mapRoleRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Role save failed' });
@@ -3462,6 +3557,14 @@ router.delete('/roles/:roleId', requireAuth, requirePermissionCode('roles.manage
       [roleIdRaw]
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Role not found' });
+    // Ledger: deleting a role drops every grant it carried.
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'role-delete',
+      entityType: 'role',
+      entityId: result.rows[0]?.id || null,
+      metadata: { roleId: roleIdRaw },
+    });
     return sendJson(res, 200, { success: true, message: 'Role deleted' });
   } catch (error: any) {
     if (error?.code === '23503') {
@@ -3520,6 +3623,7 @@ router.get('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
 
 router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, res) => {
   const grants = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
+  const applied: Array<{ code: string; allowed: boolean }> = [];
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
@@ -3545,6 +3649,7 @@ router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
       // codes are skipped (never invented) — fail closed by construction.
       const perm = await client.query('SELECT id FROM permissions WHERE permission_code = $1', [code]);
       if (!perm.rows[0]) continue;
+      applied.push({ code, allowed: grant.allowed === true });
       await client.query(
         `INSERT INTO role_permissions (role_id, permission_id, is_allowed, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
@@ -3555,6 +3660,15 @@ router.put('/roles/:roleId/permissions', requireAuth, requireAdmin, async (req, 
       );
     }
     await client.query('COMMIT');
+    // Ledger AFTER the commit: only an applied change is worth auditing, and
+    // a failed audit write must not roll back a successful one.
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'role-permissions-update',
+      entityType: 'role',
+      entityId: roleId,
+      metadata: { roleId: req.params.roleId, ...summarizeAccessChanges(applied) },
+    });
     return sendJson(res, 200, { success: true, message: 'Role permissions saved' });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
