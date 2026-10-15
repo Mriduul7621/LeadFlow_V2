@@ -220,13 +220,13 @@ export default function Dashboard() {
 
      switch (activePopup) {
         case 'new_leads':
-           return filteredPeriodLeads.filter(l => l.currentStatus === 'Untouched');
+           return filteredPeriodLeads.filter(l => l.currentStatus === 'New');
         case 'agent_responses':
-           return filteredPeriodLeads.filter(l => l.currentStatus !== 'Untouched');
+           return filteredPeriodLeads.filter(l => l.currentStatus !== 'New');
         case 'pipeline_volume':
            return filteredPeriodLeads.filter(l => l.collectedNCP > 0 || l.projectedNCP > 0);
         case 'immediate_alerts':
-           return filteredPeriodLeads.filter(l => l.currentStatus === 'Untouched');
+           return filteredPeriodLeads.filter(l => l.currentStatus === 'New');
         case 'contacted_calls':
            return filteredPeriodLeads.filter(l => ['Contacted', 'Interested', 'Follow-up Set'].includes(l.currentStatus));
         case 'meetings_completed':
@@ -240,11 +240,11 @@ export default function Dashboard() {
         case 'conversion_rate':
            return filteredPeriodLeads.filter(l => l.currentStatus === 'Converted');
         case 'avg_response_tat':
-           return filteredPeriodLeads.filter(l => l.currentStatus !== 'Untouched');
+           return filteredPeriodLeads.filter(l => l.currentStatus !== 'New');
         case 'active_leads':
            return filteredPeriodLeads.filter(l => l.currentStatus !== 'Converted' && l.currentStatus !== 'Not Interested');
         case 'critical_alerts':
-           return filteredPeriodLeads.filter(l => l.currentStatus === 'Untouched');
+           return filteredPeriodLeads.filter(l => l.currentStatus === 'New');
         default:
            return [];
      }
@@ -270,7 +270,7 @@ export default function Dashboard() {
         case 'conversion_rate': return 'Conversion Rate (Converted Leads)';
         case 'avg_response_tat': return 'Avg Response TAT (Touched Leads)';
         case 'active_leads': return 'Active Leads';
-        case 'critical_alerts': return 'Critical Alerts (Untouched)';
+        case 'critical_alerts': return 'Critical Alerts (New)';
         default: return 'Leads List';
      }
   };
@@ -293,7 +293,7 @@ export default function Dashboard() {
         "Phone Contact": lead.phone || '',
         "Region/Area": lead.area || 'No Region Configured',
         "Assigned Handler": lead.assignedTo || 'Unassigned',
-        "Current Status": lead.currentStatus || 'Untouched',
+        "Current Status": lead.currentStatus || 'New',
         "Product": lead.productName || lead.product || 'N/A',
         "Campaign": lead.campaignName || lead.campaign || 'N/A',
         "Collected NCP": lead.collectedNCP || 0,
@@ -368,7 +368,7 @@ export default function Dashboard() {
   }, [selectedLead]);
 
   const DEFAULT_STATUS_LIST = [
-    'Untouched',
+    'New',
     'Contacted',
     'No Response',
     'Busy',
@@ -559,10 +559,10 @@ export default function Dashboard() {
       }
 
       // Calculate Snapshots
-      const newLeadsCount = filteredLeads.filter(l => l.currentStatus === 'Untouched').length;
-      const responsesCount = filteredLeads.filter(l => l.currentStatus !== 'Untouched').length;
+      const newLeadsCount = filteredLeads.filter(l => l.currentStatus === 'New').length;
+      const responsesCount = filteredLeads.filter(l => l.currentStatus !== 'New').length;
       const pipelineCount = filteredLeads.filter(l => l.collectedNCP > 0 || l.projectedNCP > 0).length;
-      const alertsCount = filteredLeads.filter(l => l.currentStatus === 'Untouched').length;
+      const alertsCount = filteredLeads.filter(l => l.currentStatus === 'New').length;
 
       const collectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
       const projectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0);
@@ -571,7 +571,7 @@ export default function Dashboard() {
       let totalTatMs = 0;
       let targetTatLeads = 0;
       filteredLeads.forEach(l => {
-        if (l.currentStatus !== 'Untouched') {
+        if (l.currentStatus !== 'New') {
           const birthTime = new Date(l.timestamp || l.creationDate).getTime();
           let reactionTime = 0;
           if (l.statusHistory && l.statusHistory.length > 0) {
@@ -624,8 +624,8 @@ export default function Dashboard() {
           name: agent.name,
           assigned: agentLeads.length,
           total: agentLeads.length,
-          noCall: agentLeads.filter(l => l.currentStatus === 'Untouched').length,
-          nextCall: agentLeads.filter(l => l.currentStatus === 'Untouched').length,
+          noCall: agentLeads.filter(l => l.currentStatus === 'New').length,
+          nextCall: agentLeads.filter(l => l.currentStatus === 'New').length,
           followUp: agentLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
           followUpAlert: agentLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
           converted: agentLeads.filter(l => l.currentStatus === 'Converted').length,
@@ -638,7 +638,7 @@ export default function Dashboard() {
 
       // Campaign stats breakdown
       const statuses = [
-        'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested', 
+        'New', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested', 
         'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked'
       ];
       const colors = ['#e2e8f0', '#0F172A', '#334155', '#64748B', '#94A3B8', '#1E293B', '#CBD5E1', '#978C21', '#475569'];
@@ -657,7 +657,7 @@ export default function Dashboard() {
         return {
           team,
           assigned: teamLeads.length,
-          noCall: teamLeads.filter(l => l.currentStatus === 'Untouched').length,
+          noCall: teamLeads.filter(l => l.currentStatus === 'New').length,
           contacted: teamLeads.filter(l => l.currentStatus === 'Contacted').length,
           meetings: teamLeads.filter(l => l.currentStatus === 'Meeting Fixed').length,
           followUps: teamLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
@@ -1464,7 +1464,7 @@ export default function Dashboard() {
                                     try {
                                        await leadService.updateLead(selectedLead.id, { 
                                           assignedTo: selectedRO,
-                                          currentStatus: 'Untouched'
+                                          currentStatus: 'New'
                                        });
                                        const targetAgent = allUsers.find(u => u.employeeId === selectedRO);
                                        toast.success(`Lead successfully assigned to ${targetAgent?.name || selectedRO}!`);

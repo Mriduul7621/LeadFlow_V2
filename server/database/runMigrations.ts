@@ -53,6 +53,7 @@ import { up as notificationReliability } from "./migrations/040_notification_rel
 import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_activity_open_index.js";
 import { up as roadshows } from "./migrations/042_roadshows.js";
 import { up as proposalSentStatus } from "./migrations/043_proposal_sent_status.js";
+import { up as renameUntouchedStatus } from "./migrations/044_rename_untouched_status.js";
 
 import {
   loadLedger,
@@ -146,6 +147,8 @@ const migrations: Migration[] = [
     { id: "042_roadshows", name: "Roadshows", run: roadshows },
 
     { id: "043_proposal_sent_status", name: "Proposal Sent Status", run: proposalSentStatus },
+
+    { id: "044_rename_untouched_status", name: "Rename Untouched to New", run: renameUntouchedStatus },
 
 ];
 

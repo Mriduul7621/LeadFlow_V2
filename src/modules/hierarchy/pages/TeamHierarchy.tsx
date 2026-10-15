@@ -143,7 +143,7 @@ export default function TeamHierarchy() {
         const memberLeads = allLeads.filter(l => reportingIds.includes(l.assignedTo || ''));
 
         const lCount = memberLeads.length;
-        const contacted = memberLeads.filter(l => l.currentStatus !== 'Untouched').length;
+        const contacted = memberLeads.filter(l => l.currentStatus !== 'New').length;
         const meetings = memberLeads.filter(l => l.currentStatus === 'Meeting Completed' || l.meetingDate).length;
         const pipeline = memberLeads.filter(l => l.currentStatus === 'Pipeline Locked' || l.projectedNCP > 0).length;
         const collected = memberLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
@@ -207,7 +207,7 @@ export default function TeamHierarchy() {
       setSelectedMemberLeads(allLeads);
 
       const lCount = allLeads.length;
-      const contacted = allLeads.filter(l => l.currentStatus !== 'Untouched').length;
+      const contacted = allLeads.filter(l => l.currentStatus !== 'New').length;
       const meetings = allLeads.filter(l => l.currentStatus === 'Meeting Completed' || l.meetingDate).length;
       const collected = allLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
       const convertedCount = allLeads.filter(l => l.currentStatus === 'Converted' || l.collectedNCP > 0).length;

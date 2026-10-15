@@ -52,7 +52,7 @@ export default function FollowUpStrategy() {
         const total = filtered.length;
 
         // Calculate counts
-        const untouchedCount = filtered.filter(l => l.currentStatus === 'Untouched').length;
+        const untouchedCount = filtered.filter(l => l.currentStatus === 'New').length;
         const contactedCount = filtered.filter(l => ['Contacted', 'No Response', 'Callback Required'].includes(l.currentStatus)).length;
         const interestedCount = filtered.filter(l => ['Interested', 'Appointment Fixed'].includes(l.currentStatus)).length;
         const pipelineCount = filtered.filter(l => l.currentStatus === 'Pipeline Locked' || (l.projectedNCP > 0 && l.collectedNCP === 0)).length;
@@ -82,7 +82,7 @@ export default function FollowUpStrategy() {
               name: l.prospectName || 'Unknown Policy holder',
               call: l.currentStatus,
               due: `${dueLabel}, ${new Date(dateStr).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
-              urgency: l.currentStatus === 'Untouched' ? 'High' : 'Med'
+              urgency: l.currentStatus === 'New' ? 'High' : 'Med'
             };
           })
           .slice(0, 5); // top 5

@@ -395,7 +395,7 @@ export const translations = {
     dailyMeetingAlerts: "Daily Meeting Reminders",
     noAlerts: "No alerts",
     kpiTotalLeads: "Total Leads",
-    kpiUntouched: "Untouched",
+    kpiUntouched: "New",
     kpiDueToday: "Due Today",
     kpiOverdue: "Overdue",
     kpiConverted: "Converted",
@@ -426,7 +426,7 @@ export const translations = {
     dashboardNoTeamData: "Team performance unavailable",
     dashboardNoTeamDesc: "Canonical team metrics are not published yet. No team breakdown is shown until real team/hierarchy joins land.",
     dashboardNoStatusData: "No status distribution available",
-    dashboardUntouchedLeads: "Untouched leads",
+    dashboardUntouchedLeads: "New leads",
     dashboardUntouchedDesc: "Leads with no engagement yet",
     dashboardOverdueFollowUps: "Overdue follow-ups",
     dashboardOverdueDesc: "Follow-ups past their due date",
@@ -458,7 +458,7 @@ export const translations = {
     dashboardSyncFailed: "Could not load server metrics. Your data is unchanged.",
 
     // Status labels
-    statusUntouched: "Untouched",
+    statusUntouched: "New",
     statusContacted: "Contacted",
     statusNoResponse: "No Response",
     statusBusy: "Busy",
@@ -1132,7 +1132,7 @@ export const translations = {
     dailyMeetingAlerts: "আজকের মিটিং রিমাইন্ডার",
     noAlerts: "কোনো সতর্কতা নেই",
     kpiTotalLeads: "মোট লিড",
-    kpiUntouched: "আনটাচড",
+    kpiUntouched: "নতুন",
     kpiDueToday: "আজকের নির্ধারিত",
     kpiOverdue: "মেয়াদোত্তীর্ণ",
     kpiConverted: "কনভার্টেড",
@@ -1163,7 +1163,7 @@ export const translations = {
     dashboardNoTeamData: "টিম পারফরম্যান্স পাওয়া যায়নি",
     dashboardNoTeamDesc: "সার্ভার এখনো টিম মেট্রিক্স প্রকাশ করেনি।",
     dashboardNoStatusData: "কোনো অবস্থা বিভাজন নেই",
-    dashboardUntouchedLeads: "আনটাচড লিড",
+    dashboardUntouchedLeads: "নতুন লিড",
     dashboardUntouchedDesc: "এখনো কোনো যোগাযোগ হয়নি এমন লিড",
     dashboardOverdueFollowUps: "মেয়াদোত্তীর্ণ ফলো-আপ",
     dashboardOverdueDesc: "নির্ধারিত সময় পার হয়ে গেছে",
@@ -1195,7 +1195,7 @@ export const translations = {
     dashboardSyncFailed: "সার্ভার মেট্রিক্স লোড ব্যর্থ। আপনার ডেটা অপরিবর্তিত আছে।",
 
     // Status labels
-    statusUntouched: "আনটাচড",
+    statusUntouched: "নতুন",
     statusContacted: "যোগাযোগ হয়েছে",
     statusNoResponse: "সাড়া নেই",
     statusBusy: "ব্যস্ত",

@@ -78,7 +78,7 @@ export default function NcpProgress() {
       let totalTatMs = 0;
       let targetTatLeads = 0;
       filteredLeads.forEach(l => {
-        if (l.currentStatus !== 'Untouched') {
+        if (l.currentStatus !== 'New') {
           const birthTime = new Date(l.timestamp || l.creationDate).getTime();
           let reactionTime = 0;
           if (l.statusHistory && l.statusHistory.length > 0) {

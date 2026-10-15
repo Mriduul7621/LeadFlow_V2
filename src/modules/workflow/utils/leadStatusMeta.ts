@@ -14,7 +14,7 @@ import { registerSessionCacheClearHandler } from '../../shared/api/sessionCache'
  */
 
 const DEFAULT_COLOR_MAP: Record<string, string> = {
-  'Untouched': 'slate',
+  'New': 'slate',
   'Contacted': 'blue',
   'No Response': 'amber',
   'Busy': 'orange',

@@ -161,7 +161,7 @@ export default function LeadList() {
   };
 
   const DEFAULT_STATUS_LIST: LeadStatus[] = [
-    'Untouched',
+    'New',
     'Contacted',
     'No Response',
     'Busy',

@@ -22,6 +22,7 @@ import {
   parseAmount,
   parseTat,
   resolveImportStatus,
+  canonicalizeLegacyStatusValue,
   DEFAULT_STATUS_DICTIONARY,
   rowFingerprint,
   type ImportRow,
@@ -829,7 +830,7 @@ function mapLeadRow(row: any) {
     sumAssured: row.expected_value != null ? Number(row.expected_value) : (spread.sumAssured ?? 0),
     lastFollowUpDate: row.last_contacted_at || spread.lastFollowUpDate || '',
     nextFollowUpDate: row.next_follow_up_at || spread.nextFollowUpDate || '',
-    currentStatus: row.current_status || spread.currentStatus || 'Untouched',
+    currentStatus: row.current_status || spread.currentStatus || 'New',
     statusHistory: Array.isArray(row.status_history) ? row.status_history : (Array.isArray(spread.statusHistory) ? spread.statusHistory : []),
     assignmentHistory: Array.isArray(row.assignment_history) ? row.assignment_history : (Array.isArray(spread.assignmentHistory) ? spread.assignmentHistory : []),
     documents: Array.isArray(row.documents) ? row.documents : (Array.isArray(spread.documents) ? spread.documents : []),
@@ -4813,7 +4814,7 @@ export async function buildSecureLeadRecord(
       : null,
     lastFollowUpDate: dateOrNull(lead.lastFollowUpDate || lead.lastContactedAt),
     nextFollowUpDate: dateOrNull(lead.nextFollowUpDate || lead.nextFollowUpAt),
-    currentStatus: clean(lead.currentStatus).slice(0, 255) || (preserveDates ? '' : 'Untouched'),
+    currentStatus: clean(lead.currentStatus).slice(0, 255) || (preserveDates ? '' : 'New'),
     statusHistory,
     assignmentHistory,
     documents: Array.isArray(lead.documents) ? lead.documents : [],
@@ -5098,7 +5099,7 @@ const LEAD_UPSERT_SQL = `
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12, COALESCE(NULLIF($13, ''), 'NORMAL'), $14, $15, $16,
     $17, $18, $19, $20, $21,
-    COALESCE(NULLIF($22, ''), 'Untouched'),
+    COALESCE(NULLIF($22, ''), 'New'),
     COALESCE($23::jsonb, '[]'::jsonb), COALESCE($24::jsonb, '[]'::jsonb),
     COALESCE($25::jsonb, '[]'::jsonb),
     COALESCE($26::jsonb, '{}'::jsonb), COALESCE($27::jsonb, '[]'::jsonb),
@@ -5356,7 +5357,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         occupation: record.occupation || 'Unknown',
         area: record.area || 'Unknown',
         source: record.source || 'Unknown',
-        currentStatus: record.currentStatus || 'Untouched',
+        currentStatus: record.currentStatus || 'New',
         projectedNCP: record.projectedNCP ?? 0,
         collectedNCP: record.collectedNCP ?? 0,
         assignedTo: targetAssigned?.employeeId || (existingLead ? '' : caller.employee_id),
@@ -5509,7 +5510,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
    - Reference data (users, statuses, campaigns, existing leads,
      permissions) is resolved in bulk — no per-row N+1 queries.
    - Statuses are resolved against the canonical FollowUpStatus options;
-     unknown statuses are row-level errors (never silently "Untouched").
+     unknown statuses are row-level errors (never silently "New").
    - "Assigned To" must resolve to an ACTIVE users row via the canonical
      employee identifier (employee_id, e.g. "Monsoor_CTG"); a blank value
      leaves the lead unassigned (the schema allows it) instead of faking
@@ -5821,7 +5822,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       // Status resolution against the canonical dictionary (+ the
       // centralized legacy alias table from leadImport.ts — the exact same
       // rules the client preview uses). Unknown statuses are ERRORS - never
-      // silently replaced by "Untouched".
+      // silently replaced by "New".
       let initialStatus = '';
       if (row.initialStatus) {
         const resolved = resolveImportStatus(row.initialStatus, statusList);
@@ -6266,7 +6267,7 @@ function buildDemoImportRecord(p: PlannedImportRow, caller: CallerDbInfo): any {
     assignedBy: p.assigned ? caller.employee_id : '',
     assignedDate: row.assignedDate || '',
     creationDate: row.leadDate || new Date().toISOString(),
-    currentStatus: p.currentStatus || 'Untouched',
+    currentStatus: p.currentStatus || 'New',
     projectedNCP: p.amountValue ?? 0,
     collectedNCP: 0,
     customFields,
@@ -6508,7 +6509,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     }
     const bucket = (rawBucket || 'all') as string;
     const includeTerminal = String(req.query?.includeTerminal || '').toLowerCase() === 'true';
-    const statusFilter = req.query?.status ? String(req.query.status).trim() : '';
+    const statusFilter = req.query?.status ? canonicalizeLegacyStatusValue(req.query.status) : '';
     const assignedToRaw = req.query?.assignedTo ? String(req.query.assignedTo).trim() : '';
     const fromYmd = parseYmd(req.query?.from ? String(req.query.from) : null);
     const toYmd = parseYmd(req.query?.to ? String(req.query.to) : null);
@@ -7065,7 +7066,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       return sendJson(res, 400, { success: false, message: 'Invalid sumAssured.' });
     }
 
-    // Status validation against canonical dictionary (unknown => fail clearly, never silently Untouched)
+    // Status validation against canonical dictionary (unknown => fail clearly, never silently New)
     let validatedStatus: string | undefined = undefined;
     if (statusInput !== undefined) {
       const dict = await getFollowUpStatusValues();
@@ -7098,7 +7099,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
 
       const nowIso = new Date().toISOString();
       // Determine new status (preserve existing when not supplied)
-      const newStatus = validatedStatus !== undefined ? validatedStatus : (lead as any).currentStatus || 'Untouched';
+      const newStatus = validatedStatus !== undefined ? validatedStatus : (lead as any).currentStatus || 'New';
 
       // Build server-authoritative history entry
       const historyEntry: Record<string, any> = {
@@ -7223,7 +7224,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       const nowIso: string = new Date().toISOString();
       const nowForDb: string = nowIso; // for TIMESTAMP columns, PG will parse ISO
 
-      const newStatus = validatedStatus !== undefined ? validatedStatus : (leadRow.current_status || 'Untouched');
+      const newStatus = validatedStatus !== undefined ? validatedStatus : (leadRow.current_status || 'New');
 
       // Build history entry (server-authoritative)
       const existingHistory: any[] = Array.isArray(leadRow.status_history) ? leadRow.status_history : (Array.isArray(leadRow.statusHistory) ? leadRow.statusHistory : []);
@@ -7495,7 +7496,7 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
 ==================================================================== */
 
 const DASHBOARD_STATUS_KEYS = [
-  'Untouched',
+  'New',
   'Contacted',
   'No Response',
   'Busy',
@@ -7620,7 +7621,7 @@ function computeDashboardFromLeads(
   let responses = 0;
 
   for (const raw of leads) {
-    const status = String(raw.currentStatus || raw.current_status || 'Untouched');
+    const status = String(raw.currentStatus || raw.current_status || 'New');
     totalLeads += 1;
     if (statusCounts[status] !== undefined) statusCounts[status] += 1;
     else statusCounts[status] = (statusCounts[status] || 0) + 1;
@@ -7632,7 +7633,7 @@ function computeDashboardFromLeads(
     collected += coll;
     sumAssured += sa;
     if (coll > 0 || proj > 0) pipelineVolume += 1;
-    if (status !== 'Untouched') responses += 1;
+    if (status !== 'New') responses += 1;
     if (status !== 'Converted' && status !== 'Not Interested') activeLeads += 1;
     if (status === 'Converted') converted += 1;
     if (status === 'Not Interested') notInterested += 1;
@@ -7658,8 +7659,8 @@ function computeDashboardFromLeads(
       employeeId: agent.employeeId,
       assigned: agentLeads.length,
       total: agentLeads.length,
-      noCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
-      nextCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Untouched').length,
+      noCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'New').length,
+      nextCall: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'New').length,
       followUp: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
       followUpAlert: agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Follow-up Set').length,
       converted: agentConverted,
@@ -7674,7 +7675,7 @@ function computeDashboardFromLeads(
   const teamStats: any[] = [];
 
   const campaignStats = [
-    'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
+    'New', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
     'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked',
   ].map((name, i) => ({
     name,
@@ -7692,11 +7693,11 @@ function computeDashboardFromLeads(
     converted,
     notInterested,
     statusCounts,
-    newLeads: statusCounts['Untouched'] || 0,
+    newLeads: statusCounts['New'] || 0,
     responses,
     pipeline: pipelineVolume,
     pipelineLocked: statusCounts['Pipeline Locked'] || 0,
-    alerts: statusCounts['Untouched'] || 0,
+    alerts: statusCounts['New'] || 0,
     contacted: contactedCombo,
     meetings,
     followUps: followUpsSet,
@@ -9351,7 +9352,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     const metricSql = `
       SELECT
         COUNT(*)::int AS total_leads,
-        COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS untouched,
+        COUNT(*) FILTER (WHERE l.current_status = 'New')::int AS untouched,
         COUNT(*) FILTER (WHERE l.current_status = 'Contacted')::int AS contacted,
         COUNT(*) FILTER (WHERE l.current_status = 'No Response')::int AS no_response,
         COUNT(*) FILTER (WHERE l.current_status = 'Busy')::int AS busy,
@@ -9362,7 +9363,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         COUNT(*) FILTER (WHERE l.current_status = 'Pipeline Locked')::int AS pipeline_locked,
         COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
         COUNT(*) FILTER (WHERE l.current_status = 'Not Interested')::int AS not_interested,
-        COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'Untouched')::int AS responses,
+        COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'New')::int AS responses,
         COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'Converted' AND l.current_status IS DISTINCT FROM 'Not Interested')::int AS active_leads,
         COUNT(*) FILTER (WHERE l.current_status IN ('Contacted','Interested','Follow-up Set'))::int AS contacted_combo,
         COUNT(*) FILTER (
@@ -9400,7 +9401,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         COALESCE(au.employee_id, 'UNASSIGNED') AS employee_id,
         COALESCE(au.full_name, 'Unassigned') AS full_name,
         COUNT(*)::int AS assigned,
-        COUNT(*) FILTER (WHERE l.current_status = 'Untouched')::int AS no_call,
+        COUNT(*) FILTER (WHERE l.current_status = 'New')::int AS no_call,
         COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_up,
         COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
         COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected,
@@ -9430,7 +9431,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
 
     const m = metricRes.rows[0] || {};
     const statusCounts = emptyStatusCounts();
-    statusCounts['Untouched'] = numOr0(m.untouched);
+    statusCounts['New'] = numOr0(m.untouched);
     statusCounts['Contacted'] = numOr0(m.contacted);
     statusCounts['No Response'] = numOr0(m.no_response);
     statusCounts['Busy'] = numOr0(m.busy);
@@ -9471,7 +9472,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     const teamStats: any[] = [];
 
     const campaignStats = [
-      'Untouched', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
+      'New', 'Interested', 'Follow-up Set', 'No Response', 'Not Interested',
       'Meeting Fixed', 'Meeting Completed', 'Converted', 'Pipeline Locked',
     ].map((name, i) => ({
       name,
@@ -9489,11 +9490,11 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       converted,
       notInterested: numOr0(m.not_interested),
       statusCounts,
-      newLeads: statusCounts['Untouched'] || 0,
+      newLeads: statusCounts['New'] || 0,
       responses: numOr0(m.responses),
       pipeline: numOr0(m.pipeline_volume),
       pipelineLocked: statusCounts['Pipeline Locked'] || 0,
-      alerts: statusCounts['Untouched'] || 0,
+      alerts: statusCounts['New'] || 0,
       contacted: numOr0(m.contacted_combo),
       meetings: statusCounts['Meeting Fixed'] || 0,
       followUps: statusCounts['Follow-up Set'] || 0,

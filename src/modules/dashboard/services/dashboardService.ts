@@ -17,7 +17,7 @@ export interface DashboardFollowUpCounts {
 }
 
 export interface DashboardStatusCounts {
-  Untouched: number;
+  New: number;
   Contacted: number;
   'No Response': number;
   Busy: number;
@@ -149,7 +149,7 @@ export interface DashboardQuery {
 
 function emptyMetrics(): DashboardMetrics {
   const zeroStatus: DashboardStatusCounts = {
-    Untouched: 0,
+    New: 0,
     Contacted: 0,
     'No Response': 0,
     Busy: 0,

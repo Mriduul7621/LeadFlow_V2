@@ -17,7 +17,7 @@ export enum UserRole {
 export type LeadStatus = string;
 
 export const DEFAULT_LEAD_STATUSES = [
-  'Untouched',
+  'New',
   'Contacted',
   'No Response',
   'Busy',

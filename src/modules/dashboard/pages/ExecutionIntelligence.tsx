@@ -105,8 +105,8 @@ export default function ExecutionIntelligence() {
         return {
           team,
           assigned: teamLeads.length,
-          noCall: teamLeads.filter(l => l.currentStatus === 'Untouched').length,
-          contacted: teamLeads.filter(l => l.currentStatus !== 'Untouched').length,
+          noCall: teamLeads.filter(l => l.currentStatus === 'New').length,
+          contacted: teamLeads.filter(l => l.currentStatus !== 'New').length,
           meetings: teamLeads.filter(l => l.currentStatus === 'Meeting Completed').length,
           followUps: teamLeads.filter(l => l.currentStatus === 'Follow-up Set').length,
           pipeline: teamLeads.filter(l => l.currentStatus === 'Pipeline Locked').length,

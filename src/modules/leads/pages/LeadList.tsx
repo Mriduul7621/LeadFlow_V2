@@ -202,7 +202,7 @@ export default function LeadList() {
   };
 
   const DEFAULT_STATUS_LIST: LeadStatus[] = [
-    'Untouched',
+    'New',
     'Contacted',
     'No Response',
     'Busy',
@@ -733,7 +733,7 @@ export default function LeadList() {
         <span className="lf-mobile-lead-copy">
           <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
           <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
-          <span className="lf-mobile-lead-status">{lead.currentStatus || 'Untouched'}</span>
+          <span className="lf-mobile-lead-status">{lead.currentStatus || 'New'}</span>
         </span>
       </button>
       {/* Quick status update straight from the list (same rule as Lead 360:
