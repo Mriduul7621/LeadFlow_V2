@@ -240,8 +240,108 @@ function cachedRoles(): RolePermission[] {
   return readCache<RolePermission[]>(KEYS.ROLES, []).map(r => finalizeRole(r));
 }
 
+/**
+ * F16 Phase F — a role template as the API returns it. `source: 'system'`
+ * entries are DERIVED live from the shipped standard roles (their id is
+ * `system:<ROLE_CODE>` and they cannot be deleted); `'saved'` entries are
+ * snapshots an administrator stored.
+ */
+export interface RoleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  source: 'system' | 'saved';
+  roleCode: string | null;
+  dataVisibility: string;
+  grants: string[];
+  menuAccess: Record<string, boolean>;
+  createdAt?: string | null;
+}
+
+export interface EffectiveAccessPermission {
+  code: string;
+  module: string;
+  action: string;
+  allowed: boolean;
+  source: 'user-override' | 'role-grant' | 'deny-default';
+  roleAllowed: boolean | null;
+  overrideAllowed: boolean | null;
+  overrideIsNoop: boolean;
+  overrideReason?: string | null;
+  overrideUpdatedAt?: string | null;
+}
+
+export interface EffectiveAccess {
+  user: { id: string; employeeId: string; fullName: string; isActive: boolean };
+  role: {
+    roleCode: string;
+    roleName: string;
+    hierarchyLevel: number;
+    dataVisibility: string;
+    isAdminBypass: boolean;
+  };
+  permissions: EffectiveAccessPermission[];
+  pages: Array<{ path: string; allowed: boolean }>;
+  warnings: string[];
+  summary: {
+    total: number;
+    allowed: number;
+    denied: number;
+    roleGrants: number;
+    overridesAllow: number;
+    overridesDeny: number;
+  };
+}
+
 export const adminService = {
   // --- ROLES & PERMISSIONS WORKSPACE ---
+  /** F16 Phase F: baselines (derived live) + saved snapshots. */
+  async getRoleTemplates(): Promise<{ available: boolean; templates: RoleTemplate[] }> {
+    const body = await apiRequest<{ available: boolean; templates: RoleTemplate[] }>('/api/role-templates');
+    return { available: body?.available !== false, templates: Array.isArray(body?.templates) ? body.templates : [] };
+  },
+
+  /** Save the role's CURRENT access under a name (server reads the role itself). */
+  async saveRoleTemplate(payload: {
+    name: string;
+    description?: string;
+    fromRole: string;
+  }): Promise<RoleTemplate> {
+    return apiRequest<RoleTemplate>('/api/role-templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteRoleTemplate(templateId: string): Promise<void> {
+    await apiRequest(`/api/role-templates/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
+  },
+
+  /**
+   * F16 Phase F: the whole access review for one person — every permission with
+   * the layer that decided it, the page set, the data scope and the findings.
+   */
+  async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
+    return apiRequest<EffectiveAccess>(`/api/users/${encodeURIComponent(userId)}/effective-access`);
+  },
+
+  /**
+   * F16 Phase F: write per-person overrides from the Effective Access screen.
+   * `allowed: null` deletes the override (the person follows the role again) —
+   * the server treats null exactly that way, so "Follow role" is a real,
+   * supported state and not an empty ALLOW box.
+   */
+  async saveUserOverrides(
+    userId: string,
+    overrides: Array<{ code: string; allowed: boolean | null; reason?: string }>,
+  ): Promise<void> {
+    await apiRequest(`/api/users/${encodeURIComponent(userId)}/permissions`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ permissions: overrides }),
+    });
+  },
   async getRoles(): Promise<RolePermission[]> {
     try {
       // GET read: AppLayout reads roles on every remount; a StrictMode
