@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appName">Shanta Life LeadFlow</string>
+    <string name="launcherName">LeadFlow</string>
+    <string name="assetStatements">
+        [{
+            \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+            \"target\": {
+                \"namespace\": \"web\",
+                \"site\": \"https://app.saudalmahi.com\"
+            }
+        }]
+    </string>
+</resources>
