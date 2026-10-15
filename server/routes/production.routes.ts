@@ -26,6 +26,13 @@ import {
 // extensionless relative import is a runtime ERR_MODULE_NOT_FOUND even
 // though tsx/esbuild resolve it locally (see scripts/verify-serverless-build.mjs).
 import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRules.js';
+import {
+  closeUserMemberships,
+  hasDepartmentMirrorLayer,
+  setDepartmentHeads,
+  syncMirrorTeam,
+  syncUserDepartmentMembership,
+} from '../utils/departmentMirror.js';
 import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
   mapSpreadsheetRow,
@@ -875,6 +882,13 @@ function mapTeamRow(row: any) {
     departmentId: row.department_id || '',
     description: row.description || '',
     isActive: row.is_active !== false,
+    /**
+     * Phase C: this team is a DEPARTMENT MIRROR — created, renamed and
+     * re-rostered by the department it belongs to. It is listed like any
+     * other team (the team a department head leads is a real team), but the
+     * generic team endpoints refuse to edit or delete it.
+     */
+    isDepartmentMirror: row.is_department_mirror === true,
     createdDate: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2241,6 +2255,10 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
     // back (no partially-created user survives) and returns an error
     // response instead of a false success.
     await recomputeReportingChains(client);
+    // Phase C: membership in the department's team follows the assignment,
+    // in the SAME transaction — a user can never exist "in" a department
+    // without being on its roster.
+    await syncUserDepartmentMembership(client, row.id, departmentId || null);
     await client.query('COMMIT');
     const fresh = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
@@ -2450,11 +2468,23 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     // Server-authoritative reporting chains for the whole tree (the link
     // change can affect ancestors and descendants alike).
     await recomputeReportingChains(client);
+    // Phase C: product membership follows the department assignment, in the
+    // SAME transaction as the update. Deactivating somebody closes every
+    // membership they hold (their mirror teams lose the member, and a head
+    // seat is released); any other edit re-points the PRIMARY membership at
+    // the new department — the previous one is closed with `left_at`, never
+    // deleted. Without this the department column and the team roster could
+    // disagree, which is the "one user, two answers" class of bug.
+    if (status === false) {
+      await closeUserMemberships(client, existing.id);
+    } else {
+      await syncUserDepartmentMembership(client, row.id, departmentId || null);
+    }
     await client.query('COMMIT');
     const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
     const roleCode = await roleCodeOf(freshRow.role_id);
-    const mapped = mapUserRow(freshRow);
+    const mapped = mapUserRow({ ...freshRow, role_code: roleCode, role_name: roleCode });
     return sendJson(res, 200, { success: true, data: mapped });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -2506,6 +2536,9 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
     }
     await client.query('DELETE FROM hierarchies WHERE user_id = $1', [existing.id]).catch(() => undefined);
     await client.query('DELETE FROM notifications WHERE user_id = $1', [existing.id]).catch(() => undefined);
+    // Phase C: close memberships FIRST so the mirror teams lose the member
+    // cleanly (a cascade would erase the row without updating the teams).
+    await closeUserMemberships(client, existing.id);
     await client.query('DELETE FROM users WHERE id = $1', [existing.id]);
     await client.query('COMMIT');
     return sendJson(res, 200, { success: true, message: 'User deleted' });
@@ -3370,8 +3403,42 @@ router.get('/departments', requireAuth, async (_req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) return sendJson(res, 200, fallbackDepartments);
   try {
-    const result = await getPool().query('SELECT * FROM departments ORDER BY created_at ASC');
-    return sendJson(res, 200, result.rows.map(mapDepartmentRow));
+    const pool = getPool();
+    // The head/count/team enrichment needs migration 046. Minimal schemas
+    // (regression fixtures) keep the base department row: same response
+    // shape, no display value invented.
+    const enriched = await hasDepartmentMirrorLayer(pool);
+    const result = await pool.query(enriched
+      ? `SELECT d.*,
+              ph.user_id        AS primary_head_user_id,
+              phu.employee_id   AS primary_head_employee_id,
+              phu.full_name     AS primary_head_full_name,
+              (SELECT COUNT(*)::int FROM department_members m
+                WHERE m.department_id = d.id AND m.is_active) AS member_count,
+              (SELECT COUNT(*)::int FROM department_members m
+                WHERE m.department_id = d.id AND m.is_active AND m.is_head) AS head_count,
+              (SELECT t.id FROM teams t
+                WHERE t.department_id = d.id AND t.is_department_mirror LIMIT 1) AS mirror_team_id
+         FROM departments d
+         LEFT JOIN department_members ph
+                ON ph.department_id = d.id AND ph.is_primary_head AND ph.is_active
+         LEFT JOIN users phu ON phu.id = ph.user_id
+        ORDER BY d.created_at ASC`
+      : `SELECT * FROM departments ORDER BY created_at ASC`
+    );
+    return sendJson(res, 200, result.rows.map(row => ({
+      ...mapDepartmentRow(row),
+      primaryHead: row.primary_head_user_id
+        ? {
+            id: row.primary_head_user_id,
+            employeeId: row.primary_head_employee_id || null,
+            fullName: row.primary_head_full_name || null,
+          }
+        : null,
+      headCount: row.head_count ?? 0,
+      memberCount: row.member_count ?? 0,
+      mirrorTeamId: row.mirror_team_id || null,
+    })));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Department fetch failed' });
   }
@@ -3419,9 +3486,90 @@ router.post('/departments', requireAuth, requirePermissionCode('departments.mana
         [code, name, clean(payload.description) || null]
       );
     }
-    return sendJson(res, 200, mapDepartmentRow(result.rows[0]));
+    // One department = one mirror team (Phase C): created with the
+    // department, renamed with it, roster synced from memberships.
+    const savedDepartment = result.rows[0];
+    let mirrorTeamId: string | null = null;
+    try {
+      mirrorTeamId = (await syncMirrorTeam(pool, savedDepartment.id)).teamId;
+    } catch (mirrorError: any) {
+      console.warn('Department mirror-team sync failed:', mirrorError?.message || mirrorError);
+    }
+    return sendJson(res, 200, { ...mapDepartmentRow(savedDepartment), mirrorTeamId });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Department save failed' });
+  }
+});
+
+/**
+ * Set a department's heads (Phase C). `primaryUserId` may be null (a
+ * department is allowed to be headless — the health screen lists it), any
+ * number of co-heads may accompany the primary. Every head must already be
+ * an active member of the department; the mirror team's leader follows the
+ * primary head, and the change is written to the audit trail.
+ */
+router.put('/departments/:id/heads', requireAuth, requirePermissionCode('departments.manage'), async (req, res) => {
+  const departmentId = asUuid(req.params.id);
+  if (!departmentId) return sendJson(res, 400, { success: false, message: 'A valid department id is required.' });
+  const primaryRaw = clean(req.body?.primaryUserId);
+  const coHeadRaw = Array.isArray(req.body?.coHeadUserIds) ? req.body.coHeadUserIds : [];
+  const coHeadUserIds = coHeadRaw.map((id: any) => asUuid(clean(id))).filter(Boolean) as string[];
+
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    return sendJson(res, 200, { success: true, message: 'Department heads saved (demo mode)' });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const department = await client.query('SELECT id FROM departments WHERE id = $1 LIMIT 1', [departmentId]);
+    if (!department.rows[0]) {
+      await client.query('ROLLBACK');
+      return sendJson(res, 404, { success: false, message: 'Department not found' });
+    }
+
+    let primaryUserId: string | null = null;
+    if (primaryRaw) {
+      const found = await client.query(
+        `SELECT u.id FROM users u
+          WHERE (u.id::text = $1 OR UPPER(u.employee_id) = UPPER($1)) AND u.is_active LIMIT 1`,
+        [primaryRaw]
+      );
+      if (!found.rows[0]) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 400, { success: false, message: 'The primary head must be an active user.' });
+      }
+      primaryUserId = found.rows[0].id;
+    }
+
+    const result = await setDepartmentHeads(client, departmentId, { primaryUserId, coHeadUserIds });
+    await client.query('COMMIT');
+
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'department-heads-update',
+      entityType: 'department',
+      entityId: departmentId,
+      metadata: {
+        primaryUserId,
+        coHeadCount: coHeadUserIds.length,
+        teamId: result.teamId,
+        memberCount: result.memberCount,
+      },
+    });
+
+    return sendJson(res, 200, { success: true, ...result });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    if (error?.statusCode) {
+      return sendJson(res, error.statusCode, { success: false, message: error?.message || 'Invalid head assignment' });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Department head save failed' });
+  } finally {
+    client.release();
   }
 });
 
@@ -3926,6 +4074,18 @@ router.post('/teams', requireAuth, requirePermissionCode('teams.manage'), async 
     const memberIds = Array.isArray(payload.memberIds) ? payload.memberIds : [];
     let result;
     if (existingId) {
+      // Phase C: a department's mirror team is not a hand-managed team. The
+      // probe is schema-tolerant (older databases have no mirror column) and
+      // never throws: a missing column simply means "no mirror teams here".
+      const managed = await pool
+        .query('SELECT is_department_mirror FROM teams WHERE id = $1 LIMIT 1', [existingId])
+        .catch(() => ({ rows: [] as any[] }));
+      if (managed.rows[0]?.is_department_mirror) {
+        return sendJson(res, 400, {
+          success: false,
+          message: 'This team is managed by its department. Rename the department to rename its team.',
+        });
+      }
       result = await pool.query(
         `UPDATE teams SET team_name = $2, department_id = $3, leader_id = $4, member_ids = $5, updated_at = NOW()
          WHERE id = $1 RETURNING *`,
@@ -3961,6 +4121,19 @@ router.delete('/teams/:id', requireAuth, requirePermissionCode('teams.manage'), 
     return sendJson(res, 200, { success: true, message: 'Team deleted (demo mode)' });
   }
   try {
+    // Phase C: deleting a mirror team would leave its department without the
+    // team every membership sync writes into — the department is the thing to
+    // delete. Schema-tolerant probe (a database without the mirror column
+    // simply has no mirror teams).
+    const managed = await getPool()
+      .query('SELECT is_department_mirror FROM teams WHERE id::text = $1 OR team_code = $1 LIMIT 1', [req.params.id])
+      .catch(() => ({ rows: [] as any[] }));
+    if (managed.rows[0]?.is_department_mirror) {
+      return sendJson(res, 400, {
+        success: false,
+        message: 'This team is managed by its department. Delete the department to remove its team.',
+      });
+    }
     const result = await getPool().query('DELETE FROM teams WHERE id::text = $1 OR team_code = $1 RETURNING id', [req.params.id]);
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Team not found' });
     return sendJson(res, 200, { success: true, message: 'Team deleted' });

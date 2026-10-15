@@ -55,6 +55,7 @@ import { up as roadshows } from "./migrations/042_roadshows.js";
 import { up as proposalSentStatus } from "./migrations/043_proposal_sent_status.js";
 import { up as renameUntouchedStatus } from "./migrations/044_rename_untouched_status.js";
 import { up as defaultRoleAccess } from "./migrations/045_default_role_access.js";
+import { up as departmentHeadsAndMirrorTeams } from "./migrations/046_department_heads_and_mirror_teams.js";
 
 import {
   loadLedger,
@@ -152,6 +153,8 @@ const migrations: Migration[] = [
     { id: "044_rename_untouched_status", name: "Rename Untouched to New", run: renameUntouchedStatus },
 
     { id: "045_default_role_access", name: "Default Role Access", run: defaultRoleAccess },
+
+    { id: "046_department_heads_and_mirror_teams", name: "Department Heads + Mirror Teams", run: departmentHeadsAndMirrorTeams },
 
 ];
 

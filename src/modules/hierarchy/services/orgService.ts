@@ -6,6 +6,32 @@ export interface Department {
   name: string;
   code?: string;
   createdDate: string;
+  /**
+   * F16 Phase C — one department = one MIRROR TEAM. The team is created,
+   * renamed and re-rostered by the server; the client only displays it.
+   * Absent on rows that came from the offline cache.
+   */
+  mirrorTeamId?: string | null;
+  /** The active PRIMARY head, or null while the department is headless. */
+  primaryHead?: { id: string; employeeId: string | null; fullName: string | null } | null;
+  /** Active heads (the primary head + every co-head). */
+  headCount?: number;
+  /** Active members — exactly the people on the mirror team's roster. */
+  memberCount?: number;
+}
+
+/** Phase C: who heads a department. One primary head + any co-heads. */
+export interface DepartmentHeadAssignment {
+  /** `null` leaves the department deliberately headless. */
+  primaryUserId: string | null;
+  coHeadUserIds: string[];
+}
+
+export interface DepartmentHeadResult {
+  primaryUserId: string | null;
+  headUserIds: string[];
+  teamId: string | null;
+  memberCount: number;
 }
 
 export interface HierarchyLayer {
@@ -142,7 +168,14 @@ export const orgService = {
     }
   },
 
-  async saveDepartment(dept: Department): Promise<Department> {
+  /**
+   * Create (no `id`) or rename/update (with `id`) a department.
+   *
+   * A new department must NOT invent an id client-side: the server owns the
+   * UUID primary key (and the mirror team that hangs off it). The offline
+   * cache is refreshed from the server response.
+   */
+  async saveDepartment(dept: { id?: string; name: string; description?: string }): Promise<Department> {
     const saved = await apiRequest<Department>('/api/departments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -154,6 +187,26 @@ export const orgService = {
     else depts.push(saved);
     writeCache(KEYS.DEPT, depts);
     return saved;
+  },
+
+  /**
+   * Set a department's heads (Phase C). Every head must already be an ACTIVE
+   * member of the department — the server answers 400 otherwise, and its
+   * message is what the UI shows. Saving also re-syncs the mirror team:
+   * the primary head becomes its leader.
+   */
+  async setDepartmentHeads(
+    departmentId: string,
+    assignment: DepartmentHeadAssignment
+  ): Promise<DepartmentHeadResult> {
+    return apiRequest<DepartmentHeadResult>(
+      `/api/departments/${encodeURIComponent(departmentId)}/heads`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assignment),
+      }
+    );
   },
 
   async deleteDepartment(deptId: string): Promise<boolean> {

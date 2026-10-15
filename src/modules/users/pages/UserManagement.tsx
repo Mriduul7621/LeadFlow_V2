@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import { userService } from '../services/userService';
 import { adminService } from '../../admin/services/adminService';
 import { orgService, Department, HierarchyConfig, ReportingOption } from '../../hierarchy/services/orgService';
+import { ApiError } from '../../shared/api/http';
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission, User } from '../../shared/types';
 
@@ -285,6 +286,14 @@ export default function UserManagement() {
   const [deptFormName, setDeptFormName] = useState('');
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
 
+  // ---- Department heads (Phase C: one primary head + optional co-heads) ----
+  const [headDept, setHeadDept] = useState<Department | null>(null);
+  const [headForm, setHeadForm] = useState<{ primaryUserId: string; coHeadUserIds: string[] }>({
+    primaryUserId: '',
+    coHeadUserIds: [],
+  });
+  const [savingHeads, setSavingHeads] = useState(false);
+
   // ---- Role states ----
   const [selectedRole, setSelectedRole] = useState<RolePermission | null>(null);
   const [roleFormName, setRoleFormName] = useState('');
@@ -481,8 +490,13 @@ export default function UserManagement() {
     e.preventDefault();
     if (!deptFormName.trim()) { toast.error('Department name cannot be empty.'); return; }
     try {
-      const id = editingDeptId || `dept_${Date.now()}`;
-      await orgService.saveDepartment({ id, name: deptFormName.trim(), createdDate: new Date().toISOString() });
+      // The server owns the department id (and its mirror team's): a new
+      // department is sent WITHOUT an id instead of a made-up client one.
+      await orgService.saveDepartment(
+        editingDeptId
+          ? { id: editingDeptId, name: deptFormName.trim() }
+          : { name: deptFormName.trim() }
+      );
       toast.success(editingDeptId ? 'Department updated.' : 'Department added.');
       setDeptFormName('');
       setEditingDeptId(null);
@@ -501,6 +515,49 @@ export default function UserManagement() {
       } catch (e) {
         toast.error('Could not delete department.');
       }
+    }
+  };
+
+  /* ================================================================== */
+  /*  DEPARTMENT HEADS HANDLERS (Phase C)                                */
+  /* ================================================================== */
+  /** Everyone who may be picked as a head: the department's ACTIVE members
+   *  (the server rejects anybody else, so the picker never offers them). */
+  const headCandidates = (dept: Department | null) =>
+    dept ? users.filter(u => u.departmentId === dept.id && u.status !== 'Inactive') : [];
+
+  const openHeadsModal = (dept: Department) => {
+    setHeadDept(dept);
+    setHeadForm({ primaryUserId: dept.primaryHead?.id || '', coHeadUserIds: [] });
+  };
+
+  const toggleCoHead = (userId: string) => {
+    setHeadForm(prev => ({
+      ...prev,
+      coHeadUserIds: prev.coHeadUserIds.includes(userId)
+        ? prev.coHeadUserIds.filter(id => id !== userId)
+        : [...prev.coHeadUserIds, userId],
+    }));
+  };
+
+  const handleSaveHeads = async () => {
+    if (!headDept) return;
+    setSavingHeads(true);
+    try {
+      // The primary head is never also sent as a co-head.
+      await orgService.setDepartmentHeads(headDept.id, {
+        primaryUserId: headForm.primaryUserId || null,
+        coHeadUserIds: headForm.coHeadUserIds.filter(id => id !== headForm.primaryUserId),
+      });
+      toast.success('Department heads updated.');
+      setHeadDept(null);
+      await loadData();
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Could not update the department heads.'
+      );
+    } finally {
+      setSavingHeads(false);
     }
   };
 
@@ -985,28 +1042,71 @@ export default function UserManagement() {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {departments.map(dept => (
-                  <div key={dept.id} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-lg hover:shadow-sm transition-shadow">
-                    <div>
-                      <h4 className="text-sm font-medium text-slate-800">{dept.name}</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">{users.filter(u => (u as any).departmentId === dept.id).length} employees</p>
+                {departments.map(dept => {
+                  const memberCount = dept.memberCount ?? users.filter(u => u.departmentId === dept.id).length;
+                  const headCount = dept.headCount ?? (dept.primaryHead ? 1 : 0);
+                  const coHeadCount = Math.max(0, headCount - 1);
+                  return (
+                    <div key={dept.id} className="p-4 bg-slate-50 border border-slate-100 rounded-lg hover:shadow-sm transition-shadow">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h4 className="text-sm font-medium text-slate-800 truncate">{dept.name}</h4>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {memberCount} {memberCount === 1 ? 'employee' : 'employees'}
+                            {headCount > 0 && ` · ${headCount} ${headCount === 1 ? 'head' : 'heads'}`}
+                          </p>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => openHeadsModal(dept)}
+                            className="p-2 text-slate-400 hover:text-[#978C21] hover:bg-[#978C21]/10 rounded-lg transition-colors"
+                            title="Set department heads"
+                          >
+                            <UserCheck className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => { setEditingDeptId(dept.id); setDeptFormName(dept.name); }}
+                            className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
+                            title="Edit"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteDept(dept.id)}
+                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center gap-1.5 text-xs">
+                        {dept.primaryHead ? (
+                          <>
+                            <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span className="text-slate-700 font-medium truncate">
+                              {dept.primaryHead.fullName || dept.primaryHead.employeeId}
+                            </span>
+                            {dept.primaryHead.employeeId && (
+                              <span className="text-slate-400 shrink-0">{dept.primaryHead.employeeId}</span>
+                            )}
+                            {coHeadCount > 0 && (
+                              <span className="text-slate-400 shrink-0">+{coHeadCount} co-head{coHeadCount > 1 ? 's' : ''}</span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                            <span className="text-amber-600">No head assigned</span>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Team: {dept.mirrorTeamId ? 'auto-managed from this department' : 'not synced yet'}
+                      </p>
                     </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => { setEditingDeptId(dept.id); setDeptFormName(dept.name); }}
-                        className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteDept(dept.id)}
-                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1624,6 +1724,115 @@ export default function UserManagement() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Department heads modal (Phase C) */}
+      <AnimatePresence>
+        {headDept && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setHeadDept(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-800">Department heads</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{headDept.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHeadDept(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {headCandidates(headDept).length === 0 ? (
+                <p className="text-sm text-slate-500 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                  Nobody can head this department yet. Add employees to it first — a head must be an
+                  active member of the department.
+                </p>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">Primary head</label>
+                    <select
+                      value={headForm.primaryUserId}
+                      onChange={e => setHeadForm(prev => ({ ...prev, primaryUserId: e.target.value }))}
+                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                    >
+                      <option value="">No head (department left headless)</option>
+                      {headCandidates(headDept).map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.name || u.fullName} — {u.employeeId}{(u as any).designation ? ` — ${(u as any).designation}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-400 mt-1">
+                      The primary head leads the department&apos;s team — its roster is exactly this department&apos;s members.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">
+                      Co-heads (optional)
+                    </label>
+                    <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-56 overflow-y-auto">
+                      {headCandidates(headDept)
+                        .filter(u => u.id !== headForm.primaryUserId)
+                        .map(u => (
+                          <label
+                            key={u.id}
+                            className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={headForm.coHeadUserIds.includes(u.id)}
+                              onChange={() => toggleCoHead(u.id)}
+                              className="w-4 h-4 accent-[#978C21]"
+                            />
+                            <span className="truncate">{u.name || u.fullName}</span>
+                            <span className="text-xs text-slate-400 ml-auto shrink-0">{u.employeeId}</span>
+                          </label>
+                        ))}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Co-heads share the department&apos;s work but do not lead the team.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setHeadDept(null)}
+                  className="px-5 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveHeads}
+                  disabled={savingHeads || headCandidates(headDept).length === 0}
+                  className="px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                >
+                  {savingHeads ? 'Saving…' : 'Save heads'}
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
