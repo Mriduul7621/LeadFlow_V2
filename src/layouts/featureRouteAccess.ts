@@ -1,6 +1,7 @@
 import { UserRole } from '../modules/shared/types';
 import { ANY_ROLE, resolveMenuVisibility } from './menuVisibility';
 import type { RolePermission } from '../modules/shared/types';
+import { rolesWithDefaultGrant } from '../modules/shared/access/roleGrantDefaults';
 
 /**
  * featureRouteAccess.ts
@@ -45,15 +46,21 @@ const EVERYONE: string[] = [ANY_ROLE];
  * business rule: performance analytics are not visible to everyone); an
  * admin can still grant them per role through Roles & Access, which
  * writes `menuAccess` and wins over this fallback.
+ *
+ * DERIVED, not retyped (F16 §3.3): the list is exactly the standard roles
+ * the DEFAULT grant table gives `reports.view` — so the page gate and the
+ * server's data permission can never disagree again. That decision
+ * (2026-10-15) resolved the divergence the F16 audit found: the server
+ * already granted MANAGER / SM / RM / TEAM_LEAD / BDM / ASM `reports.view`
+ * while this fallback only listed ADMIN/RO/RM/CEO, hiding from a manager
+ * the very reports the server was willing to serve. ADMIN/SUPERADMIN need
+ * no entry here (bypass above); RO/BE/SBE/EMPLOYEE carry no `reports.view`
+ * in the default table and therefore stay out — an admin who wants a
+ * frontline role to see reports grants it in Roles & Access.
  */
 const INSIGHT_ROLES: string[] = [
   UserRole.ADMIN,
-  UserRole.RO,
-  UserRole.RM,
-  // The CEO sits above the org and must see performance by default; every
-  // other non-legacy role needs an explicit Roles & Access grant (which
-  // writes menuAccess and wins over this fallback).
-  'CEO',
+  ...rolesWithDefaultGrant('reports.view'),
 ];
 const TEAM_ROLES: string[] = [
   UserRole.ADMIN,

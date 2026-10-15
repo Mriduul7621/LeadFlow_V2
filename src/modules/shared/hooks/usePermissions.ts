@@ -1,5 +1,6 @@
 import { useAuthStore } from '../../auth/store/authStore';
 import { RolePermission } from '../types';
+import { buildPermissionSheet } from '../utils/permissionSheet';
 import { readSessionCache, writeSessionCache } from '../api/sessionCache';
 import { coalesceGet } from '../api/coalesce';
 import { waitForShellStartup } from '../api/startupPriority';
@@ -96,10 +97,9 @@ export function usePermissions() {
 
         const body = await response.json();
         const rows = Array.isArray(body?.data) ? body.data : [];
-        const permissions = rows.reduce((result: Record<string, boolean>, row: any) => {
-          result[String(row.permission_code)] = Boolean(row.is_allowed);
-          return result;
-        }, {});
+        // Server-parity sheet: the per-user override wins over the role
+        // grant, exactly like hasPermissionCode() resolves it (F16 §3.1).
+        const permissions = buildPermissionSheet(rows);
 
         if (!cancelled) {
           writeSessionCache(cacheKey, permissions);

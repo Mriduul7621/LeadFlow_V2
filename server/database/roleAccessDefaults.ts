@@ -24,66 +24,19 @@
  */
 import { query } from "./connection.js";
 
-/** Canonical codes each standard role needs — mirrors the Roles & Access editor. */
-const FIELD_EXEC = [
-  'dashboard.view',
-  'leads.view', 'leads.create', 'leads.edit',
-  'campaigns.view', 'products.view',
-  'roadshows.view', 'notifications.view',
-];
-const TEAM_LEAD = [
-  ...FIELD_EXEC,
-  'leads.assign',
-  'roadshows.create', 'roadshows.edit',
-  'teams.view', 'reports.view',
-];
-const MANAGER = [
-  ...TEAM_LEAD,
-  'leads.transfer', 'leads.export',
-  'users.view', 'departments.view',
-  'roadshows.report', 'audit.view',
-];
-const EXECUTIVE = [
-  'dashboard.view', 'leads.view',
-  'reports.view', 'users.view', 'roles.view',
-  'teams.view', 'departments.view', 'audit.view',
-  'campaigns.view', 'products.view',
-  'roadshows.view', 'roadshows.report',
-  'notifications.view',
-];
-
 /**
- * role_code -> permission codes. Legacy codes (RO/RM/ASM/BDM/BE/BH) map to
- * the closest modern equivalent so pre-rename databases behave the same.
- * Codes absent from this table (custom roles) are intentionally skipped.
+ * Canonical codes each standard role needs — mirrors the Roles & Access
+ * editor. The table itself lives in ONE place now
+ * (src/modules/shared/access/roleGrantDefaults) because the client's
+ * report-page fallback derives from the same data; two hand-kept copies
+ * had drifted (F16 §3.3).
  */
-const DEFAULT_GRANTS: Record<string, string[]> = {
-  CEO: EXECUTIVE,
-  BH: EXECUTIVE,
-  MANAGER: MANAGER,
-  SM: MANAGER,
-  RM: MANAGER,
-  TEAM_LEAD: TEAM_LEAD,
-  BDM: TEAM_LEAD,
-  ASM: TEAM_LEAD,
-  EMPLOYEE: FIELD_EXEC,
-  SBE: FIELD_EXEC,
-  BE: FIELD_EXEC,
-  RO: FIELD_EXEC,
-};
+import {
+  DEFAULT_GRANTS,
+  DEFAULT_VISIBILITY,
+} from '../../src/modules/shared/access/roleGrantDefaults.js';
 
-/** role_code -> data visibility. Only applied while the value is still 'Own'. */
-const DEFAULT_VISIBILITY: Record<string, string> = {
-  CEO: 'Organization',
-  BH: 'Organization',
-  MANAGER: 'FullTeam',
-  SM: 'FullTeam',
-  RM: 'FullTeam',
-  TEAM_LEAD: 'DownTeam',
-  BDM: 'DownTeam',
-  ASM: 'DownTeam',
-  RO: 'DownTeam',
-};
+export { DEFAULT_GRANTS, DEFAULT_VISIBILITY };
 
 export async function applyDefaultRoleAccess(): Promise<void> {
     /* `role_permissions.updated_at` is a product column (migration 035), but
