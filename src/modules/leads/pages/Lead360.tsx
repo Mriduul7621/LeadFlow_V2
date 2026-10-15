@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, MapPin, Briefcase, User as UserIcon,
-  Clock, UserCog, FileText, Bell, Plus, Edit2, ChevronRight
+  Clock, UserCog, FileText, Bell, Plus, Edit2, ChevronRight, Target
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -388,13 +388,22 @@ export default function Lead360() {
             </span>
             <LeadQualityBadge quality={lead.leadQuality} />
             {canAccess('lead_tracking', 'edit') && (
-              <button
-                type="button"
-                onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
-                className="inline-flex min-h-10 items-center gap-2 rounded-[10px] border border-stone-200 bg-white px-3 text-xs font-semibold text-stone-700 hover:bg-stone-50"
-              >
-                <Edit2 className="h-3.5 w-3.5" /> Edit
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-[10px] border border-[#978C21]/40 bg-[#978C21]/10 px-3 text-xs font-semibold text-[#6b6416] hover:bg-[#978C21]/20"
+                >
+                  <Target className="h-3.5 w-3.5" /> Update
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-[10px] border border-stone-200 bg-white px-3 text-xs font-semibold text-stone-700 hover:bg-stone-50"
+                >
+                  <Edit2 className="h-3.5 w-3.5" /> Edit
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -441,13 +450,22 @@ export default function Lead360() {
               ) : null}
             </div>
             {canAccess('lead_tracking', 'edit') && (
-              <button
-                type="button"
-                onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
-                className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 px-3 text-xs font-semibold text-stone-700"
-              >
-                <Edit2 className="h-3.5 w-3.5" /> Edit
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
+                  className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-[#978C21]/40 bg-[#978C21] px-3 text-xs font-black text-white"
+                >
+                  <Target className="h-3.5 w-3.5" /> Update
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
+                  className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 px-3 text-xs font-semibold text-stone-700"
+                >
+                  <Edit2 className="h-3.5 w-3.5" /> Edit
+                </button>
+              </div>
             )}
           </div>
           <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-stone-100 pt-4">
