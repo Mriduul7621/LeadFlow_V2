@@ -212,20 +212,35 @@ export default function LeadGenerate() {
     const childPresence = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
     
     try {
-      await leadService.createLead({
-        ...data,
-        area: combinedArea,
-        hasChild: childPresence && Number(data.noOfChildren) > 0,
-        noOfChildren: childPresence ? data.noOfChildren : '0',
-        assignedTo: user.employeeId,
-        assignedBy: user.employeeId,
-        currentStatus: 'New',
-        projectedNCP: 0,
-        collectedNCP: 0,
-        creationDate: new Date().toISOString(),
-        timestamp: new Date().toISOString()
-      });
-      toast.success(t('leadCreatedSuccess'));
+      // F12: the server upserts a lead when the MOBILE NUMBER already exists
+      // (documented behaviour). Without this the operator saw "Lead created
+      // successfully" while the existing record was being overwritten — the
+      // classic double-entry accident going unnoticed until reporting.
+      let matchedBy: 'leadCode' | 'mobile' | null = null;
+      await leadService.createLead(
+        {
+          ...data,
+          area: combinedArea,
+          hasChild: childPresence && Number(data.noOfChildren) > 0,
+          noOfChildren: childPresence ? data.noOfChildren : '0',
+          assignedTo: user.employeeId,
+          assignedBy: user.employeeId,
+          currentStatus: 'New',
+          projectedNCP: 0,
+          collectedNCP: 0,
+          creationDate: new Date().toISOString(),
+          timestamp: new Date().toISOString()
+        },
+        { onMatch: info => { matchedBy = info.matchedBy; } }
+      );
+      if (matchedBy === 'mobile') {
+        toast.warning(
+          `A lead with the mobile number ${data.mobile} already existed — that record was updated instead of creating a duplicate. Open Leads to review it.`,
+          { duration: 8000 }
+        );
+      } else {
+        toast.success(t('leadCreatedSuccess'));
+      }
       reset();
     } catch (err) {
       toast.error(t('leadCreatedError'));

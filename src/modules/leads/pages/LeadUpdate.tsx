@@ -8,6 +8,7 @@ import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { useTranslation } from '../../shared/utils/translations';
 import { cn } from '../../../lib/utils';
+import { validateLeadStatusFields } from '../utils/leadStatusRules';
 import type { Lead } from '../../shared/types';
 
 /**
@@ -57,9 +58,46 @@ const inputCls =
 const labelCls = 'mb-1.5 block text-[11px] font-black uppercase tracking-widest text-stone-500';
 const errCls = 'mt-1 text-xs font-semibold text-rose-500';
 
-/** yyyy-MM-ddTHH:mm formatted for `<input type="datetime-local">`, one hour from now. */
-function defaultLocalDateTime(): string {
-  const d = new Date(Date.now() + 60 * 60 * 1000);
+/** A translation key the `t()` helper accepts. */
+type TranslationKey = Parameters<ReturnType<typeof useTranslation>['t']>[0];
+
+/** API field name -> the form's local error key. */
+const FORM_ERROR_KEY_BY_API_FIELD: Record<string, string> = {
+  nextFollowUpDate: 'followUpAt',
+  meetingDate: 'meetingAt',
+  productName: 'productName',
+  sumAssured: 'sumAssured',
+  projectedNCP: 'projectedNCP',
+  collectedNCP: 'collectedNCP',
+  lossReason: 'lossReason',
+};
+
+/** API field name -> translation key (falls back to the API's own sentence). */
+const FORM_MESSAGE_KEY_BY_API_FIELD: Record<string, string> = {
+  nextFollowUpDate: 'updErrFollowUpDate',
+  meetingDate: 'updErrMeetingDate',
+  productName: 'updErrProduct',
+  sumAssured: 'updErrSumAssured',
+  projectedNCP: 'updErrProjectedNCP',
+  collectedNCP: 'updErrCollectedNCP',
+  lossReason: 'updErrLossReason',
+};
+
+/**
+ * yyyy-MM-ddTHH:mm for `<input type="datetime-local">`, derived from a real
+ * instant (the lead's own next follow-up when the server has one).
+ *
+ * F10: the form used to pre-fill BOTH the follow-up and the meeting picker
+ * with "now + 1 hour". An operator who did not notice saved a meeting at a
+ * time nobody agreed to, and the value then flowed into the Task Calendar.
+ * An appointment time is data about the real world — the form must not invent
+ * it. Fields start empty and the per-status rule (F6) refuses to save without
+ * them; when the lead already has a next follow-up, that real value is used.
+ */
+function localDateTimeValue(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -76,8 +114,8 @@ export default function LeadUpdate() {
   const [status, setStatus] = useState('');
   const [nextAction, setNextAction] = useState<NextAction | ''>('');
 
-  const [followUpAt, setFollowUpAt] = useState(defaultLocalDateTime);
-  const [meetingAt, setMeetingAt] = useState(defaultLocalDateTime);
+  const [followUpAt, setFollowUpAt] = useState('');
+  const [meetingAt, setMeetingAt] = useState('');
   const [meetingType, setMeetingType] = useState('');
   const [productName, setProductName] = useState('');
   const [sumAssured, setSumAssured] = useState('');
@@ -113,6 +151,12 @@ export default function LeadUpdate() {
         setStatusList(values);
         if (fetched?.currentStatus && values.includes(fetched.currentStatus)) {
           setStatus(fetched.currentStatus);
+        }
+        // Real data only: the lead's existing next follow-up, never an
+        // invented "now + 1 hour" (F10).
+        if (fetched) {
+          const existing = (fetched as any).nextFollowUpDate || (fetched as any).nextFollowUpAt || '';
+          if (existing) setFollowUpAt(localDateTimeValue(String(existing)));
         }
       } finally {
         if (!cancelled) setLoadingLead(false);
@@ -156,23 +200,33 @@ export default function LeadUpdate() {
   const needsConvertedFields = effectiveStatus === 'Converted';
   const needsLossReason = effectiveStatus === NOT_INTERESTED;
 
+  /**
+   * F6 — the conditional fields are validated from the SAME table the server
+   * enforces (`validateLeadStatusFields`), so the form can never ask for less
+   * (or more) than the API accepts. Only the copy differs: the form keeps its
+   * translated messages, the API returns a plain sentence for non-UI callers.
+   */
   const validate = (): boolean => {
     const e: Record<string, string> = {};
     if (!status) e.status = t('updErrStatusRequired');
+    // The Next Action choice is a UI shortcut (it resolves Interested into a
+    // final status); the server does not demand it, so it stays client-side.
     if (needsNextAction && !nextAction) e.nextAction = t('updErrNextAction');
-    if (needsFollowUpAt && !followUpAt) e.followUpAt = t('updErrFollowUpDate');
-    if (needsMeeting && !meetingAt) e.meetingAt = t('updErrMeetingDate');
-    if (needsProposalFields) {
-      if (!productName) e.productName = t('updErrProduct');
-      if (!sumAssured.trim()) e.sumAssured = t('updErrSumAssured');
-      if (!projectedNCP.trim()) e.projectedNCP = t('updErrProjectedNCP');
+
+    const violations = validateLeadStatusFields(effectiveStatus, {
+      nextFollowUpDate: followUpAt,
+      meetingDate: meetingAt,
+      productName,
+      sumAssured: sumAssured.trim() === '' ? undefined : Number(sumAssured),
+      projectedNCP: projectedNCP.trim() === '' ? undefined : Number(projectedNCP),
+      collectedNCP: collectedNCP.trim() === '' ? undefined : Number(collectedNCP),
+      lossReason,
+    });
+    for (const violation of violations) {
+      const key = FORM_ERROR_KEY_BY_API_FIELD[violation.field] || violation.field;
+      const messageKey = FORM_MESSAGE_KEY_BY_API_FIELD[violation.field] as TranslationKey | undefined;
+      if (!e[key]) e[key] = messageKey ? t(messageKey) : violation.message;
     }
-    if (needsConvertedFields) {
-      if (!productName) e.productName = t('updErrProduct');
-      if (!sumAssured.trim()) e.sumAssured = t('updErrSumAssured');
-      if (!collectedNCP.trim()) e.collectedNCP = t('updErrCollectedNCP');
-    }
-    if (needsLossReason && !lossReason) e.lossReason = t('updErrLossReason');
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -340,6 +394,9 @@ export default function LeadUpdate() {
             <div className="mt-4">
               <span className={labelCls}>{t('updFollowUpAt')} *</span>
               <input type="datetime-local" value={followUpAt} onChange={(e) => setFollowUpAt(e.target.value)} className={inputCls} />
+              <p className="mt-1.5 text-[11px] font-medium text-stone-400">
+                No time is assumed — pick the exact moment your lead agreed to.
+              </p>
               {errors.followUpAt ? <p className={errCls}>{errors.followUpAt}</p> : null}
             </div>
           ) : null}
@@ -350,6 +407,9 @@ export default function LeadUpdate() {
               <div>
                 <span className={labelCls}>{t('updMeetingAt')} *</span>
                 <input type="datetime-local" value={meetingAt} onChange={(e) => setMeetingAt(e.target.value)} className={inputCls} />
+                <p className="mt-1.5 text-[11px] font-medium text-stone-400">
+                  No time is assumed — this is mirrored onto the Task Calendar.
+                </p>
                 {errors.meetingAt ? <p className={errCls}>{errors.meetingAt}</p> : null}
               </div>
               <div>

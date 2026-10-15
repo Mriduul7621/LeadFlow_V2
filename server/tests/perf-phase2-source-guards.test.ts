@@ -224,7 +224,11 @@ describe('Performance Phase 2 — GET coalescing wiring', () => {
     const leadSvc = read('src/modules/leads/services/leadService.ts');
     const createBody = leadSvc.slice(leadSvc.indexOf('async createLead'), leadSvc.indexOf('async bulkUploadLeads'));
     assert.ok(!createBody.includes('coalesceGet'), 'createLead must not be coalesced');
-    assert.ok(createBody.includes('await apiRequest<Lead>(\'/api/leads\''), 'createLead still awaits the server');
+    assert.ok(
+      createBody.includes("await apiRequest<Lead>('/api/leads'") ||
+      createBody.includes("await apiRequestEnvelope<Lead>('/api/leads'"),
+      'createLead still awaits the server'
+    );
 
     const scheduledSvc = read('src/modules/scheduledActivities/services/scheduledActivityService.ts');
     const createBodyS = scheduledSvc.slice(scheduledSvc.indexOf('async create('));

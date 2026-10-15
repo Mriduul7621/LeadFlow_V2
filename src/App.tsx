@@ -42,7 +42,6 @@ const TaskCalendar = lazy(() => import('./modules/auth/pages/TaskCalendar'));
 const Activities = lazy(() => import('./modules/leads/pages/Activities'));
 const DailyWorkbench = lazy(() => import('./modules/workbench/pages/DailyWorkbench'));
 const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
-const LeadEdit = lazy(() => import('./modules/leads/pages/LeadEdit'));
 const LeadUpdate = lazy(() => import('./modules/leads/pages/LeadUpdate'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
@@ -167,8 +166,6 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/leads/:id/update"><LazyPage page={<LeadUpdate />} /></FeatureGate></ProtectedRoute>,
   },
   {
-    path: '/leads/:id/edit',
-    element: <ProtectedRoute><FeatureGate route="/leads/:id/edit"><LazyPage page={<LeadEdit />} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/leads/:id',

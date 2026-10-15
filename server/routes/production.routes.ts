@@ -2567,14 +2567,11 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
   const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
   const fileName = body.fileName ? String(body.fileName) : undefined;
 
-  if (!rawRows.length) {
-    return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
-  }
-  if (rawRows.length > USER_BULK_MAX_ROWS) {
-    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
-  }
-
   try {
+    /* F15: authorization comes FIRST. Validating the payload before the
+       permission check answered 400 to a caller who was never allowed to make
+       the request at all — a shape oracle that also made the documented
+       "users.create required" answer depend on how much the caller sent. */
     const caller = await getCallerDbInfo(req);
     if (!caller) {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
@@ -2592,6 +2589,14 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
     }
     if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+    }
+
+    // Only an authorised caller gets told what is wrong with the payload.
+    if (!rawRows.length) {
+      return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
+    }
+    if (rawRows.length > USER_BULK_MAX_ROWS) {
+      return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
     }
 
     // Normalize rows
@@ -2647,6 +2652,26 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
   const fileName = body.fileName ? String(body.fileName) : undefined;
 
+  /* F15: the authorization decision must not depend on the payload. An
+     unprivileged caller gets 403 whether they send zero rows, ten rows or a
+     malformed body — the empty-body 400 used to come first. */
+  const caller = await getCallerDbInfo(req);
+  if (!caller) {
+    return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+  }
+
+  const [canCreate, canEdit] = await Promise.all([
+    hasPermissionCode(caller, 'users.create'),
+    hasPermissionCode(caller, 'users.edit'),
+  ]);
+
+  if (mode === 'createOnly' && !canCreate) {
+    return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
+  }
+  if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
+    return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+  }
+
   if (!rawRows.length) {
     return sendJson(res, 400, { success: false, message: 'No rows supplied for commit' });
   }
@@ -2658,23 +2683,6 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   const client = await pool.connect();
 
   try {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-
-    // Independent codes: one round trip of latency instead of two.
-    const [canCreate, canEdit] = await Promise.all([
-      hasPermissionCode(caller, 'users.create'),
-      hasPermissionCode(caller, 'users.edit'),
-    ]);
-
-    if (mode === 'createOnly' && !canCreate) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
-    }
-    if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
-    }
 
     // Normalize rows (fresh)
     const normalized: NormalizedUserBulkRow[] = rawRows.map((r: any) => {
@@ -5071,8 +5079,16 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     const listLimit = Number.isFinite(requested) && requested > 0
       ? Math.min(Math.floor(requested), maxRows)
       : maxRows;
+    // F11: `offset` was silently ignored, so ?offset=5 returned the same rows
+    // as ?offset=0 and any paging client silently re-read page 1. It is a
+    // non-negative integer, clamped to the same ceiling as `limit` so a
+    // hostile value cannot ask the database to walk the whole table.
+    const rawOffset = Number(req.query?.offset);
+    const listOffset = Number.isFinite(rawOffset) && rawOffset > 0
+      ? Math.min(Math.floor(rawOffset), LIST_OFFSET_CEILING)
+      : 0;
     const result = await pool.query(
-      `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT ${listLimit}`,
+      `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT ${listLimit} OFFSET ${listOffset}`,
       params
     );
     perf.span('db.query');
@@ -5096,12 +5112,16 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       return mapped;
     });
     perf.finish(res);
+    // NOTE: the response stays a bare array — that is the client contract.
     return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
   } catch (error: any) {
     perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
   }
 });
+
+/** Hard ceiling for ?offset= on the leads list (F11). */
+const LIST_OFFSET_CEILING = 100000;
 
 const LEAD_UPSERT_SQL = `
   INSERT INTO leads (
@@ -5176,6 +5196,14 @@ router.post('/leads', requireAuth, async (req: any, res) => {
 
     // Determine if this is an update (existing lead) via lead_code or mobile
     let existingLead: any = null;
+    // F12: an accidental duplicate is the silent case worth reporting. The
+    // endpoint has always upserted on a matching mobile number (see
+    // lead-authz-integration case 11 — a caller who owns the lead may upsert),
+    // but it never told the caller that it MATCHED something, so an operator
+    // adding the same prospect twice was told "Lead created successfully"
+    // while the first record was being overwritten. We keep the upsert (that
+    // is the documented contract) and report the match instead.
+    let matchedBy: 'leadCode' | 'mobile' | null = null;
     const incomingLeadCode = String(payload.leadCode || payload.lead_code || payload.id || '').slice(0, 50).trim();
     const incomingMobile = clean(payload.mobile || payload.mobileNumber || payload.phone);
 
@@ -5187,6 +5215,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
           [incomingLeadCode, isCanonicalLowerUuid(incomingLeadCode) ? incomingLeadCode : null]
         );
         existingLead = found.rows[0] || null;
+        if (existingLead) matchedBy = 'leadCode';
       }
       if (!existingLead && incomingMobile) {
         const foundMobile = await pool.query(
@@ -5194,14 +5223,17 @@ router.post('/leads', requireAuth, async (req: any, res) => {
           [incomingMobile]
         );
         existingLead = foundMobile.rows[0] || null;
+        if (existingLead) matchedBy = 'mobile';
       }
     } else {
       // Demo mode lookup
       if (incomingLeadCode) {
         existingLead = fallbackStore.leads.find((l: any) => l.id === incomingLeadCode) || null;
+        if (existingLead) matchedBy = 'leadCode';
       }
       if (!existingLead && incomingMobile) {
         existingLead = fallbackStore.leads.find((l: any) => String(l.mobile || '').toUpperCase() === incomingMobile.toUpperCase()) || null;
+        if (existingLead) matchedBy = 'mobile';
       }
     }
 
@@ -5423,7 +5455,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         }
       }
 
-      return sendJson(res, 200, { success: true, data: lead });
+      return sendJson(res, 200, { success: true, data: lead, matchedBy });
     }
 
     // ── PostgreSQL path: transactional upsert + server-side notifications ──
@@ -5431,7 +5463,20 @@ router.post('/leads', requireAuth, async (req: any, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await client.query(LEAD_UPSERT_SQL, leadParams(record, record.leadCode));
+      /* F12: when the request matched an EXISTING lead by mobile number, that
+         match is the identity of the write — otherwise a second POST with the
+         same phone silently inserted a second row (the upsert only conflicts
+         on lead_code) while the permission checks had already treated the call
+         as an edit of the matched lead. Honouring the match is what makes the
+         "this record was updated" warning the operator sees true. An explicit
+         incoming lead code still wins: the caller said which lead it means. */
+      const explicitLeadCode = String(payload.leadCode || payload.lead_code || '').trim();
+      const writeLeadCode = explicitLeadCode
+        ? record.leadCode
+        : (matchedBy === 'mobile' && existingLead
+            ? String(existingLead.lead_code || existingLead.id || record.leadCode)
+            : record.leadCode);
+      const result = await client.query(LEAD_UPSERT_SQL, leadParams(record, writeLeadCode));
       perf.span('db.upsert');
       const row = result.rows[0];
 
@@ -5499,7 +5544,10 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       );
       perf.span('db.qualitySignals');
       perf.finish(res);
-      return sendJson(res, 200, { success: true, data: mappedLead });
+      // `matchedBy === 'mobile'` means: this was NOT a new prospect, it was an
+      // existing lead found by phone number, so the caller must not claim a
+      // creation (F12).
+      return sendJson(res, 200, { success: true, data: mappedLead, matchedBy });
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
       perf.finish(res);

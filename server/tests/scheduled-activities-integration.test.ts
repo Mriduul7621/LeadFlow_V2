@@ -591,9 +591,8 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
     assert.ok(calText.includes('scheduledActivityService'), 'TaskCalendar should use scheduledActivityService');
     // Check that Calendar does not call leadService.getLeads
     assert.equal(calText.includes('getLeads'), false, 'TaskCalendar should not call getLeads');
-    // Also check legacy re-export
-    const legacyPath = path.join(process.cwd(), 'src/pages/TaskCalendar.tsx');
-    const legacyText = fs.readFileSync(legacyPath, 'utf-8');
-    assert.ok(legacyText.includes('TaskCalendar'), 'legacy path should re-export');
+    // F14: the legacy `src/pages` re-export tree was removed outright — a
+    // stale duplicate of TaskCalendar cannot drift out of sync if it does
+    // not exist. `dead-tree-hygiene.test.ts` guards that removal.
   });
 });
