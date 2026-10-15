@@ -647,7 +647,7 @@
 }
 .leadflow-wordmark {
   color: #182B25;
-  font-size: clamp(36px, 10vw, 48px);
+  font-size: clamp(44px, 12.5vw, 58px);
   font-weight: 800;
   line-height: 1.04;
   letter-spacing: -2.2px;
