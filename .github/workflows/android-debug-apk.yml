@@ -1,19 +1,36 @@
 name: Android Debug APK (TWA)
 
 # Builds the Trusted Web Activity wrapper (com.saudalmahi.leadflow) that ships
-# https://app.saudalmahi.com as an installable Android app.
+# the LeadFlow web app as an installable Android app.
+#
 # Get the APK from:
 #   1) the workflow run artifacts ("leadflow-debug-apk"), or
 #   2) the always-updated pre-release:
-#      https://github.com/Mriduul7621/LeadFlow_V2/releases/tag/android-debug
+#        https://github.com/Mriduul7621/LeadFlow_V2/releases/tag/android-debug
+#
+# Two build inputs (see docs/ANDROID_TWA.md):
+#   * versionCode  — passed automatically as the workflow run number, so a
+#                    freshly published APK can always be installed OVER an
+#                    older install (Android rejects equal/lower codes).
+#   * host         — the site the wrapper opens. Defaults to the branded
+#                    domain; pick another value when running the workflow
+#                    manually to test against a host that is already live.
 
 on:
   workflow_dispatch:
+    inputs:
+      host:
+        description: "Host the wrapper opens (default: branded domain)"
+        required: false
+        default: "app.saudalmahi.com"
   push:
     branches: [main, feat/android-twa-debug-apk]
 
 permissions:
   contents: write
+
+env:
+  DEFAULT_HOST: app.saudalmahi.com
 
 jobs:
   debug-apk:
@@ -36,16 +53,48 @@ jobs:
       - name: Android SDK licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
+      - name: Resolve build inputs (host + versionCode)
+        id: inputs
+        run: |
+          HOST="${{ github.event.inputs.host || env.DEFAULT_HOST }}"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Android debug APK"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Host opened | https://$HOST |"
+            echo "| versionCode | ${{ github.run_number }} |"
+            echo "| Digital Asset Links | https://$HOST/.well-known/assetlinks.json |"
+            echo "| Workflow run | #${{ github.run_number }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the Digital Asset Links fingerprint matches the signing key
+        run: |
+          set -euo pipefail
+          EXPECTED=$(python3 -c "import json;print(json.load(open('public/.well-known/assetlinks.json'))[0]['target']['sha256_cert_fingerprints'][0])")
+          ACTUAL=$(keytool -list -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey \
+                   | grep -i 'SHA256:' | head -1 | sed 's/.*SHA256: *//' | tr -d ' ')
+          echo "assetlinks: $EXPECTED"
+          echo "keystore  : $ACTUAL"
+          test "$EXPECTED" = "$ACTUAL"
+
       - name: Bootstrap wrapper & build debug TWA
         run: |
           cd android
           gradle wrapper --gradle-version 8.7 --distribution-type bin
-          ./gradlew :app:assembleDebug --stacktrace
+          ./gradlew :app:assembleDebug \
+            -PappHost="${{ steps.inputs.outputs.host }}" \
+            -PversionCode="${{ steps.inputs.outputs.version_code }}" \
+            --stacktrace
 
       - name: Report APK checksum
         run: |
           APK=$(ls android/app/build/outputs/apk/debug/*.apk)
+          echo "APK: $APK"
           sha256sum "$APK"
+          echo "- APK sha256: \`$(sha256sum "$APK" | cut -d' ' -f1)\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
