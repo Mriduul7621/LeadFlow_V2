@@ -21,7 +21,11 @@ import {
   resolveNextActionStatus,
   validateLeadStatusFields,
 } from '../utils/leadStatusRules.js';
-import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRules';
+// NOTE: the `.js` extension is mandatory here. Vercel transpiles every
+// traced file individually and runs the tree as plain Node ESM, where an
+// extensionless relative import is a runtime ERR_MODULE_NOT_FOUND even
+// though tsx/esbuild resolve it locally (see scripts/verify-serverless-build.mjs).
+import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRules.js';
 import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
   mapSpreadsheetRow,
