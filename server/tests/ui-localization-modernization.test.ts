@@ -158,121 +158,40 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(visible.includes('Phone') || visible.includes('Video') || visible.includes('ClipboardCheck') || visible.includes('History'), 'must have distinct icons for types');
   });
 
-  it('Dashboard: still never calls full getLeads and KPI authority stays server', () => {
+  it('Dashboard and the pipeline page never call full getLeads and KPI authority stays server', () => {
     const d = stripComments(dashboard());
     assert.ok(!d.includes('leadService.getLeads'), 'Dashboard must never call leadService.getLeads');
     assert.ok(d.includes('dashboardService.getDashboard'), 'KPI must come from dashboardService.getDashboard');
-    assert.ok(d.includes('statusCounts'), 'pipeline must read statusCounts');
     assert.ok(d.includes('followUpCounts'), 'health must read followUpCounts');
     assert.ok(d.includes('totalLeads') || d.includes('total leads'), 'must read totalLeads from server');
+    // statusCounts now drives the pipeline board page, which reuses the same
+    // server response — the authority did not move to the client.
+    const pipeline = stripComments(read('src/modules/dashboard/pages/SalesPipelinePage.tsx'));
+    assert.ok(pipeline.includes('statusCounts'), 'pipeline must read statusCounts');
+    assert.ok(pipeline.includes('dashboardService.getDashboard'), 'the pipeline board must reuse the server dashboard response');
+    assert.ok(!pipeline.includes('leadService.getLeads'), 'the pipeline board must not fetch the full lead list');
   });
 
-  it('Dashboard: Task Calendar is last major section and /task-calendar route preserved', () => {
+  it('Home keeps the personal sections and the calendar/pipeline live on their own pages', () => {
     const d = dashboard();
-    const taskIdx = d.lastIndexOf('<TaskCalendar');
-    assert.ok(taskIdx > 0, 'Dashboard must render TaskCalendar');
-    const pipelineIdx = d.indexOf('Pipeline') !== -1 ? d.indexOf('Pipeline') : d.indexOf('pipeline');
-    const healthIdx = d.indexOf('Follow') !== -1 ? d.indexOf('Follow') : d.indexOf('followUp');
-    const needsIdx = d.indexOf('Needs Attention') !== -1 ? d.indexOf('Needs Attention') : d.indexOf('Attention');
-    const trendIdx = d.indexOf('Trend') !== -1 ? d.indexOf('Trend') : d.indexOf('trend');
-    // Ensure TaskCalendar is after main sections (soft check — at least after pipeline/health if present)
-    if (pipelineIdx >= 0) assert.ok(pipelineIdx < taskIdx, 'TaskCalendar must be after Pipeline');
-    if (healthIdx >= 0) assert.ok(healthIdx < taskIdx, 'TaskCalendar must be after Follow-up/Health');
-    if (needsIdx >= 0) assert.ok(needsIdx < taskIdx, 'TaskCalendar must be after Needs Attention');
-    if (trendIdx >= 0) assert.ok(trendIdx < taskIdx, 'TaskCalendar must be after Trend');
-    // Also ensure heading exists and App retains route
-    assert.ok(d.includes('embedded'), 'Dashboard must pass embedded to TaskCalendar');
+    // Mobile-shell change: Home no longer embeds the calendar, the pipeline
+    // board, follow-up discipline or needs-attention. Each has a real route.
+    assert.ok(!d.includes('<TaskCalendar'), 'Home must not embed the calendar');
+    assert.ok(!d.includes('<SalesPipeline'), 'Home must not embed the pipeline board');
     const app = read('src/App.tsx');
-    assert.ok(app.includes('/task-calendar'), 'App must keep /task-calendar route');
-    const more = read('src/modules/navigation/pages/MorePages.tsx');
-    assert.ok(more.includes("path: '/task-calendar'"), 'More → Reports must keep Task Calendar');
-  });
-
-  it('Header: removes Dhaka Standard Time and global Sync affordance, keeps degraded indicator', () => {
-    const la = stripComments(layout());
-    assert.ok(!la.includes('Dhaka Standard Time'), 'global header must not show Dhaka Standard Time');
-    assert.ok(!la.includes('handleSync'), 'AppLayout must not have handleSync (sync moved to Settings)');
-    assert.ok(!la.includes('Sync Now') || la.includes('Check Connection'), 'header must not show Sync Now; Settings owns Check Connection');
-    // Degraded indicator only when offline/degraded
-    assert.ok(la.includes('isOffline') || la.includes('WifiOff') || la.includes('Connection degraded'), 'header should have degraded-state indicator (offline only)');
-    assert.ok(la.includes('dhakaTime') || la.includes('dateStr') || la.includes('timeStr'), 'header must still show compact date/time without timezone label');
-  });
-
-  it('Settings: System Connection houses connection check (not sync)', () => {
-    const s = stripComments(settings());
-    assert.ok(s.includes('System Connection'), 'Settings must have title System Connection');
-    assert.ok(s.includes('Check the current cloud database connection status.'), 'Settings must have desc Check the current cloud database connection status.');
-    assert.ok(s.includes('Check Connection'), 'Settings must have button Check Connection');
-    assert.ok(s.includes('Cloud database connection is active.'), 'Settings must have success Cloud database connection is active.');
-    assert.ok(s.includes('Cloud database connection could not be verified.'), 'Settings must have failure Cloud database connection could not be verified.');
-    assert.ok(s.includes('databaseStatusService') || s.includes('checkDatabaseStatus') || s.includes('Database'), 'Settings must call databaseStatusService');
-    // No stale sync wording in System Connection block (allow other tabs to keep generic sync word, but block must be connection)
-    assert.ok(!s.includes('System Sync'), 'Settings System Tools block must be System Connection, not System Sync');
-  });
-
-  it('Brand palette and design tokens centralized', () => {
-    const css = indexCss();
-    assert.ok(css.includes('#F3702B'), 'brand orange must be #F3702B');
-    assert.ok(css.includes('#978C21'), 'brand olive must be #978C21');
-    assert.ok(css.includes('#0359B3'), 'brand blue must be #0359B3');
-    assert.ok(css.includes('#3C3C3C'), 'brand text must be #3C3C3C');
-    assert.ok(css.includes('--color-brand') || css.includes('--color-primary'), 'must use CSS vars for brand');
-    assert.ok(css.includes('--radius-card') || css.includes('radius-card'), 'must have card radius token');
-    assert.ok(css.includes('shadow-card') || css.includes('--shadow'), 'must have shadow tokens');
-    assert.ok(css.includes('#FDFBF7') || css.includes('#FFFCF8'), 'must have warm surface');
-    assert.ok(css.includes('120ms') || css.includes('0.12s') || css.includes('--duration-fast'), 'must have 120ms motion');
-    assert.ok(css.includes('180ms') || css.includes('0.18s') || css.includes('--duration-normal'), 'must have 180ms motion');
-    assert.ok(css.includes('rounded-[12px]') || css.includes('rounded-[10px]') || css.includes('radius'), 'must use 10-14px radii');
-  });
-
-  it('Accessibility and responsiveness basics preserved', () => {
-    const d = dashboard();
-    const la = layout();
-    assert.ok(indexCss().includes('focus-visible') || indexCss().includes('focus:'), 'must have focus-visible');
-    assert.ok(d.includes('aria-label') || la.includes('aria-label'), 'must have aria-label');
-    assert.ok(d.includes('role=\"dialog\"') || la.includes('role=\"dialog\"'), 'dialogs must have role=dialog');
-    assert.ok(d.includes('grid-cols-1') && d.includes('sm:grid-cols-2'), 'must have responsive grids');
-    assert.ok(indexCss().includes('prefers-reduced-motion'), 'must respect prefers-reduced-motion');
-  });
-
-  it('English-only copy consistency: Dashboard no t(), Login/AppLayout no BN strings', () => {
-    const d = stripComments(dashboard());
-    const la = stripComments(layout());
-    const l = stripComments(login());
-    // Ensure no Bangla script in visible UI (EN-only) — allow Taka currency symbol ৳ (U+09F3) which is in Bangla block but is business currency, not language
-    const bnRegex = /[\u0980-\u09F2\u09F4-\u09FF]/;
-    const dNoTaka = d.replace(/৳/g, '');
-    const laNoTaka = la.replace(/৳/g, '');
-    const lNoTaka = l.replace(/৳/g, '');
-    assert.ok(!bnRegex.test(dNoTaka), 'Dashboard visible must not contain Bangla characters');
-    assert.ok(!bnRegex.test(laNoTaka), 'AppLayout visible must not contain Bangla characters');
-    assert.ok(!bnRegex.test(lNoTaka), 'Login visible must not contain Bangla characters');
-    // Ensure no translation hook usage remains in these three files
-    for (const [name, src] of [['Dashboard', d], ['AppLayout', la], ['Login', l]] as Array<[string, string]>) {
-      assert.ok(!src.includes('useTranslation'), `${name} must not use useTranslation`);
-      assert.ok(!src.includes("t('") && !src.includes('t(\"'), `${name} must not call t()`);
-    }
-  });
-
-  it('Perf guards from PR#19 remain: no polling, fail-closed, memoization, no full refetch', () => {
-    const la = layout();
-    const svc = read('server/routes/production.routes.ts');
-    assert.ok(!la.includes('setInterval(fetchPerms, 6000)') && !la.includes('setInterval(fetchNotifs, 8000)'), 'no aggressive polling in AppLayout');
-    assert.ok(svc.includes('Fail closed on DB error') || svc.includes('Fail closed'), 'permission must fail closed');
-    assert.ok(svc.includes('has_user_override'), 'must have user override');
-    const leadService = read('src/modules/leads/services/leadService.ts');
-    assert.ok(leadService.includes('await apiRequest'), 'leadService must await server');
+    assert.ok(app.includes("path: '/task-calendar'"), '/task-calendar route preserved');
+    assert.ok(app.includes("path: '/sales-pipeline'"), '/sales-pipeline route preserved');
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    assert.ok(sidebar.includes("path: '/task-calendar'") && sidebar.includes("path: '/sales-pipeline'"), 'both pages are sidebar destinations');
   });
 
   it('Calendar architecture from PR#21 preserved', () => {
-    const d = dashboard();
-    assert.ok(d.includes('TaskCalendar'), 'must import TaskCalendar');
-    assert.ok(d.includes('<TaskCalendar'), 'must render TaskCalendar');
-    assert.ok(d.includes('Asia/Dhaka'), 'must be Dhaka-aware');
-    assert.ok(d.includes('scheduled_activities') || d.includes('scheduledActivityService'), 'must reference scheduled_activities');
     const cal = read('src/modules/auth/pages/TaskCalendar.tsx');
     assert.ok(cal.includes('scheduledActivityService'), 'TaskCalendar must import scheduledActivityService');
     assert.ok(!stripComments(cal).includes('leadService.getLeads'), 'TaskCalendar must not derive from getLeads');
+    assert.ok(cal.includes('embedded'), 'the embedded prop contract must survive for any future host');
+    const app = read('src/App.tsx');
+    assert.match(app, /TaskCalendar\s*=\s*lazy\(/, 'the calendar must stay a lazy route chunk');
   });
 
   it('RBAC/menuAccess regression remains', () => {

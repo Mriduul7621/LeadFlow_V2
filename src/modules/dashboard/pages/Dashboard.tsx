@@ -140,17 +140,6 @@ export function resolveRange(period: PeriodKey, customStart?: string, customEnd?
   return { label: period, startYmd: null, endYmd: null, display: 'All time' };
 }
 
-// ---- Pipeline stages ------------------------------------------------
-const PIPELINE_STAGES = [
-  'Untouched',
-  'Contacted',
-  'Interested',
-  'Meeting Fixed',
-  'Meeting Completed',
-  'Pipeline Locked',
-  'Converted',
-] as const;
-
 const formatMoney = (n: number) => `৳ ${Number(n || 0).toLocaleString('en-US')}`;
 const formatCount = (n: number) => Number(n || 0).toLocaleString('en-US');
 
@@ -699,8 +688,7 @@ export default function Dashboard() {
     void loadDailyExecution();
   }, [loadDailyExecution]);
 
-  const statusCounts = metrics?.statusCounts ?? {};
-  const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
 
   // The embedded Task Calendar is only mounted (chunk fetch + its own

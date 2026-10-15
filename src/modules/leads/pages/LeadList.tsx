@@ -1,21 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { 
-  Search, 
-  Filter, 
-  Download, 
-  MoreHorizontal, 
-  Phone, 
-  MessageSquare, 
-  Clock, 
-  ChevronLeft, 
-  ChevronRight, 
-  Eye, 
-  CheckCircle, 
-  XCircle, 
-  Calendar, 
+import {
+  Search,
+  Filter,
+  Download,
+  MoreHorizontal,
+  Phone,
+  MessageSquare,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  CheckCircle,
+  XCircle,
+  Calendar,
   RefreshCw,
   Edit2,
+  Target,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -719,17 +720,45 @@ export default function LeadList() {
 
         <div className="lf-mobile-lead-list" aria-label="Lead prospects">
   {filteredLeads.length > 0 ? filteredLeads.map((lead) => (
-    <button key={lead.id} type="button" className="lf-mobile-lead-row" onClick={() => navigate('/leads/' + lead.id)} aria-label={'Open details for ' + (lead.prospectName || 'Unknown Prospect')}>
-      <span className="lf-mobile-lead-avatar" aria-hidden="true">
-        {String(lead.prospectName || 'U').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
-      </span>
-      <span className="lf-mobile-lead-copy">
-        <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
-        <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
-        <span className="lf-mobile-lead-status">{lead.currentStatus || 'Untouched'}</span>
-      </span>
-      <ChevronRight className="lf-mobile-lead-arrow" size={19} aria-hidden="true" />
-    </button>
+    <div key={lead.id} className="lf-mobile-lead-row">
+      <button
+        type="button"
+        className="lf-mobile-lead-open"
+        onClick={() => navigate('/leads/' + lead.id)}
+        aria-label={'Open details for ' + (lead.prospectName || 'Unknown Prospect')}
+      >
+        <span className="lf-mobile-lead-avatar" aria-hidden="true">
+          {String(lead.prospectName || 'U').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
+        </span>
+        <span className="lf-mobile-lead-copy">
+          <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
+          <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
+          <span className="lf-mobile-lead-status">{lead.currentStatus || 'Untouched'}</span>
+        </span>
+      </button>
+      {/* Quick status update straight from the list (same rule as Lead 360:
+          only when the role may edit leads). */}
+      {canEditLead && (
+        <button
+          type="button"
+          className="lf-row-action lf-row-action--primary"
+          onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
+          aria-label={'Update status for ' + (lead.prospectName || 'lead')}
+          title="Update status"
+        >
+          <Target size={17} />
+        </button>
+      )}
+      <button
+        type="button"
+        className="lf-row-action"
+        onClick={() => navigate('/leads/' + lead.id)}
+        aria-label={'Open details for ' + (lead.prospectName || 'Unknown Prospect')}
+        title="Open lead"
+      >
+        <ChevronRight size={19} aria-hidden="true" />
+      </button>
+    </div>
   )) : <div className="lf-mobile-lead-empty">No prospects match your filters.</div>}
 </div>
 
@@ -772,6 +801,16 @@ export default function LeadList() {
                            >
                               Timeline
                            </button>
+                           {canEditLead && (
+                             <button
+                               onClick={(e) => { e.stopPropagation(); navigate(`/leads/${encodeURIComponent(lead.id)}/update`); }}
+                               title="Update status"
+                               aria-label={'Update status for ' + (lead.prospectName || 'lead')}
+                               className="text-[8px] font-black text-white bg-[#978C21] px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#8a7f1e] transition-all shrink-0 normal-case not-italic"
+                             >
+                                Update
+                             </button>
+                           )}
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold flex items-center gap-1 uppercase tracking-tight mt-1 opacity-60">
                           <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || 'No Mobile'} • {lead.area || 'No Area'}

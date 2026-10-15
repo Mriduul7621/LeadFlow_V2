@@ -32,7 +32,7 @@ const read = (rel: string) => readFileSync(`${repoRoot}${rel}`, 'utf8');
 
 const ALL_ROUTES = Object.keys(FEATURE_ROUTES);
 const NON_ADMIN_ROLES = ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH'];
-const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/reports', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id', '/leads/:id/edit'];
+const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/sales-pipeline', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id', '/leads/:id/edit'];
 const INSIGHT_ROUTES = ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'];
 const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/leads/upload', '/leads/all', '/users'];
 
@@ -99,13 +99,23 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     assert.equal(resolveFeatureRouteAccess('/team', 'RO', { menuAccess: {} } as any), false);
   });
 
-  it('Reports opens when any child report is enabled, despite a legacy Reports toggle being off', () => {
-    assert.equal(resolveFeatureRouteAccess('/reports', 'RO', {
-      menuAccess: { '/reports': false, '/execution-intelligence': true },
-    } as any), true);
-    assert.equal(resolveFeatureRouteAccess('/reports', 'RO', {
-      menuAccess: { '/reports': false, '/settings/performance-diagnostics': true },
-    } as any), false, 'admin-only diagnostics alone must not expose Reports');
+  it('every report/pipeline route is gated by its OWN module toggle (the aggregate Reports gate is gone)', () => {
+    // Mobile-shell change: the "Reports" directory was retired and each page
+    // moved to the left sidebar with its own Feature Access module. There is no
+    // longer any route that opens because a *different* report module is on.
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'RO', {
+      menuAccess: { '/execution-intelligence': true },
+    } as any), true, 'an enabled report module opens its own page');
+    assert.equal(resolveFeatureRouteAccess('/sales-pipeline', 'RO', {
+      menuAccess: { '/sales-pipeline': false, '/execution-intelligence': true },
+    } as any), false, 'a sibling report module must not open the pipeline page');
+    assert.equal(resolveFeatureRouteAccess('/sales-pipeline', 'RO', {
+      menuAccess: { '/sales-pipeline': true },
+    } as any), true, 'the pipeline module toggle opens the pipeline page');
+    // Diagnostics keeps its ADMIN/SUPERADMIN static fallback (the AdminRoute
+    // gate inside the element is the hard boundary; an explicit dynamic
+    // menuAccess grant is the pre-existing override path).
+    assert.equal(resolveFeatureRouteAccess('/settings/performance-diagnostics', 'RO', undefined), false, 'diagnostics stays ADMIN/SUPERADMIN only');
   });
 
   it('fails closed on unknown route keys and missing roles', () => {
@@ -130,18 +140,21 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
 });
 
 describe('primary navigation and More directories — route coverage', () => {
-  it('primary tabs use the new five-item structure and old secondary pages live under More → Reports', () => {
+  it('primary tabs keep their five entries and the secondary pages live in the left sidebar', () => {
     const layout = read('src/layouts/AppLayout.tsx');
     const start = layout.indexOf('const PRIMARY_NAV_ITEMS');
     const end = layout.indexOf('const MORE_NAV_PATHS');
     assert.ok(start >= 0 && end > start, 'primary navigation config must exist');
     const menuPaths = Array.from(layout.slice(start, end).matchAll(/path: '([^']+)'/g), m => m[1]);
     assert.deepEqual(menuPaths, ['/', '/workbench', '/leads/new', '/leads', '/more']);
-    assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen|isSidebarOpen/, 'no desktop sidebar or mobile drawer remains');
+    assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
+    assert.ok(layout.includes('isSidebarOpen'), 'the left sidebar drawer owns the shell drawer state');
 
-    const more = read('src/modules/navigation/pages/MorePages.tsx');
-    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown']) {
-      assert.ok(more.includes(`path: '${p}'`), `More → Reports must include ${p}`);
+    // The retired More → Reports directory is replaced by the permission-
+    // filtered left sidebar (src/layouts/sidebarNav.ts).
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown', '/roadshows', '/sales-pipeline']) {
+      assert.ok(sidebar.includes(`path: '${p}'`), `the sidebar must include ${p}`);
     }
 
     for (const p of menuPaths) {

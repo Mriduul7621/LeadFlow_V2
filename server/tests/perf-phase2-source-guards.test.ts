@@ -132,40 +132,30 @@ describe('Performance Phase 2 — route-level code splitting', () => {
 /* 2. Dashboard: embedded Task Calendar is deferred + code-split        */
 /* ==================================================================== */
 
-describe('Performance Phase 2 — deferred dashboard Task Calendar', () => {
+describe('Performance Phase 2 — the Task Calendar is a route of its own', () => {
   const DASHBOARD = () => read('src/modules/dashboard/pages/Dashboard.tsx');
 
-  it('E. the embedded calendar is lazy and never statically imported by the dashboard', () => {
+  it('E. Home no longer embeds the calendar: it is lazy, route-level only', () => {
     const d = DASHBOARD();
-    assert.ok(
-      /const\s+TaskCalendar\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\.\/\.\.\/auth\/pages\/TaskCalendar['"]\s*\)/.test(d),
-      'Dashboard must lazy-import TaskCalendar'
-    );
+    // The mobile-shell change removed the embedded calendar from Home. The
+    // heavy component must now exist ONLY behind its own lazy route, so Home
+    // never pays for its chunk and cannot regress into a static import.
     assert.doesNotMatch(d, /import\s+TaskCalendar\s+from/, 'no static TaskCalendar import in Dashboard');
+    assert.ok(!d.includes('TaskCalendar'), 'Dashboard must not reference the embedded calendar at all');
+    assert.doesNotMatch(d, /lazy\(\s*\(\s*\)\s*=>\s*import\s*\(?\s*'[^']*TaskCalendar'/, 'the calendar must not be lazy-loaded into Dashboard either');
+    const app = read('src/App.tsx');
+    assert.match(app, /TaskCalendar\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\(\s*'\.\/modules\/auth\/pages\/TaskCalendar'\s*\)/, 'TaskCalendar must stay a lazy route chunk');
+    assert.ok(app.includes("path: '/task-calendar'"), 'the /task-calendar route must remain');
   });
 
-  it('F. the calendar mounts only after primary content settled, inside a Suspense boundary', () => {
+  it('F. the calendar is reachable from the sidebar and nothing else on Home waits on it', () => {
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    assert.ok(sidebar.includes("path: '/task-calendar'"), 'the sidebar must offer the Task Calendar');
     const d = DASHBOARD();
-    assert.ok(d.includes('calendarReady'), 'dashboard must derive a calendarReady flag');
-    const flag = d.slice(d.indexOf('const calendarReady'));
-    assert.ok(/!loading\s*&&\s*!dailyLoading/.test(flag), 'calendar must wait for BOTH primary loads');
-    const renderIdx = d.lastIndexOf('<TaskCalendar embedded');
-    const openIdx = d.lastIndexOf('<Suspense');
-    const closeIdx = d.indexOf('</Suspense', renderIdx);
-    assert.ok(
-      openIdx !== -1 && openIdx < renderIdx && closeIdx > renderIdx,
-      'the embedded calendar must render inside a Suspense boundary (open before, close after)'
-    );
-    assert.ok(d.includes('TaskCalendarPlaceholder'), 'deferred calendar needs a lightweight placeholder');
-    // Primary sections still exist and still precede the calendar section
-    // (the calendar remains the LAST major section — no behavior change).
-    for (const marker of ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'SalesPipeline', 'FollowUpDiscipline', 'NeedsAttentionSection', 'PerformanceInsights']) {
+    assert.ok(!d.includes('calendarReady'), 'the deferred-mount flag is obsolete once Home stops embedding the calendar');
+    for (const marker of ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'PerformanceInsights']) {
       assert.ok(d.includes(marker), `primary section ${marker} must remain on the dashboard`);
     }
-    assert.ok(
-      d.indexOf('const TaskCalendar = lazy') < d.lastIndexOf('<TaskCalendar'),
-      'calendar declaration precedes its render'
-    );
   });
 
   it('G. dashboard KPI authority is untouched (no new client-side sources)', () => {

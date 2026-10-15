@@ -14,8 +14,6 @@ import { MemoryRouter } from 'react-router-dom';
 import ts from 'typescript';
 import {
   ExecutiveSnapshot,
-  FollowUpDiscipline,
-  NeedsAttentionSection,
   TodayTomorrowPanel,
   resolveRange,
 } from '../../src/modules/dashboard/pages/Dashboard';
@@ -124,8 +122,8 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
     const bindings = iconImport?.importClause?.namedBindings;
     assert.ok(bindings && ts.isNamedImports(bindings));
     assert.ok(bindings.elements.some((item) => item.name.text === 'History'));
-    const discipline = render(React.createElement(FollowUpDiscipline, { overdue: 9, dueToday: 2, upcoming: 3, total: 14 }));
-    assert.match(discipline, /lucide-history/);
+    // The Follow-up Discipline card left Home, so the icon guard now runs on
+    // the panel that still renders every activity icon (History included).
     const panel = render(React.createElement(TodayTomorrowPanel, populatedDays));
     assert.match(panel, /lucide-history/);
     assert.match(panel, /lucide-phone/);
@@ -281,48 +279,18 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
     }
   });
 
-  it('links all three Follow-up Discipline metrics to their queue buckets with native keyboard access and unchanged counts/share', () => {
-    const buckets = [['overdue', 'Overdue'], ['today', 'Due Today'], ['upcoming', 'Upcoming']] as const;
-    const scenarios = [
-      { props: { overdue: 9, dueToday: 2, upcoming: 3, total: 14 }, counts: ['9', '2', '3'], share: '64% share' },
-      { props: { overdue: 1200, dueToday: 345, upcoming: 56, total: 1601 }, counts: ['1,200', '345', '56'], share: '75% share' },
-      { props: { overdue: 0, dueToday: 0, upcoming: 0, total: 0 }, counts: ['0', '0', '0'], share: '0% share' },
-    ];
-    for (const { props, counts, share } of scenarios) {
-      const html = render(React.createElement(FollowUpDiscipline, props));
-      const links = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)];
-      assert.equal(links.length, 4, 'three metric links plus the existing full-queue link');
-      buckets.forEach(([bucket, label], index) => {
-        const matches = links.filter(([, attributes]) => attributes.includes(`href="/follow-up?bucket=${bucket}"`));
-        assert.equal(matches.length, 1, `${label} must link to its authoritative bucket exactly once`);
-        const [, attributes, content] = matches[0];
-        assert.match(content, new RegExp(`>${label}</p>`));
-        assert.match(content, new RegExp(`>${counts[index]}</p>`));
-        // Real anchors with href retain native Tab/Enter behavior and the app's
-        // existing focus-visible outline; no disabling or focus suppression.
-        assert.doesNotMatch(attributes, /tabindex="-1"|aria-disabled="true"|role="button"|outline-none/i);
-        if (bucket === 'overdue') assert.ok(content.includes(`>${share}</span>`));
-      });
-      assert.equal(links.filter(([, attributes]) => attributes.includes('href="/follow-up"')).length, 1);
-      assert.equal((html.match(/% share/g) || []).length, 1);
-    }
-  });
-
-  it('keeps Overdue in Executive Snapshot and Follow-up Discipline, not Needs Attention', () => {
+  it('keeps every overdue/today/upcoming bucket reachable without the retired card', () => {
+    // The three-bucket card was removed from Home; the buckets themselves are
+    // still first-class destinations. The Overdue KPI card links into the
+    // queue via the daily-workbench surface, and the queue strategy page still
+    // serves ?bucket=overdue|today|upcoming.
     const snapshot = render(React.createElement(ExecutiveSnapshot, snapshotProps));
-    const discipline = render(React.createElement(FollowUpDiscipline, { overdue: 9, dueToday: 2, upcoming: 3, total: 14 }));
-    const attention = render(React.createElement(NeedsAttentionSection, { untouched: 23 }));
-    assert.match(snapshot, />Overdue Follow-ups</);
-    assert.match(discipline, />Overdue</);
-    assert.match(discipline, /href="\/follow-up\?bucket=overdue"/);
-    assert.match(discipline, /href="\/follow-up"/);
-    assert.match(attention, />Untouched Leads</);
-    assert.match(attention, />23</);
-    assert.match(attention, /href="\/leads"/);
-    assert.doesNotMatch(attention, /overdue|\/follow-up/i);
-    assert.match(main, /<NeedsAttentionSection untouched=\{statusCounts\['Untouched'\] \?\? 0\} \/>/);
-    assert.doesNotMatch(source, /function NeedsAttention\(/);
-    assert.equal((source.match(/function NeedsAttentionSection\(/g) || []).length, 1);
+    assert.match(snapshot, /Overdue Follow-ups/);
+    assert.match(snapshot, /lucide-triangle-alert/);
+    const strategy = fs.readFileSync(path.join(ROOT, 'src/modules/leads/pages/FollowUpStrategy.tsx'), 'utf8');
+    assert.match(strategy, /bucket=overdue|'overdue'/);
+    assert.match(strategy, /searchParams|useSearchParams/);
+    assert.equal((source.match(/FollowUpDiscipline/g) || []).length, 0, 'the retired card must not come back to Dashboard.tsx');
   });
 
   it('fixes rounded-[10x] and preserves the Add Lead action', () => {
@@ -363,23 +331,26 @@ describe('Dashboard productivity refinement — PR #24 blockers', () => {
     assert.match(source, /getFollowUpQueue\(\{ bucket: 'today', limit: 50 \}\)/);
     assert.match(source, /getFollowUpQueue\(\{ bucket: 'upcoming', limit: 50 \}\)/);
     assert.match(source, /scheduledActivityService\.list\(\{ from: dhakaToday, to: tomorrowYmd, limit: 100 \}\)/);
-    const panel = source.slice(source.indexOf('function TodayTomorrowPanel('), source.indexOf('// ---- Sales Pipeline'));
+    const panel = source.slice(source.indexOf('function TodayTomorrowPanel('), source.indexOf('// ---- Executive Snapshot'));
     assert.doesNotMatch(panel, /Service\.|\bfetch\s*\(/);
   });
 
-  it('keeps Task Calendar embedded and last, after the actual final productivity sections', () => {
-    const order = ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'SalesPipeline', 'FollowUpDiscipline', 'NeedsAttentionSection', 'PerformanceInsights', 'TaskCalendar'];
+  it('keeps the personal-work sections in order and leaves the analysis pages off Home', () => {
+    // Mobile-shell change: Home is Core Performance + Today's Focus + Recent
+    // Leads + Performance Insights. The pipeline board, follow-up discipline,
+    // needs-attention and the embedded calendar moved to their own pages.
+    const order = ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'PerformanceInsights'];
     let previous = -1;
     for (const component of order) {
       const index = main.indexOf(`<${component}`);
       assert.ok(index > previous, `${component} must follow the previous section`);
       previous = index;
     }
-    assert.match(main, /<TaskCalendar embedded=\{true\} \/>/);
-    const tail = main.slice(main.lastIndexOf('<TaskCalendar'));
-    assert.doesNotMatch(tail, /<section\b/);
-    assert.match(tail, /to="\/task-calendar"/);
+    assert.ok(!main.includes('<TaskCalendar'), 'Home must not embed the calendar any more');
+    assert.ok(!main.includes('<SalesPipeline'), 'Home must not embed the pipeline board any more');
     assert.doesNotMatch(source, /Lead Status Distribution/);
+    // Recent Leads stays: it is personal, not analytical.
+    assert.match(main, /lf-recent-list/);
   });
 });
 

@@ -1297,14 +1297,34 @@
 .lf-desktop-lead-table tbody tr:last-child td:first-child { border-bottom-left-radius: 14px; }
 .lf-desktop-lead-table tbody tr:last-child td:last-child { border-bottom-right-radius: 14px; }
 /* Row language shared by the Leads list (mobile) and the workbench queue. */
-.lf-mobile-lead-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 14px 13px; border: 0; border-bottom: 1px solid #F0EFE8; background: #FFFFFF; color: inherit; text-align: left; cursor: pointer; transition: background .15s ease; }
+.lf-mobile-lead-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 12px 10px 12px 13px; border-bottom: 1px solid #F0EFE8; background: #FFFFFF; transition: background .15s ease; }
+.lf-mobile-lead-open { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 12px; padding: 2px 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+/* Compact per-row actions (Update / open). */
+.lf-row-action {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #EFEDE3;
+  border-radius: 11px;
+  background: #FFFFFF;
+  color: #6B7263;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.lf-row-action:hover { background: #F7F5E9; border-color: #EAE7D6; color: #77701E; }
+.lf-row-action--primary { border-color: #E4DFAE; background: #F7F5E9; color: #77701E; }
+.lf-row-action--primary:hover { background: #978C21; border-color: #978C21; color: #FFFFFF; }
 .lf-mobile-lead-row:last-child { border-bottom: 0; }
 .lf-mobile-lead-row:active, .lf-mobile-lead-row:hover { background: #FDFCF7; }
 .lf-mobile-lead-avatar { display: flex; width: 44px; height: 44px; flex: 0 0 44px; align-items: center; justify-content: center; border: 1px solid #EAE7D6; border-radius: 14px; background: #F7F5E9; color: #817719; font-size: 14px; font-weight: 800; letter-spacing: -.03em; }
 .lf-mobile-lead-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; }
 .lf-mobile-lead-copy strong { max-width: 100%; overflow: hidden; color: #29352E; font-size: 13px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .lf-mobile-lead-copy small { max-width: 100%; overflow: hidden; color: #898C82; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.lf-mobile-lead-status { display: inline-flex; max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 6px; background: #F5F3E5; color: #77701E; font-size: 9px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.lf-mobile-lead-status { display: inline-flex; max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 6px; background: #F5F3E5; color: #77701E; font-size: 9px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; text-transform: capitalize; }
 .lf-mobile-lead-arrow { flex: 0 0 auto; color: #A2A398; }
 .lf-mobile-lead-empty { padding: 28px 14px; color: #898C82; font-size: 12px; text-align: center; }
 @media (max-width: 767px) {
@@ -1464,3 +1484,114 @@
 }
 .lf-back-button:hover { background: #F7F5E9; border-color: #EAE7D6; color: #77701E; }
 .lf-back-button:active { transform: translateY(1px); }
+
+/* ================================================================
+   Task Calendar — Outlook-style month grid
+   ================================================================ */
+.lf-cal {
+  overflow: hidden;
+  border: 1px solid #E7E5DC;
+  border-radius: 14px;
+  background: #FFFFFF;
+}
+.lf-cal-headrow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid #E7E5DC; background: #FBFAF7; }
+.lf-cal-headcell {
+  padding: 9px 4px;
+  border-left: 1px solid #F0EFE8;
+  color: #6E7570;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.lf-cal-headcell:first-child { border-left: 0; }
+.lf-cal-headcell-short { display: none; }
+
+.lf-cal-body { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.lf-cal-cell {
+  min-height: 104px;
+  padding: 6px 5px 5px;
+  border-left: 1px solid #F0EFE8;
+  border-top: 1px solid #F0EFE8;
+  background: #FFFFFF;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.lf-cal-cell:nth-child(7n + 1) { border-left: 0; }
+.lf-cal-cell:nth-child(-n + 7) { border-top: 0; }
+.lf-cal-cell:hover { background: #FDFCF7; }
+.lf-cal-cell.is-weekend { background: #FCFBF8; }
+.lf-cal-cell.is-outside { background: #FAF9F6; }
+.lf-cal-cell.is-outside .lf-cal-daynum { color: #B9BAB2; }
+.lf-cal-cell.is-today { background: #F9F8F1; }
+
+.lf-cal-cell-top { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-bottom: 4px; }
+.lf-cal-daynum { color: #29352E; font-size: 12px; font-weight: 700; line-height: 1; }
+.lf-cal-daynum.is-today {
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #978C21;
+  color: #FFFFFF;
+  font-weight: 800;
+}
+.lf-cal-cell-count { color: #A8A99F; font-size: 9px; font-weight: 800; }
+
+.lf-cal-events { display: flex; flex-direction: column; gap: 3px; }
+.lf-cal-pill {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: filter .12s ease;
+}
+.lf-cal-pill:hover { filter: brightness(.96); }
+.lf-cal-pill-time { flex: 0 0 auto; font-size: 9px; font-weight: 800; opacity: .75; }
+.lf-cal-pill-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-cal-pill--call { background: #E8F2FD; border-left-color: #3B82F6; color: #1D4ED8; }
+.lf-cal-pill--meeting { background: #FEF3E2; border-left-color: #F59E0B; color: #B45309; }
+.lf-cal-pill--followup { background: #E7F6EE; border-left-color: #10B981; color: #047857; }
+.lf-cal-pill--task { background: #F1EBFD; border-left-color: #8B5CF6; color: #6D28D9; }
+.lf-cal-more {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: #817719;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+.lf-cal-more:hover { text-decoration: underline; }
+
+/* The legend stays on one line and the page is narrower than the console. */
+.lf-cal-legend { max-width: 100%; }
+@media (max-width: 767px) {
+  .lf-cal-legend { width: 100%; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .lf-cal-legend label { flex: 0 0 auto; }
+}
+
+/* Phone: single-letter day headers and shorter rows, events stay readable. */
+@media (max-width: 767px) {
+  .lf-cal-headcell-long { display: none; }
+  .lf-cal-headcell-short { display: inline; }
+  .lf-cal-headcell { padding: 7px 2px; font-size: 10px; }
+  .lf-cal-cell { min-height: 74px; padding: 4px 3px; }
+  .lf-cal-daynum { font-size: 11px; }
+  .lf-cal-daynum.is-today { min-width: 19px; height: 19px; }
+  .lf-cal-cell-count { display: none; }
+  .lf-cal-pill { gap: 0; padding: 3px 4px; font-size: 9px; }
+  .lf-cal-pill-time { display: none; }
+}

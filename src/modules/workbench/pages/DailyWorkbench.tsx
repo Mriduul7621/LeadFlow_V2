@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Loader2,
   MapPinned,
+  Target,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -712,7 +713,28 @@ export default function DailyWorkbench() {
                           <small>{meta.label} · {formatDhakaDue(item.scheduledAt || '')}</small>
                           <span className="lf-mobile-lead-status">{itemStatus}</span>
                         </span>
-                        <ChevronRight className={cn('lf-mobile-lead-arrow transition-transform', isSelected && 'rotate-90')} size={18} aria-hidden="true" />
+                      </button>
+                      {/* Quick status update from the queue (the lead only, not the
+                          scheduled activity) — gated on the same leads.edit grant. */}
+                      {canEditScheduled && (
+                        <Link
+                          to={`/leads/${encodeURIComponent(item.leadId)}/update`}
+                          className="lf-row-action lf-row-action--primary"
+                          aria-label={`Update status for ${item.leadName}`}
+                          title="Update status"
+                        >
+                          <Target size={17} />
+                        </Link>
+                      )}
+                      <button
+                        type="button"
+                        className="lf-row-action"
+                        onClick={() => setSelectedKey(isSelected ? null : item.key)}
+                        aria-expanded={isSelected}
+                        aria-label={isSelected ? 'Hide details' : 'Show details'}
+                        title="Details"
+                      >
+                        <ChevronRight className={cn('transition-transform', isSelected && 'rotate-90')} size={19} aria-hidden="true" />
                       </button>
                       {isSelected && (
                         <div className="basis-full border-t border-stone-100 pt-3">
