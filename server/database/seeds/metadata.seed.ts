@@ -42,6 +42,7 @@ const DEFAULT_OPTIONS: DefaultOption[] = [
   { type: "FollowUpStatus", value: "Follow-up Set", meta: { color: "indigo", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Meeting Fixed", meta: { color: "purple", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Meeting Completed", meta: { color: "violet", isWon: false, isLost: false, isTerminal: false } },
+  { type: "FollowUpStatus", value: "Proposal Sent", meta: { color: "cyan", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Pipeline Locked", meta: { color: "yellow", isWon: false, isLost: false, isTerminal: false } },
   { type: "FollowUpStatus", value: "Converted", meta: { color: "green", isWon: true, isLost: false, isTerminal: true } },
   { type: "FollowUpStatus", value: "Not Interested", meta: { color: "red", isWon: false, isLost: true, isTerminal: true } },
@@ -125,10 +126,17 @@ export async function seedMetadata(): Promise<void> {
     console.log(`ℹ️ Metadata types already present. Skipping type seed.`);
   }
 
-  if ((optionCount.rows[0]?.count ?? 0) === 0) {
+  // Baseline option *values* are always (re)applied idempotently: each
+  // insert is ON CONFLICT (field_key, option_value) DO NOTHING. A blanket
+  // "table already has rows" presence check would silently drop the whole
+  // seed whenever any migration added a single option row earlier in the
+  // boot (e.g. a new canonical lead status) — so convergence is the rule,
+  // not the table being empty.
+  {
+    let inserted = 0;
     for (let i = 0; i < DEFAULT_OPTIONS.length; i++) {
       const option = DEFAULT_OPTIONS[i];
-      await query(
+      const result = await query(
         `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
          -- NOTE: $3 is cast explicitly. COALESCE($3, $2) with two inferred
          -- params makes PostgreSQL resolve the shared $2 inconsistently
@@ -138,9 +146,8 @@ export async function seedMetadata(): Promise<void> {
          ON CONFLICT (field_key, option_value) DO NOTHING`,
         [option.type, option.value, option.label || null, i + 1, JSON.stringify(option.meta || {})]
       );
+      if ((result as any)?.rowCount && (result as any).rowCount > 0) inserted += 1;
     }
-    console.log(`🌱 Options seed completed (${DEFAULT_OPTIONS.length} options).`);
-  } else {
-    console.log(`ℹ️ Options already present. Skipping options seed.`);
+    console.log(`🌱 Options seed reconciled (${inserted} inserted, ${DEFAULT_OPTIONS.length - inserted} already present).`);
   }
 }

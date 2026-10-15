@@ -80,6 +80,7 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY },
   '/leads/all': { route: '/leads/all', path: '/leads/all', roles: ADMIN_ONLY },
   '/leads/:id/edit': { route: '/leads/:id/edit', path: '/leads', roles: ALL_ROLES },
+  '/leads/:id/update': { route: '/leads/:id/update', path: '/leads', roles: ALL_ROLES },
   '/execution-intelligence': { route: '/execution-intelligence', path: '/execution-intelligence', roles: INSIGHT_ROLES },
   '/ncp-progress': { route: '/ncp-progress', path: '/ncp-progress', roles: INSIGHT_ROLES },
   '/trend-charts': { route: '/trend-charts', path: '/trend-charts', roles: INSIGHT_ROLES },
