@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
-import { UserRole, SystemNotification, RolePermission } from '../modules/shared/types';
+import { SystemNotification, RolePermission } from '../modules/shared/types';
 import { cn } from '../lib/utils';
 import { motion } from 'framer-motion';
 import { notificationService } from '../modules/notifications/services/notificationService';
@@ -30,7 +30,7 @@ import {
   writeSessionCache,
 } from '../modules/shared/api/sessionCache';
 import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
-import { resolveMenuVisibility } from './menuVisibility';
+import { ANY_ROLE, resolveMenuVisibility } from './menuVisibility';
 import { resolveFeatureRouteAccess } from './featureRouteAccess';
 import { buildSidebarGroups } from './sidebarNav';
 import { usePermissions } from '../modules/shared/hooks/usePermissions';
@@ -42,13 +42,20 @@ interface MenuItem {
   roles: string[];
 }
 
-const ALL_ROLES = Object.values(UserRole);
+/**
+ * The five primary destinations are organization-wide: `ANY_ROLE` ('*')
+ * mirrors the route registry (featureRouteAccess.ts) so the menu and the
+ * page gate can never disagree, and the role codes that live in the
+ * database (EMPLOYEE, TEAM_LEAD, MANAGER, SBE, SM, CEO, custom codes) are
+ * not silently locked out by a stale enum list. A configured
+ * `menuAccess[path]` still wins over this default.
+ */
 const PRIMARY_NAV_ITEMS: MenuItem[] = [
-  { label: 'Home', icon: LayoutDashboard, path: '/', roles: ALL_ROLES },
-  { label: 'My Work', icon: Target, path: '/workbench', roles: ALL_ROLES },
-  { label: 'Add Lead', icon: Plus, path: '/leads/new', roles: ALL_ROLES },
-  { label: 'Leads', icon: ClipboardList, path: '/leads', roles: ALL_ROLES },
-  { label: 'More', icon: MoreHorizontal, path: '/more', roles: ALL_ROLES },
+  { label: 'Home', icon: LayoutDashboard, path: '/', roles: [ANY_ROLE] },
+  { label: 'My Work', icon: Target, path: '/workbench', roles: [ANY_ROLE] },
+  { label: 'Add Lead', icon: Plus, path: '/leads/new', roles: [ANY_ROLE] },
+  { label: 'Leads', icon: ClipboardList, path: '/leads', roles: [ANY_ROLE] },
+  { label: 'More', icon: MoreHorizontal, path: '/more', roles: [ANY_ROLE] },
 ];
 const MORE_NAV_PATHS = [
   '/more', '/notifications', '/help', '/about', '/administration',

@@ -22,6 +22,7 @@ import {
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useRoadshowAccess } from '../../shared/hooks/useRoadshowAccess';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { roadshowService, type Roadshow } from '../../roadshows/services/roadshowService';
@@ -29,6 +30,8 @@ import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import type { LeadQuality } from '../../shared/types';
 import LeadQualityBadge from '../../leads/components/LeadQualityBadge';
 import { toast } from 'sonner';
+import NoAccessYet from '../../shared/components/NoAccessYet';
+import { isForbiddenError } from '../../shared/api/forbidden';
 
 /** ------------------------------------------------------------
  * Daily Workbench — focused daily lead execution workspace.
@@ -250,6 +253,9 @@ export default function DailyWorkbench() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // F3: both primary queues answering 403 = the role holds no leads read at
+  // all; explain that instead of a red retry card.
+  const [forbidden, setForbidden] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [scheduledError, setScheduledError] = useState<string | null>(null);
 
@@ -279,7 +285,7 @@ export default function DailyWorkbench() {
   // featurePathMapping + permissionModule mapping). Dashboard view must NOT
   // grant mutation capability. No new permission architecture.
   const canEditScheduled = canAccess('lead_tracking', 'edit');
-  const canViewRoadshows = canAccess('roadshow_follow_up', 'view');
+  const canViewRoadshows = useRoadshowAccess();
 
   const todayYmd = useMemo(() => getDhakaTodayYmd(), []);
   const tomorrowYmd = useMemo(() => {
@@ -294,6 +300,7 @@ export default function DailyWorkbench() {
     if (!user) return;
     setLoading(true);
     setError(null);
+    setForbidden(false);
     setFollowUpError(null);
     setScheduledError(null);
     setCompletedTodayError(null);
@@ -384,10 +391,19 @@ export default function DailyWorkbench() {
       }
 
       if (followUpAllRes.status === 'rejected' && scheduledRangeRes.status === 'rejected') {
+        const denied = isForbiddenError(followUpAllRes.reason) && isForbiddenError(scheduledRangeRes.reason);
+        if (denied) {
+          setForbidden(true);
+        } else {
+          setError('Daily work could not be loaded.');
+        }
+      }
+    } catch (err) {
+      if (isForbiddenError(err)) {
+        setForbidden(true);
+      } else {
         setError('Daily work could not be loaded.');
       }
-    } catch {
-      setError('Daily work could not be loaded.');
     } finally {
       setLoading(false);
     }
@@ -589,7 +605,12 @@ export default function DailyWorkbench() {
         </div>
       )}
 
-      {error && (
+      {forbidden ? (
+        <NoAccessYet
+          module="the Daily Workbench"
+          hint="Follow-ups and the task calendar both read the leads module, which your role cannot see yet."
+        />
+      ) : error && (
         <div className="flex items-center justify-between gap-4 bg-red-50 border border-red-200 rounded-[12px] px-5 py-4">
           <div className="flex items-center gap-3 text-red-700">
             <AlertTriangle className="w-5 h-5" />
@@ -604,7 +625,7 @@ export default function DailyWorkbench() {
         </div>
       )}
 
-      {loading ? (
+      {forbidden ? null : loading ? (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {Array.from({ length: 6 }).map((_, i) => (

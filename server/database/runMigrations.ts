@@ -54,6 +54,7 @@ import { up as scheduledActivityOpenIndex } from "./migrations/041_scheduled_act
 import { up as roadshows } from "./migrations/042_roadshows.js";
 import { up as proposalSentStatus } from "./migrations/043_proposal_sent_status.js";
 import { up as renameUntouchedStatus } from "./migrations/044_rename_untouched_status.js";
+import { up as defaultRoleAccess } from "./migrations/045_default_role_access.js";
 
 import {
   loadLedger,
@@ -149,6 +150,8 @@ const migrations: Migration[] = [
     { id: "043_proposal_sent_status", name: "Proposal Sent Status", run: proposalSentStatus },
 
     { id: "044_rename_untouched_status", name: "Rename Untouched to New", run: renameUntouchedStatus },
+
+    { id: "045_default_role_access", name: "Default Role Access", run: defaultRoleAccess },
 
 ];
 

@@ -576,10 +576,10 @@ export default function UserManagement() {
         menuAccess: {
           '/': featureOn('dashboard'),
           '/more': true,
-          '/reports': [
-            'activities', 'task_calendar', 'follow_up_strategy', 'team_progress',
-            'execution_intelligence', 'ncp_progress', 'trend_charts', 'campaign_breakdown',
-          ].some(featureOn),
+          // NOTE: the retired "/reports" aggregate module key is gone — every
+          // report page now has its own route + module toggle below, and a
+          // stale key here would only let an admin toggle a path that no
+          // route or menu item reads.
           '/administration': isAdm,
           '/notifications': featureOn('notifications'),
           '/help': featureOn('help_support'),

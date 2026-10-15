@@ -169,7 +169,9 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     assert.ok(w.includes('/update`'), 'each row must offer the status-update page');
     assert.ok(w.includes('canEditScheduled'), 'the update entry must stay permission-gated');
     assert.ok(w.includes('Roadshows today') && w.includes('roadshowsTomorrow'), 'roadshow alerts stay for users with access');
-    assert.ok(w.includes("canAccess('roadshow_follow_up', 'view')"), 'roadshow alerts must be permission-gated');
+    assert.ok(w.includes('useRoadshowAccess()'), 'roadshow alerts must be permission-gated (shared predicate)');
+    assert.ok(read('src/modules/shared/hooks/useRoadshowAccess.ts').includes("canAccess('roadshow_follow_up', 'view')"),
+      'the shared predicate must stay tied to the roadshow capability');
   });
 
   it('Lead 360 Update/Edit are icon-only so they cannot overlap', () => {
