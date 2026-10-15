@@ -46,10 +46,16 @@ describe('Daily Workbench — source guards', () => {
     const src = layout();
     assert.ok(src.includes("label: 'My Work'"), 'primary tabs must contain My Work');
     assert.ok(src.includes("path: '/workbench'"), 'My Work must route to /workbench');
-    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    // The workspace pages moved from More → Reports into the left sidebar
+    // (single source of truth: src/layouts/sidebarNav.ts), so the guard now
+    // asserts the sidebar carries them and More no longer duplicates them.
+    const sidebar = read('src/layouts/sidebarNav.ts');
     for (const route of ['/activities', '/task-calendar', '/follow-up']) {
-      assert.ok(more.includes(`path: '${route}'`), `More → Reports must retain ${route}`);
+      assert.ok(sidebar.includes(`path: '${route}'`), `left sidebar must carry ${route}`);
     }
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
+    assert.ok(!more.includes("path: '/reports'"), 'More must not re-open the retired Reports directory');
+    assert.ok(!more.includes("path: '/roadshows'"), 'Roadshow Follow-up is a sidebar entry now, not a More entry');
   });
 
   it('permission/menu visibility remains correct', () => {
@@ -134,18 +140,20 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(wb.includes('parseTimeSort'), 'must have parseTimeSort helper');
   });
 
-  it('quick filters work over loaded data', () => {
+  it('the queue renders every loaded work item, client-side, with no type/quality chips', () => {
     const wb = workbench();
-    assert.ok(wb.includes('activeFilter'), 'must have activeFilter state');
-    assert.ok(wb.includes('filterChips') || wb.includes('All') && wb.includes('Overdue') && wb.includes('Calls'), 'must have filter chips All, Overdue, Calls, Meetings, Follow-ups, Tasks');
-    assert.ok(wb.includes('filteredItems'), 'must have filteredItems derived from workItems');
-    assert.ok(wb.includes('filterCounts'), 'must show counts in filter chips');
-    // Ensure filteredItems is client-side over workItems, no refetch
-    const filteredIdx = wb.indexOf('const filteredItems');
-    assert.ok(filteredIdx >= 0, 'filteredItems must be defined');
-    const filteredSlice = wb.slice(filteredIdx, filteredIdx + 1500);
-    assert.ok(filteredSlice.includes('workItems'), 'filteredItems must derive from workItems');
-    assert.ok(!filteredSlice.includes('getFollowUpQueue') && !filteredSlice.includes('scheduledActivityService.list'), 'filtering must be client-side, no refetch');
+    // The "All / Overdue / Calls / Meetings / Follow-ups / Tasks" chips were
+    // removed on purpose: the queue is a minimal list now and the filter row
+    // is gone. The queue itself must still be built from the loaded work items
+    // (no refetch, no new client-side source).
+    assert.ok(!wb.includes('activeFilter'), 'the type filter chips must be gone');
+    assert.ok(!wb.includes('qualityFilter'), 'the quality filter chips must be gone');
+    assert.ok(wb.includes('const workItems'), 'workItems must still be derived from the loaded rows');
+    assert.ok(wb.includes('workItems.map'), 'the queue must render every loaded item');
+    const itemsIdx = wb.indexOf('const workItems');
+    const itemsSlice = wb.slice(itemsIdx, itemsIdx + 900);
+    assert.ok(itemsSlice.includes('overdueFollowUps') && itemsSlice.includes('todayFollowUps'), 'workItems must still combine overdue + today follow-ups');
+    assert.ok(!itemsSlice.includes('getFollowUpQueue') && !itemsSlice.includes('scheduledActivityService.list'), 'queue composition must stay client-side over the loaded rows');
   });
 
   it('no N+1 lead detail requests', () => {
@@ -305,16 +313,22 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(!wb.includes('fuzzy') && !wb.toLowerCase().includes('merge by lead'), 'must not heuristically merge by lead/name/timestamp');
   });
 
-  it('Dashboard structure unchanged except required shared dependency', () => {
+  it('Dashboard keeps the personal work sections; the analysis sections moved to their own destinations', () => {
     const dash = dashboard();
     assert.ok(dash.includes('ExecutiveSnapshot'), 'Dashboard must keep ExecutiveSnapshot');
     assert.ok(dash.includes('TodayTomorrowPanel'), 'must keep Today & Tomorrow');
-    assert.ok(dash.includes('SalesPipeline'), 'must keep Sales Pipeline');
-    assert.ok(dash.includes('FollowUpDiscipline'), 'must keep Follow-up Discipline');
-    assert.ok(dash.includes('NeedsAttentionSection'), 'must keep Needs Attention');
     assert.ok(dash.includes('PerformanceInsights'), 'must keep Performance Insights');
-    assert.ok(dash.includes('TaskCalendar'), 'must keep Task Calendar last');
-    assert.ok(dash.includes('Task Calendar') && dash.lastIndexOf('TaskCalendar') > dash.indexOf('SalesPipeline'), 'Task Calendar must remain last');
+    // Deliberate move (mobile-shell PR): the pipeline, follow-up discipline,
+    // needs-attention and the embedded calendar left Home. Each one has a real
+    // destination — the sidebar pipeline page and the /task-calendar route —
+    // and none of them may sneak back onto the dashboard.
+    assert.ok(!dash.includes('SalesPipeline'), 'Sales Pipeline must not be embedded on Home');
+    assert.ok(!dash.includes('FollowUpDiscipline'), 'Follow-up Discipline must not be embedded on Home');
+    assert.ok(!dash.includes('NeedsAttentionSection'), 'Needs Attention must not be embedded on Home');
+    assert.ok(!dash.includes('TaskCalendar'), 'the Task Calendar must not be embedded on Home');
+    const pipelinePage = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
+    assert.ok(pipelinePage.includes('dashboardService.getDashboard'), 'the pipeline page must keep the server-authoritative source');
+    assert.ok(app().includes("path: '/task-calendar'"), 'the calendar must stay reachable at /task-calendar');
   });
 
   it('PR #19 performance hardening preserved', () => {

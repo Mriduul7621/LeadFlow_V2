@@ -27,6 +27,7 @@ import { useAuthStore } from '../store/authStore';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import BackButton from '../../shared/components/BackButton';
 
 interface CalendarEvent {
   id: string;
@@ -373,92 +374,80 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
   // Render Month View
   const renderMonthView = () => {
-    const daysInM = getDaysInMonthCount(year, month);
-    const firstDayIdx = getFirstDayOfMonthIndex(year, month);
-    
-    const cells: (Date | null)[] = [];
-    // Padding for previous month
-    for (let i = 0; i < firstDayIdx; i++) {
-      cells.push(null);
-    }
-    // Days of current month
-    for (let i = 1; i <= daysInM; i++) {
-      cells.push(new Date(year, month, i));
+    const firstOfMonth = new Date(year, month, 1);
+    const lastOfMonth = new Date(year, month + 1, 0);
+    // Outlook-style fixed 6x7 grid: the leading days of the previous month and
+    // the trailing days of the next one fill the edges (muted), so the weeks
+    // never jump row to row.
+    const gridStart = new Date(firstOfMonth);
+    gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+    const cells: Date[] = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gridStart);
+      d.setDate(gridStart.getDate() + i);
+      cells.push(d);
     }
 
     return (
-      <div className="border border-slate-200/60 rounded-sm overflow-hidden bg-[#FBFAF8] shadow-sm animate-in fade-in duration-300">
-        <div className="grid grid-cols-7 text-center bg-white border-b border-slate-200/60 divide-x divide-slate-100">
+      <div className="lf-cal" role="grid" aria-label={`${MONTHS[month]} ${year}`}>
+        <div className="lf-cal-headrow" role="row">
           {DAYS_OF_WEEK.map(day => (
-            <div key={day} className="py-3 text-[10px] font-black tracking-widest text-slate-400 uppercase italic">
-              {day}
+            <div key={day} className="lf-cal-headcell" role="columnheader">
+              <span className="lf-cal-headcell-long">{day}</span>
+              <span className="lf-cal-headcell-short" aria-hidden="true">{day.charAt(0)}</span>
             </div>
           ))}
         </div>
-        
-        <div className="grid grid-cols-7 divide-x divide-y divide-slate-100 bg-[#FBFAF8] min-h-[500px]">
-          {cells.map((day, index) => {
-            if (!day) {
-              return <div key={`empty_${index}`} className="bg-slate-50/20 p-2 min-h-[90px] border-b border-slate-100/40" />;
-            }
 
+        <div className="lf-cal-body">
+          {cells.map((day, index) => {
+            const inMonth = day.getMonth() === month;
+            const weekend = day.getDay() === 0 || day.getDay() === 6;
             const dayEvents = getEventsForDay(day);
             const activeToday = isToday(day);
+            const rendered = dayEvents.slice(0, 3);
 
             return (
-              <div 
-                key={day.toString()} 
+              <div
+                key={day.toISOString()}
+                role="gridcell"
                 className={cn(
-                  "p-2 min-h-[100px] flex flex-col justify-between hover:bg-slate-50/50 transition-colors group relative",
-                  activeToday && "bg-[#F9F9F4]/40"
+                  'lf-cal-cell',
+                  !inMonth && 'is-outside',
+                  weekend && 'is-weekend',
+                  activeToday && 'is-today',
                 )}
+                onClick={() => handleDayClick(day, dayEvents)}
               >
-                <div className="flex justify-between items-start mb-2">
-                  <span className={cn(
-                    "text-xs font-mono font-bold px-1.5 py-0.5 rounded-none leading-none select-none",
-                    activeToday ? "bg-[#978C21] text-white font-black shadow-sm" : "text-slate-500"
-                  )}>
-                    {day.getDate()}
-                  </span>
-                  
+                <div className="lf-cal-cell-top">
+                  <span className={cn('lf-cal-daynum', activeToday && 'is-today')}>{day.getDate()}</span>
                   {dayEvents.length > 0 && (
-                    <button
-                      onClick={() => handleDayClick(day, dayEvents)}
-                      className="text-[8px] font-black text-[#978C21] uppercase tracking-wider hover:underline leading-none p-1 cursor-pointer"
-                    >
-                      {dayEvents.length} Tasks
-                    </button>
+                    <span className="lf-cal-cell-count" aria-hidden="true">{dayEvents.length}</span>
                   )}
                 </div>
 
-                <div className="flex-1 space-y-1 overflow-y-auto max-h-[80px] scrollbar-thin pr-0.5">
-                  {dayEvents.slice(0, 3).map(event => (
-                    <div
+                <div className="lf-cal-events">
+                  {rendered.map(event => (
+                    <button
                       key={event.id}
-                      onClick={() => setSelectedEvent(event)}
-                      className={cn(
-                        "p-1.5 text-[9px] font-black uppercase tracking-wider leading-snug cursor-pointer flex flex-col border border-l-2 text-left truncate transition-all hover:translate-x-0.5",
-                        event.type === 'meeting' && "bg-amber-50 text-amber-700 border-amber-200 border-l-amber-500",
-                        event.type === 'call' && "bg-sky-50 text-sky-700 border-sky-250 border-l-sky-500",
-                        event.type === 'follow_up' && "bg-emerald-50 text-emerald-700 border-emerald-200 border-l-emerald-500",
-                        (event.type as any) === 'followup' && "bg-emerald-50 text-emerald-700 border-emerald-200 border-l-emerald-500",
-                        event.type === 'task' && "bg-purple-50 text-purple-700 border-purple-200 border-l-purple-500"
-                      )}
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setSelectedEvent(event); }}
+                      className={cn('lf-cal-pill', `lf-cal-pill--${event.type === 'follow_up' ? 'followup' : event.type}`)}
+                      title={`${event.lead?.prospectName || event.prospectName} · ${event.title}`}
                     >
-                      <span className="truncate font-black">{event.lead?.prospectName || event.prospectName}</span>
-                      <span className="text-[7.5px] font-mono text-slate-450 leading-none flex items-center gap-0.5 mt-0.5 font-bold">
-                        <Clock className="w-2.5 h-2.5 shrink-0" />
+                      <span className="lf-cal-pill-time">
                         {event.date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                       </span>
-                    </div>
+                      <span className="lf-cal-pill-title">{event.lead?.prospectName || event.prospectName}</span>
+                    </button>
                   ))}
-                  
-                  {dayEvents.length > 3 && (
+                  {dayEvents.length > rendered.length && (
                     <button
-                      onClick={() => handleDayClick(day, dayEvents)}
-                      className="w-full text-center py-1 text-[8px] font-black text-slate-400 hover:text-[#978C21] uppercase tracking-widest block border border-dashed border-slate-200 bg-white"
+                      type="button"
+                      className="lf-cal-more"
+                      onClick={(e) => { e.stopPropagation(); handleDayClick(day, dayEvents); }}
                     >
-                      + {dayEvents.length - 3} More
+                      +{dayEvents.length - rendered.length} more
                     </button>
                   )}
                 </div>
@@ -654,6 +643,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
   return (
     <div className={cn("space-y-8 max-w-7xl mx-auto", embedded ? "pb-4" : "space-y-10 pb-24")}>
+      {!embedded && <BackButton fallback="/" />}
       {/* Header Panel */}
       {embedded ? (
         <div className="border-b border-slate-100 pb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -683,27 +673,27 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           </div>
         </div>
       ) : (
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-slate-100 pb-10">
-          <div className="flex items-center gap-6">
-            <div className="w-16 h-16 bg-[#F9F9F4] rounded-sm flex items-center justify-center text-[#978C21] border border-slate-100 shadow-sm">
-              <CalendarIcon className="w-8 h-8" />
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-5 md:pb-10">
+          <div className="flex items-center gap-3 md:gap-6">
+            <div className="flex h-11 w-11 md:h-16 md:w-16 items-center justify-center rounded-sm border border-slate-100 bg-[#F9F9F4] text-[#978C21] shadow-sm">
+              <CalendarIcon className="h-5 w-5 md:h-8 md:w-8" />
             </div>
             <div>
-              <h1 className="text-4xl font-black tracking-tighter text-slate-900 uppercase italic serif leading-none">Task Calendar</h1>
-              <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Unified Schedule & Action Agenda Interface</p>
+              <h1 className="text-2xl md:text-4xl font-black tracking-tighter text-slate-900 uppercase italic serif leading-none">Task Calendar</h1>
+              <p className="hidden md:block text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Unified Schedule & Action Agenda Interface</p>
             </div>
           </div>
 
           {/* View Mode Switcher */}
-          <div className="flex items-center gap-1 border border-slate-200/60 p-1.5 rounded-sm bg-[#FBFAF8] shadow-sm">
+          <div className="flex w-full items-center gap-1 rounded-sm border border-slate-200/60 bg-[#FBFAF8] p-1.5 shadow-sm md:w-auto">
             {(['year', 'month', 'week', 'day'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
                 className={cn(
-                  "px-4 py-2 text-[9px] font-black uppercase tracking-wider italic cursor-pointer transition-all",
-                  viewMode === mode 
-                    ? "bg-[#978C21] text-white shadow-md shadow-[#978C21]/15" 
+                  "flex-1 px-3 py-2 text-[9px] font-black uppercase tracking-wider italic cursor-pointer transition-all md:flex-none md:px-4",
+                  viewMode === mode
+                    ? "bg-[#978C21] text-white shadow-md shadow-[#978C21]/15"
                     : "text-slate-400 hover:text-slate-800 hover:bg-slate-100"
                 )}
               >
@@ -715,7 +705,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       )}
 
       {/* Control Console */}
-      <div className="bg-[#FBFAF8] border border-slate-200 p-4 rounded-sm flex flex-col md:flex-row justify-between items-center gap-4">
+      <div className="flex flex-col items-center justify-between gap-3 rounded-sm border border-slate-200 bg-[#FBFAF8] p-3 md:flex-row md:gap-4 md:p-4">
         {/* Navigation buttons */}
         <div className="flex items-center gap-3 w-full md:w-auto">
           <button
@@ -748,9 +738,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
         </div>
 
         {/* Dynamic Filters */}
-        <div className="flex flex-wrap items-center gap-4 w-full md:w-auto justify-end">
-          {/* Checkbox controls for filter types */}
-          <div className="flex items-center gap-3 bg-white border border-slate-200 p-1.5 px-3">
+        <div className="flex w-full flex-wrap items-center justify-end gap-3 md:w-auto md:gap-4">
+          {/* Checkbox controls for filter types — one scrollable line on phones */}
+          <div className="lf-cal-legend flex items-center gap-3 overflow-x-auto border border-slate-200 bg-white p-1.5 px-3">
             <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest italic mr-1">LEGEND:</span>
             
             <label className="flex items-center gap-1.5 cursor-pointer text-[9px] font-black uppercase tracking-wider text-sky-700 select-none">

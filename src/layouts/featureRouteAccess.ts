@@ -36,18 +36,6 @@ const TEAM_ROLES: string[] = [
 ];
 const ADMIN_ONLY: string[] = [UserRole.ADMIN];
 const DIAGNOSTICS_ADMIN_ROLES: string[] = ['ADMIN', 'SUPERADMIN'];
-const REPORT_SECTION_PATHS = [
-  '/reports',
-  '/activities',
-  '/task-calendar',
-  '/follow-up',
-  '/team',
-  '/execution-intelligence',
-  '/ncp-progress',
-  '/trend-charts',
-  '/campaign-breakdown',
-];
-
 export interface FeatureRouteEntry {
   /** Route key used by FeatureGate (router path pattern). */
   route: string;
@@ -65,12 +53,12 @@ export interface FeatureRouteEntry {
 export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/': { route: '/', path: '/', roles: ALL_ROLES },
   '/more': { route: '/more', path: '/more', roles: ALL_ROLES },
-  '/reports': { route: '/reports', path: '/reports', roles: ALL_ROLES },
   '/administration': { route: '/administration', path: '/administration', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/notifications': { route: '/notifications', path: '/notifications', roles: ALL_ROLES },
   '/help': { route: '/help', path: '/help', roles: ALL_ROLES },
   '/about': { route: '/about', path: '/about', roles: ALL_ROLES },
   '/roadshows': { route: '/roadshows', path: '/roadshows', roles: ALL_ROLES },
+  '/sales-pipeline': { route: '/sales-pipeline', path: '/sales-pipeline', roles: ALL_ROLES },
   '/workbench': { route: '/workbench', path: '/workbench', roles: ALL_ROLES },
   '/activities': { route: '/activities', path: '/activities', roles: ALL_ROLES },
   '/task-calendar': { route: '/task-calendar', path: '/task-calendar', roles: ALL_ROLES },
@@ -114,9 +102,6 @@ export function resolveFeatureRouteAccess(
   const role = String(userRoleName || '').trim().toUpperCase();
   if (!role) return false; // no role: fail closed
   if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
-  if (routeKey === '/reports' && REPORT_SECTION_PATHS.some(path =>
-    matchedPermission?.menuAccess?.[path] === true
-  )) return true;
   return resolveMenuVisibility(userRoleName, matchedPermission, {
     path: entry.path,
     roles: entry.roles,

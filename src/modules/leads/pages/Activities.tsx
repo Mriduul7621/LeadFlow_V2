@@ -8,6 +8,7 @@ import { leadService } from '../services/leadService';
 import { Lead } from '../../shared/types';
 import { buildActivities, groupByCategory, ActivityCategory, Activity } from '../utils/activityEngine';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import BackButton from '../../shared/components/BackButton';
 
 const CATEGORY_CONFIG: Record<ActivityCategory, { label: string; icon: any; color: string }> = {
   Today: { label: 'Today', icon: Calendar, color: 'text-[#978C21] bg-[#978C21]/10' },
@@ -50,6 +51,7 @@ export default function Activities() {
 
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
+      <BackButton fallback="/" />
       <div>
         <h1 className="text-xl font-bold text-slate-800">Activities</h1>
         <p className="text-[11px] text-slate-400 uppercase tracking-widest mt-1">

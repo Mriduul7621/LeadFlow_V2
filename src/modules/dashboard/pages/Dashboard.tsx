@@ -1,10 +1,8 @@
-import React, { Suspense, lazy, useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import type { Lead } from '../../shared/types';
 import {
   Users,
-  Inbox,
-  Clock,
   AlertTriangle,
   History,
   TrendingUp,
@@ -14,7 +12,6 @@ import {
   Calendar as CalendarIcon,
   RefreshCw,
   ChevronRight,
-  CalendarClock,
   ArrowRight,
   Phone,
   Video,
@@ -31,7 +28,6 @@ import { leadService, type FollowUpQueueItem } from '../../leads/services/leadSe
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
-import SectionErrorBoundary from '../../shared/components/SectionErrorBoundary';
 import { localDb } from '../../../services/localDb';
 
 /** -------------------------------------------------------------
@@ -144,17 +140,6 @@ export function resolveRange(period: PeriodKey, customStart?: string, customEnd?
   return { label: period, startYmd: null, endYmd: null, display: 'All time' };
 }
 
-// ---- Pipeline stages ------------------------------------------------
-const PIPELINE_STAGES = [
-  'Untouched',
-  'Contacted',
-  'Interested',
-  'Meeting Fixed',
-  'Meeting Completed',
-  'Pipeline Locked',
-  'Converted',
-] as const;
-
 const formatMoney = (n: number) => `৳ ${Number(n || 0).toLocaleString('en-US')}`;
 const formatCount = (n: number) => Number(n || 0).toLocaleString('en-US');
 
@@ -219,51 +204,6 @@ function SkeletonCard() {
       <div className="h-3 w-24 bg-stone-100 rounded mb-4" />
       <div className="h-7 w-20 bg-stone-100 rounded" />
     </div>
-  );
-}
-
-// ---- Follow-up Discipline compact card -----------------------------
-export function FollowUpDiscipline({ overdue, dueToday, upcoming, total }: { overdue: number; dueToday: number; upcoming: number; total: number }) {
-  const overdueShare = total > 0 ? Math.round((overdue / total) * 100) : 0;
-  return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading title="Follow-up Discipline" />
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Link to="/follow-up?bucket=overdue" className="rounded-[12px] border p-5 flex items-center justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-150">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600" />
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-red-600">Overdue</p>
-              <p className="text-2xl font-black text-red-600 mt-1">{formatCount(overdue)}</p>
-            </div>
-          </div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">{overdueShare}% share</span>
-        </Link>
-        <Link to="/follow-up?bucket=today" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
-          <div className="flex items-center gap-3">
-            <Clock className="w-5 h-5 text-amber-600" />
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-amber-600">Due Today</p>
-              <p className="text-2xl font-black text-amber-600 mt-1">{formatCount(dueToday)}</p>
-            </div>
-          </div>
-        </Link>
-        <Link to="/follow-up?bucket=upcoming" className="rounded-[12px] border p-5 flex items-center justify-between group-hover:shadow-md group-hover:-translate-y-0.5 transition-all duration-150">
-          <div className="flex items-center gap-3">
-            <CalendarClock className="w-5 h-5 text-blue-600" />
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-blue-600">Upcoming</p>
-              <p className="text-2xl font-black text-blue-600 mt-1">{formatCount(upcoming)}</p>
-            </div>
-          </div>
-        </Link>
-      </div>
-      <div className="mt-4 text-right">
-        <Link to="/follow-up" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-          <History className="w-3.5 h-3.5" /> Open Full Queue <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
-      </div>
-    </section>
   );
 }
 
@@ -419,36 +359,6 @@ export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todaySch
   );
 }
 
-// ---- Sales Pipeline -------------------------------------------------
-function SalesPipeline({ statusCounts, totalLeads }: { statusCounts: Record<string, number>; totalLeads: number }) {
-  const pipelineStages = PIPELINE_STAGES.map((stage) => {
-    const count = Number((statusCounts as any)[stage] || 0);
-    const pct = totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0;
-    return { stage, count, pct };
-  });
-
-  return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading title="Sales Pipeline" desc="Track leads across each sales stage" />
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-        {pipelineStages.map((s, i) => (
-          <div key={s.stage} className="relative bg-[#FFFCF8] border border-stone-100 rounded-[12px] p-3 hover:bg-white hover:shadow-sm transition-all duration-150">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black uppercase tracking-wider text-stone-500 truncate">{s.stage}</span>
-              {i < pipelineStages.length - 1 && <ChevronRight className="hidden lg:block w-3.5 h-3.5 text-stone-300 shrink-0" />}
-            </div>
-            <p className="text-2xl font-black text-brand-text mt-2 leading-none">{formatCount(s.count)}</p>
-            <div className="h-1.5 bg-stone-200 rounded-full mt-3 overflow-hidden">
-              <div className="h-full bg-[#978C21] rounded-full transition-all duration-500" style={{ width: `${s.pct}%` }} />
-            </div>
-            <p className="text-[10px] font-semibold text-stone-400 mt-2">{s.pct}% of leads</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 // ---- Executive Snapshot ---------------------------------------------
 export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, projectedNCP, activeLeads, pipelineLocked, overdueFollowUps }: {
   totalLeads: number;
@@ -461,22 +371,16 @@ export function ExecutiveSnapshot({ totalLeads, conversionRate, collectedNCP, pr
 }) {
   return (
     <>
-      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <KpiCard label="Total Leads" value={formatCount(totalLeads)} icon={Users} variant="blue" />
         <KpiCard label="Conversion Rate" value={conversionRate} icon={Percent} variant="slate" />
         <KpiCard label="Collected NCP" value={collectedNCP} icon={Banknote} variant="emerald" />
         <KpiCard label="Projected NCP" value={projectedNCP} icon={TrendingUp} variant="olive" />
         <KpiCard label="Active Leads" value={formatCount(activeLeads)} icon={Layers} variant="blue" sub={`${pipelineLocked} Pipeline Locked`} />
-      </div>
-      {/* Overdue Follow-ups shown as a compact callout under the KPI grid */}
-      <div className="mt-4 rounded-[12px] border border-red-200 bg-red-50 p-4">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="w-4 h-4 text-red-500" />
-          <div>
-            <p className="text-[11px] font-black uppercase tracking-widest text-red-600">Overdue Follow-ups</p>
-            <p className="text-2xl font-black text-red-600 mt-1">{formatCount(overdueFollowUps)}</p>
-          </div>
-        </div>
+        {/* Overdue Follow-ups is a first-class KPI card (same design language as
+            the rest of Core Performance) sitting beside Active Leads — it is no
+            longer a red callout under the grid. */}
+        <KpiCard label="Overdue Follow-ups" value={formatCount(overdueFollowUps)} icon={AlertTriangle} variant="red" sub="Due before today" />
       </div>
     </>
   );
@@ -580,65 +484,6 @@ export function LeadQualitySnapshot({ quality }: { quality?: DashboardQualityAgg
         </p>
       )}
     </section>
-  );
-}
-
-// ---- Needs Attention ------------------------------------------------
-export function NeedsAttentionSection({ untouched }: { untouched: number }) {
-  return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading title="Needs Attention" />
-      <div className="grid grid-cols-1 gap-4">
-        <Link
-          to="/leads"
-          className="rounded-[12px] border border-stone-100 p-5 hover:border-[#978C21]/30 hover:shadow-sm transition-all duration-150 group flex items-center justify-between bg-[#FFFCF8] hover:bg-white"
-        >
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-[10px] bg-white border border-stone-100 flex items-center justify-center text-stone-400 shadow-sm">
-              <Inbox className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-stone-800">Untouched Leads</p>
-              <p className="text-[12px] text-stone-400">Leads with no engagement yet</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-black text-brand-text">{formatCount(untouched)}</p>
-            <span className="text-[11px] font-bold text-stone-400 group-hover:text-[#978C21]">Open Lead Workspace</span>
-          </div>
-        </Link>
-      </div>
-    </section>
-  );
-}
-
-// ============================================================
-// Task Calendar (embedded) — deferred, never blocks the page
-// ============================================================
-/**
- * The full Task Calendar is a heavy component (month grid, modals, 90-day
- * scheduled-activities window). It is the LAST section on this page and
- * carries no KPI or Today-execution data, so it is:
- *   1. code-split (own chunk — its ~50 KB component + framer-motion usage
- *      no longer sit in the initial bundle), and
- *   2. deferred until the primary dashboard content has settled
- *      (`!loading && !dailyLoading`), after which a lightweight placeholder
- *      is shown until the chunk + its own server data arrive.
- * The dedicated /task-calendar route still renders the same component.
- */
-// NOTE: the space in `import (…)` is deliberate — the English-only source
-// guard in server/tests scans this file for a `t('` translation call, and
-// the literal `import('` would false-positive on it.
-const TaskCalendar = lazy(() => import ('../../auth/pages/TaskCalendar'));
-
-function TaskCalendarPlaceholder() {
-  return (
-    <div className="space-y-3 py-2" role="status" aria-label="Loading task calendar">
-      <span className="sr-only">Loading task calendar...</span>
-      <div className="h-5 w-48 bg-stone-100 rounded animate-pulse" />
-      <div className="h-24 bg-stone-100 rounded-[10px] animate-pulse" />
-      <div className="h-24 bg-stone-100 rounded-[10px] animate-pulse" />
-    </div>
   );
 }
 
@@ -843,14 +688,12 @@ export default function Dashboard() {
     void loadDailyExecution();
   }, [loadDailyExecution]);
 
-  const statusCounts = metrics?.statusCounts ?? {};
-  const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
+    const followUpCounts = metrics?.followUpCounts ?? { overdue: 0, today: 0, upcoming: 0, all: 0 };
   const totalLeads = metrics?.totalLeads ?? 0;
 
   // The embedded Task Calendar is only mounted (chunk fetch + its own
   // scheduled-activities request) after the primary content has settled,
   // so the KPI area never waits on it.
-  const calendarReady = !loading && !dailyLoading;
 
   const refreshAll = () => {
     void loadDashboardData();
@@ -1122,34 +965,12 @@ export default function Dashboard() {
             )}
           </section>
 
-          {/* Analysis sections — every figure below comes from the SAME
-              GET /api/dashboard payload that already loaded (statusCounts,
-              trendData, teamStats, quality). No additional request. */}
-          <SalesPipeline statusCounts={statusCounts} totalLeads={totalLeads} />
-          <FollowUpDiscipline
-            overdue={followUpCounts.overdue}
-            dueToday={followUpCounts.today}
-            upcoming={followUpCounts.upcoming}
-            total={followUpCounts.all}
-          />
-          <NeedsAttentionSection untouched={statusCounts['Untouched'] ?? 0} />
+          {/* Remaining analysis — the same GET /api/dashboard payload that
+              already loaded (trendData, teamStats). Sales Pipeline, Follow-up
+              Discipline, Needs Attention and the Task Calendar moved off Home:
+              the pipeline board is its own sidebar page (/sales-pipeline) and
+              the calendar lives at /task-calendar (sidebar → Workspace). */}
           <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} />
-
-          {/* Embedded Task Calendar — always the LAST section. Its chunk and
-              its own scheduled-activities request start only after the
-              primary content has settled (calendarReady), inside a Suspense
-              boundary, so the KPI area never waits on it. */}
-          <div className="lf-mobile-calendar">
-            {/* A failure inside the optional calendar must never blank the
-                whole Home screen (it renders its placeholder instead); the
-                primary content above is unaffected. */}
-            <SectionErrorBoundary fallback={<TaskCalendarPlaceholder />}>
-              <Suspense fallback={<TaskCalendarPlaceholder />}>
-                {calendarReady && <TaskCalendar embedded={true} />}
-              </Suspense>
-            </SectionErrorBoundary>
-            <Link to="/task-calendar" className="lf-view-all">Open full calendar <ChevronRight size={16} /></Link>
-          </div>
 
         </>
       )}

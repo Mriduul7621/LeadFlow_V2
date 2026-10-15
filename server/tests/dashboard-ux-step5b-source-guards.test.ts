@@ -50,8 +50,11 @@ const PRIMARY_ROUTES = [
   '/more',
 ];
 
-/** Legacy secondary routes retained in More → Reports / Administration. */
-const MORE_ROUTES = [
+/**
+ * Secondary routes retained in the LEFT SIDEBAR (single source of truth:
+ * src/layouts/sidebarNav.ts) — they used to hang off More → Reports.
+ */
+const SIDEBAR_ROUTES = [
   '/activities',
   '/task-calendar',
   '/follow-up',
@@ -61,6 +64,7 @@ const MORE_ROUTES = [
   '/campaign-breakdown',
   '/team',
 ];
+/** Administration directory routes. */
 const ADMIN_ROUTES = [
   '/leads/upload',
   '/leads/all',
@@ -91,10 +95,14 @@ describe('Dashboard UX Step 5B — source guards', () => {
     const body = dashboardLoadBody();
     assert.ok(body.includes('dashboardService.getDashboard'), 'loadDashboardData must call dashboardService.getDashboard');
     const page = DASHBOARD();
-    // KPI bindings derive from the server response object (`metrics`), never from a lead list.
-    assert.ok(page.includes('statusCounts'), 'pipeline/status values must read statusCounts');
-    assert.ok(page.includes('followUpCounts'), 'follow-up health must read followUpCounts');
+    // KPI bindings derive from the server response object (`metrics`), never
+    // from a lead list. statusCounts now feeds the pipeline board page, which
+    // reads the same GET /api/dashboard payload.
     assert.ok(page.includes('totalLeads'), 'total leads must read totalLeads');
+    assert.ok(page.includes('followUpCounts'), 'follow-up health must read followUpCounts');
+    const pipeline = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
+    assert.ok(pipeline.includes('statusCounts'), 'pipeline/status values must read statusCounts');
+    assert.ok(pipeline.includes('dashboardService.getDashboard'), 'the pipeline page must reuse the server dashboard response');
   });
 
   it('B. no fake avgResponseTAT restored', () => {
@@ -140,29 +148,34 @@ describe('Dashboard UX Step 5B — source guards', () => {
     assert.ok(!page.includes('leadService.getLeads'), 'Dashboard must not call leadService.getLeads() (replaced by server scheduled_activities in Step 5C)');
   });
 
-  it('F. calendar remains available from dashboard and navigation', () => {
-    const dashboard = DASHBOARD();
-    assert.ok(dashboard.includes('TaskCalendar'), 'Dashboard must import TaskCalendar');
-    assert.ok(dashboard.includes('<TaskCalendar'), 'Dashboard must render TaskCalendar');
-    assert.ok(read('src/modules/navigation/pages/MorePages.tsx').includes("path: '/task-calendar'"), 'More → Reports must keep Task Calendar');
+  it('F. calendar remains available from the sidebar and its own route', () => {
+    assert.ok(read('src/layouts/sidebarNav.ts').includes("path: '/task-calendar'"), 'the sidebar must offer the Task Calendar');
+    assert.ok(APP().includes("path: '/task-calendar'"), 'the /task-calendar route must remain');
+    assert.ok(!DASHBOARD().includes('TaskCalendar'), 'Home must not embed the calendar any more');
   });
 
   it('G. follow-up queue navigation remains available', () => {
-    assert.ok(read('src/modules/navigation/pages/MorePages.tsx').includes("path: '/follow-up'"), 'More → Reports must keep Follow-up Queue');
-    assert.ok(DASHBOARD().includes('/follow-up?bucket='), 'dashboard must deep-link follow-up buckets');
+    assert.ok(read('src/layouts/sidebarNav.ts').includes("path: '/follow-up'"), 'the sidebar must offer the Follow-up Queue');
     assert.ok(FOLLOWUP().includes('useSearchParams'), 'FollowUpStrategy must read ?bucket=');
+    // The bucket deep-links moved off Home with the retired discipline card;
+    // the queue page itself still owns the three buckets.
+    assert.ok(FOLLOWUP().includes('bucket'), 'the queue page must keep its bucket handling');
   });
 
   it('H. primary tabs and secondary directories match the new navigation structure', () => {
     assert.deepEqual(primaryNavigationPaths(), PRIMARY_ROUTES);
-    const more = read('src/modules/navigation/pages/MorePages.tsx');
-    for (const route of MORE_ROUTES) {
-      assert.ok(more.includes(`path: '${route}'`), `More → Reports must retain ${route}`);
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    for (const route of SIDEBAR_ROUTES) {
+      assert.ok(sidebar.includes(`path: '${route}'`), `the sidebar must retain ${route}`);
     }
+    const more = read('src/modules/navigation/pages/MorePages.tsx');
     for (const route of ADMIN_ROUTES) {
       assert.ok(more.includes(`path: '${route}'`), `Administration must retain ${route}`);
     }
-    assert.doesNotMatch(LAYOUT(), /<motion\.aside|isMobileMenuOpen|isSidebarOpen/, 'desktop sidebar and mobile drawer must be removed');
+    // The five primary tabs are unchanged; the drawer is the LEFT sidebar
+    // (opened from the header), never a second navigation system.
+    assert.doesNotMatch(LAYOUT(), /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
+    assert.ok(LAYOUT().includes('isSidebarOpen'), 'the left sidebar drawer must be the shell drawer');
   });
 
   it('I. role menuAccess still controls primary navigation visibility', () => {
@@ -179,7 +192,7 @@ describe('Dashboard UX Step 5B — source guards', () => {
   it('K. no new route bypasses ProtectedRoute', () => {
     const app = APP();
     const protectedPaths = [
-      '/', '/more', '/reports', '/administration', '/notifications', '/help', '/about',
+      '/', '/more', '/sales-pipeline', '/administration', '/notifications', '/help', '/about',
       '/workbench', '/leads/new', '/leads', '/leads/upload', '/leads/all',
       '/follow-up', '/task-calendar', '/activities', '/leads/:id',
       '/users', '/team', '/execution-intelligence', '/ncp-progress',
@@ -193,12 +206,16 @@ describe('Dashboard UX Step 5B — source guards', () => {
     }
   });
 
-  it('L. mobile primary navigation replaces the drawer', () => {
+  it('L. the mobile tab bar and the left sidebar coexist in the shell', () => {
     const layout = LAYOUT();
     assert.ok(layout.includes('aria-label="Primary mobile navigation"'), 'mobile tab bar must remain accessible');
     assert.ok(layout.includes('leadflow-mobile-nav'), 'mobile tab bar must remain in the shell');
     assert.ok(read('src/index.css').includes('.leadflow-mobile-nav'), 'mobile tab bar styles must remain');
-    assert.doesNotMatch(layout, /isMobileMenuOpen|isSidebarOpen/, 'no mobile drawer state remains');
+    // The LEFT sidebar is additive: it carries the pages that used to hide in
+    // More → Reports, and it is closed by the back button (see
+    // mobile-shell-sidebar.test.ts for the full contract).
+    assert.ok(layout.includes('id="leadflow-sidebar"'), 'the left sidebar must exist');
+    assert.ok(read('src/layouts/sidebarNav.ts').includes('buildSidebarGroups'), 'sidebar entries must be permission-filtered');
   });
 
   it('M. dashboard service remains the single KPI authority', () => {

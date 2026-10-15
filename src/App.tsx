@@ -53,11 +53,11 @@ const Settings = lazy(() => import('./modules/settings/pages/Settings'));
 const ProfileSettings = lazy(() => import('./modules/settings/pages/ProfileSettings'));
 const MorePage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.MorePage })));
 const AdministrationPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AdministrationPage })));
-const ReportsPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.ReportsPage })));
 const NotificationsPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.NotificationsPage })));
 const HelpPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.HelpPage })));
 const AboutPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AboutPage })));
 const RoadshowPage = lazy(() => import('./modules/roadshows/pages/RoadshowPage'));
+const SalesPipelinePage = lazy(() => import('./modules/dashboard/pages/SalesPipelinePage'));
 // TEMPORARY admin-only diagnostics page (its own lazy chunk, like every
 // other feature page — see the route map below).
 const PerformanceDiagnostics = lazy(() => import('./modules/settings/pages/PerformanceDiagnostics'));
@@ -107,8 +107,9 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/more"><LazyPage page={<MorePage />} /></FeatureGate></ProtectedRoute>,
   },
   {
-    path: '/reports',
-    element: <ProtectedRoute><FeatureGate route="/reports"><LazyPage page={<ReportsPage />} /></FeatureGate></ProtectedRoute>,
+    // Sales pipeline board — sidebar destination only (removed from Home).
+    path: '/sales-pipeline',
+    element: <ProtectedRoute><FeatureGate route="/sales-pipeline"><LazyPage page={<SalesPipelinePage />} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/administration',

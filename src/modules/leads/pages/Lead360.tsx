@@ -392,9 +392,11 @@ export default function Lead360() {
                 <button
                   type="button"
                   onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
-                  className="inline-flex min-h-10 items-center gap-2 rounded-[10px] border border-[#978C21]/40 bg-[#978C21]/10 px-3 text-xs font-semibold text-[#6b6416] hover:bg-[#978C21]/20"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-[#978C21]/40 bg-[#978C21]/10 text-[#6b6416] hover:bg-[#978C21]/20"
+                  aria-label="Update lead status"
+                  title="Update status"
                 >
-                  <Target className="h-3.5 w-3.5" /> Update
+                  <Target className="h-[18px] w-[18px]" />
                 </button>
                 <button
                   type="button"
@@ -449,21 +451,28 @@ export default function Lead360() {
                 </a>
               ) : null}
             </div>
+            {/* Icon-only actions: the phone number / email line next to them can
+                be arbitrarily long, so labels used to collide with it. The icons
+                keep their accessible names. */}
             {canAccess('lead_tracking', 'edit') && (
               <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
                   onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
-                  className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-[#978C21]/40 bg-[#978C21] px-3 text-xs font-black text-white"
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#978C21] text-white"
+                  aria-label="Update lead status"
+                  title="Update status"
                 >
-                  <Target className="h-3.5 w-3.5" /> Update
+                  <Target className="h-[18px] w-[18px]" />
                 </button>
                 <button
                   type="button"
                   onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
-                  className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 px-3 text-xs font-semibold text-stone-700"
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
+                  aria-label="Edit lead"
+                  title="Edit lead"
                 >
-                  <Edit2 className="h-3.5 w-3.5" /> Edit
+                  <Edit2 className="h-[18px] w-[18px]" />
                 </button>
               </div>
             )}

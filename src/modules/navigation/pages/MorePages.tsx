@@ -1,19 +1,16 @@
 import { useEffect, useState, type ComponentType } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Activity,
   ArrowLeft,
   Bell,
   ChevronRight,
   CircleHelp,
-  ClipboardList,
   Database,
-  FileText,
   Globe,
-  LayoutDashboard,
   LogOut,
   Settings,
   Shield,
-  MapPinned,
   Upload,
   UserRound,
   Users,
@@ -90,12 +87,6 @@ export function MorePage() {
     ...(canOpen('/notifications')
       ? [{ label: 'Notifications', description: 'Recent updates and reminders', path: '/notifications', icon: Bell }]
       : []),
-    ...(canOpen('/roadshows')
-      ? [{ label: 'Roadshow Follow-up', description: 'Plan roadshows, track status and review results', path: '/roadshows', icon: MapPinned }]
-      : []),
-    ...(canOpen('/reports')
-      ? [{ label: 'Reports', description: 'Analytics and workspace pages available to your role', path: '/reports', icon: FileText }]
-      : []),
     ...(canOpen('/help')
       ? [{ label: 'Help & Support', description: 'Guidance for everyday LeadFlow tasks', path: '/help', icon: CircleHelp }]
       : []),
@@ -138,11 +129,22 @@ export function MorePage() {
 }
 
 export function AdministrationPage() {
+  const { user, roles } = usePermissions();
+  const role = String(user?.role || '').toUpperCase();
+  const matchedRole = roles.find(permission => permission.roleId === user?.role || permission.roleId === role);
+  const canOpen = (route: string) => resolveFeatureRouteAccess(route, user?.role, matchedRole);
+  const isAdministrator = DIAGNOSTICS_ADMIN_ROLES.includes(role);
+
   const items: DirectoryItem[] = [
     { label: 'User Management', description: 'Users, roles and access', path: '/users', icon: Users },
     { label: 'Lead Upload', description: 'Import leads from a file', path: '/leads/upload', icon: Upload },
     { label: 'Lead Pool', description: 'Review and assign available leads', path: '/leads/all', icon: Database },
     { label: 'System', description: 'Strategy, forms, workflow, sync and system tools', path: '/settings/system', icon: Settings },
+    // Performance Diagnostics moved here from the retired Reports directory —
+    // it is an administration tool, not a report a sales user reads.
+    ...(isAdministrator && canOpen('/settings/performance-diagnostics')
+      ? [{ label: 'Performance Diagnostics', description: 'System diagnostics and request performance', path: '/settings/performance-diagnostics', icon: Activity }]
+      : []),
   ];
 
   return (
@@ -152,54 +154,6 @@ export function AdministrationPage() {
         Manage access and lead operations. System settings are grouped separately from your personal profile.
       </p>
       <DirectoryList items={items} />
-    </div>
-  );
-}
-
-export function ReportsPage() {
-  const { canAccess, user, roles } = usePermissions();
-  const role = String(user?.role || '').toUpperCase();
-  const matchedRole = roles.find(permission => permission.roleId === user?.role || permission.roleId === role);
-  const canOpen = (route: string) => resolveFeatureRouteAccess(route, user?.role, matchedRole);
-  const reports: Array<DirectoryItem & { permission: string }> = [
-    { label: 'Performance', description: 'Sales execution and performance insights', path: '/execution-intelligence', icon: LayoutDashboard, permission: 'execution_intelligence' },
-    { label: 'NCP Progress', description: 'Collected and projected NCP progress', path: '/ncp-progress', icon: ClipboardList, permission: 'ncp_progress' },
-    { label: 'Trends', description: 'Performance over time', path: '/trend-charts', icon: FileText, permission: 'trend_charts' },
-    { label: 'Campaigns', description: 'Lead and performance by campaign', path: '/campaign-breakdown', icon: Globe, permission: 'campaign_breakdown' },
-  ];
-  const visibleReports = reports.filter(report => canAccess(report.permission, 'view'));
-  const otherPages: Array<DirectoryItem & { route: string }> = [
-    { label: 'Activities', description: 'Lead activity history and execution records', path: '/activities', route: '/activities', icon: ClipboardList },
-    { label: 'Task Calendar', description: 'Scheduled calls, meetings and tasks', path: '/task-calendar', route: '/task-calendar', icon: LayoutDashboard },
-    { label: 'Follow-up Queue', description: 'Overdue, today and upcoming follow-ups', path: '/follow-up', route: '/follow-up', icon: ClipboardList },
-    { label: 'Team', description: 'Team progress and reporting hierarchy', path: '/team', route: '/team', icon: Users },
-    ...(DIAGNOSTICS_ADMIN_ROLES.includes(role)
-      ? [{ label: 'Performance Diagnostics', description: 'System diagnostics and request performance', path: '/settings/performance-diagnostics', route: '/settings/performance-diagnostics', icon: Settings }]
-      : []),
-  ];
-  const visibleOtherPages = otherPages.filter(page => canOpen(page.route));
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <PageHeading title="Reports" />
-      <p className="text-sm leading-6 text-stone-600">Reports and supporting workspace pages available to your role.</p>
-      {visibleReports.length > 0 && (
-        <section className="space-y-3" aria-labelledby="reports-analytics-heading">
-          <h2 id="reports-analytics-heading" className="text-xs font-bold uppercase tracking-wider text-stone-500">Analytics</h2>
-          <DirectoryList items={visibleReports} />
-        </section>
-      )}
-      {visibleOtherPages.length > 0 && (
-        <section className="space-y-3" aria-labelledby="reports-workspace-heading">
-          <h2 id="reports-workspace-heading" className="text-xs font-bold uppercase tracking-wider text-stone-500">Workspace pages</h2>
-          <DirectoryList items={visibleOtherPages} />
-        </section>
-      )}
-      {visibleReports.length === 0 && visibleOtherPages.length === 0 && (
-        <p className="border-y border-stone-100 bg-white px-4 py-8 text-center text-sm text-stone-500">
-          No reports or workspace pages are enabled for your role.
-        </p>
-      )}
     </div>
   );
 }

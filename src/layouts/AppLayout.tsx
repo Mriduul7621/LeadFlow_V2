@@ -14,6 +14,7 @@ import {
   WifiOff,
   Plus,
   MoreHorizontal,
+  Menu,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -30,6 +31,9 @@ import {
 } from '../modules/shared/api/sessionCache';
 import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
 import { resolveMenuVisibility } from './menuVisibility';
+import { resolveFeatureRouteAccess } from './featureRouteAccess';
+import { buildSidebarGroups } from './sidebarNav';
+import { usePermissions } from '../modules/shared/hooks/usePermissions';
 
 interface MenuItem {
   label: string;
@@ -47,11 +51,11 @@ const PRIMARY_NAV_ITEMS: MenuItem[] = [
   { label: 'More', icon: MoreHorizontal, path: '/more', roles: ALL_ROLES },
 ];
 const MORE_NAV_PATHS = [
-  '/more', '/reports', '/notifications', '/help', '/about', '/administration',
+  '/more', '/notifications', '/help', '/about', '/administration',
   '/settings', '/settings/system', '/settings/performance-diagnostics',
   '/users', '/leads/upload', '/leads/all', '/activities', '/task-calendar',
   '/follow-up', '/team', '/execution-intelligence', '/ncp-progress',
-  '/trend-charts', '/campaign-breakdown',
+  '/trend-charts', '/campaign-breakdown', '/sales-pipeline',
 ];
 
 const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
@@ -59,11 +63,13 @@ const NOTIFICATION_REFRESH_MS = 60_000;
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
+  const { canAccess } = usePermissions();
   const location = useLocation();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [rolesPermissions, setRolesPermissions] = useState<RolePermission[]>([]);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -194,6 +200,57 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // upcoming / scheduled.
     if (location.pathname !== '/') markShellStartupSettled();
   }, [location.pathname]);
+
+  /**
+   * Left drawer (hamburger) lifecycle: it never survives a navigation, it
+   * closes on Escape, and while open the page behind it must not scroll.
+   *
+   * Closing is the BACK BUTTON's job: opening the drawer pushes one history
+   * entry (same URL, marker state) so the device/browser back gesture pops
+   * that entry and closes the drawer instead of leaving the page. There is
+   * deliberately no in-drawer close/exit control. When the user taps a menu
+   * item the marker entry stays behind, so back from the destination page
+   * lands on the page they opened the drawer from.
+   */
+  useEffect(() => {
+    setIsSidebarOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const onPopState = () => setIsSidebarOpen(false);
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const openSidebar = () => {
+    setIsSidebarOpen(true);
+    window.history.pushState({ ...(window.history.state || {}), lfSidebar: true }, '');
+  };
+
+  const closeSidebar = () => {
+    // Pop our own marker entry when it is the current one; popstate then
+    // performs the actual close so history stays truthful.
+    if (window.history.state?.lfSidebar) {
+      window.history.back();
+      return;
+    }
+    setIsSidebarOpen(false);
+  };
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeSidebar();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSidebarOpen]);
 
   const syncNotifications = (next: SystemNotification[]) => {
     if (!user) return;
@@ -393,6 +450,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   };
 
+  /**
+   * Left sidebar contents. Same visibility rule as the router and the
+   * retired More → Reports directory: an entry appears only when BOTH the
+   * route module (Feature Access) and its functional `view` permission allow
+   * the destination — so the drawer can never surface a page the user would
+   * be bounced out of.
+   */
+  const sidebarGroups = buildSidebarGroups({
+    canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
+    canAccess,
+  });
+  const isSidebarItemActive = (path: string) =>
+    location.pathname === path || location.pathname.startsWith(`${path}/`);
+
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -402,6 +473,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-[#FDFBF7] flex text-brand-text font-sans">
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
         <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
+          <button
+            type="button"
+            id="leadflow-sidebar-toggle"
+            className={cn('lf-sidebar-toggle', isSidebarOpen && 'is-active')}
+            aria-label="Menu"
+            aria-haspopup="dialog"
+            aria-expanded={isSidebarOpen}
+            aria-controls="leadflow-sidebar"
+            onClick={() => (isSidebarOpen ? closeSidebar() : openSidebar())}
+          >
+            <Menu className="h-[18px] w-[18px]" />
+          </button>
+
           <div className="flex items-center gap-2 lg:hidden">
              <img src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO" alt="Shanta Life" className="h-7 w-auto max-w-[112px] object-contain" referrerPolicy="no-referrer" />
           </div>
@@ -596,6 +680,64 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      {/* ----------------------------------------------------------------
+          Left sidebar (drawer). It replaces More → Reports: the analytics
+          pages, the workspace pages, Roadshow Follow-up and the Sales
+          Pipeline live here, permission-filtered, one tap from anywhere.
+          Nothing listed here is duplicated in More.
+          ---------------------------------------------------------------- */}
+      {isSidebarOpen && (
+        <>
+          <div
+            className="lf-sidebar-scrim is-open"
+            onClick={closeSidebar}
+            aria-hidden="true"
+          />
+          <aside
+            id="leadflow-sidebar"
+            className="lf-sidebar is-open"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menu"
+          >
+            <div className="lf-sidebar-head">
+              <span className="lf-sidebar-title">Menu</span>
+            </div>
+            <nav className="lf-sidebar-body" aria-label="Sidebar navigation">
+              {sidebarGroups.map(group => (
+                <div key={group.title} className="lf-sidebar-group">
+                  <p className="lf-sidebar-group-title">{group.title}</p>
+                  {group.items.map(item => {
+                    const active = isSidebarItemActive(item.path);
+                    return (
+                      <Link
+                        key={item.path}
+                        to={item.path}
+                        className={cn('lf-sidebar-item', active && 'is-active')}
+                        aria-current={active ? 'page' : undefined}
+                        onClick={() => setIsSidebarOpen(false)}
+                      >
+                        <span className="lf-sidebar-item-icon">
+                          <item.icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+                        </span>
+                        <span className="lf-sidebar-item-copy">
+                          <strong>{item.label}</strong>
+                          <small>{item.description}</small>
+                        </span>
+                        <ChevronRight className="lf-sidebar-item-arrow" />
+                      </Link>
+                    );
+                  })}
+                </div>
+              ))}
+              {sidebarGroups.length === 0 && (
+                <p className="lf-sidebar-empty">No additional pages are enabled for your role.</p>
+              )}
+            </nav>
+          </aside>
+        </>
+      )}
+
       <nav className="leadflow-mobile-nav" aria-label="Primary mobile navigation">
         {visiblePrimaryItems.map(item => {
           const active = isPrimaryItemActive(item.path);

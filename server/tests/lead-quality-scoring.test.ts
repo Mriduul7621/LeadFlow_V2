@@ -679,11 +679,16 @@ describe('Lead Quality — frontend never scores (source guards)', () => {
     assert.ok(src.includes('quality.band'), 'badge must render quality.band');
   });
 
-  it('workbench prioritizes over loaded items without per-item detail fetches', () => {
+  it('workbench renders the loaded queue without per-item detail fetches', () => {
     const src = stripComments(read('src/modules/workbench/pages/DailyWorkbench.tsx'));
-    assert.ok(src.includes('qualityFilteredItems'), 'workbench must narrow the loaded queue by quality');
+    // The quality chip row was removed with the other queue chips (minimal
+    // list), so the guard now pins the property that actually matters: the
+    // queue is built ONLY from the loaded rows, never from per-item reads.
+    assert.ok(!src.includes('qualityFilteredItems'), 'the removed quality narrowing must not come back');
+    assert.ok(src.includes('const workItems'), 'the queue must be derived from the loaded rows');
     assert.ok(!src.includes('getLeadQuality('), 'workbench must not fetch per-item quality (no N+1)');
     assert.ok(!src.includes('getLeads('), 'workbench must not fetch the full lead list');
+    assert.ok(!src.includes('getLead('), 'workbench must not fetch single leads either');
   });
 
   it('dashboard consumes only the server aggregate', () => {
