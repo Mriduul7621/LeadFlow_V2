@@ -13,6 +13,7 @@ import { leadService } from '../../leads/services/leadService';
 import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
+import BackButton from '../../shared/components/BackButton';
 
 export default function ExecutionIntelligence() {
   const { user } = useAuthStore();
@@ -216,6 +217,7 @@ export default function ExecutionIntelligence() {
 
   return (
     <div className="space-y-8 pb-24 bg-white font-sans">
+      <BackButton fallback="/" />
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Execution Intelligence</h1>

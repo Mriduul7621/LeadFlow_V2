@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../../../lib/utils';
 import { leadService, type FollowUpQueueItem, type FollowUpQueueResult } from '../services/leadService';
 import { toast } from 'sonner';
+import BackButton from '../../shared/components/BackButton';
 
 type Bucket = 'overdue' | 'today' | 'upcoming';
 
@@ -116,6 +117,7 @@ export default function FollowUpStrategy() {
 
   return (
     <div className="space-y-8 pb-24 bg-white font-sans">
+      <BackButton fallback="/" />
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
         <div className="flex items-center gap-5">
           <div className="w-14 h-14 bg-[#F9F9F4] rounded-sm flex items-center justify-center text-[#978C21] border border-slate-100">

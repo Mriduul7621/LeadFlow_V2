@@ -27,6 +27,7 @@ import { useAuthStore } from '../store/authStore';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import BackButton from '../../shared/components/BackButton';
 
 interface CalendarEvent {
   id: string;
@@ -654,6 +655,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
 
   return (
     <div className={cn("space-y-8 max-w-7xl mx-auto", embedded ? "pb-4" : "space-y-10 pb-24")}>
+      {!embedded && <BackButton fallback="/" />}
       {/* Header Panel */}
       {embedded ? (
         <div className="border-b border-slate-100 pb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">

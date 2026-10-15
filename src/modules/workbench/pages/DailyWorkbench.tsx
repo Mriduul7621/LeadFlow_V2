@@ -241,10 +241,6 @@ function SummaryCard({
   );
 }
 
-type FilterKey = 'all' | 'overdue' | 'call' | 'meeting' | 'follow_up' | 'task';
-// Lead Quality prioritization filter — a second, independent client-side
-// dimension over the already-loaded queue (no refetch, no rescoring).
-type QualityFilterKey = 'all' | 'Hot' | 'Warm' | 'Developing' | 'Cold';
 
 export default function DailyWorkbench() {
   const { user } = useAuthStore();
@@ -268,8 +264,6 @@ export default function DailyWorkbench() {
   const [roadshowsTomorrow, setRoadshowsTomorrow] = useState<Roadshow[]>([]);
   const [roadshowError, setRoadshowError] = useState<string | null>(null);
 
-  const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
-  const [qualityFilter, setQualityFilter] = useState<QualityFilterKey>('all');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -408,45 +402,6 @@ export default function DailyWorkbench() {
     return toWorkItems(queueFollowUps, scheduledToday, todayYmd);
   }, [overdueFollowUps, todayFollowUps, scheduledToday, todayYmd]);
 
-  const filteredItems = useMemo(() => {
-    if (activeFilter === 'all') return workItems;
-    if (activeFilter === 'overdue') return workItems.filter(i => i.overdue);
-    return workItems.filter(i => i.type === activeFilter);
-  }, [workItems, activeFilter]);
-
-  // Quality narrowing over the type-filtered queue (client-side over
-  // loaded data — the queue composition and ordering above are unchanged).
-  const qualityFilteredItems = useMemo(() => {
-    if (qualityFilter === 'all') return filteredItems;
-    return filteredItems.filter(i => i.leadQuality?.band === qualityFilter);
-  }, [filteredItems, qualityFilter]);
-
-  const qualityCounts = useMemo(() => {
-    // NOTE: named tally on purpose — the frozen English-only guard
-    // rejects naive translation-call patterns that count-plus-quote
-    // invocations would trip.
-    const tally = (band: QualityFilterKey) =>
-      band === 'all' ? filteredItems.length : filteredItems.filter(i => i.leadQuality?.band === band).length;
-    return {
-      all: filteredItems.length,
-      Hot: tally('Hot'),
-      Warm: tally('Warm'),
-      Developing: tally('Developing'),
-      Cold: tally('Cold'),
-    };
-  }, [filteredItems]);
-
-  const filterCounts = useMemo(() => {
-    return {
-      all: workItems.length,
-      overdue: workItems.filter(i => i.overdue).length,
-      call: workItems.filter(i => i.type === 'call').length,
-      meeting: workItems.filter(i => i.type === 'meeting').length,
-      follow_up: workItems.filter(i => i.type === 'follow_up').length,
-      task: workItems.filter(i => i.type === 'task').length,
-    };
-  }, [workItems]);
-
   const summary = useMemo(() => {
     const callsToday = scheduledToday.filter(a => (a.activityType || (a as any).activity_type) === 'call').length;
     const meetingsToday = scheduledToday.filter(a => (a.activityType || (a as any).activity_type) === 'meeting').length;
@@ -571,23 +526,6 @@ export default function DailyWorkbench() {
       return todayYmd;
     }
   }, [todayYmd]);
-
-  const filterChips: Array<{ key: FilterKey; label: string }> = [
-    { key: 'all', label: 'All' },
-    { key: 'overdue', label: 'Overdue' },
-    { key: 'call', label: 'Calls' },
-    { key: 'meeting', label: 'Meetings' },
-    { key: 'follow_up', label: 'Follow-ups' },
-    { key: 'task', label: 'Tasks' },
-  ];
-
-  const qualityChips: Array<{ key: QualityFilterKey; label: string }> = [
-    { key: 'all', label: 'All Quality' },
-    { key: 'Hot', label: 'Hot' },
-    { key: 'Warm', label: 'Warm' },
-    { key: 'Developing', label: 'Developing' },
-    { key: 'Cold', label: 'Cold' },
-  ];
 
   return (
     <div className="space-y-6 pb-12 font-sans max-w-[1280px] mx-auto">
@@ -721,52 +659,6 @@ export default function DailyWorkbench() {
             </section>
           )}
 
-          {/* Quick Filters */}
-          <div className="flex flex-nowrap md:flex-wrap items-center gap-2 overflow-x-auto bg-white border border-stone-100 rounded-[12px] p-3" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            {filterChips.map(chip => {
-              const count = (filterCounts as any)[chip.key] ?? 0;
-              const active = activeFilter === chip.key;
-              return (
-                <button
-                  key={chip.key}
-                  type="button"
-                  onClick={() => setActiveFilter(chip.key)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold border transition-all duration-150',
-                    'shrink-0',
-                    active ? 'bg-[#978C21] text-white border-[#978C21] shadow-sm' : 'bg-[#FFFCF8] text-stone-600 border-stone-200 hover:bg-white hover:border-stone-300',
-                  )}
-                >
-                  {chip.label}
-                  <span className={cn('ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-black', active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500')}>{count}</span>
-                </button>
-              );
-            })}
-            {/* Lead Quality prioritization filter (client-side narrowing over the loaded queue) */}
-            <span className="mx-1 hidden md:block w-px h-6 bg-stone-200" aria-hidden="true" />
-            <span className="hidden md:inline text-[11px] font-bold text-stone-400 uppercase tracking-wide">Quality</span>
-            {qualityChips.map(chip => {
-              const count = qualityCounts[chip.key] ?? 0;
-              const active = qualityFilter === chip.key;
-              return (
-                <button
-                  key={`quality-${chip.key}`}
-                  type="button"
-                  onClick={() => setQualityFilter(chip.key)}
-                  data-testid={`wb-quality-filter-${chip.key}`}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold border transition-all duration-150',
-                    'hidden md:inline-flex shrink-0',
-                    active ? 'bg-[#978C21] text-white border-[#978C21] shadow-sm' : 'bg-[#FFFCF8] text-stone-600 border-stone-200 hover:bg-white hover:border-stone-300',
-                  )}
-                >
-                  {chip.label}
-                  <span className={cn('ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-black', active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500')}>{count}</span>
-                </button>
-              );
-            })}
-          </div>
-
           {/* Execution Queue */}
           <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <div className="flex items-end justify-between gap-4 mb-4">
@@ -774,10 +666,10 @@ export default function DailyWorkbench() {
                 <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700"><span className="hidden md:inline">Execution Queue</span><span className="md:hidden">Today</span></h2>
                 <p className="hidden md:block text-[12px] text-stone-500 mt-1.5 leading-relaxed">Overdue follow-ups first, then today's work by scheduled time. Tomorrow does not enter this queue.</p>
               </div>
-              <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{qualityFilteredItems.length} items</span>
+              <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{workItems.length} items</span>
             </div>
 
-            {qualityFilteredItems.length === 0 ? (
+            {workItems.length === 0 ? (
               <div className="rounded-[12px] border border-dashed border-stone-200 bg-[#FFFCF8] px-6 py-12 text-center">
                 <div className="w-12 h-12 rounded-full bg-white border border-stone-100 flex items-center justify-center mx-auto mb-4">
                   <CheckCircle2 className="w-6 h-6 text-emerald-500" />
@@ -789,8 +681,8 @@ export default function DailyWorkbench() {
                 </Link>
               </div>
             ) : (
-              <div className="space-y-2 max-h-[720px] overflow-y-auto pr-1">
-                {qualityFilteredItems.map(item => {
+              <div className="lf-queue-list">
+                {workItems.map(item => {
                   const meta = TYPE_META[item.type];
                   const Icon = meta.icon;
                   const isSelected = selectedKey === item.key;
@@ -801,61 +693,29 @@ export default function DailyWorkbench() {
                     <div
                       key={item.key}
                       className={cn(
-                        'flex flex-wrap items-center gap-3 px-3 md:px-4 py-3 rounded-[10px] border transition-all duration-150',
-                        isSelected ? 'border-[#978C21] bg-[#978C21]/[0.04] shadow-sm' : 'border-stone-100 bg-[#FFFCF8] hover:bg-white hover:border-stone-200 hover:shadow-sm',
+                        'lf-mobile-lead-row flex-wrap',
+                        item.overdue && 'lf-mobile-lead-row--overdue',
+                        isSelected && 'bg-[#FDFCF7]',
                       )}
                     >
                       <button
                         type="button"
                         onClick={() => setSelectedKey(isSelected ? null : item.key)}
                         aria-expanded={isSelected}
-                        className="flex items-center gap-3 min-w-0 flex-1 text-left"
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
                       >
-                        <div className={cn('w-9 h-9 rounded-[10px] border flex items-center justify-center shrink-0', meta.tone)}>
-                          <Icon className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="text-sm font-semibold text-stone-800 truncate">{item.leadName}</p>
-                            <span className="hidden md:inline-flex"><LeadQualityBadge quality={item.leadQuality} /></span>
-                            {item.overdue && (
-                              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[10px] font-bold text-red-700">
-                                <AlertTriangle className="w-3 h-3" />
-                                Overdue
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-stone-500 truncate md:hidden">
-                            {meta.label} · {itemStatus} · {formatDhakaDue(item.scheduledAt || '')}
-                          </p>
-                          <p className="hidden md:block text-[11px] text-stone-500 truncate">
-                            {item.title ? `${item.title} · ` : ''}{formatDhakaDue(item.scheduledAt || '')}{item.leadStatus ? ` · ${item.leadStatus}` : ''}
-                          </p>
-                        </div>
-                        <ChevronRight className={cn('h-4 w-4 shrink-0 text-stone-400 transition-transform md:hidden', isSelected && 'rotate-90')} />
+                        <span className="lf-mobile-lead-avatar" aria-hidden="true">
+                          <Icon className="h-[17px] w-[17px]" />
+                        </span>
+                        <span className="lf-mobile-lead-copy">
+                          <strong>{item.leadName}</strong>
+                          <small>{meta.label} · {formatDhakaDue(item.scheduledAt || '')}</small>
+                          <span className="lf-mobile-lead-status">{itemStatus}</span>
+                        </span>
+                        <ChevronRight className={cn('lf-mobile-lead-arrow transition-transform', isSelected && 'rotate-90')} size={18} aria-hidden="true" />
                       </button>
-
-                      <div className="hidden md:flex items-center gap-2 shrink-0">
-                        <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', meta.tone)}>{meta.badge}</span>
-                        {item.source === 'follow_up' ? (
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-stone-50 border-stone-200 text-stone-600">Follow-up</span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-white border-stone-200 text-stone-600">{(item.raw as ScheduledActivity).activityType}</span>
-                        )}
-                        {item.leadStatus && (
-                          <span className={cn('hidden md:inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border', getLeadStatusColorClasses(item.leadStatus))}>
-                            {item.leadStatus}
-                          </span>
-                        )}
-                        <Link
-                          to={`/leads/${encodeURIComponent(item.leadId)}`}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-[10px] border border-stone-200 bg-white text-[11px] font-semibold text-stone-600 hover:text-[#978C21] hover:border-[#978C21]/30 transition-colors"
-                        >
-                          Open <ExternalLink className="w-3 h-3" />
-                        </Link>
-                      </div>
                       {isSelected && (
-                        <div className="basis-full border-t border-stone-100 pt-3 pl-12 md:hidden">
+                        <div className="basis-full border-t border-stone-100 pt-3">
                           {item.title ? <p className="text-xs font-medium text-stone-700">{item.title}</p> : null}
                           <p className="mt-1 text-xs text-stone-600">{meta.label} · {itemStatus} · {formatDhakaDue(item.scheduledAt || '')}</p>
                           {item.leadStatus ? <p className="mt-1 text-xs text-stone-500">Lead status · {item.leadStatus}</p> : null}

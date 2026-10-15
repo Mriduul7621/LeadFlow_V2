@@ -36,6 +36,7 @@ import { leadService } from '../../leads/services/leadService';
 import { orgService } from '../services/orgService';
 import { UserRole, User, Lead } from '../../shared/types';
 import { toast } from 'sonner';
+import BackButton from '../../shared/components/BackButton';
 
 // Auto-generated organogram node (server derives the tree from users.manager_id)
 interface OrgNode {
@@ -296,6 +297,7 @@ export default function TeamHierarchy() {
 
   return (
     <div className="space-y-6 pb-24 bg-white font-sans min-h-screen">
+      <BackButton fallback="/" />
       {/* 1. Header Section */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
         <div>

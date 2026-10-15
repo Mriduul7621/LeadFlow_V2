@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { userService } from '../../users/services/userService';
 import type { User } from '../../shared/types';
+import BackButton from '../../shared/components/BackButton';
 import {
   roadshowService,
   type Roadshow,
@@ -235,6 +236,7 @@ export default function RoadshowPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-10">
+      <BackButton fallback="/" />
       <header>
         <h1 className="text-2xl font-bold tracking-tight text-brand-text">Roadshow Follow-up</h1>
         <p className="mt-1 text-sm text-stone-500">Schedule field events, assign your team, and track leads by roadshow.</p>
