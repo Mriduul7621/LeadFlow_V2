@@ -56,6 +56,7 @@ import { up as proposalSentStatus } from "./migrations/043_proposal_sent_status.
 import { up as renameUntouchedStatus } from "./migrations/044_rename_untouched_status.js";
 import { up as defaultRoleAccess } from "./migrations/045_default_role_access.js";
 import { up as departmentHeadsAndMirrorTeams } from "./migrations/046_department_heads_and_mirror_teams.js";
+import { up as roleTemplates } from "./migrations/047_role_templates.js";
 
 import {
   loadLedger,
@@ -155,6 +156,7 @@ const migrations: Migration[] = [
     { id: "045_default_role_access", name: "Default Role Access", run: defaultRoleAccess },
 
     { id: "046_department_heads_and_mirror_teams", name: "Department Heads + Mirror Teams", run: departmentHeadsAndMirrorTeams },
+    { id: "047_role_templates", name: "Role Templates", run: roleTemplates },
 
 ];
 

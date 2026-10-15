@@ -38,6 +38,15 @@ import {
 } from '../utils/departmentMirror.js';
 import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
+  listRoleTemplates,
+  saveRoleTemplate,
+  deleteRoleTemplate,
+} from '../utils/roleTemplates.js';
+import {
+  buildAccessWarnings,
+  resolveEffectivePermissions,
+} from '../utils/effectiveAccess.js';
+import {
   fetchInactiveOwnersWithOpenLeads,
   fetchOpenLeadCountMap,
   hasLeadsTable,
@@ -3523,6 +3532,115 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
 /* ---------- user permission overrides + audit ---------- */
 /* ---------- user permission overrides + audit ---------- */
 
+/**
+ * GET /users/:id/effective-access (F16 Phase F) — the whole access review for
+ * ONE person in one answer: every canonical permission with the layer that
+ * decided it, the page set, the data scope, and the findings a reviewer cares
+ * about (explicit deny over an allow, no-op overrides, fail-closed roles).
+ *
+ * Admin-only: this is the screen an administrator uses to check somebody
+ * else's access, and it exposes the complete matrix.
+ */
+router.get('/users/:id/effective-access', requireAuth, requireAdmin, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) return sendJson(res, 200, { success: false, available: false, message: 'Database is not configured.' });
+  try {
+    const pool = getPool();
+    const uuid = asUuid(req.params.id);
+    const userResult = await pool.query(
+      `SELECT u.id, u.employee_id, u.full_name, u.is_active, u.must_change_password,
+              u.role_id, r.role_code, r.role_name, r.data_visibility, r.hierarchy_level,
+              r.menu_access
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($1) OR u.id = $2 LIMIT 1`,
+      [req.params.id, uuid || null]
+    );
+    const user = userResult.rows[0];
+    if (!user) return sendJson(res, 404, { success: false, message: 'User not found' });
+
+    const rows = await pool.query(
+      `SELECT p.permission_code, p.module_name, p.action_name,
+              COALESCE(rp.is_allowed, FALSE) AS is_allowed,
+              (rp.permission_id IS NOT NULL) AS has_role_grant,
+              up.is_allowed AS user_override,
+              up.reason AS override_reason,
+              up.updated_at AS override_updated_at
+         FROM permissions p
+         LEFT JOIN role_permissions rp ON rp.permission_id = p.id AND rp.role_id = $2
+         LEFT JOIN user_permissions up ON up.permission_id = p.id AND up.user_id = $1
+         ORDER BY p.module_name, p.action_name, p.permission_code`,
+      [user.id, user.role_id]
+    );
+
+    const effective = resolveEffectivePermissions(rows.rows as any);
+    // The override reason/updated_at are attached AFTER the pure resolver (the
+    // precedence itself must stay a function of the trio it is tested on).
+    const reasonByCode = new Map<string, string>();
+    const updatedByCode = new Map<string, string>();
+    for (const row of rows.rows as any[]) {
+      if (row?.user_override === null || row?.user_override === undefined) continue;
+      const code = String(row.permission_code);
+      if (row.override_reason) reasonByCode.set(code, String(row.override_reason));
+      if (row.override_updated_at) updatedByCode.set(code, String(row.override_updated_at));
+    }
+    const permissions = effective.permissions.map(p => ({
+      ...p,
+      overrideReason: reasonByCode.get(p.code) || null,
+      overrideUpdatedAt: updatedByCode.get(p.code) || null,
+    }));
+
+    const menuAccess = user.menu_access && typeof user.menu_access === 'object' && !Array.isArray(user.menu_access)
+      ? user.menu_access as Record<string, unknown>
+      : {};
+    const pages = Object.entries(menuAccess)
+      .filter(([, value]) => typeof value === 'boolean')
+      .map(([path, value]) => ({ path, allowed: value === true }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    const menuAccessConfigured = pages.filter(p => p.allowed).length;
+
+    const roleCode = String(user.role_code || 'EMPLOYEE').toUpperCase();
+    const isAdminBypass = roleCode === 'ADMIN' || roleCode === 'SUPERADMIN';
+    const dataVisibility = isAdminBypass ? 'Organization' : (user.data_visibility || 'Own');
+
+    const warnings = buildAccessWarnings({
+      effective,
+      roleCode,
+      roleName: user.role_name || roleCode,
+      isActive: user.is_active !== false,
+      mustChangePassword: user.must_change_password === true,
+      isAdminBypass,
+      menuAccessConfigured,
+      dataVisibility,
+    });
+
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          employeeId: user.employee_id,
+          fullName: user.full_name,
+          isActive: user.is_active !== false,
+        },
+        role: {
+          roleCode,
+          roleName: user.role_name || roleCode,
+          hierarchyLevel: Number(user.hierarchy_level) || 0,
+          dataVisibility,
+          isAdminBypass,
+        },
+        permissions,
+        pages,
+        warnings,
+        summary: effective.summary,
+      },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Effective access fetch failed' });
+  }
+});
+
 router.get('/users/:id/permissions', requireAuth, requireSelfOrAdmin('id'), async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) return sendJson(res, 200, { success: true, data: [] });
@@ -4018,6 +4136,112 @@ router.delete('/departments/:id', requireAuth, requirePermissionCode('department
 /* ====================================================================
    ROLES
 ==================================================================== */
+
+/* ====================================================================
+   ROLE TEMPLATES  (F16 Phase F)
+   --------------------------------------------------------------------
+   GET    /role-templates        – baselines (derived live from the shipped
+                                   standard roles) + saved snapshots
+   POST   /role-templates        – save a role's CURRENT access under a name
+   DELETE /role-templates/:id    – remove a saved template
+   Applying a template is a CLIENT action on purpose: it fills the role
+   editor, the admin reviews every toggle, and the save goes through the one
+   existing write path. Nothing here grants access by itself.
+==================================================================== */
+router.get('/role-templates', requireAuth, requirePermissionCode('roles.manage'), async (_req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    return sendJson(res, 200, { success: true, available: false, templates: [] });
+  }
+  try {
+    const result = await listRoleTemplates(getPool());
+    return sendJson(res, 200, { success: true, ...result });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Role templates fetch failed' });
+  }
+});
+
+router.post('/role-templates', requireAuth, requirePermissionCode('roles.manage'), async (req, res) => {
+  const payload = req.body || {};
+  const name = clean(payload.name || payload.templateName);
+  const fromRole = clean(payload.fromRole || payload.fromRoleCode || payload.roleId);
+  if (!name) return sendJson(res, 400, { success: false, message: 'A template name is required.' });
+  if (name.length > 150) return sendJson(res, 400, { success: false, message: 'The template name must be 150 characters or fewer.' });
+  if (!fromRole) {
+    return sendJson(res, 400, { success: false, message: 'Choose the role whose access should be saved as a template.' });
+  }
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    return sendJson(res, 200, { success: true, message: 'Template saved (demo mode)' });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const template = await saveRoleTemplate(client, {
+      name,
+      description: clean(payload.description) || undefined,
+      fromRoleCode: fromRole,
+      createdBy: req.currentUser?.id || null,
+    });
+    await client.query('COMMIT');
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'role-template-save',
+      entityType: 'role_template',
+      entityId: template.id,
+      metadata: {
+        name: template.name,
+        sourceRoleCode: template.roleCode,
+        dataVisibility: template.dataVisibility,
+        grantCount: template.grants.length,
+        pageCount: Object.values(template.menuAccess).filter(Boolean).length,
+      },
+    });
+    return sendJson(res, 201, { success: true, data: template });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    if (error?.code === '23505') {
+      return sendJson(res, 409, { success: false, message: 'A template with that name already exists.' });
+    }
+    if (error?.statusCode) {
+      return sendJson(res, error.statusCode, { success: false, message: error?.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Template save failed' });
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/role-templates/:id', requireAuth, requirePermissionCode('roles.manage'), async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    return sendJson(res, 200, { success: true, message: 'Template removed (demo mode)' });
+  }
+  try {
+    const removed = await deleteRoleTemplate(getPool(), String(req.params.id));
+    if (!removed) {
+      return sendJson(res, 404, {
+        success: false,
+        // Baseline templates are DERIVED, not rows: there is nothing stored to
+        // delete, and the message says so instead of a bare 404.
+        message: 'No saved template with that id. Standard-role baselines are derived from the roles themselves and cannot be deleted.',
+      });
+    }
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'role-template-delete',
+      entityType: 'role_template',
+      entityId: String(req.params.id),
+      metadata: {},
+    });
+    return sendJson(res, 200, { success: true, message: 'Template removed' });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Template delete failed' });
+  }
+});
 
 router.get('/roles', requireAuth, async (_req, res) => {
   if (sendDbUnavailable(res)) return;

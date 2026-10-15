@@ -19,14 +19,19 @@ import {
   Mail,
   UserCheck,
   UserX,
-  Upload
+  Upload,
+  ShieldCheck,
+  Sparkles,
+  Bookmark,
+  Loader2
 } from 'lucide-react';
 import { UserBulkImportModal } from '../components/UserBulkImportModal';
+import EnterpriseAccessPanel from '../components/EnterpriseAccessPanel';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { userService } from '../services/userService';
-import { adminService } from '../../admin/services/adminService';
+import { adminService, RoleTemplate } from '../../admin/services/adminService';
 import { orgService, Department, HierarchyConfig, ReportingOption } from '../../hierarchy/services/orgService';
 import { ApiError } from '../../shared/api/http';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -321,6 +326,24 @@ export default function UserManagement() {
   const [roleFormFeatures, setRoleFormFeatures] = useState<Record<string, Record<string, boolean>>>({});
   const [roleFormActions, setRoleFormActions] = useState<Record<string, boolean>>({});
   const [showRoleForm, setShowRoleForm] = useState(false);
+
+  // ---- Role templates (F16 Phase F) ----
+  // `available` is false on a database without migration 047: the baselines are
+  // still listed (they are derived from the roles, not stored), but saving a new
+  // snapshot is impossible and the screen says so instead of throwing.
+  const [roleTemplates, setRoleTemplates] = useState<RoleTemplate[]>([]);
+  const [templatesAvailable, setTemplatesAvailable] = useState(false);
+  const [showTemplateForm, setShowTemplateForm] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateDesc, setTemplateDesc] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  // ---- Effective Access (F16 Phase F) ----
+  const [accessReviewUser, setAccessReviewUser] = useState<{ id: string; name: string } | null>(null);
+  // The access review answers for anybody, but only an administrator may read
+  // it (the endpoint is admin-only). The button follows the same rule, so
+  // nobody is offered a screen that would answer 403.
+  const isPlatformAdmin = ['ADMIN', 'SUPERADMIN'].includes(String(currentUser?.role || '').toUpperCase());
 
   // ---- Hierarchy (company-wide reporting ladder) states ----
   const [hierConfig, setHierConfig] = useState<HierarchyConfig | null>(null);
@@ -728,6 +751,93 @@ export default function UserManagement() {
     setShowRoleForm(true);
   };
 
+  /* ================================================================== */
+  /*  ROLE TEMPLATES (F16 Phase F)                                       */
+  /*                                                                     */
+  /*  A template is a STARTING POINT, never a second source of truth:     */
+  /*  applying one fills this editor, the administrator sees every toggle, */
+  /*  and the save goes through the ONE existing role save path. Nothing  */
+  /*  here writes access by itself.                                      */
+  /* ================================================================== */
+  const loadRoleTemplates = async () => {
+    try {
+      const result = await adminService.getRoleTemplates();
+      setRoleTemplates(result.templates);
+      setTemplatesAvailable(result.available);
+    } catch {
+      // A role manager without the templates table, or an offline shell: the
+      // section simply does not appear — it must never block role editing.
+      setRoleTemplates([]);
+      setTemplatesAvailable(false);
+    }
+  };
+
+  const handleUseTemplate = (template: RoleTemplate) => {
+    setSelectedRole(null);
+    // "Manager baseline" becomes "Manager"; a saved snapshot keeps its own name.
+    setRoleFormName(template.source === 'system' ? template.name.replace(/\s+baseline$/i, '') : template.name);
+    // The Role ID stays EMPTY on purpose: the role save upserts on the role id,
+    // so a prefilled id could quietly overwrite an existing role. The
+    // administrator names the new role deliberately.
+    setRoleFormSlug('');
+    setRoleFormVisibility((template.dataVisibility as any) || 'Own');
+    const granted = new Set(template.grants || []);
+    const actions: Record<string, boolean> = {};
+    ACTION_PERMISSION_GROUPS.forEach(g => g.items.forEach(i => { actions[i.code] = granted.has(i.code); }));
+    setRoleFormActions(actions);
+    // Pages: the template's own page set wins where it has an opinion; where it
+    // has none the shipped default applies — the exact rule `applyRoleToForm`
+    // uses, so loading a role and loading its baseline land on the same screen.
+    const features: Record<string, Record<string, boolean>> = {};
+    APP_FEATURES.forEach(feature => {
+      const configured = template.menuAccess?.[feature.path];
+      features[feature.key] = { view: configured ?? Boolean(feature.defaultEnabled) };
+    });
+    setRoleFormFeatures(features);
+    setShowRoleForm(true);
+    toast.success(`Template “${template.name}” loaded.`, {
+      description: 'Review every toggle and give the role an ID before saving — the template wrote nothing on its own.',
+    });
+  };
+
+  const handleSaveAsTemplate = async () => {
+    const fromRole = roleFormSlug.trim().toLowerCase() || selectedRole?.roleId || '';
+    if (!fromRole) {
+      toast.error('Save the role first — a template snapshots what the role holds on the server.');
+      return;
+    }
+    if (!templateName.trim()) { toast.error('Give the template a name.'); return; }
+    setSavingTemplate(true);
+    try {
+      await adminService.saveRoleTemplate({
+        name: templateName.trim(),
+        description: templateDesc.trim() || undefined,
+        fromRole,
+      });
+      toast.success('Template saved.', {
+        description: 'It may drift from the role from now on — that is the point of a snapshot. Delete it when it stops being useful.',
+      });
+      setShowTemplateForm(false);
+      setTemplateName('');
+      setTemplateDesc('');
+      await loadRoleTemplates();
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not save the template.');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (template: RoleTemplate) => {
+    try {
+      await adminService.deleteRoleTemplate(template.id);
+      toast.success(`Template “${template.name}” removed.`);
+      await loadRoleTemplates();
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not remove the template.');
+    }
+  };
+
   const handleSaveRole = async () => {
     if (!roleFormName.trim()) { toast.error('Role name is required.'); return; }
     const slug = roleFormSlug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
@@ -857,6 +967,9 @@ export default function UserManagement() {
 
   useEffect(() => {
     if (activeTab === 'hierarchy') loadHierarchyConfig();
+    // Templates are read when the Roles tab is opened — not on every mount of
+    // the page, and not before an administrator asks for them.
+    if (activeTab === 'roles') loadRoleTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -1099,6 +1212,15 @@ export default function UserManagement() {
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
+                              {isPlatformAdmin && (
+                                <button
+                                  onClick={() => setAccessReviewUser({ id: u.id, name: u.name })}
+                                  className="p-2 text-slate-400 hover:text-[#978C21] hover:bg-[#978C21]/10 rounded-lg transition-colors"
+                                  title="Effective Access — what this person can actually do, and which layer decided it"
+                                >
+                                  <ShieldCheck className="w-4 h-4" />
+                                </button>
+                              )}
                               {u.employeeId !== 'ADMIN' && u.id !== currentUser?.id && (
                                 <button
                                   onClick={() => handleDeleteUser(u.id, u.name)}
@@ -1252,6 +1374,57 @@ export default function UserManagement() {
         <div className="space-y-4">
           {!showRoleForm ? (
             <>
+              {roleTemplates.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-[#978C21] mt-0.5" />
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-800">Start from a template</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        A baseline reads the standard role live, so it can never drift from what that role holds.
+                        A saved template is a snapshot you took on purpose. Either way the editor opens with every
+                        toggle visible and nothing is saved until you save it.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {roleTemplates.map(template => (
+                      <div
+                        key={template.id}
+                        className="flex items-center gap-2 border border-slate-200 rounded-lg pl-3 pr-1.5 py-1.5 bg-slate-50"
+                      >
+                        <button
+                          onClick={() => handleUseTemplate(template)}
+                          className="text-left"
+                          title={template.description}
+                        >
+                          <span className="block text-xs font-medium text-slate-700">{template.name}</span>
+                          <span className="block text-[10px] text-slate-400">
+                            {template.source === 'system' ? 'baseline · live' : 'saved snapshot'} ·{' '}
+                            {template.grants.length} action{template.grants.length === 1 ? '' : 's'} ·{' '}
+                            {template.dataVisibility}
+                          </span>
+                        </button>
+                        {template.source === 'saved' && (
+                          <button
+                            onClick={() => handleDeleteTemplate(template)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Delete this saved template"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {!templatesAvailable && (
+                      <p className="text-[11px] text-slate-400 self-center">
+                        Saving your own snapshots needs migration 047 on this database; the baselines above work without it.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-between items-center">
                 <h3 className="text-base font-semibold text-slate-800">Roles ({roles.length})</h3>
                 <button
@@ -1317,12 +1490,72 @@ export default function UserManagement() {
           ) : (
             /* Role form / editor */
             <div className="space-y-4">
-              <button
-                onClick={() => setShowRoleForm(false)}
-                className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700"
-              >
-                <ArrowLeft className="w-4 h-4" /> Back to Roles
-              </button>
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={() => setShowRoleForm(false)}
+                  className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Back to Roles
+                </button>
+                <button
+                  onClick={() => {
+                    if (!selectedRole) {
+                      toast.info('Save the role first — a template snapshots what the role actually holds on the server.');
+                      return;
+                    }
+                    setTemplateName(`${roleFormName.trim() || selectedRole.roleName} snapshot`);
+                    setShowTemplateForm(v => !v);
+                  }}
+                  className="inline-flex items-center gap-2 px-3 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium rounded-lg transition-colors"
+                >
+                  <Bookmark className="w-3.5 h-3.5" /> Save as template
+                </button>
+              </div>
+
+              {showTemplateForm && selectedRole && (
+                <div className="bg-white border border-[#978C21]/30 rounded-xl p-5 space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">Save this role’s access as a template</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      A snapshot of the <span className="font-medium">{selectedRole.roleId}</span> role as it is stored
+                      on the server right now — {selectedRole.roleName}. Later edits to that role will not change the
+                      snapshot, and loading the snapshot will not change the role.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={templateName}
+                      onChange={e => setTemplateName(e.target.value)}
+                      placeholder="Template name"
+                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
+                    />
+                    <input
+                      type="text"
+                      value={templateDesc}
+                      onChange={e => setTemplateDesc(e.target.value)}
+                      placeholder="What is it for? (optional)"
+                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSaveAsTemplate}
+                      disabled={savingTemplate}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {savingTemplate ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save template
+                    </button>
+                    <button
+                      onClick={() => setShowTemplateForm(false)}
+                      className="px-4 py-2 text-sm text-slate-500 hover:text-slate-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* 1. Role basic info */}
@@ -2270,6 +2503,16 @@ export default function UserManagement() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Effective Access — the whole access review for one person, including
+          the layer that decided each permission. */}
+      {accessReviewUser && (
+        <EnterpriseAccessPanel
+          userId={accessReviewUser.id}
+          userName={accessReviewUser.name}
+          onClose={() => setAccessReviewUser(null)}
+        />
+      )}
 
       {/* Bulk Import Modal */}
       <UserBulkImportModal
