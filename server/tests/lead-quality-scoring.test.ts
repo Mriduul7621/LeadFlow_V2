@@ -691,10 +691,19 @@ describe('Lead Quality — frontend never scores (source guards)', () => {
     assert.ok(!src.includes('getLead('), 'workbench must not fetch single leads either');
   });
 
-  it('dashboard consumes only the server aggregate', () => {
-    const src = stripComments(read('src/modules/dashboard/pages/Dashboard.tsx'));
-    assert.ok(src.includes('metrics?.quality'), 'dashboard must render metrics.quality');
-    assert.ok(!src.includes('getLeadQuality('), 'dashboard must not fetch per-item quality');
+  it('the pipeline page consumes only the server aggregate, Home renders none', () => {
+    // The snapshot moved off Home onto the Sales Pipeline page; the property
+    // that matters did not change: one server aggregate, never per-item reads.
+    const home = stripComments(read('src/modules/dashboard/pages/Dashboard.tsx'));
+    assert.ok(!home.includes('LeadQualitySnapshot'), 'Home must not render the quality snapshot');
+    assert.ok(!home.includes('metrics?.quality'), 'Home must not read the quality aggregate');
+    assert.ok(!home.includes('getLeadQuality('), 'Home must never fetch per-item quality');
+    const pipeline = stripComments(read('src/modules/dashboard/pages/SalesPipelinePage.tsx'));
+    assert.ok(pipeline.includes('LeadQualitySnapshot'), 'the pipeline page must render the quality snapshot');
+    assert.ok(pipeline.includes('metrics?.quality'), 'the pipeline page must read metrics.quality');
+    assert.ok(!pipeline.includes('getLeadQuality('), 'the pipeline page must not fetch per-item quality');
+    const component = stripComments(read('src/modules/dashboard/components/LeadQualitySnapshot.tsx'));
+    assert.ok(!component.includes('getLeadQuality('), 'the snapshot must stay aggregate-only');
   });
 
   it('lead workspace lazily loads single-lead explanations through the reader', () => {

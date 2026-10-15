@@ -23,12 +23,13 @@ import {
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
-import { dashboardService, type DashboardMetrics, type DashboardQualityAggregate } from '../services/dashboardService';
+import { dashboardService, type DashboardMetrics } from '../services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { markCriticalStartupSettled, waitForCriticalStartup } from '../../shared/api/startupPriority';
 import { localDb } from '../../../services/localDb';
+import { roadshowService, type Roadshow } from '../../roadshows/services/roadshowService';
 
 /** -------------------------------------------------------------
  * Dashboard — role-aligned CRM / sales-execution workspace.
@@ -258,16 +259,22 @@ function getDailyActivities(followUps: FollowUpQueueItem[], scheduled: Scheduled
   return [...uniqueActivities.values()].sort((a, b) => time(a) - time(b));
 }
 
-export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled, tomorrowScheduled, dailyLoading }: {
+export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todayScheduled, tomorrowScheduled, dailyLoading, roadshowCounts }: {
   todayFollowUps: FollowUpQueueItem[];
   tomorrowFollowUps: FollowUpQueueItem[];
   todayScheduled: ScheduledActivity[];
   tomorrowScheduled: ScheduledActivity[];
   dailyLoading: boolean;
+  /**
+   * Roadshow alerts for the two days. `null`/absent (no roadshow access, or
+   * the read failed) hides the row entirely instead of claiming a false 0.
+   */
+  roadshowCounts?: { today: number; tomorrow: number } | null;
 }) {
+  const showRoadshows = !!roadshowCounts;
   const groups = [
-    { label: 'Today', items: getDailyActivities(todayFollowUps, todayScheduled) },
-    { label: 'Tomorrow', items: getDailyActivities(tomorrowFollowUps, tomorrowScheduled) },
+    { label: 'Today', items: getDailyActivities(todayFollowUps, todayScheduled), roadshows: roadshowCounts?.today ?? 0 },
+    { label: 'Tomorrow', items: getDailyActivities(tomorrowFollowUps, tomorrowScheduled), roadshows: roadshowCounts?.tomorrow ?? 0 },
   ];
 
   return (
@@ -302,13 +309,22 @@ export function TodayTomorrowPanel({ todayFollowUps, tomorrowFollowUps, todaySch
               </div>
             ) : (
               <>
-                <dl aria-label={`${group.label} activity counts`} className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                <dl
+                  aria-label={`${group.label} activity counts`}
+                  className={cn('grid gap-2 mb-3', showRoadshows ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4')}
+                >
                   {ACTIVITY_TYPES.map((type) => (
                     <div key={type} className="flex items-center justify-between gap-2 rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-3 py-2">
                       <dt className="text-[11px] font-semibold text-stone-500">{ACTIVITY_META[type].summary}</dt>
                       <dd className="text-sm font-bold text-brand-text">{formatCount(group.items.filter((item) => item.activityType === type).length)}</dd>
                     </div>
                   ))}
+                  {showRoadshows && (
+                    <div className="flex items-center justify-between gap-2 rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-3 py-2" data-roadshow-count={group.roadshows}>
+                      <dt className="text-[11px] font-semibold text-stone-500">Roadshows</dt>
+                      <dd className="text-sm font-bold text-brand-text">{formatCount(group.roadshows)}</dd>
+                    </div>
+                  )}
                 </dl>
                 {group.items.length === 0 ? (
                   <div className="rounded-[12px] border border-dashed border-stone-200 px-4 py-6 text-[13px] text-stone-400 text-center bg-[#FFFCF8]">
@@ -442,51 +458,6 @@ function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date
   );
 }
 
-// ---- Lead Quality snapshot (server-computed aggregate only) --------
-export function LeadQualitySnapshot({ quality }: { quality?: DashboardQualityAggregate }) {
-  if (!quality) return null;
-  const bands = [
-    { label: 'Hot', value: quality.hot, dot: 'bg-red-500' },
-    { label: 'Warm', value: quality.warm, dot: 'bg-amber-500' },
-    { label: 'Developing', value: quality.developing, dot: 'bg-blue-500' },
-    { label: 'Cold', value: quality.cold, dot: 'bg-slate-300' },
-  ];
-  const desc =
-    quality.activeScored > 0
-      ? `${formatCount(quality.activeScored)} active leads scored${quality.activeAverage !== null ? ` · avg ${quality.activeAverage}` : ''}`
-      : 'No active leads scored yet';
-  return (
-    <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-      <SectionHeading
-        title="Lead Quality"
-        desc={desc}
-        action={(
-          <Link to="/leads" className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#978C21] hover:underline">
-            Open Lead Workspace <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
-        )}
-      />
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {bands.map(band => (
-          <div key={band.label} className="rounded-[10px] border border-stone-100 bg-[#FFFCF8] px-4 py-3">
-            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-stone-500">
-              <span className={cn('w-2 h-2 rounded-full', band.dot)} />
-              {band.label}
-            </p>
-            <p className="text-xl font-black text-brand-text mt-1 tabular-nums">{formatCount(band.value)}</p>
-          </div>
-        ))}
-      </div>
-      {quality.needsAttention > 0 && (
-        <p className="mt-3 text-[12px] text-stone-500">
-          <span className="font-bold text-amber-600">{formatCount(quality.needsAttention)}</span>
-          {' '}need attention — overdue or stale engagement.
-        </p>
-      )}
-    </section>
-  );
-}
-
 // ============================================================
 // Dashboard main component
 // ============================================================
@@ -494,6 +465,9 @@ export default function Dashboard() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
   const canCreateLead = canAccess('lead_generate', 'create');
+  // Roadshow alerts are only rendered for users who may open the roadshow
+  // page at all — the same gate the workbench uses.
+  const canViewRoadshows = canAccess('roadshow_follow_up', 'view');
 
   const [period, setPeriod] = useState<PeriodKey>('TODAY');
   const [customStart, setCustomStart] = useState<string>(() => {
@@ -530,6 +504,7 @@ export default function Dashboard() {
   const [todayScheduled, setTodayScheduled] = useState<ScheduledActivity[]>([]);
   const [tomorrowScheduled, setTomorrowScheduled] = useState<ScheduledActivity[]>([]);
   const [dailyLoading, setDailyLoading] = useState(true);
+  const [roadshowCounts, setRoadshowCounts] = useState<{ today: number; tomorrow: number } | null>(null);
   const [recentLeads, setRecentLeads] = useState<Lead[]>([]);
   const [recentLeadsLoading, setRecentLeadsLoading] = useState(true);
 
@@ -608,21 +583,40 @@ export default function Dashboard() {
         }
       };
 
-      // Tier 3 — scheduled activities after follow-ups settle so they do
-      // not join the first-login connection burst.
-      const scheduledRes = await scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 });
+      // Tier 3 — scheduled activities and the (permission-gated) roadshow
+      // alerts start together only after the follow-ups settled, so they can
+      // never join the first-login connection burst.
+      const [scheduledRes, roadshowRes] = await Promise.all([
+        scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 }),
+        canViewRoadshows
+          ? roadshowService.list({ from: dhakaToday, to: tomorrowYmd, mine: true })
+          : Promise.resolve([] as Roadshow[]),
+      ]);
 
       setTodayScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, dhakaToday)));
       setTomorrowScheduled((scheduledRes ?? []).filter((a) => isDhakaDate(a.scheduledAt, tomorrowYmd)));
+
+      if (canViewRoadshows) {
+        // Same rule as the workbench: only open roadshows are alerts.
+        const open = (roadshowRes ?? []).filter((item) => item.status === 'pending' || item.status === 'reschedule');
+        setRoadshowCounts({
+          today: open.filter((item) => isDhakaDate(item.scheduledAt, dhakaToday)).length,
+          tomorrow: open.filter((item) => isDhakaDate(item.scheduledAt, tomorrowYmd)).length,
+        });
+      } else {
+        setRoadshowCounts(null);
+      }
     } catch {
       setTodayFollowUps([]);
       setTomorrowFollowUps([]);
       setTodayScheduled([]);
       setTomorrowScheduled([]);
+      // Never show a fabricated 0 when the read failed.
+      setRoadshowCounts(null);
     } finally {
       setDailyLoading(false);
     }
-  }, [user]);
+  }, [user, canViewRoadshows]);
 
   /**
    * Recent Leads — the five most recent rows from the LOCAL MIRROR of server
@@ -906,7 +900,6 @@ export default function Dashboard() {
               pipelineLocked={metrics?.pipelineLocked ?? 0}
               overdueFollowUps={followUpCounts.overdue}
             />
-            <LeadQualitySnapshot quality={metrics?.quality} />
           </section>
 
           <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
@@ -928,6 +921,7 @@ export default function Dashboard() {
               todayScheduled={todayScheduled}
               tomorrowScheduled={tomorrowScheduled}
               dailyLoading={dailyLoading}
+              roadshowCounts={roadshowCounts}
             />
           </section>
 
