@@ -82,7 +82,7 @@ function scanPageComponent(rel: string): Offender | null {
   return offenders.length ? { file: rel, lines: offenders.map((i) => i + 1) } : null;
 }
 
-/** Live page components (the dead `src/pages` duplicate tree is excluded). */
+/** Live page components (the dead `src/pages` duplicate tree was removed in F14). */
 function livePageFiles(): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {

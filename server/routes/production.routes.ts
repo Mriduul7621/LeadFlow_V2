@@ -2567,14 +2567,11 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
   const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
   const fileName = body.fileName ? String(body.fileName) : undefined;
 
-  if (!rawRows.length) {
-    return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
-  }
-  if (rawRows.length > USER_BULK_MAX_ROWS) {
-    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
-  }
-
   try {
+    /* F15: authorization comes FIRST. Validating the payload before the
+       permission check answered 400 to a caller who was never allowed to make
+       the request at all — a shape oracle that also made the documented
+       "users.create required" answer depend on how much the caller sent. */
     const caller = await getCallerDbInfo(req);
     if (!caller) {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
@@ -2592,6 +2589,14 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
     }
     if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+    }
+
+    // Only an authorised caller gets told what is wrong with the payload.
+    if (!rawRows.length) {
+      return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
+    }
+    if (rawRows.length > USER_BULK_MAX_ROWS) {
+      return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
     }
 
     // Normalize rows
@@ -2647,6 +2652,26 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   const mode: ImportMode = body.mode === 'createAndUpdate' ? 'createAndUpdate' : 'createOnly';
   const fileName = body.fileName ? String(body.fileName) : undefined;
 
+  /* F15: the authorization decision must not depend on the payload. An
+     unprivileged caller gets 403 whether they send zero rows, ten rows or a
+     malformed body — the empty-body 400 used to come first. */
+  const caller = await getCallerDbInfo(req);
+  if (!caller) {
+    return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+  }
+
+  const [canCreate, canEdit] = await Promise.all([
+    hasPermissionCode(caller, 'users.create'),
+    hasPermissionCode(caller, 'users.edit'),
+  ]);
+
+  if (mode === 'createOnly' && !canCreate) {
+    return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
+  }
+  if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
+    return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
+  }
+
   if (!rawRows.length) {
     return sendJson(res, 400, { success: false, message: 'No rows supplied for commit' });
   }
@@ -2658,23 +2683,6 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   const client = await pool.connect();
 
   try {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-
-    // Independent codes: one round trip of latency instead of two.
-    const [canCreate, canEdit] = await Promise.all([
-      hasPermissionCode(caller, 'users.create'),
-      hasPermissionCode(caller, 'users.edit'),
-    ]);
-
-    if (mode === 'createOnly' && !canCreate) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to create users (users.create required).' });
-    }
-    if (mode === 'createAndUpdate' && !canCreate && !canEdit) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import users (users.create or users.edit required).' });
-    }
 
     // Normalize rows (fresh)
     const normalized: NormalizedUserBulkRow[] = rawRows.map((r: any) => {
