@@ -61,12 +61,15 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     assert.equal(resolveFeatureRouteAccess('/settings/performance-diagnostics', 'ADMIN', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/settings/performance-diagnostics', 'SUPERADMIN', undefined), true);
 
+    // Insight/report pages follow the DEFAULT `reports.view` grant table
+    // (decided 2026-10-15): the client fallback derives from it, so the
+    // page gate cannot disagree with the server permission again.
     for (const route of INSIGHT_ROUTES) {
-      for (const role of ['RO', 'RM']) {
-        assert.equal(resolveFeatureRouteAccess(route, role, undefined), true, `${route} open for ${role}`);
+      for (const role of ['MANAGER', 'SM', 'RM', 'TEAM_LEAD', 'BDM', 'ASM', 'CEO', 'BH']) {
+        assert.equal(resolveFeatureRouteAccess(route, role, undefined), true, `${route} open for ${role} (holds reports.view)`);
       }
-      for (const role of ['ASM', 'BDM', 'BE', 'BH']) {
-        assert.equal(resolveFeatureRouteAccess(route, role, undefined), false, `${route} closed for ${role} (static)`);
+      for (const role of ['RO', 'BE', 'SBE', 'EMPLOYEE']) {
+        assert.equal(resolveFeatureRouteAccess(route, role, undefined), false, `${route} closed for ${role} (no reports.view)`);
       }
     }
 
@@ -219,8 +222,11 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     // Roadshows are a deliberate grant, not an org-wide default.
     assert.equal(resolveFeatureRouteAccess('/roadshows', 'EMPLOYEE', undefined), false, 'employees need the roadshow grant');
     assert.equal(resolveFeatureRouteAccess('/roadshows', 'MANAGER', undefined), true, 'managers carry the roadshow default');
-    // Reports: the CEO opens them by default, other catalogue roles do not.
+    // Reports: managers and team leads open them by default (they hold
+    // reports.view), frontline roles do not until an admin grants it.
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'CEO', undefined), true);
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'MANAGER', undefined), true);
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'TEAM_LEAD', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', undefined), false);
     // ...and an explicit toggle still opens them for anyone.
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', { menuAccess: { '/execution-intelligence': true } } as any), true);
