@@ -3217,9 +3217,17 @@ router.put('/users/:id/permissions', requireAuth, requirePermissionCode('permiss
       if (override.allowed === null || override.allowed === undefined) {
         await client.query('DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2', [userId, permResult.rows[0].id]);
       } else {
+        // Column list MUST match migration 027 (the only creator of this
+        // table): user_id, permission_id, is_allowed, reason, created_at,
+        // updated_at. A `granted_at` column was named here for years while
+        // no migration ever created it, so EVERY override save answered
+        // 500 ("column granted_at ... does not exist") on real databases —
+        // the older integration suites missed it because each hand-wrote a
+        // fixture that happened to include the column. `created_at` already
+        // records when the override was first stored.
         await client.query(
-          `INSERT INTO user_permissions (user_id, permission_id, is_allowed, reason, granted_at, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, NOW(), NOW(), NOW())
+          `INSERT INTO user_permissions (user_id, permission_id, is_allowed, reason, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())
            ON CONFLICT (user_id, permission_id) DO UPDATE SET
              is_allowed = EXCLUDED.is_allowed,
              reason = EXCLUDED.reason,
