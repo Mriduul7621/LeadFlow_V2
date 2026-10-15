@@ -733,8 +733,16 @@ describe('Performance & latency hardening — client source guards', () => {
   it('K. mutations only report success after the server confirms (client)', () => {
     const svc = LEAD_SERVICE();
     const createBody = svc.slice(svc.indexOf('async createLead'), svc.indexOf('async bulkUploadLeads'));
-    assert.ok(createBody.indexOf('await apiRequest<Lead>(\'/api/leads\'') >= 0, 'createLead must await the server');
-    assert.ok(createBody.indexOf('cacheLead(saved)') > createBody.indexOf('await apiRequest<Lead>(\'/api/leads\''),
+    // The create now reads the ENVELOPE (it needs the server's `matchedBy`
+    // so a duplicate mobile number cannot be reported as a creation) — but it
+    // must still be one awaited round trip that the cache is written after.
+    const createCall = Math.max(
+      createBody.indexOf("await apiRequest<Lead>('/api/leads'"),
+      createBody.indexOf("await apiRequestEnvelope<Lead>('/api/leads'"),
+    );
+    assert.ok(createCall >= 0, 'createLead must await the server');
+    assert.ok(!createBody.includes('coalesceGet'), 'createLead must not be coalesced with other reads');
+    assert.ok(createBody.indexOf('cacheLead(saved)') > createCall,
       'local cache must be written only after the confirmed response');
     const fuBody = svc.slice(svc.indexOf('async updateLeadStatus'), svc.indexOf('async getLead('));
     assert.ok(fuBody.includes('await apiRequest'), 'follow-up save must await the server');
