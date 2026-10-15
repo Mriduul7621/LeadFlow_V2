@@ -277,6 +277,9 @@ export default function UserManagement() {
     designation: '',
     role: '',
     departmentId: '',
+    // Extra department seats (Phase D): one person may belong to more than
+    // one department, which is what lets a single head lead several.
+    departmentIds: [] as string[],
     managerId: '',
     password: '',
     status: 'Active' as 'Active' | 'Inactive',
@@ -348,6 +351,7 @@ export default function UserManagement() {
       designation: '',
       role: roles.length > 0 ? roles[0].roleId : 'ADMIN',
       departmentId: departments.length > 0 ? departments[0].id : '',
+      departmentIds: [],
       managerId: '',
       password: '', status: 'Active',
     });
@@ -365,6 +369,10 @@ export default function UserManagement() {
       designation: u.designation || '',
       role: u.role || (roles.length > 0 ? roles[0].roleId : 'ADMIN'),
       departmentId: (u as any).departmentId || '',
+      // Only the EXTRA seats are edited here; the primary department is the
+      // dropdown above.
+      departmentIds: (((u as any).departmentIds || []) as string[])
+        .filter(id => id !== (u as any).departmentId),
       managerId: (u as any).managerId || (u as any).reportingManagerId || '',
       password: '',
       status: u.status || 'Active',
@@ -417,6 +425,11 @@ export default function UserManagement() {
         designation: userForm.designation.trim() || 'Officer',
         role: userForm.role,
         departmentId: userForm.departmentId as any,
+        // Primary + extra seats, deduped: the server ignores the primary when
+        // it writes the extra seats.
+        departmentIds: Array.from(
+          new Set([userForm.departmentId, ...userForm.departmentIds].filter(Boolean))
+        ) as any,
         status: userForm.status,
         createdDate: editingUser ? editingUser.createdDate : new Date().toISOString(),
         password: userForm.password ? userForm.password : (editingUser ? undefined : genTempPw()),
@@ -522,9 +535,17 @@ export default function UserManagement() {
   /*  DEPARTMENT HEADS HANDLERS (Phase C)                                */
   /* ================================================================== */
   /** Everyone who may be picked as a head: the department's ACTIVE members
-   *  (the server rejects anybody else, so the picker never offers them). */
+   *  (the server rejects anybody else, so the picker never offers them).
+   *  Phase D: membership — not the single legacy `departmentId` — decides who
+   *  belongs, so a person whose seat in this department is an EXTRA one is
+   *  offered too (that is how one head can lead several departments). */
+  const belongsToDepartment = (u: User, departmentId: string) => {
+    const seats = ((u as any).departmentIds || []) as string[];
+    return seats.length > 0 ? seats.includes(departmentId) : (u as any).departmentId === departmentId;
+  };
+
   const headCandidates = (dept: Department | null) =>
-    dept ? users.filter(u => u.departmentId === dept.id && u.status !== 'Inactive') : [];
+    dept ? users.filter(u => belongsToDepartment(u, dept.id) && u.status !== 'Inactive') : [];
 
   const openHeadsModal = (dept: Department) => {
     setHeadDept(dept);
@@ -778,7 +799,7 @@ export default function UserManagement() {
     const text = `${u.name} ${u.employeeId} ${u.designation || ''} ${u.email || ''}`.toLowerCase();
     const q = userQuery.toLowerCase();
     const matchQuery = !q || text.includes(q);
-    const matchDept = !filterDeptId || (u as any).departmentId === filterDeptId;
+    const matchDept = !filterDeptId || belongsToDepartment(u, filterDeptId);
     const matchRole = !filterRole || u.role === filterRole;
     return matchQuery && matchDept && matchRole;
   });
@@ -937,7 +958,20 @@ export default function UserManagement() {
                                 <Shield className="w-3 h-3 text-[#978C21]" />
                                 {roles.find(r => r.roleId === u.role)?.roleName || u.role}
                               </span>
-                              {dept && <p className="text-xs text-slate-400">{dept.name}</p>}
+                              {dept && (
+                                <p className="text-xs text-slate-400">
+                                  {dept.name}
+                                  {(() => {
+                                    const extras = (((u as any).departmentIds || []) as string[])
+                                      .filter(id => id !== (u as any).departmentId)
+                                      .map(id => departments.find(d => d.id === id)?.name)
+                                      .filter(Boolean);
+                                    return extras.length > 0 ? (
+                                      <span className="text-[#978C21] font-medium"> +{extras.join(', ')}</span>
+                                    ) : null;
+                                  })()}
+                                </p>
+                              )}
                               {u.designation && <p className="text-xs text-slate-400">{u.designation}</p>}
                             </div>
                           </td>
@@ -1465,6 +1499,104 @@ export default function UserManagement() {
             );
           })()}
 
+          {/* Department health (F16 Phase D): a department with members but no
+              primary head, an empty department, a mirror team that drifted out
+              of step with its memberships — each is listed instead of being
+              silently averaged away by the ladder progress bar above. */}
+          {hierConfig?.departments && !hierConfig.departments.available && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-500">
+              Department health needs the department-members layer (migration 046), which this database does not
+              have yet. Run migrations, then reload.
+            </div>
+          )}
+          {hierConfig?.departments && hierConfig.departments.available && (() => {
+            const dh = hierConfig.departments!;
+            const clean = dh.headless.length === 0 && dh.empty.length === 0 && dh.teamDrift.length === 0;
+            return (
+              <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-slate-700">Department health</span>
+                  <span className="text-xs text-slate-500">
+                    {dh.totalDepartments} department{dh.totalDepartments === 1 ? '' : 's'} · {dh.headless.length} without a
+                    primary head · {dh.empty.length} empty · {dh.teamDrift.length} team{dh.teamDrift.length === 1 ? '' : 's'} out of sync
+                  </span>
+                </div>
+
+                {clean ? (
+                  <p className="text-xs text-emerald-600">
+                    Every department has a head, at least one member, and a team that matches its members.
+                  </p>
+                ) : (
+                  <>
+                    {dh.headless.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-300 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-amber-800">
+                          {dh.headless.length} department{dh.headless.length === 1 ? '' : 's'} have members but no primary head.
+                        </p>
+                        <p className="text-[11px] text-amber-700 mt-1">
+                          A department is allowed to be headless — nobody is guessing a value here. Set the primary head
+                          in the <span className="font-semibold">Departments</span> tab (the head must be a member).
+                        </p>
+                        <ul className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                          {dh.headless.map(d => (
+                            <li key={d.id} className="text-xs text-amber-800">
+                              <span className="font-medium">{d.name}</span> — {d.memberCount} member{d.memberCount === 1 ? '' : 's'}
+                              {d.coHeadCount > 0 ? `, ${d.coHeadCount} co-head${d.coHeadCount === 1 ? '' : 's'} waiting for a primary` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {dh.teamDrift.length > 0 && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-red-800">
+                          {dh.teamDrift.length} department team{dh.teamDrift.length === 1 ? '' : 's'} no longer match their members.
+                        </p>
+                        <p className="text-[11px] text-red-700 mt-1">
+                          The department is the source of truth: save the department (or any of its members) in the
+                          <span className="font-semibold"> Departments</span> tab to re-sync its roster and leader.
+                        </p>
+                        <ul className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                          {dh.teamDrift.map(d => (
+                            <li key={d.id} className="text-xs text-red-800">
+                              <span className="font-medium">{d.name}</span> — members {d.membershipCount}, team roster {d.rosterCount}
+                              {d.issues.includes('missing-team') ? ', no team' : ''}
+                              {d.issues.includes('leader-mismatch') ? ', team leader is not the primary head' : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {dh.empty.length > 0 && (
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-slate-700">
+                          {dh.empty.length} empty department{dh.empty.length === 1 ? '' : 's'} (no members yet)
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-1">{dh.empty.map(d => d.name).join(', ')}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {dh.membersWithoutDepartment.length > 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    {dh.membersWithoutDepartment.length} active employee{dh.membersWithoutDepartment.length === 1 ? '' : 's'} belong
+                    to no department: {dh.membersWithoutDepartment.map(u => `${u.fullName || u.employeeId} (${u.employeeId})`).join(', ')}
+                  </p>
+                )}
+                {dh.multiDepartmentHeads.length > 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    Heads of more than one department: {dh.multiDepartmentHeads
+                      .map(h => `${h.fullName || h.employeeId} (${h.departmentCount})`)
+                      .join(', ')} — allowed by design; each department keeps its own team.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Ladder levels */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
             {hierConfig && hierConfig.levels.length > 0 ? (
@@ -1648,6 +1780,40 @@ export default function UserManagement() {
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))}
                     </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">
+                      Additional Departments <span className="text-xs font-normal text-slate-400">(optional — the person is a team member there too)</span>
+                    </label>
+                    {departments.filter(d => d.id !== userForm.departmentId).length === 0 ? (
+                      <p className="text-xs text-slate-400 px-4 py-2.5 border border-dashed border-slate-200 rounded-lg">
+                        No other department available.
+                      </p>
+                    ) : (
+                      <div className="grid sm:grid-cols-2 gap-2 px-4 py-3 border border-slate-200 rounded-lg">
+                        {departments
+                          .filter(d => d.id !== userForm.departmentId)
+                          .map(d => {
+                            const checked = userForm.departmentIds.includes(d.id);
+                            return (
+                              <label key={d.id} className="flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setUserForm({
+                                    ...userForm,
+                                    departmentIds: checked
+                                      ? userForm.departmentIds.filter(id => id !== d.id)
+                                      : [...userForm.departmentIds, d.id],
+                                  })}
+                                  className="w-4 h-4 accent-[#978C21]"
+                                />
+                                {d.name}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-600 mb-1 block">Reporting Manager</label>
