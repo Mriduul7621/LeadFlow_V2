@@ -1,0 +1,68 @@
+plugins { id 'com.android.application' }
+
+// androidbrowserhelper 2.5.0 pulls kotlin-stdlib-jdk7/jdk8:1.6.21 while
+// androidx.appcompat:1.7.0 pulls kotlin-stdlib:1.8.22 — the mix trips
+// :checkDebugDuplicateClasses. Pin all stdlib artifacts to one version.
+configurations.all {
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+    }
+}
+
+android {
+    namespace 'com.saudalmahi.leadflow'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.saudalmahi.leadflow'
+        minSdk 23
+        targetSdk 34
+        // CI passes -PversionCode=<run number>: the "android-debug" release is
+        // republished on every push to main, and Android refuses to install an
+        // update whose versionCode is not higher than the installed one. A
+        // local build without the property keeps the plain 1.
+        def ciVersionCode = (project.findProperty('versionCode') ?: '1').toString()
+        versionCode (ciVersionCode.isInteger() ? ciVersionCode.toInteger() : 1)
+        versionName '1.0.0'
+        // Host the wrapper opens. The branded domain is the default; CI can
+        // build a variant against another host with -PappHost=<host> (see
+        // docs/ANDROID_TWA.md) — the App Links intent-filter follows it, and
+        // the site-side assetlinks.json is host-independent.
+        manifestPlaceholders = [appHost: (project.findProperty('appHost') ?: 'app.saudalmahi.com')]
+    }
+
+    // Committed standard debug credentials (android/android). For a release
+    // build, swap this file + passwords for the production signing key.
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            keyAlias 'androiddebugkey'
+            storePassword 'android'
+            keyPassword 'android'
+            storeType 'PKCS12'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

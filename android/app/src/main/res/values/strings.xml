@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appName">Shanta Life LeadFlow</string>
+    <string name="launcherName">LeadFlow</string>
+    <!-- App-side statement(s): every host this wrapper may open. The site-side
+         file (/…/.well-known/assetlinks.json) is host-independent — it names the
+         package + signing certificate only — so a variant build against another
+         host verifies with the same file. -->
+    <string name="assetStatements">
+        [{
+            \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+            \"target\": {
+                \"namespace\": \"web\",
+                \"site\": \"https://app.saudalmahi.com\"
+            }
+        }, {
+            \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+            \"target\": {
+                \"namespace\": \"web\",
+                \"site\": \"https://lead-flow-jet.vercel.app\"
+            }
+        }]
+    </string>
+</resources>

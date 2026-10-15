@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.saudalmahi.leadflow",
+      "sha256_cert_fingerprints": [
+        "85:9B:81:1A:D0:C2:4E:83:C3:DC:62:02:48:AC:65:E8:E6:7F:81:48:37:38:38:0F:8E:63:23:76:8A:04:D1:AC"
+      ]
+    }
+  }
+]

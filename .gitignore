@@ -8,3 +8,9 @@ coverage/
 .env*
 !.env.example
 .arena/
+
+# Android TWA build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
