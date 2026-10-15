@@ -86,6 +86,19 @@ const DEFAULT_VISIBILITY: Record<string, string> = {
 };
 
 export async function applyDefaultRoleAccess(): Promise<void> {
+    /* `role_permissions.updated_at` is a product column (migration 035), but
+       minimal schemas exist in the wild — the forced-password-change fixture
+       creates the table without it, and a hard reference to it turned every
+       user creation on such a database into a 500. Detect it once instead of
+       assuming it. */
+    const hasTouchColumn = await query<{ exists: boolean }>(
+        `SELECT EXISTS (
+             SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'role_permissions' AND column_name = 'updated_at'
+         ) AS exists`
+    );
+    const touchClause = hasTouchColumn.rows[0]?.exists ? ', updated_at = NOW()' : '';
+
     // ---- 1. Default permission grants (fresh roles only) ----------------
     for (const [roleCode, codes] of Object.entries(DEFAULT_GRANTS)) {
         // The guard: does this role already hold ANY grant? If yes, it has
@@ -107,7 +120,7 @@ export async function applyDefaultRoleAccess(): Promise<void> {
               WHERE UPPER(r.role_code) = $1
                 AND p.permission_code = ANY($2)
              ON CONFLICT (role_id, permission_id) DO UPDATE
-                SET is_allowed = TRUE, updated_at = NOW()`,
+                SET is_allowed = TRUE${touchClause}`,
             [roleCode, codes]
         );
     }

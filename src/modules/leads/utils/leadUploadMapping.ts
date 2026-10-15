@@ -267,6 +267,38 @@ export function formatDateForDisplay(value: any): string {
   return String(value).trim();
 }
 
+/** The spreadsheet columns that hold a DATE (everything else is text/number). */
+const DATE_FIELDS: CanonicalField[] = ['assignedDate', 'leadDate', 'firstCallDate', 'followUpDate'];
+
+/**
+ * True when a sheet HEADER names a date column (all known aliases).
+ *
+ * F17: the raw-file preview used to run `formatDateForDisplay` on EVERY cell,
+ * so a plain number in a non-date column was read as an Excel serial — an
+ * "Interested amount of investment" of 50000 displayed as 2036-11-21 while
+ * the validator (correctly) sent 50000. The preview now asks the column.
+ */
+export function isDateColumn(header: unknown): boolean {
+  const key = normalizeHeaderKey(header);
+  if (!key) return false;
+  return DATE_FIELDS.some(field => FIELD_ALIASES[field].some(alias => normalizeHeaderKey(alias) === key));
+}
+
+/**
+ * Display value for ONE raw sheet cell.
+ *
+ * `header` is the cell's column header ('' for an unknown/extra column).
+ * A date column is formatted as a date; anything else is shown exactly as it
+ * came from the file (trimmed), so numbers stay numbers.
+ */
+export function formatSheetCellForDisplay(cell: any, header: unknown): string {
+  if (cell === undefined || cell === null) return '';
+  if (cell instanceof Date) return formatDateForDisplay(cell);
+  if (isDateColumn(header)) return formatDateForDisplay(cell);
+  if (typeof cell === 'string') return cell.trim();
+  return String(cell);
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 /* ------------------------------------------------------------------

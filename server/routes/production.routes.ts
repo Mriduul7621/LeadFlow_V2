@@ -15,6 +15,13 @@ import {
   reportingManagerRequiredError,
 } from '../utils/reportingRules.js';
 import { createPerf } from '../utils/perf.js';
+import { applyDefaultRoleAccess } from '../database/roleAccessDefaults.js';
+import {
+  leadStatusViolationMessage,
+  resolveNextActionStatus,
+  validateLeadStatusFields,
+} from '../utils/leadStatusRules.js';
+import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRules';
 import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
   mapSpreadsheetRow,
@@ -397,11 +404,19 @@ async function ensureDefaultRoles(): Promise<void> {
   } else {
     // Existing databases: guarantee the business ladder has a Level-1 (CEO)
     // role available even when the table was seeded before it existed.
-    await pool.query(
+    const inserted = await pool.query(
       `INSERT INTO roles (role_code, role_name, hierarchy_level, is_active, created_at, updated_at)
        VALUES ('CEO', 'Chief Executive Officer', 1, TRUE, NOW(), NOW())
        ON CONFLICT (role_code) DO NOTHING`
     );
+    if ((inserted.rowCount ?? 0) > 0) {
+      // A role must never be born unconfigured: give the brand-new row the
+      // same guarded defaults the seed step gives the standard roles, so an
+      // install that predates this fix does not end up with a CEO who cannot
+      // read a single page (F3/F4). The routine is idempotent and skips any
+      // role that already holds a grant, so an admin's matrix is untouched.
+      await applyDefaultRoleAccess();
+    }
   }
   rolesEnsured = true;
 }
@@ -7031,6 +7046,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     const rawSumAssured = body.sumAssured ?? body.sum_assured ?? body.sumAssured;
     const rawProductName = body.productName ?? body.product_name ?? body.product;
     const rawLossReason = body.lossReason ?? body.loss_reason ?? body.lossReason;
+    // 'nextAction' is the form's shortcut out of 'Interested' (Need Follow-Up /
+    // Meeting Fixed / Proposal Sent / Not Interested). It is resolved to the
+    // canonical status here, so the API keeps the UI's semantics.
+    const rawNextAction = body.nextAction ?? body.next_action;
 
     // Normalize
     const statusInput = rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '' ? String(rawStatus).trim() : undefined;
@@ -7078,12 +7097,47 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (!validatedStatus) {
         return sendJson(res, 400, { success: false, message: `Unknown status \"${statusInput}\".` });
       }
+      // Interested + a Next Action = the status the form would have sent.
+      // Only a VALID choice resolves; an unknown nextAction is ignored (it is
+      // a UI hint) and the explicit status wins.
+      if (normalizeStatusKey(validatedStatus) === 'interested') {
+        const resolvedNextAction = resolveNextActionStatus(rawNextAction);
+        if (resolvedNextAction) validatedStatus = resolvedNextAction;
+      }
     }
 
     // At least one business field should be present; otherwise it's a no-op
     const hasAnyField = validatedStatus !== undefined || remarksInput !== undefined || nextFollowUpDateInput !== undefined || nextCallDateInput !== undefined || meetingDateInput !== undefined || meetingTypeInput !== undefined || collectedNCPInput !== undefined || projectedNCPInput !== undefined || sumAssuredInput !== undefined || productNameInput !== undefined || lossReasonInput !== undefined;
     if (!hasAnyField) {
       return sendJson(res, 400, { success: false, message: 'No valid follow-up fields supplied.' });
+    }
+
+    /* ---- F6: per-status required fields (server-authoritative) ----------------
+       The conditionals used to live only in the Update form, so any other
+       caller could park a lead in "Meeting Fixed" with no meeting, "Converted"
+       with no premium, or "Not Interested" with no reason. Same rule table as
+       the form (src/modules/leads/utils/leadStatusRules.ts), evaluated on the
+       NORMALIZED payload, so 0 / "" / null all count as missing.
+       A partial update (remarks only, no status) keeps working: the rule is
+       keyed on the status being written.                                          */
+    if (validatedStatus !== undefined) {
+      const violations = validateLeadStatusFields(validatedStatus, {
+        nextFollowUpDate: nextFollowUpDateInput,
+        meetingDate: meetingDateInput,
+        productName: productNameInput,
+        sumAssured: sumAssuredInput,
+        projectedNCP: projectedNCPInput,
+        collectedNCP: collectedNCPInput,
+        lossReason: lossReasonInput,
+      });
+      if (violations.length > 0) {
+        perf.finish(res);
+        return sendJson(res, 400, {
+          success: false,
+          message: leadStatusViolationMessage(violations),
+          errors: violations,
+        });
+      }
     }
 
     if (!useDb()) {

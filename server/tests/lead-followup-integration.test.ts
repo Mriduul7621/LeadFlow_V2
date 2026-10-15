@@ -226,7 +226,9 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     }
 
     // Seed FollowUpStatus dictionary (canonical)
-    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted', 'Not Interested'];
+    // 'Proposal Sent' is part of the live dictionary (migration 0xx adds it);
+    // the fixture must carry it too so the F6 rules for it can be exercised.
+    const statuses = ['New', 'Contacted', 'No Response', 'Busy', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Proposal Sent', 'Converted', 'Not Interested'];
     for (let i = 0; i < statuses.length; i++) {
       await pool.query(`INSERT INTO options (field_key, option_value, option_label, sort_order, is_active) VALUES ('FollowUpStatus', $1, $1, $2, true) ON CONFLICT DO NOTHING`, [statuses[i], i + 1]);
     }
@@ -822,5 +824,114 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
     const res = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Busy', remarks: 'idempotency check' });
     assert.equal(res.status, 200);
+  });
+
+  /* ==================================================================
+     F6 — per-status required fields are now enforced by the SERVER.
+     The rules used to live only in the Update form, so a direct API call
+     could park a lead in a state the business cannot act on. Each case
+     below is the exact payload the old code accepted with a 200.
+     ================================================================== */
+
+  it('Z1. Follow-up Set demands a next follow-up date (400, nothing written)', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009920' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const res = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Follow-up Set', remarks: 'no date supplied' });
+    assert.equal(res.status, 400, `expected rejection, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.match(String(res.body.message), /Next Follow-Up date/i);
+    assert.equal(res.body.errors[0].field, 'nextFollowUpDate');
+    const row: any = await pool.query(`SELECT current_status FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.notEqual(row.rows[0].current_status, 'Follow-up Set', 'a rejected update must not move the lead');
+    // …and the compliant payload still succeeds
+    const ok = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Follow-up Set', remarks: 'with date', nextFollowUpDate: new Date(Date.now() + 86400000).toISOString() });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  it('Z2. Meeting Fixed demands a meeting date', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009921' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const bad = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Meeting Fixed', remarks: 'no meeting date' });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.equal(bad.body.errors[0].field, 'meetingDate');
+    const good = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Meeting Fixed', remarks: 'scheduled', meetingDate: new Date(Date.now() + 3600000).toISOString(), meetingType: 'In-Person' });
+    assert.equal(good.status, 200, JSON.stringify(good.body));
+  });
+
+  it('Z3. Proposal Sent demands product + sum assured + projected FYCP', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009922' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const bad = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Proposal Sent', remarks: 'forgot the numbers' });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.deepEqual((bad.body.errors || []).map((e: any) => e.field), ['productName', 'sumAssured', 'projectedNCP'], JSON.stringify(bad.body));
+    // zero is NOT a premium: "0" used to pass the client-side non-empty check
+    const zero = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Proposal Sent', productName: 'SCEP', sumAssured: 0, projectedNCP: 0 });
+    assert.equal(zero.status, 400, JSON.stringify(zero.body));
+    assert.match(String(zero.body.message), /greater than zero/i);
+    const good = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Proposal Sent', productName: 'SCEP', sumAssured: 500000, projectedNCP: 25000 });
+    assert.equal(good.status, 200, JSON.stringify(good.body));
+  });
+
+  it('Z4. Converted demands product + sum assured + collected FYCP', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009923' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const bad = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Converted', remarks: 'closed it' });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.deepEqual(bad.body.errors.map((e: any) => e.field), ['productName', 'sumAssured', 'collectedNCP']);
+    const negative = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Converted', productName: 'SCEP', sumAssured: 500000, collectedNCP: -5 });
+    assert.equal(negative.status, 400, JSON.stringify(negative.body));
+    const good = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Converted', productName: 'SCEP', sumAssured: 500000, collectedNCP: 30000 });
+    assert.equal(good.status, 200, JSON.stringify(good.body));
+    const row: any = await pool.query(`SELECT current_status FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.equal(row.rows[0].current_status, 'Converted');
+  });
+
+  it('Z5. Not Interested demands a loss reason', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009924' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const bad = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Not Interested', remarks: 'not keen' });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.equal(bad.body.errors[0].field, 'lossReason');
+    const whitespace = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Not Interested', lossReason: '   ' });
+    assert.equal(whitespace.status, 400, 'whitespace is not a loss reason');
+    const good = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Not Interested', lossReason: 'Chose a competitor' });
+    assert.equal(good.status, 200, JSON.stringify(good.body));
+  });
+
+  it('Z6. a remarks-only update (no status) is still allowed — the rules are per-status', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009925' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    const res = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ remarks: 'called, no answer — trying again tomorrow' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+  });
+
+  it('Z7. Interested + Next Action resolves server-side, exactly like the form', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009926' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    // "Need Follow-Up" is a next action, not a dictionary status: it must land on Follow-up Set…
+    const missing = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Interested', nextAction: 'Need Follow-Up', remarks: 'call back' });
+    assert.equal(missing.status, 400, `the resolved status (Follow-up Set) still needs its date: ${JSON.stringify(missing.body)}`);
+    assert.equal(missing.body.errors[0].field, 'nextFollowUpDate');
+    const okRes = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Interested', nextAction: 'Proposal Sent', remarks: 'quote sent', productName: 'SCEP', sumAssured: 400000, projectedNCP: 20000 });
+    assert.equal(okRes.status, 200, JSON.stringify(okRes.body));
+    const row: any = await pool.query(`SELECT current_status FROM leads WHERE lead_code = $1`, [lead.id]);
+    assert.equal(row.rows[0].current_status, 'Proposal Sent', 'the next action decides the persisted status');
+    // …and a bare Interested (no next action) keeps working: it is a real state.
+    const lead2 = await createLeadAs(employeeA, { mobile: '01700009927' });
+    const bare = await request(app).post(`/api/leads/${lead2.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Interested', remarks: 'interested, details later' });
+    assert.equal(bare.status, 200, JSON.stringify(bare.body));
+    const row2: any = await pool.query(`SELECT current_status FROM leads WHERE lead_code = $1`, [lead2.id]);
+    assert.equal(row2.rows[0].current_status, 'Interested');
+  });
+
+  it('Z8. the enforcement cannot be dodged with an alias field name', async () => {
+    const lead = await createLeadAs(employeeA, { mobile: '01700009928' });
+    const token = signToken({ id: employeeA.id, employeeId: employeeA.employeeId, role: employeeA.role, email: employeeA.email });
+    // alias spellings of the required fields are normalized BEFORE the check
+    const okRes = await request(app).post(`/api/leads/${lead.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Converted', product_name: 'SCEP', sum_assured: 300000, collected_ncp: 12000 });
+    assert.equal(okRes.status, 200, JSON.stringify(okRes.body));
+    // …and an empty-value alias is still empty
+    const lead2 = await createLeadAs(employeeA, { mobile: '01700009929' });
+    const bad = await request(app).post(`/api/leads/${lead2.id}/follow-up`).set('Authorization', `Bearer ${token}`).send({ status: 'Converted', product_name: 'SCEP', sum_assured: '', collected_ncp: '' });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
   });
 });

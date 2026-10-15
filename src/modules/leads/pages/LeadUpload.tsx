@@ -20,15 +20,19 @@ import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
-import { REAL_SHEET_HEADERS, mapRowForPreview, formatDateForDisplay, type PreviewRow } from '../utils/leadUploadMapping';
+import { REAL_SHEET_HEADERS, mapRowForPreview, formatSheetCellForDisplay, isDateColumn, type PreviewRow } from '../utils/leadUploadMapping';
 
 /** Display formatting for preview cells (never mutates the submitted data). */
-function displayCell(cell: any): string {
-  if (cell === null || cell === undefined) return '';
-  // formatDateForDisplay handles Date instances, Excel serials and every
-  // supported date-only string WITHOUT timezone shifting (a Date or a
-  // "23-Apr-2026" cell must display the same calendar date that is stored).
-  return formatDateForDisplay(cell);
+/**
+ * F17 — display one raw sheet cell.
+ *
+ * The column matters: only a real date column may interpret a number as an
+ * Excel serial. The previous version date-formatted every cell, which turned
+ * an "Interested amount of investment" of 50000 into 2036-11-21 in the
+ * preview even though the server received, and stored, 50000.
+ */
+function displayCell(cell: any, header: unknown = ''): string {
+  return formatSheetCellForDisplay(cell, header);
 }
 
 export default function LeadUpload() {
@@ -43,6 +47,10 @@ export default function LeadUpload() {
   const [importResult, setImportResult] = useState<BulkImportResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [processing, setProcessing] = useState(false);
+  /** Column headers of the loaded sheet — they tell each preview cell
+   *  whether it is a date column (F17: only a date column may read a bare
+   *  number as an Excel serial; an amount must stay 50000, not 2036-11-21). */
+  const headerRow: any[] = Array.isArray(previewData[0]) ? previewData[0] : [];
 
   if (!canAccess('lead_upl_gen', 'upload_raw_csv_xlsx')) {
     return (
@@ -79,7 +87,10 @@ export default function LeadUpload() {
         'Product': 'SCEP',
         'Other Info': '',
         'Campaign Name': "Child Education April`26",
-        'Assigned To': 'Monsoor_CTG',
+        // Blank on purpose: the app's own sample must import as-is, and an
+        // employee id that does not exist in THIS workspace would make the
+        // first row fail (F9). The hint below the table says how to fill it.
+        'Assigned To': '',
         'Previously Assigned': '',
         'TAT': 1,
         '1st Call date': '23-Apr-2026',
@@ -176,10 +187,15 @@ export default function LeadUpload() {
           setPreviewData(data.slice(0, 7)); // Preview header + 6 rows
           setImportResult(null);
           setMappedRows(rows.map((row: any, i: number) => mapRowForPreview(row, i)).filter(r => r.hasAnyValue));
-          toast.success('Data imported successfully');
+          // F8: parsing a file is not an import. Saying "imported successfully"
+          // here promised a write that had not happened (and, with rejected
+          // rows, never would). Report the load, then let the server preview
+          // and the import report speak about data.
           if (rows.length > 0) {
+            toast.info(`${rows.length} row(s) loaded — validating against the server…`);
             void runServerValidation(rows);
           } else {
+            toast.error('No data rows found in the file (only the header row).');
             setServerPreview(null);
           }
         } catch (err) {
@@ -410,6 +426,7 @@ export default function LeadUpload() {
 
                   {/* Raw data preview */}
                   <div className="overflow-x-auto border border-slate-50 rounded-sm shadow-inner bg-[#FBFAF8]">
+
                     <table className="w-full text-left">
                       <tbody className="italic">
                         {previewData.map((row: any, i) => (
@@ -418,8 +435,14 @@ export default function LeadUpload() {
                              i === 0 ? 'bg-[#3C3C3C] font-black text-white uppercase tracking-[0.1em]' : 'text-slate-500 font-bold hover:bg-white'
                           )}>
                             {row.map((cell: any, j: number) => (
-                              <td key={j} className="px-6 py-4 whitespace-nowrap border-r border-slate-100/10">
-                                {String(displayCell(cell))}
+                              <td
+                                key={j}
+                                className={cn(
+                                  'px-6 py-4 whitespace-nowrap border-r border-slate-100/10',
+                                  i > 0 && isDateColumn(headerRow[j]) && 'tabular-nums'
+                                )}
+                              >
+                                {displayCell(cell, headerRow[j])}
                               </td>
                             ))}
                           </tr>
@@ -431,7 +454,7 @@ export default function LeadUpload() {
                   <div className="flex items-center gap-6 bg-[#978C21]/5 p-6 rounded-sm border border-[#978C21]/10">
                     <Info className="w-6 h-6 text-[#978C21] shrink-0" />
                     <p className="text-[11px] font-black text-brand-text leading-relaxed italic uppercase tracking-tight">
-                      <strong>Assignment Logic:</strong> "Assigned To" must match an active employee ID (e.g. Monsoor_CTG) — otherwise the row is rejected. Blank leaves the lead unassigned. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
+                      <strong>Assignment Logic:</strong> "Assigned To" must match an ACTIVE employee ID of this workspace (see Administration → Users) — otherwise the row is rejected. Blank leaves the lead unassigned, which is what the sample file does. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
                     </p>
                   </div>
 
