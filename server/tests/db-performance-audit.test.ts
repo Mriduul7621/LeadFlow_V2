@@ -650,6 +650,18 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
      PLAN EVIDENCE: hot predicates use the intended indexes
   ================================================================== */
 
+  /* The planner decides from STATISTICS, and a freshly seeded fixture has none
+     until something runs ANALYZE — in production that is autovacuum, which is
+     why these plans are what real installations get. Without this, the same
+     query was planned once without a histogram and once with one (an isolated
+     local run passed; a loaded CI machine failed on the same commit, choosing
+     idx_scheduled_activities_status instead of the partial open index). The
+     fix is to establish the statistics production has, NOT to weaken the
+     assertion: what follows still requires the intended index in the plan. */
+  before(async () => {
+    await pool.query('ANALYZE');
+  });
+
   const planOf = async (sql: string, params: any[] = []) => {
     const r = await pool.query(`EXPLAIN ${sql}`, params);
     return r.rows.map((x: any) => x['QUERY PLAN']).join('\n');
