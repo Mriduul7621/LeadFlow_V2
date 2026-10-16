@@ -376,7 +376,10 @@ describe('Server-secret exposure guards (GEMINI_API_KEY)', () => {
     // Any process.env reference must be a public VITE_* var (or a benign dev flag),
     // never a server secret.
     const processEnvRefs = [...vite.matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1]);
-    const allowed = new Set(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY', 'DISABLE_HMR']);
+    // Public by design: a URL, inlined into the bundle on purpose — it is how
+    // the bundled Android app (Capacitor) knows where the API lives. It holds
+    // no secret; secrets must never be named here.
+    const allowed = new Set(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY', 'VITE_API_BASE_URL', 'DISABLE_HMR']);
     for (const name of processEnvRefs) {
       assert.ok(allowed.has(name), `process.env.${name} must not be injected into the browser bundle`);
     }
