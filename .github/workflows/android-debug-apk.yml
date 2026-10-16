@@ -1,36 +1,45 @@
-name: Android Debug APK (TWA)
+name: Android Debug APK (Capacitor)
 
-# Builds the Trusted Web Activity wrapper (com.saudalmahi.leadflow) that ships
-# the LeadFlow web app as an installable Android app.
+# Builds the installable Android app (com.saudalmahi.leadflow) from the WEB APP
+# BUNDLE — Capacitor packages the built site INSIDE the APK, so the app always
+# opens: no domain has to resolve for the shell to start.
 #
 # Get the APK from:
 #   1) the workflow run artifacts ("leadflow-debug-apk"), or
 #   2) the always-updated pre-release:
 #        https://github.com/Mriduul7621/LeadFlow_V2/releases/tag/android-debug
 #
-# Two build inputs (see docs/ANDROID_TWA.md):
-#   * versionCode  — passed automatically as the workflow run number, so a
-#                    freshly published APK can always be installed OVER an
-#                    older install (Android rejects equal/lower codes).
-#   * host         — the site the wrapper opens. Defaults to the branded
-#                    domain; pick another value when running the workflow
-#                    manually to test against a host that is already live.
+# Build inputs:
+#   * api_base     — the API origin the app talks to. Baked into the bundle at
+#                    build time (VITE_API_BASE_URL). Points at the live
+#                    production deployment by default; point it at another
+#                    backend by running the workflow manually.
+#   * versionCode  — the workflow run number, so a freshly published APK always
+#                    installs OVER the previous one (Android refuses an update
+#                    whose versionCode is not higher).
+#
+# The wrapper is a shell around the bundled assets: a UI change needs a NEW
+# APK (unlike the old TWA, which fetched the site at runtime). That is the
+# trade-off for an app that cannot be broken by DNS.
 
 on:
   workflow_dispatch:
     inputs:
-      host:
-        description: "Host the wrapper opens (default: branded domain)"
+      api_base:
+        description: "API origin the app talks to (default: live production URL)"
         required: false
-        default: "app.saudalmahi.com"
+        default: "https://lead-flow-jet.vercel.app"
   push:
-    branches: [main, feat/android-twa-debug-apk]
+    branches: [main]
 
 permissions:
   contents: write
 
 env:
-  DEFAULT_HOST: app.saudalmahi.com
+  # The backend the shipped APK talks to. Must be an origin that serves /api
+  # (https://<host>/api/...). Switch to https://app.saudalmahi.com once that
+  # domain is connected to this project.
+  DEFAULT_API_BASE: https://lead-flow-jet.vercel.app
 
 jobs:
   debug-apk:
@@ -39,55 +48,173 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
         with:
-          gradle-version: "8.7"
+          node-version: '22'
+          cache: npm
 
-      - name: Android SDK licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+      - name: Install JavaScript dependencies
+        run: npm ci --no-audit --no-fund
 
-      - name: Resolve build inputs (host + versionCode)
+      - name: Resolve build inputs (api_base + versionCode)
         id: inputs
         run: |
-          HOST="${{ github.event.inputs.host || env.DEFAULT_HOST }}"
-          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          API_BASE="${{ github.event.inputs.api_base || env.DEFAULT_API_BASE }}"
+          # Normalise: strip trailing slashes so the bundle never contains
+          # "https://host//api/...".
+          API_BASE="${API_BASE%/}"
+          case "$API_BASE" in
+            https://*) ;;
+            *) echo "::error::api_base must be an https:// origin (got '$API_BASE')"; exit 1 ;;
+          esac
+          echo "api_base=$API_BASE" >> "$GITHUB_OUTPUT"
           echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           {
             echo "### Android debug APK"
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Host opened | https://$HOST |"
+            echo "| App talks to | $API_BASE |"
             echo "| versionCode | ${{ github.run_number }} |"
-            echo "| Digital Asset Links | https://$HOST/.well-known/assetlinks.json |"
+            echo "| Packaging | Capacitor (web app bundled inside the APK) |"
             echo "| Workflow run | #${{ github.run_number }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify the Digital Asset Links fingerprint matches the signing key
+      - name: Build the web bundle with the API origin baked in
+        env:
+          VITE_API_BASE_URL: ${{ steps.inputs.outputs.api_base }}
         run: |
           set -euo pipefail
-          EXPECTED=$(python3 -c "import json;print(json.load(open('public/.well-known/assetlinks.json'))[0]['target']['sha256_cert_fingerprints'][0])")
-          ACTUAL=$(keytool -list -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey \
-                   | grep -i 'SHA256:' | head -1 | sed 's/.*SHA256: *//' | tr -d ' ')
-          echo "assetlinks: $EXPECTED"
-          echo "keystore  : $ACTUAL"
-          test "$EXPECTED" = "$ACTUAL"
+          # `build:web` intentionally skips the server bundle (dist/server.cjs):
+          # the APK only carries the client assets.
+          npm run build:web
+          test -f dist/index.html
+          # Fail HERE, in seconds, rather than after the Gradle build: if the
+          # API origin is not in the bundle, the app would install and then
+          # fail on its first request from the WebView.
+          if ! grep -rlF "$VITE_API_BASE_URL" dist/assets > /dev/null; then
+            echo "::error::the API origin ($VITE_API_BASE_URL) is not baked into the bundle"
+            exit 1
+          fi
+          echo "bundle carries $VITE_API_BASE_URL"
 
-      - name: Bootstrap wrapper & build debug TWA
+      - name: Add the Android platform
+        run: npx cap add android
+
+      - name: Apply branding, label, signing key and versionCode
+        env:
+          VERSION_CODE: ${{ steps.inputs.outputs.version_code }}
         run: |
-          cd android
-          gradle wrapper --gradle-version 8.7 --distribution-type bin
-          ./gradlew :app:assembleDebug \
-            -PappHost="${{ steps.inputs.outputs.host }}" \
-            -PversionCode="${{ steps.inputs.outputs.version_code }}" \
-            --stacktrace
+          set -euo pipefail
+          # Launcher icons: ONLY the mipmap PNGs. The generic values/*.xml are
+          # left alone on purpose — the generated project already defines
+          # `ic_launcher_background` and `app_name`, and copying ours over them
+          # would either duplicate a resource (AAPT error) or strip the strings
+          # the manifest references.
+          cp -R branding/android/res/mipmap-* android/app/src/main/res/
+
+          # Launcher label: the same short name the previous app install showed,
+          # because that is the name on the phone's home screen right now.
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          strings = Path('android/app/src/main/res/values/strings.xml')
+          src = strings.read_text()
+          src = re.sub(r'<string name="app_name">[^<]*</string>', '<string name="app_name">LeadFlow</string>', src)
+          src = re.sub(r'<string name="title_activity_main">[^<]*</string>', '<string name="title_activity_main">LeadFlow</string>', src)
+          strings.write_text(src)
+          print(src)
+          PY
+          # Sign with the committed debug key so this build installs STRAIGHT
+          # OVER the previously installed wrapper (same package name + same
+          # signing certificate + higher versionCode). A different key would
+          # force an uninstall first.
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          gradle = Path('android/app/build.gradle')
+          src = gradle.read_text()
+          version_code = int(os.environ['VERSION_CODE'])
+
+          src = re.sub(r'versionCode\s+\d+', f'versionCode {version_code}', src, count=1)
+          src = re.sub(r'versionName\s+"[^"]*"', f'versionName "1.0.{version_code}"', src, count=1)
+
+          signing = """
+              signingConfigs {
+                  debug {
+                      storeFile file('../../branding/android/debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                      storeType 'PKCS12'
+                  }
+              }
+          """
+          src = src.replace('android {', 'android {\n' + signing, 1)
+          # Debug AND release use that key here: this is an internal testing
+          # build series, and both must be signed with the same certificate the
+          # installed wrapper already used.
+          src = src.replace('buildTypes {', "buildTypes {\n        debug { signingConfig signingConfigs.debug }", 1)
+          src = src.replace('release {', 'release {\n            signingConfig signingConfigs.debug', 1)
+          gradle.write_text(src)
+          print('patched android/app/build.gradle: versionCode', version_code)
+          PY
+
+          # The keystore is committed, so the same certificate is used on every
+          # run (and it is the one the site-side assetlinks.json names).
+          ls -l branding/android/debug.keystore
+
+      - name: Prove the build will install over the app already on devices
+        run: |
+          set -euo pipefail
+          # An existing install is replaced only if the package name AND the
+          # signing certificate match and the versionCode is higher. The first
+          # two are facts about the committed key, so they are checked here
+          # rather than discovered on a tester's phone.
+          PKG=$(python3 -c "import json;print(json.load(open('public/.well-known/assetlinks.json'))[0]['target']['package_name'])")
+          EXPECTED=$(python3 -c "import json;print(json.load(open('public/.well-known/assetlinks.json'))[0]['target']['sha256_cert_fingerprints'][0])")
+          test "$PKG" = "$(python3 -c "import re,sys;print(re.search(r\"appId:\s*'([^']+)\", open('capacitor.config.ts').read()).group(1))")" \
+            || { echo "::error::assetlinks package ($PKG) does not match capacitor appId"; exit 1; }
+          ACTUAL=$(openssl pkcs12 -in branding/android/debug.keystore -passin pass:android -nokeys -clcerts 2>/dev/null \
+            | openssl x509 -outform DER \
+            | openssl dgst -sha256 -hex | awk '{print toupper($NF)}' \
+            | sed 's/../&:/g;s/:$//')
+          echo "keystore certificate: $ACTUAL"
+          echo "assetlinks           : $EXPECTED"
+          test "$ACTUAL" = "$EXPECTED" \
+            || { echo "::error::the debug keystore is NOT the certificate the installed app was signed with — it would refuse to install as an update"; exit 1; }
+
+      - name: Sync web assets into the Android project
+        run: npx cap sync android
+
+      - name: Build installable debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Verify the APK really contains the app and its API origin
+        env:
+          API_BASE: ${{ steps.inputs.outputs.api_base }}
+        run: |
+          set -euo pipefail
+          APK=$(ls android/app/build/outputs/apk/debug/*.apk)
+          rm -rf /tmp/apk && mkdir -p /tmp/apk
+          unzip -q -o "$APK" -d /tmp/apk
+          # 1. the web app is bundled (this is what makes the shell always open)
+          test -f /tmp/apk/assets/public/index.html
+          # 2. the bundle knows where the API is
+          if ! grep -rlF "$API_BASE" /tmp/apk/assets/public/assets > /dev/null; then
+            echo "::error::the APK does not carry the API origin $API_BASE"
+            exit 1
+          fi
+          echo "APK contains the bundled app and the API origin $API_BASE"
 
       - name: Report APK checksum
         run: |
@@ -101,6 +228,7 @@ jobs:
         with:
           name: leadflow-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
           retention-days: 30
 
       - name: Publish to "android-debug" pre-release
@@ -110,5 +238,13 @@ jobs:
           tag_name: android-debug
           name: Android Debug APK (latest)
           prerelease: true
-          generate_release_notes: true
+          # The download page answers the two questions an installer has:
+          # where does it open, and will it install over what I have?
+          body: |
+            **App talks to:** ${{ steps.inputs.outputs.api_base }}
+            **versionCode:** ${{ steps.inputs.outputs.version_code }} — installs straight over any older build.
+
+            The web app is bundled INSIDE this APK (Capacitor), so opening it does not
+            depend on any domain resolving. It does need network access to the API
+            origin above.
           files: android/app/build/outputs/apk/debug/*.apk

@@ -329,12 +329,116 @@ export interface HttpSecurityOptions {
   production?: boolean;
   /** Defaults to `!production` (see createSecurityHeaders). */
   allowFraming?: boolean;
+  /** CORS allowlist override (defaults to the WebView origins + env). */
+  cors?: ApiCorsOptions;
 }
 
 /**
  * Applies trust proxy + security headers + rate limiters + body parsers,
  * in that order, before any route is registered. Idempotent per app.
  */
+
+/* ==================================================================
+   CORS — for the Android app, not for the web
+   ------------------------------------------------------------------
+   The web app is served BY this API, so its requests are same-origin and
+   need no CORS at all. The Android app built with Capacitor serves the
+   bundle from inside the WebView (`https://localhost`), so every `/api/...`
+   call is cross-origin and the browser engine will:
+     * refuse to send the request unless the preflight is answered, and
+     * refuse to hand the response to the app unless the origin is allowed.
+   Before this existed, a Capacitor build could install, open, and then fail
+   on its very first API call — with an error that looks like "no network".
+
+   The allowlist is deliberately explicit (never `*`): today only the WebView
+   origins are needed, and an explicit list means a future cookie-based auth
+   or a new browser origin cannot silently become reachable. Extra origins can
+   be added per deployment with CORS_ALLOWED_ORIGINS (comma separated), so a
+   preview/staging build does not need a code change.
+==================================================================== */
+
+/** Origins a Capacitor WebView runs under (Android/iOS/preview). */
+export const CAPACITOR_WEBVIEW_ORIGINS = [
+  'https://localhost',
+  'capacitor://localhost',
+  'http://localhost',
+];
+
+/**
+ * The allowed origin list: the WebView origins plus whatever the deployment
+ * adds. A configured value REPLACES it only by extension — the WebView origins
+ * are always present, because the Android app must keep working when someone
+ * sets a staging origin and forgets this file.
+ */
+export function resolveAllowedCorsOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+  const configured = String(env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(value => value.trim().replace(/\/+$/, ''))
+    .filter(value => /^https?:\/\//i.test(value) || value.startsWith('capacitor://'));
+  return Array.from(new Set([...CAPACITOR_WEBVIEW_ORIGINS, ...configured]));
+}
+
+export interface ApiCorsOptions {
+  /** Defaults to `resolveAllowedCorsOrigins()`. */
+  allowedOrigins?: string[];
+}
+
+/**
+ * CORS middleware. Mounted BEFORE the rate limiters so a preflight is always
+ * answered (a 429 without CORS headers would look like a network error), and
+ * it never touches same-origin traffic: a request without an `Origin` header
+ * is passed straight through, untouched, exactly as before.
+ */
+export function createApiCorsMiddleware(options: ApiCorsOptions = {}) {
+  const allowed = new Set(options.allowedOrigins ?? resolveAllowedCorsOrigins());
+  const allowedMethods = 'GET,POST,PUT,PATCH,DELETE,OPTIONS';
+  const allowedHeaders = 'authorization,content-type';
+
+  return function apiCors(req: Request, res: Response, next: NextFunction): void {
+    const origin = String(req.headers.origin || '');
+    if (!origin) {
+      next();
+      return;
+    }
+
+    const isPreflight = req.method === 'OPTIONS' && !!req.headers['access-control-request-method'];
+
+    if (!allowed.has(origin)) {
+      if (isPreflight) {
+        // No CORS headers => the browser blocks it, which is the point. The
+        // body explains the refusal to whoever is debugging with curl.
+        res.status(403).json({
+          success: false,
+          message: 'Origin not allowed. Add it to CORS_ALLOWED_ORIGINS to permit it.',
+        });
+        return;
+      }
+      next();
+      return;
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    // The response now depends on the request's Origin — without Vary, a cache
+    // (or the CDN in front of the function) could hand an allowed answer to a
+    // different origin.
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', allowedMethods);
+    res.setHeader('Access-Control-Allow-Headers', allowedHeaders);
+    res.setHeader('Access-Control-Max-Age', '600');
+
+    if (isPreflight) {
+      res.status(204).end();
+      return;
+    }
+
+    next();
+  };
+}
+
+export function applyApiCors(app: Express, options: ApiCorsOptions = {}): void {
+  app.use(createApiCorsMiddleware(options));
+}
+
 export function applyProductionHttpSecurity(app: Express, options: HttpSecurityOptions = {}): void {
   const production = options.production ?? isProductionRuntime();
 
@@ -346,6 +450,10 @@ export function applyProductionHttpSecurity(app: Express, options: HttpSecurityO
   // parser rejections, 404s and 5xx are all correlated identically.
   app.use(createApiObservabilityMiddleware());
   app.use(createSecurityHeaders({ production, allowFraming: options.allowFraming }));
+  // CORS before the limiters: a preflight must never be answered with a 429
+  // that carries no CORS headers (the app would report a network failure and
+  // the real cause — rate limiting — would be invisible).
+  applyApiCors(app, options.cors);
   // Compression BEFORE the routes: list endpoints return up to 5000 lead
   // rows (several MB of JSON). Uncompressed, that transfer dominates every
   // mobile page load; gzip cuts it by ~8-12x. Requests without

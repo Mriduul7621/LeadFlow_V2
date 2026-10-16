@@ -11,8 +11,16 @@
  * introducing inconsistencies. If you add new service files, you do
  * NOT need to do anything special - just call fetch('/api/...') as
  * normal and the token will be attached automatically.
+ *
+ * The same patch is where the API ORIGIN is applied (lib/apiBase.ts): the
+ * Android app (Capacitor) serves the bundle from `https://localhost` inside
+ * the WebView, so `/api/leads` has to become `https://<api host>/api/leads`
+ * there. Doing it here — one place, every call site, including
+ * `coalesceGet` and the raw `fetch('/api/...')` calls in pages — is the only
+ * way this cannot be forgotten for one endpoint out of forty.
  */
 import { useAuthStore } from '../modules/auth/store/authStore';
+import { resolveApiBaseUrl, withApiBase } from './apiBase';
 import {
   recordApiRequestStart,
   recordApiRequestSettled,
@@ -50,6 +58,17 @@ export function installAuthenticatedFetch() {
   patched = true;
 
   const originalFetch = window.fetch.bind(window);
+  // Resolved ONCE at boot: a build either talks to its own origin (web) or to
+  // the API origin it was built for (Android bundle).
+  const apiBase = resolveApiBaseUrl();
+
+  /** Point an API request at the configured base, keeping Request instances intact. */
+  const remapInput = (input: RequestInfo | URL, url: string): RequestInfo | URL => {
+    const target = withApiBase(url, apiBase);
+    if (target === url) return input;
+    if (input instanceof Request) return new Request(target, input as RequestInit);
+    return target;
+  };
 
   window.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input as Request).url);
@@ -59,6 +78,10 @@ export function installAuthenticatedFetch() {
       return originalFetch(input, init);
     }
 
+    // Cross-origin (Android): the request must carry the API origin, not the
+    // WebView's. Same-origin (web): `withApiBase` returns the path unchanged.
+    const requestInput = remapInput(input, url);
+
     // Diagnostics FIRST-CLASS metadata: only the URL and HTTP method are
     // recorded (the recorder cannot accept headers, tokens, or bodies).
     const diagId = recordApiRequestStart(url, (init.method || (input instanceof Request ? input.method : 'GET') || 'GET'));
@@ -66,7 +89,7 @@ export function installAuthenticatedFetch() {
 
     const token = useAuthStore.getState().token;
     if (!token) {
-      return instrumentedDiagnostics(originalFetch(input, init), diagId, startedPerfMs);
+      return instrumentedDiagnostics(originalFetch(requestInput, init), diagId, startedPerfMs);
     }
 
     const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
@@ -74,6 +97,6 @@ export function installAuthenticatedFetch() {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return instrumentedDiagnostics(originalFetch(input, { ...init, headers }), diagId, startedPerfMs);
+    return instrumentedDiagnostics(originalFetch(requestInput, { ...init, headers }), diagId, startedPerfMs);
   };
 }

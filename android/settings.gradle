@@ -1,5 +1,0 @@
-pluginManagement {
-    repositories { google(); mavenCentral(); gradlePluginPortal() }
-}
-rootProject.name = 'leadflow-twa'
-include ':app'
