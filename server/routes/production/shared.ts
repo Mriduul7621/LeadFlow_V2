@@ -21,6 +21,7 @@ import { applyDefaultRoleAccess } from '../../database/roleAccessDefaults.js';
 import { getUserDepartmentIds } from '../../utils/departmentMirror.js';
 import { getRequestMemo } from '../../utils/requestAuthz.js';
 import { logAuthTokenRejected } from '../../observability/events.js';
+import { DEFAULT_STATUS_DICTIONARY } from '../leadImport.js';
 
 export const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
@@ -820,4 +821,165 @@ export async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): P
     [raw, isCanonicalLowerUuid(raw) ? raw : null]
   );
   return result.rows[0] || null;
+}
+
+/* ====================================================================
+   LEAD VALUE / ASSIGNMENT HELPERS — moved here in Phase 1 PR #4
+   (roadshows + scheduled-activities extraction): value conversions,
+   assignment resolution and the activity/follow-up row helpers the
+   scheduled-activities handlers share with the leads domain. One
+   definition, imported by both production.routes.ts and
+   production/roadshows.routes.ts.
+==================================================================== */
+
+export const dateOrNull = (value: any): string | null => {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+};
+
+/** Resolve assignedTo reference to userId + employeeId. */
+export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string } | null> {
+  if (!ref) return null;
+  const value = String(ref).trim();
+  if (!value) return null;
+  if (!useDb()) {
+    const user = fallbackStore.users.find(u =>
+      u.id === value ||
+      u.employeeId.toUpperCase() === value.toUpperCase() ||
+      u.email.toLowerCase() === value.toLowerCase()
+    );
+    if (!user) return null;
+    return { userId: user.id, employeeId: user.employeeId };
+  }
+  try {
+    const pool = getPool();
+    const uuid = asUuid(value);
+    const result = await pool.query(
+      `SELECT id, employee_id FROM users WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2) LIMIT 1`,
+      [uuid || value, value]
+    );
+    if (!result.rows[0]) return null;
+    return { userId: result.rows[0].id, employeeId: result.rows[0].employee_id };
+  } catch {
+    return null;
+  }
+}
+
+/** Check if caller is allowed to assign a lead to target user. */
+export function isAssignedToAllowed(target: { userId: string; employeeId: string } | null, visibility: any, caller: CallerDbInfo): boolean {
+  if (!target) return true;
+  if (visibility.all) return true;
+  if (target.userId && visibility.userIds.includes(target.userId)) return true;
+  if (target.userId === caller.id) return true;
+  const empUpper = String(target.employeeId || '').toUpperCase();
+  const visEmpUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+  if (empUpper && visEmpUpper.includes(empUpper)) return true;
+  if (empUpper && caller.employee_id && empUpper === String(caller.employee_id).toUpperCase()) return true;
+  return false;
+}
+
+/**
+ * Fetch canonical FollowUpStatus values (active options). Falls back to
+ * DEFAULT_STATUS_DICTIONARY when the options table has no rows (same
+ * policy as bulk import, so validation never depends on seed ordering).
+ */
+export async function getFollowUpStatusValues(): Promise<string[]> {
+  if (!useDb()) {
+    const opts = fallbackStore.options.filter((o: any) => o.type === 'FollowUpStatus' && o.status !== 'Inactive');
+    if (opts.length > 0) return opts.map(o => String(o.value));
+    const legacy = fallbackStore.options.filter((o: any) => o.type === 'lead_status' && o.status !== 'Inactive').map(o => String(o.value));
+    if (legacy.length > 0) return legacy;
+    return DEFAULT_STATUS_DICTIONARY as unknown as string[];
+  }
+  try {
+    let res = await getPool().query(`SELECT option_value FROM options WHERE field_key = 'FollowUpStatus' AND COALESCE(is_active, TRUE) = TRUE`);
+    if (res.rows.length > 0) return res.rows.map((r: any) => String(r.option_value));
+    // Fallback to legacy key used by some deployments
+    res = await getPool().query(`SELECT option_value FROM options WHERE field_key = 'lead_status' AND COALESCE(is_active, TRUE) = TRUE`);
+    if (res.rows.length > 0) return res.rows.map((r: any) => String(r.option_value));
+  } catch {}
+  return DEFAULT_STATUS_DICTIONARY as unknown as string[];
+}
+
+export function parseNumeric(value: any): number | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const n = Number(String(value).replace(/[,\\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+export function mapActivityRow(row: any) {
+  return {
+    id: row.id,
+    leadId: row.lead_id || row.leadId,
+    activityType: row.activity_type || row.activityType || 'follow_up',
+    status: row.status || '',
+    remarks: row.remarks || '',
+    nextFollowUpAt: row.next_follow_up_at || row.nextFollowUpAt || null,
+    nextFollowUpDate: row.next_follow_up_at || row.nextFollowUpAt || null,
+    nextCallAt: row.next_call_at || row.nextCallAt || null,
+    nextCallDate: row.next_call_at || row.nextCallAt || null,
+    meetingAt: row.meeting_at || row.meetingAt || null,
+    meetingDate: row.meeting_at || row.meetingAt || null,
+    meetingType: row.meeting_type || row.meetingType || null,
+    collectedNcp: row.collected_ncp != null ? Number(row.collected_ncp) : (row.collectedNcp ?? null),
+    collectedNCP: row.collected_ncp != null ? Number(row.collected_ncp) : (row.collectedNcp ?? null),
+    projectedNcp: row.projected_ncp != null ? Number(row.projected_ncp) : (row.projectedNcp ?? null),
+    projectedNCP: row.projected_ncp != null ? Number(row.projected_ncp) : (row.projectedNcp ?? null),
+    sumAssured: row.sum_assured != null ? Number(row.sum_assured) : (row.sumAssured ?? null),
+    sum_assured: row.sum_assured != null ? Number(row.sum_assured) : (row.sumAssured ?? null),
+    productName: row.product_name || row.productName || null,
+    product_name: row.product_name || row.productName || null,
+    lossReason: row.loss_reason || row.lossReason || null,
+    loss_reason: row.loss_reason || row.lossReason || null,
+    createdBy: row.created_by || row.createdBy || null,
+    created_by: row.created_by || row.createdBy || null,
+    createdAt: row.created_at || row.createdAt,
+    created_at: row.created_at || row.createdAt,
+    // Actor employeeId for UI convenience (joined when possible)
+    actorEmployeeId: row.actor_employee_id || row.created_by_employee || null,
+  };
+}
+
+export function mapScheduledActivityRow(row: any) {
+  const completedAtRaw = row.completed_at ?? row.completedAt ?? null;
+  const completedByRaw = row.completed_by ?? row.completedBy ?? null;
+  const completedActRaw = row.completed_activity_id ?? row.completedActivityId ?? null;
+  return {
+    id: row.id,
+    leadId: row.lead_id || row.leadId,
+    lead_id: row.lead_id || row.leadId,
+    activityType: row.activity_type || row.activityType,
+    activity_type: row.activity_type || row.activityType,
+    title: row.title ?? null,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
+    scheduled_at: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
+    durationMinutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
+    duration_minutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
+    remarks: row.remarks ?? null,
+    status: row.status || 'scheduled',
+    priority: row.priority || 'NORMAL',
+    meetingType: row.meeting_type ?? row.meetingType ?? null,
+    meeting_type: row.meeting_type ?? row.meetingType ?? null,
+    location: row.location ?? null,
+    createdBy: row.created_by || row.createdBy || null,
+    created_by: row.created_by || row.createdBy || null,
+    assignedTo: row.assigned_to || row.assignedTo || null,
+    assigned_to: row.assigned_to || row.assignedTo || null,
+    updatedBy: row.updated_by || row.updatedBy || null,
+    updated_by: row.updated_by || row.updatedBy || null,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
+    completedAt: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
+    completed_at: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
+    completedBy: completedByRaw || null,
+    completed_by: completedByRaw || null,
+    completedActivityId: completedActRaw || null,
+    completed_activity_id: completedActRaw || null,
+    leadCustomerName: row.lead_customer_name || row.customer_name || row.leadCustomerName || null,
+    leadMobile: row.lead_mobile || row.leadMobile || null,
+    leadStatus: row.lead_current_status || row.leadStatus || null,
+  };
 }

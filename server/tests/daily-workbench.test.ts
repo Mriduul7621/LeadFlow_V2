@@ -229,9 +229,12 @@ describe('Daily Workbench — source guards', () => {
   it('server remains final authorization boundary', () => {
     const prod = read('server/routes/production.routes.ts');
     assert.ok(prod.includes("hasPermissionCode(caller, 'leads.edit')"), 'server must check leads.edit for scheduled mutations');
-    assert.ok(prod.includes('/scheduled-activities/:id/complete'), 'server must have complete endpoint with authz');
-    assert.ok(prod.includes('/scheduled-activities/:id/cancel'), 'server must have cancel endpoint with authz');
-    assert.ok(prod.includes('PUT /scheduled-activities/:id') || prod.includes("router.put('/scheduled-activities/:id'"), 'server must have update endpoint with authz');
+    // Scheduled-activity handlers moved to production/roadshows.routes.ts
+    // in Phase 1 PR #4 (mounted by production.routes.ts; same router).
+    const sched = read('server/routes/production/roadshows.routes.ts');
+    assert.ok(sched.includes('/scheduled-activities/:id/complete'), 'server must have complete endpoint with authz');
+    assert.ok(sched.includes('/scheduled-activities/:id/cancel'), 'server must have cancel endpoint with authz');
+    assert.ok(sched.includes('PUT /scheduled-activities/:id') || sched.includes("router.put('/scheduled-activities/:id'"), 'server must have update endpoint with authz');
     const wb = workbench();
     assert.ok(wb.includes('scheduledActivityService.complete') && wb.includes('scheduledActivityService.cancel') && wb.includes('scheduledActivityService.update'), 'client must use existing services, server is final boundary');
   });

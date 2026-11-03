@@ -749,13 +749,16 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
       'shipped uuid visibility predicate must remain');
     assert.ok(routes.includes('l.assigned_to = $${params.length}::uuid'),
       'follow-up queue assignedTo must stay sargable');
-    assert.ok(routes.includes('sa.assigned_to = $${params.length}::uuid'),
+    // Scheduled-activity handlers moved to production/roadshows.routes.ts
+    // in Phase 1 PR #4 (mounted by production.routes.ts; same router).
+    const roadshows = read('server/routes/production/roadshows.routes.ts');
+    assert.ok(roadshows.includes('sa.assigned_to = $${params.length}::uuid'),
       'scheduled-activities assignedTo must stay sargable');
     // Dashboard visibility builder keeps the sargable shape.
     assert.ok(/buildDashboardVisibilitySql[\s\S]{0,600}assigned_to = ANY/.test(routes),
       'buildDashboardVisibilitySql must emit uuid-typed ANY');
     // Single-row PK lookups keep the sargable dual form.
-    assert.ok(!routes.includes('sa.id::text'), 'scheduled-activity PK lookups must stay sargable');
+    assert.ok(!routes.includes('sa.id::text') && !roadshows.includes('sa.id::text'), 'scheduled-activity PK lookups must stay sargable');
     assert.ok(!routes.includes('n.id::text'), 'notification PK lookups must stay sargable');
     assert.ok(!/lead_code = \$1 OR l\.id::text/.test(routes), 'lead dual lookups must stay sargable');
     assert.ok(!routes.includes('reference_id::text'), 'lead-scoped notification branch must stay sargable');
@@ -779,7 +782,7 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
     // Bulk-signal contract: one query per signal family, ids passed once.
     assert.ok(signals.includes('WHERE a.lead_id = ANY($1::uuid[])'), 'activity signals stay bulk-set');
     assert.ok(signals.includes('WHERE s.lead_id = ANY($1::uuid[])'), 'scheduled signals stay bulk-set');
-    const routes = read('server/routes/production.routes.ts');
+    const routes = read('server/routes/production/roadshows.routes.ts');
     assert.ok(routes.includes('sa.status = $${params.length}'), 'scheduled status filter stays sargable');
     assert.ok(routes.includes('sa.activity_type = $${params.length}'), 'scheduled type filter stays sargable');
   });
