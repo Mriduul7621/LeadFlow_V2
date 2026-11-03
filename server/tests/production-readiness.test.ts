@@ -320,7 +320,12 @@ describe('Production-readiness source guards', () => {
   });
 
   it('U. production router refuses weak/default JWT secrets in production', () => {
-    const src = read('server/routes/production.routes.ts');
+    // The guard lives in the production router tree: since the Phase 1 auth
+    // extraction it sits in production/shared.ts (signToken + the startup
+    // check), which production.routes.ts imports for every route.
+    const src =
+      read('server/routes/production.routes.ts') +
+      read('server/routes/production/shared.ts');
     assert.ok(src.includes('isWeakJwtSecret'), 'router must use the shared weak-secret check');
     assert.ok(src.includes('Refusing to sign a token in production'), 'signToken must refuse weak secrets');
   });
