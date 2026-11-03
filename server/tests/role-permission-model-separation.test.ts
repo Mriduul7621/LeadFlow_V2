@@ -98,6 +98,7 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
         read('server/routes/production/auth.routes.ts'),
         read('server/routes/production/notifications.routes.ts'),
         read('server/routes/production/metadata.routes.ts'),
+        read('server/routes/production/users.routes.ts'),
       ].join('\n')
     );
 
@@ -232,7 +233,13 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
   }
 
   it('6. Admin-only capabilities remain requireAdmin (not canonical toggles)', () => {
-    const src = read('server/routes/production.routes.ts');
+    // Phase 1 (users/access step): the users/roles/permissions handlers
+    // live in production/users.routes.ts; the leads purge routes stay in
+    // the monolith — the admin-gating rule applies to the mounted tree.
+    const src =
+      read('server/routes/production.routes.ts') +
+      '\n' +
+      read('server/routes/production/users.routes.ts');
     for (const route of [
       "router.get('/roles/:roleId/permissions', requireAuth, requireAdmin,",
       "router.put('/roles/:roleId/permissions', requireAuth, requireAdmin,",

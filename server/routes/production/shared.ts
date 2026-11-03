@@ -983,3 +983,31 @@ export function mapScheduledActivityRow(row: any) {
     leadStatus: row.lead_current_status || row.leadStatus || null,
   };
 }
+
+/* ====================================================================
+   USER ID / EMPLOYEE ID RESOLUTION — moved from production.routes.ts
+   in the Phase 1 users/access extraction (verbatim, one definition):
+   managerEmployeeId / employeeIdsFor are called by the users domain
+   AND by the leads domain, so they live here; production.routes.ts
+   and production/users.routes.ts both import them from this module.
+==================================================================== */
+
+export async function managerEmployeeId(userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  const result = await getPool().query('SELECT employee_id FROM users WHERE id = $1', [userId]);
+  return result.rows[0]?.employee_id || null;
+}
+
+/**
+ * Resolve many user UUIDs to employee ids in ONE round trip (primary-key
+ * lookup). Replaces sequential per-user lookups on mutation response
+ * paths (e.g. a lead save joining assigned_to + assigned_by).
+ */
+export async function employeeIdsFor(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const unique = Array.from(new Set(ids.map(i => asUuid(String(i || ''))).filter((v): v is string => !!v)));
+  const out = new Map<string, string>();
+  if (unique.length === 0) return out;
+  const result = await getPool().query('SELECT id, employee_id FROM users WHERE id = ANY($1::uuid[])', [unique]);
+  for (const row of result.rows) out.set(String(row.id), row.employee_id);
+  return out;
+}
