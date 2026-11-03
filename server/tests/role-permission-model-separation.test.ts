@@ -193,7 +193,12 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     const src = read('server/routes/production.routes.ts');
     const start = src.indexOf('function requirePermissionCode(');
     assert.ok(start >= 0, 'requirePermissionCode helper must exist');
-    const block = src.slice(start, src.indexOf('/* ====================================================================', start));
+    // Slice exactly the gate function (its closing brace at column 0).
+    // Phase 1 moved the helpers that used to sit between this gate and
+    // the next section banner out of the monolith, so a banner-bounded
+    // slice would now swallow unrelated code (SYSTEM_ROLES) and fail the
+    // bypass check below for the wrong reason.
+    const block = src.slice(start, src.indexOf('\n}\n', start) + 2);
     assert.ok(block.includes('hasPermissionCode(caller, permissionCode)'), 'the gate must resolve grants through hasPermissionCode');
     assert.ok(block.includes('401'), 'unauthenticated requests must be rejected');
     assert.ok(!callerBypassInGate(block), 'the bypass must live in hasPermissionCode, not be re-implemented per-gate');
@@ -233,7 +238,8 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
   });
 
   it('7. Self-service password change is NOT modeled as users.edit', () => {
-    const src = read('server/routes/production.routes.ts');
+    // Phase 1: the auth handlers live in production/auth.routes.ts.
+    const src = read('server/routes/production/auth.routes.ts');
     const idx = src.indexOf("router.post('/auth/change-password'");
     assert.ok(idx >= 0, 'self-service change-password endpoint must exist');
     const line = src.slice(idx, idx + 160);

@@ -532,14 +532,13 @@ describe('Forced first-login password change', () => {
   });
 
   it('16. the forced-change endpoint carries no admin/permission/feature gate', () => {
-    const src = stripComments(read('server/routes/production.routes.ts'));
+    // Phase 1: the auth handlers live in production/auth.routes.ts; the
+    // forced-change endpoint is that router's last route, so the slice
+    // runs from its registration to the end of the file.
+    const src = stripComments(read('server/routes/production/auth.routes.ts'));
     const start = src.indexOf("router.post('/auth/change-required-password'");
     assert.ok(start >= 0, 'endpoint must be registered');
-    // Slice just this endpoint: from its registration to the next route
-    // (GET /users/check-admin opens the USERS section).
-    const end = src.indexOf("router.get('/users/check-admin'");
-    assert.ok(end > start, 'the USERS section must follow the forced-change endpoint');
-    const block = src.slice(start, end);
+    const block = src.slice(start);
     assert.doesNotMatch(block, /requirePermissionCode/, 'no canonical action permission gate');
     assert.doesNotMatch(block, /requireAdmin/, 'no admin gate');
     assert.doesNotMatch(block, /requireRole\(/, 'no role gate');

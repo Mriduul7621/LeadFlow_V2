@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { isWeakJwtSecret } from '../config/env.js';
-import { getPool, isDatabaseConfigured } from '../database/connection.js';
+import { getPool } from '../database/connection.js';
 import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import { computeDepartmentHealth, computeHierarchyHealth, emptyDepartmentHealth } from '../utils/hierarchyHealth.js';
@@ -15,7 +13,6 @@ import {
   reportingManagerRequiredError,
 } from '../utils/reportingRules.js';
 import { createPerf } from '../utils/perf.js';
-import { applyDefaultRoleAccess } from '../database/roleAccessDefaults.js';
 import {
   leadStatusViolationMessage,
   resolveNextActionStatus,
@@ -29,14 +26,12 @@ import { normalizeStatusKey } from '../../src/modules/shared/utils/statusFieldRu
 import {
   closeUserMemberships,
   getMembershipDepartmentMap,
-  getUserDepartmentIds,
   hasDepartmentMirrorLayer,
   setDepartmentHeads,
   setUserExtraMemberships,
   syncMirrorTeam,
   syncUserDepartmentMembership,
 } from '../utils/departmentMirror.js';
-import { getRequestMemo } from '../utils/requestAuthz.js';
 import {
   listRoleTemplates,
   saveRoleTemplate,
@@ -105,13 +100,42 @@ import {
   createAssignmentNotifications,
   createAssignmentNotificationsDemo,
 } from '../services/NotificationService.js';
+import { logAuthAdminPasswordReset } from '../observability/events.js';
+
+import authRouter from './production/auth.routes.js';
 import {
-  logAuthAdminPasswordReset,
-  logAuthForcedPasswordChangeCompleted,
-  logAuthLoginFailed,
-  logAuthLoginSuccess,
-  logAuthTokenRejected,
-} from '../observability/events.js';
+  AUDIT_CHANGE_CAP,
+  EMPLOYEE_ID_RE,
+  USER_SELECT,
+  adminExistsInDb,
+  asUuid,
+  callerIsAdmin,
+  clean,
+  dbErrorStatus,
+  demoModeAllowed,
+  ensureDefaultRoles,
+  getCallerDbInfo,
+  isCanonicalLowerUuid,
+  isSelfRef,
+  jsonbOr,
+  logAccessChange,
+  mapUserRow,
+  normalizeRole,
+  requireAdmin,
+  requireAuth,
+  resolveRoleId,
+  sendDbUnavailable,
+  sendJson,
+  summarizeAccessChanges,
+  useDb,
+  withMembershipDepartments,
+  type CallerDbInfo,
+} from './production/shared.js';
+
+// The caller-resolution surface stays importable from this module (the
+// test suite and the remaining domains consume it here); the single
+// definition lives in ./production/shared.js.
+export { getCallerDbInfo, type CallerDbInfo } from './production/shared.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -142,190 +166,6 @@ import {
 
 const router = Router();
 
-const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
-
-const JWT_SECRET = process.env.JWT_SECRET || 'leadflow_development_only_secret';
-
-if (IS_PRODUCTION && isWeakJwtSecret(process.env.JWT_SECRET)) {
-  console.error(
-    '❌ JWT_SECRET is not configured, or is a known weak/default value. ' +
-      'Authentication will refuse to sign tokens in production. ' +
-      'Set a strong, production-specific secret (see docs/PRODUCTION_READINESS.md).'
-  );
-}
-
-function useDb(): boolean {
-  return isDatabaseConfigured();
-}
-
-function demoModeAllowed(): boolean {
-  return !IS_PRODUCTION && !useDb();
-}
-
-/**
- * When DB is required but missing/unusable, send the right error instead
- * of silently switching to an in-memory store.
- */
-function sendDbUnavailable(res: any): boolean {
-  if (useDb()) return false; // DB configured - callers must handle query errors
-  if (!demoModeAllowed()) {
-    res.status(503).json({
-      success: false,
-      message: 'Database is not configured. Set DATABASE_URL on the server, or start in development mode without it.',
-      mode: 'db-unconfigured',
-    });
-    return true;
-  }
-  return false;
-}
-
-function normalizeRole(value?: string): string {
-  if (!value) return 'EMPLOYEE';
-  return String(value).trim().toUpperCase();
-}
-
-function signToken(payload: Record<string, any>): string {
-  if (IS_PRODUCTION && isWeakJwtSecret(process.env.JWT_SECRET)) {
-    throw new Error(
-      'JWT_SECRET is not configured, or is a known weak/default value. ' +
-        'Refusing to sign a token in production.'
-    );
-  }
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-}
-
-function getAuthUser(req: any): any {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) return null;
-  try {
-    return jwt.verify(header.slice(7), JWT_SECRET) as any;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Observability only: when a Bearer token was PRESENTED but failed
- * verification, emit one safe `auth_token_rejected` event (reason
- * 'expired' | 'invalid'). Anonymous requests (no header) stay silent.
- * Never logs the token, the header or any claim.
- */
-function logRejectedTokenIfPresent(req: any): void {
-  const header = req?.headers?.authorization || '';
-  if (!header.startsWith('Bearer ')) return;
-  try {
-    jwt.verify(header.slice(7), JWT_SECRET);
-  } catch (error: any) {
-    logAuthTokenRejected({ reason: error?.name === 'TokenExpiredError' ? 'expired' : 'invalid' });
-  }
-}
-
-function requireAuth(req: any, res: any, next: any): void {
-  const user = getAuthUser(req);
-  if (!user) {
-    logRejectedTokenIfPresent(req);
-    res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
-    return;
-  }
-  req.currentUser = user;
-  next();
-}
-
-function requireRole(...roles: string[]) {
-  return (req: any, res: any, next: any): void => {
-    const currentRole = normalizeRole(req.currentUser?.role || req.currentUser?.roleCode);
-    if (!roles.some(role => normalizeRole(role) === currentRole)) {
-      res.status(403).json({ success: false, message: 'You do not have permission to perform this action.' });
-      return;
-    }
-    next();
-  };
-}
-
-/** requireAuth + (requireRole ADMIN when DB is configured). In dev demo mode
- *  only authentication is required so the local demo stays usable. */
-function requireAdmin(req: any, res: any, next: any): void {
-  if (!req.currentUser) {
-    res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
-    return;
-  }
-  const role = normalizeRole(req.currentUser.role || req.currentUser.roleCode);
-  if (role !== 'ADMIN' && role !== 'SUPERADMIN') {
-    res.status(403).json({ success: false, message: 'You do not have permission to perform this action.' });
-    return;
-  }
-  next();
-}
-
-function callerIsAdmin(req: any): boolean {
-  const role = normalizeRole(req.currentUser?.role || req.currentUser?.roleCode);
-  return role === 'ADMIN' || role === 'SUPERADMIN';
-}
-
-/**
- * Access-change audit (F16 Phase B / §7 of the user-management design note).
- *
- * Why these writes exist: "which admin changed whose access, and when" is
- * exactly what an audit trail is for, and this product answered 403s for
- * every read on a database where nobody had opened Roles & Access yet —
- * so access changes are the first thing anyone will argue about later.
- * Today the only audit writers were the password-change flow and the bulk
- * user import; role/permission edits left no trace at all.
- *
- * Best-effort by design: a minimal schema in the wild may lack
- * `audit_logs` (some fixtures predate migration 032), and an audit write
- * failing must NEVER turn a successful access change into a 500 — the
- * same lesson as the `granted_at` regression. Failures are logged, the
- * mutation stands.
- *
- * `metadata` is capped so one bulk edit cannot post an unbounded JSONB
- * document: the arrays carry at most AUDIT_CHANGE_CAP entries and always
- * carry the true totals.
- */
-const AUDIT_CHANGE_CAP = 50;
-
-function summarizeAccessChanges(changes: Array<{ code: string; allowed: boolean }>): {
-  total: number;
-  granted: string[];
-  denied: string[];
-  truncated: boolean;
-} {
-  const granted = changes.filter(c => c.allowed).map(c => c.code);
-  const denied = changes.filter(c => !c.allowed).map(c => c.code);
-  return {
-    total: changes.length,
-    granted: granted.slice(0, AUDIT_CHANGE_CAP),
-    denied: denied.slice(0, AUDIT_CHANGE_CAP),
-    truncated: granted.length > AUDIT_CHANGE_CAP || denied.length > AUDIT_CHANGE_CAP,
-  };
-}
-
-async function logAccessChange(entry: {
-  actorId?: string | null;
-  targetUserId?: string | null;
-  actionCode: string;
-  entityType: string;
-  entityId?: string | null;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
-  if (!useDb()) return; // demo mode has no ledger to write to
-  try {
-    await getPool().query(
-      `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-      [
-        entry.actorId || null,
-        entry.targetUserId || null,
-        entry.actionCode,
-        entry.entityType,
-        entry.entityId || null,
-        JSON.stringify(entry.metadata || {}),
-      ]
-    );
-  } catch (error: any) {
-    console.warn(`Access-change audit write failed (${entry.actionCode}):`, error?.message || error);
-  }
-}
 
 /**
  * requireAuth + canonical permission grant (permissions × role_permissions
@@ -378,18 +218,6 @@ function requirePermissionCode(permissionCode: string) {
   };
 }
 
-/** True when `ref` identifies the authenticated caller (uuid, employee id or email). */
-function isSelfRef(req: any, ref: any): boolean {
-  if (!req.currentUser || ref == null) return false;
-  const value = String(ref).trim();
-  if (!value) return false;
-  const candidates = [req.currentUser.id, req.currentUser.employeeId, req.currentUser.email]
-    .filter(Boolean)
-    .map((entry: any) => String(entry).trim());
-  return candidates.some(entry =>
-    entry === value || entry.toUpperCase() === value.toUpperCase()
-  );
-}
 
 /**
  * Allows the request when the route param identifies the caller
@@ -417,122 +245,11 @@ function requireSelfOrAdmin(paramName: string) {
 }
 
 
-/** Translate low-level database failures into HTTP 503 (unavailable). */
-function dbErrorStatus(error: any): number {
-  if (!error) return 500;
-  const code = String(error.code || '');
-  const msg = String(error.message || '');
-  if (['ECONNREFUSED','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','57P01','57P03','08001','08006','08004','53300'].includes(code)) {
-    return 503;
-  }
-  if (/(connection|timeout|reachable|pool|unavailable)/i.test(msg)) return 503;
-  return 500;
-}
-
-function sendJson(res: any, status: number, payload: any): void {
-  if (demoModeAllowed()) {
-    res.setHeader('X-Data-Mode', 'dev-demo');
-  }
-  res.status(status).json(payload);
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const asUuid = (value: any): string | null => (value && UUID_RE.test(String(value)) ? String(value) : null);
-
-/**
- * Strict canonical-lowercase UUID test for query-shape optimization.
- * PostgreSQL renders uuid::text in canonical lowercase, so a predicate
- * like `col::text = $1` can only match when $1 is already canonical
- * lowercase. Only in that case may we rewrite it to the sargable
- * `col = $1::uuid` with EXACTLY the same result set; uppercase or
- * non-UUID inputs keep the legacy (no-match) behavior.
- */
-const isCanonicalLowerUuid = (value: unknown): boolean => {
-  const s = String(value ?? '');
-  return UUID_RE.test(s) && s === s.toLowerCase();
-};
-
-const jsonbOr = (value: any, fallback: any = null): any => {
-  if (value == null) return fallback;
-  if (typeof value === 'string') {
-    try { return JSON.parse(value); } catch { return fallback; }
-  }
-  return value;
-};
-
-/* ====================================================================
-   DEFAULT ROLES
-==================================================================== */
-
-const DEFAULT_ROLES: Array<{ code: string; name: string; level: number }> = [
-  { code: 'ADMIN', name: 'Administrator', level: 1 },
-  { code: 'CEO', name: 'Chief Executive Officer', level: 1 },
-  { code: 'MANAGER', name: 'Manager', level: 2 },
-  { code: 'TEAM_LEAD', name: 'Team Lead', level: 3 },
-  { code: 'EMPLOYEE', name: 'Employee', level: 4 },
-  { code: 'SM', name: 'Sales Manager', level: 2 },
-  { code: 'BDM', name: 'Business Development Manager', level: 3 },
-  { code: 'SBE', name: 'Senior Business Executive', level: 4 },
-  { code: 'BE', name: 'Business Executive', level: 5 },
-];
 
 /** System roles that exist for platform administration and never take part
  *  in the business reporting ladder (Level 1..N company-wide hierarchy). */
 const SYSTEM_ROLES = ['ADMIN', 'SUPERADMIN'];
 
-let rolesEnsured = false;
-
-/** Seeds default roles when the roles table is empty (idempotent). */
-async function ensureDefaultRoles(): Promise<void> {
-  if (rolesEnsured || !useDb()) return;
-  const pool = getPool();
-  const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM roles');
-  const count = countResult.rows[0]?.count ?? 0;
-  if (count === 0) {
-    for (const role of DEFAULT_ROLES) {
-      await pool.query(
-        `INSERT INTO roles (role_code, role_name, hierarchy_level, is_active, created_at, updated_at)
-         VALUES ($1, $2, $3, TRUE, NOW(), NOW())
-         ON CONFLICT (role_code) DO NOTHING`,
-        [role.code, role.name, role.level]
-      );
-    }
-  } else {
-    // Existing databases: guarantee the business ladder has a Level-1 (CEO)
-    // role available even when the table was seeded before it existed.
-    const inserted = await pool.query(
-      `INSERT INTO roles (role_code, role_name, hierarchy_level, is_active, created_at, updated_at)
-       VALUES ('CEO', 'Chief Executive Officer', 1, TRUE, NOW(), NOW())
-       ON CONFLICT (role_code) DO NOTHING`
-    );
-    if ((inserted.rowCount ?? 0) > 0) {
-      // A role must never be born unconfigured: give the brand-new row the
-      // same guarded defaults the seed step gives the standard roles, so an
-      // install that predates this fix does not end up with a CEO who cannot
-      // read a single page (F3/F4). The routine is idempotent and skips any
-      // role that already holds a grant, so an admin's matrix is untouched.
-      await applyDefaultRoleAccess();
-    }
-  }
-  rolesEnsured = true;
-}
-
-/** Resolve (and if necessary create) a role row for a role code. */
-async function resolveRoleId(roleCode: string): Promise<string | null> {
-  const pool = getPool();
-  await ensureDefaultRoles();
-  const code = normalizeRole(roleCode);
-  let result = await pool.query('SELECT id FROM roles WHERE UPPER(role_code) = $1 LIMIT 1', [code]);
-  if (result.rows[0]) return result.rows[0].id;
-  result = await pool.query(
-    `INSERT INTO roles (role_code, role_name, hierarchy_level, is_active, created_at, updated_at)
-     VALUES ($1, $2, 99, TRUE, NOW(), NOW())
-     ON CONFLICT (role_code) DO UPDATE SET updated_at = NOW()
-     RETURNING id`,
-    [code, code]
-  );
-  return result.rows[0]?.id || null;
-}
 
 async function roleCodeOf(roleId: string | null): Promise<string | null> {
   if (!roleId) return null;
@@ -876,76 +593,6 @@ async function buildHierarchyConfig() {
    ROW MAPPERS  (database rows -> frontend contract)
 ==================================================================== */
 
-function mapUserRow(row: any, managerEmployeeId?: string | null) {
-  const isInactive =
-    row.is_active === false || String(row.account_status || '').toUpperCase() === 'INACTIVE';
-  const role = row.role_code || 'EMPLOYEE';
-  return {
-    id: row.id,
-    employeeId: row.employee_id,
-    fullName: row.full_name,
-    name: row.full_name,
-    email: row.email || '',
-    phone: row.phone || '',
-    role,
-    roleCode: role,
-    roleName: row.role_name || role,
-    status: isInactive ? 'Inactive' : 'Active',
-    accountStatus: (row.account_status || (row.is_active === false ? 'INACTIVE' : 'ACTIVE')).toUpperCase(),
-    isActive: !isInactive,
-    designation: row.designation || '',
-    departmentId: row.department_id || '',
-    /**
-     * F16 Phase D: the person's ACTIVE department memberships (primary seat
-     * plus any extra one). The client's FullTeam mirror reads this, so a head
-     * who leads several departments sees all of them; when the memberships
-     * were not attached the list is empty and the primary column stands.
-     */
-    departmentIds: Array.isArray(row.department_ids) ? row.department_ids.map(String) : [],
-    /**
-     * Phase E: how many OPEN leads this person owns (null when the caller
-     * did not load the counts). The Users screen warns before a deactivation;
-     * the server refuses one that would strand them either way.
-     */
-    openLeadCount: row.open_lead_count === undefined || row.open_lead_count === null
-      ? null
-      : Number(row.open_lead_count),
-    teamId: row.team_id || '',
-    managerId: managerEmployeeId || row.manager_employee_id || '',
-    reportingManagerId: managerEmployeeId || row.manager_employee_id || '',
-    avatarUrl: row.profile_photo || '',
-    joiningDate: row.joining_date || null,
-    lastLogin: row.last_login || null,
-    mustChangePassword: row.must_change_password === true,
-    reportingChain: jsonbOr(row.reporting_chain, []),
-    subordinates: jsonbOr(row.subordinates, []),
-    hierarchyLevel: Number(row.hierarchy_level) > 0 ? Number(row.hierarchy_level) : 0,
-    createdDate: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-const USER_SELECT = `
-  SELECT u.*, r.role_code, r.role_name, r.hierarchy_level, m.employee_id AS manager_employee_id
-  FROM users u
-  LEFT JOIN roles r ON r.id = u.role_id
-  LEFT JOIN users m ON m.id = u.manager_id
-`;
-
-/**
- * Attach a person's active department memberships before `mapUserRow`, so
- * every user payload that reaches the client carries the same membership list
- * the server's data-visibility layer uses (F16 Phase D). One indexed query;
- * a database without migration 046 simply attaches an empty list.
- */
-async function withMembershipDepartments(
-  exec: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
-  row: any
-): Promise<any> {
-  if (!row?.id) return { ...row, department_ids: [] };
-  const ids = await getUserDepartmentIds(exec, String(row.id));
-  return { ...row, department_ids: ids };
-}
 
 /**
  * Phase E: attach each person's open-lead count to a whole roster in ONE
@@ -1165,7 +812,6 @@ const NOTIFICATION_SELECT = `
    HELPERS - shared value conversions
 ==================================================================== */
 
-const clean = (value: any): string => String(value == null ? '' : value).trim();
 const dateOrNull = (value: any): string | null => {
   if (!value) return null;
   const d = new Date(value);
@@ -1185,15 +831,6 @@ function importLeadCode(mobile: string): string {
    - Ownership + hierarchy/data-scope enforced server-side
    - Permission checks reuse existing permissions table
 ==================================================================== */
-
-export interface CallerDbInfo {
-  id: string;
-  employee_id: string;
-  email: string;
-  role_id: string | null;
-  role_code: string;
-  department_id: string | null;
-}
 
 export interface CallerVisibilityResult {
   /** true = unrestricted (sees everyone) */
@@ -1222,64 +859,6 @@ function callerMemo(caller: CallerDbInfo): CallerAuthzMemo {
   return memo;
 }
 
-/**
- * Resolve caller to DB record (or fallbackStore in dev-demo).
- * Memoized per HTTP request: a route that authorizes several times
- * (guard + handler, multiple permission codes) performs the caller
- * lookup exactly once.
- */
-export async function getCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
-  const memo = getRequestMemo(req);
-  if (memo?.callerPromise) return memo.callerPromise as Promise<CallerDbInfo | null>;
-  const promise = resolveCallerDbInfo(req);
-  if (memo) memo.callerPromise = promise;
-  return promise;
-}
-
-async function resolveCallerDbInfo(req: any): Promise<CallerDbInfo | null> {
-  const rawId = String(req.currentUser?.id || '').trim();
-  const rawEmp = String(req.currentUser?.employeeId || '').trim();
-  const rawEmail = String(req.currentUser?.email || '').trim();
-  if (!useDb()) {
-    const user = fallbackStore.users.find(u =>
-      (rawId && u.id === rawId) ||
-      (rawEmp && u.employeeId.toUpperCase() === rawEmp.toUpperCase()) ||
-      (rawEmail && u.email.toLowerCase() === rawEmail.toLowerCase())
-    );
-    if (!user) return null;
-    return {
-      id: user.id,
-      employee_id: user.employeeId,
-      email: user.email,
-      role_id: null,
-      role_code: normalizeRole(user.roleCode || user.role),
-      department_id: (user as any).departmentId || null,
-    };
-  }
-  try {
-    const pool = getPool();
-    const result = await pool.query(
-      `SELECT u.id, u.employee_id, u.email, u.role_id, u.department_id, r.role_code
-       FROM users u
-       LEFT JOIN roles r ON r.id = u.role_id
-       WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR UPPER(u.email) = UPPER($3)
-       LIMIT 1`,
-      [rawId || rawEmp || rawEmail, rawEmp || rawId, rawEmail || rawId]
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    return {
-      id: row.id,
-      employee_id: row.employee_id,
-      email: row.email || '',
-      role_id: row.role_id || null,
-      role_code: row.role_code || normalizeRole(req.currentUser?.role || req.currentUser?.roleCode),
-      department_id: row.department_id || null,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /** Check if caller has a specific permission code (admin bypass).
  *
@@ -1544,568 +1123,12 @@ router.get('/db-status', async (_req, res) => {
 });
 
 /* ====================================================================
-   FIRST-ADMIN BOOTSTRAP (secure, unauthenticated, guarded)
+   AUTH — extracted to ./production/auth.routes.ts (Phase 1). Mounted
+   here, at the position the handlers originally occupied, so route
+   registration order is unchanged.
 ==================================================================== */
 
-async function adminExistsInDb(): Promise<boolean> {
-  if (!useDb()) {
-    return fallbackStore.users.some(u => normalizeRole(u.role) === 'ADMIN' || normalizeRole(u.roleCode) === 'ADMIN');
-  }
-  await ensureDefaultRoles();
-  const pool = getPool();
-  const result = await pool.query(
-    `SELECT 1 FROM users u
-     JOIN roles r ON r.id = u.role_id
-     WHERE UPPER(r.role_code) IN ('ADMIN', 'SUPERADMIN')
-     LIMIT 1`
-  );
-  return result.rows.length > 0;
-}
-
-router.get('/auth/bootstrap-status', async (_req, res) => {
-  // In production without a database this must report 503 (honest
-  // "unavailable") instead of consulting the empty in-memory store and
-  // misleading the login screen into first-run setup.
-  if (sendDbUnavailable(res)) return;
-  try {
-    const required = !(await adminExistsInDb());
-    return sendJson(res, 200, { required, exists: !required });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Admin check failed' });
-  }
-});
-
-const EMPLOYEE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,29}$/;
-
-router.post('/auth/bootstrap-admin', async (req, res) => {
-  const payload = req.body || {};
-  const fullName = clean(payload.fullName || payload.name);
-  const employeeId = clean(payload.employeeId || payload.employee_id).toUpperCase();
-  const email = clean(payload.email).toLowerCase();
-  const password = String(payload.password || '');
-
-  if (fullName.length < 3 || employeeId.length < 3 || !EMPLOYEE_ID_RE.test(employeeId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 5) {
-    return sendJson(res, 400, {
-      success: false,
-      message: 'Valid full name, employee ID, email and a password of at least 5 characters are required.',
-    });
-  }
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) {
-      return sendJson(res, 503, {
-        success: false,
-        message: 'Database is not configured. Cannot create the first admin in production.',
-      });
-    }
-    // Development demo mode: only allowed while no ADMIN exists.
-    const adminExists = fallbackStore.users.some(
-      u => normalizeRole(u.role) === 'ADMIN' || normalizeRole(u.roleCode) === 'ADMIN'
-    );
-    if (adminExists) {
-      return sendJson(res, 409, { success: false, message: 'An admin already exists.' });
-    }
-    const hash = await bcrypt.hash(password, 10);
-    const adminUser = {
-      id: createId('user'),
-      employeeId,
-      fullName,
-      name: fullName,
-      email,
-      role: 'ADMIN',
-      roleCode: 'ADMIN',
-      status: 'Active' as const,
-      accountStatus: 'ACTIVE',
-      isActive: true,
-      designation: 'Administrator',
-      departmentId: '',
-      teamId: '',
-      managerId: '',
-      reportingManagerId: '',
-      avatarUrl: '',
-      createdDate: new Date().toISOString(),
-      password: hash,
-      mustChangePassword: false,
-    };
-    fallbackStore.users.push(adminUser);
-    const token = signToken({ id: adminUser.id, employeeId, role: 'ADMIN', email, name: fullName });
-    const { password: _pw, ...safeUser } = adminUser;
-    return sendJson(res, 201, { success: true, token, user: safeUser });
-  }
-
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    // Advisory lock scoped to the transaction prevents two serverless
-    // instances from both bootstrapping an admin concurrently.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['leadflow_first_admin_bootstrap']);
-    const adminResult = await client.query(
-      `SELECT 1 FROM users u
-       JOIN roles r ON r.id = u.role_id
-       WHERE UPPER(r.role_code) IN ('ADMIN', 'SUPERADMIN')
-       LIMIT 1`
-    );
-    if (adminResult.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return sendJson(res, 409, { success: false, message: 'An admin account already exists. Please log in.' });
-    }
-    const dup = await client.query(
-      `SELECT employee_id, email FROM users
-       WHERE UPPER(employee_id) = $1 OR UPPER(email) = $2
-       LIMIT 1`,
-      [employeeId, email]
-    );
-    if (dup.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return sendJson(res, 409, {
-        success: false,
-        message: 'A user with that employee ID or email already exists.',
-      });
-    }
-    const roleId = await resolveRoleId('ADMIN');
-    if (!roleId) {
-      await client.query('ROLLBACK');
-      return sendJson(res, 500, { success: false, message: 'Default ADMIN role could not be prepared.' });
-    }
-    const hash = await bcrypt.hash(password, 10);
-    const created = await client.query(
-      `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, designation,
-                          is_active, account_status, must_change_password, created_at, updated_at)
-       VALUES ($1, $2, $3, NULL, $4, $5, 'Administrator', TRUE, 'ACTIVE', FALSE, NOW(), NOW())
-       RETURNING *`,
-      [employeeId, fullName, email, hash, roleId]
-    );
-    await client.query('COMMIT');
-    const row = created.rows[0];
-    const mapped = mapUserRow({ ...row, role_code: 'ADMIN', role_name: 'Administrator' });
-    const token = signToken({ id: row.id, employeeId, role: 'ADMIN', email, name: fullName });
-    return sendJson(res, 201, { success: true, token, user: mapped });
-  } catch (error: any) {
-    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'First admin setup failed.' });
-  } finally {
-    client.release();
-  }
-});
-
-/* ====================================================================
-   AUTH
-==================================================================== */
-
-router.post('/auth/login', async (req, res) => {
-  const loginId = clean(req.body?.employeeId || req.body?.email);
-  const password = String(req.body?.password || '');
-
-  if (!loginId || !password) {
-    return sendJson(res, 400, { success: false, message: 'Employee ID and password are required' });
-  }
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) {
-      return sendJson(res, 503, { success: false, message: 'Database is not configured. Cannot authenticate in production.' });
-    }
-    const user = fallbackStore.users.find(
-      item =>
-        String(item.employeeId || '').toUpperCase() === loginId.toUpperCase() ||
-        String(item.email || '').toLowerCase() === loginId.toLowerCase()
-    );
-    if (!user || !user.password) {
-      logAuthLoginFailed({ reason: 'invalid_credentials' });
-      return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
-    }
-    const ok = user.password.startsWith('$2')
-      ? await bcrypt.compare(password, user.password)
-      : user.password === password;
-    if (!ok) {
-      logAuthLoginFailed({ reason: 'invalid_credentials' });
-      return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
-    }
-    const token = signToken({ id: user.id, employeeId: user.employeeId, role: normalizeRole(user.role), email: user.email, name: user.fullName || user.name });
-    logAuthLoginSuccess({ userId: user.id, role: normalizeRole(user.role) });
-    const { password: _pw, ...safeUser } = user;
-    return res.status(200).json({ token, user: { ...safeUser, name: user.fullName || user.name } });
-  }
-
-  const perf = createPerf('auth.login');
-  try {
-    const pool = getPool();
-    // Same projection as GET /auth/session below: the profile the client
-    // caches at login is then byte-identical to the one startup validation
-    // compares it against, so a cold reload of an unchanged account needs no
-    // state rewrite (and therefore no re-run of the [user] effects that
-    // re-fetch roles/notifications/dashboard data).
-    const result = await pool.query(
-      `${USER_SELECT}
-       WHERE UPPER(u.employee_id) = UPPER($1) OR UPPER(u.email) = UPPER($1)
-       LIMIT 1`,
-      [loginId]
-    );
-    perf.span('db.userLookup');
-    const user = result.rows[0];
-    if (!user) {
-      logAuthLoginFailed({ reason: 'invalid_credentials' });
-      perf.finish(res);
-      return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
-    }
-    const valid = user.password && String(user.password).startsWith('$2')
-      ? await bcrypt.compare(password, user.password)
-      : user.password === password;
-    perf.span('auth.bcryptVerify');
-    if (!valid) {
-      logAuthLoginFailed({ reason: 'invalid_credentials' });
-      perf.finish(res);
-      return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
-    }
-    // last_login is bookkeeping: its semantics are preserved (the update is
-    // still issued for every successful login) but it no longer delays the
-    // authenticated response — authentication is already confirmed.
-    void pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id])
-      .catch(() => undefined);
-    const role = user.role_code || 'EMPLOYEE';
-    const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
-    logAuthLoginSuccess({ userId: user.id, role });
-    perf.finish(res);
-    // The session profile carries the caller's own memberships: the client
-    // mirrors the server's FullTeam scope from this payload.
-    const sessionRow = await withMembershipDepartments(pool, user);
-    return sendJson(res, 200, { token, user: mapUserRow(sessionRow, sessionRow.manager_employee_id) });
-  } catch (error: any) {
-    perf.finish(res);
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Login failed' });
-  }
-});
-
-/**
- * GET /auth/session — authoritative session validation for app startup.
- * ------------------------------------------------------------------
- * The browser must never treat its cached auth state (Zustand persist /
- * localStorage) as proof that a session is still valid. On every cold load
- * the client asks this endpoint before it renders a protected route.
- *
- * Validation is server-side and deliberately cheap:
- *   1. `requireAuth` verifies the bearer token signature and expiry.
- *   2. The account is then re-read (PostgreSQL when configured, the
- *      development in-memory store otherwise) so a deleted or deactivated
- *      employee's cached token stops working immediately instead of
- *      surviving until the JWT expires.
- *
- * The reply uses the same `{ success, data }` envelope as the rest of the
- * production API, so the centralized client helper unwraps it, and `data`
- * is exactly the user object `/auth/login` returns - never the password
- * column.
- *
- * Status contract the client relies on:
- *   401 -> this session was REJECTED (clear it and re-login)
- *   503 -> validation is UNAVAILABLE (database down/unconfigured) - the
- *          client keeps the session rather than logging people out during
- *          an infrastructure outage.
- */
-router.get('/auth/session', requireAuth, async (req: any, res) => {
-  const perf = createPerf('auth.session');
-  const claim = req.currentUser as { id?: string; employeeId?: string; email?: string } | undefined;
-  const claimId = String(claim?.id || '').trim();
-  const claimEmployeeId = String(claim?.employeeId || '').trim();
-  const claimEmail = String(claim?.email || '').trim();
-
-  if (!claimId && !claimEmployeeId && !claimEmail) {
-    perf.finish(res);
-    return sendJson(res, 401, { success: false, message: 'Your session is not valid. Please log in again.' });
-  }
-
-  if (useDb()) {
-    try {
-      const pool = getPool();
-      const result = await pool.query(
-        `${USER_SELECT}
-         WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR UPPER(u.email) = UPPER($3)
-         LIMIT 1`,
-        [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
-      );
-      perf.span('db.userLookup');
-      const row = result.rows[0];
-      if (!row) {
-        perf.finish(res);
-        return sendJson(res, 401, { success: false, message: 'Your account no longer exists. Please log in again.' });
-      }
-      if (row.is_active === false || String(row.account_status || '').toUpperCase() === 'INACTIVE') {
-        perf.finish(res);
-        return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
-      }
-      perf.finish(res);
-      const sessionRow = await withMembershipDepartments(getPool(), row);
-      return sendJson(res, 200, { success: true, data: mapUserRow(sessionRow, sessionRow.manager_employee_id) });
-    } catch (error: any) {
-      perf.finish(res);
-      return sendJson(res, dbErrorStatus(error), {
-        success: false,
-        message: error?.message || 'Session validation is temporarily unavailable.',
-      });
-    }
-  }
-
-  // No database configured: production stays honest (503 - not a rejected
-  // session), development uses the in-memory demo store it logged into.
-  if (!demoModeAllowed()) {
-    return sendJson(res, 503, {
-      success: false,
-      message: 'Database is not configured. Session validation is unavailable.',
-      mode: 'db-unconfigured',
-    });
-  }
-
-  const demoUser = fallbackStore.users.find(item =>
-    (claimId && item.id === claimId) ||
-    (claimEmployeeId && String(item.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
-    (claimEmail && String(item.email).toLowerCase() === claimEmail.toLowerCase())
-  );
-  if (!demoUser) {
-    return sendJson(res, 401, { success: false, message: 'Your account no longer exists. Please log in again.' });
-  }
-  if (
-    demoUser.status === 'Inactive' ||
-    demoUser.isActive === false ||
-    String(demoUser.accountStatus || '').toUpperCase() === 'INACTIVE'
-  ) {
-    return sendJson(res, 401, { success: false, message: 'Your account is inactive. Please contact an administrator.' });
-  }
-  const { password: _pw, ...safeSessionUser } = demoUser;
-  return sendJson(res, 200, { success: true, data: safeSessionUser });
-});
-
-router.put('/auth/profile', requireAuth, async (req, res) => {
-  const body = req.body || {};
-  const allowedFields = new Set(['name', 'email', 'phone']);
-  if (Object.keys(body).some(key => !allowedFields.has(key))) {
-    return sendJson(res, 400, { success: false, message: 'Only name, email, and phone can be changed here.' });
-  }
-
-  const name = String(body.name ?? '').trim();
-  const email = String(body.email ?? '').trim().toLowerCase();
-  const phone = String(body.phone ?? '').trim();
-  if (!name || name.length > 120) {
-    return sendJson(res, 400, { success: false, message: 'Name is required and must be 120 characters or fewer.' });
-  }
-  if (email.length > 150 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return sendJson(res, 400, { success: false, message: 'Enter a valid email address.' });
-  }
-  if (phone.length > 20) {
-    return sendJson(res, 400, { success: false, message: 'Mobile number must be 20 characters or fewer.' });
-  }
-
-  const claim = req.currentUser as { id?: string; employeeId?: string; email?: string } | undefined;
-  const claimId = String(claim?.id || '').trim();
-  const claimEmployeeId = String(claim?.employeeId || '').trim();
-  const claimEmail = String(claim?.email || '').trim();
-  if (!claimId && !claimEmployeeId && !claimEmail) {
-    return sendJson(res, 401, { success: false, message: 'Your session does not identify a user.' });
-  }
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) {
-      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    }
-    const user = fallbackStore.users.find(item =>
-      (claimId && String(item.id) === claimId) ||
-      (claimEmployeeId && String(item.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
-      (claimEmail && String(item.email).toLowerCase() === claimEmail.toLowerCase())
-    );
-    if (!user) return sendJson(res, 404, { success: false, message: 'User not found.' });
-    const duplicate = fallbackStore.users.some(item =>
-      item.id !== user.id && String(item.email).toLowerCase() === email
-    );
-    if (duplicate) return sendJson(res, 409, { success: false, message: 'That email address is already in use.' });
-    user.name = name;
-    user.fullName = name;
-    user.email = email;
-    user.phone = phone;
-    const { password: _password, ...safeUser } = user;
-    return sendJson(res, 200, { success: true, data: safeUser });
-  }
-
-  try {
-    const pool = getPool();
-    const existingResult = await pool.query(
-      `${USER_SELECT}
-       WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR LOWER(u.email) = LOWER($3)
-       LIMIT 1`,
-      [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
-    );
-    const existing = existingResult.rows[0];
-    if (!existing) return sendJson(res, 404, { success: false, message: 'User not found.' });
-
-    const updated = await pool.query(
-      `UPDATE users
-       SET full_name = $1, email = $2, phone = $3, updated_at = NOW()
-       WHERE id = $4
-       RETURNING id`,
-      [name, email, phone, existing.id]
-    );
-    const saved = await pool.query(`${USER_SELECT} WHERE u.id = $1 LIMIT 1`, [updated.rows[0].id]);
-    return sendJson(res, 200, { success: true, data: mapUserRow(saved.rows[0]) });
-  } catch (error: any) {
-    if (error?.code === '23505') {
-      return sendJson(res, 409, { success: false, message: 'That email address is already in use.' });
-    }
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Profile update failed.' });
-  }
-});
-
-router.post('/auth/change-password', requireAuth, async (req, res) => {
-  const { userId, currentPassword, newPassword } = req.body || {};
-  if (!userId || !currentPassword || !newPassword) {
-    return sendJson(res, 400, { success: false, message: 'All password fields are required' });
-  }
-  if (String(newPassword).length < 5) {
-    return sendJson(res, 400, { success: false, message: 'New password must be at least 5 characters' });
-  }
-  // Self-service only: one authenticated user must not rotate another
-  // user's password. Admins use POST /users/:id/reset-password.
-  if (!callerIsAdmin(req) && !isSelfRef(req, userId)) {
-    return sendJson(res, 403, { success: false, message: 'You can only change your own password.' });
-  }
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) {
-      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    }
-    const user = fallbackStore.users.find(item => item.id === userId || item.employeeId === userId);
-    if (!user || !user.password) {
-      return sendJson(res, 404, { success: false, message: 'User not found' });
-    }
-    const ok = user.password.startsWith('$2') ? await bcrypt.compare(currentPassword, user.password) : user.password === currentPassword;
-    if (!ok) {
-      return sendJson(res, 401, { success: false, message: 'Current password is incorrect' });
-    }
-    user.password = await bcrypt.hash(newPassword, 10);
-    user.mustChangePassword = false;
-    return sendJson(res, 200, { success: true, message: 'Password updated successfully' });
-  }
-
-  try {
-    const pool = getPool();
-    const result = await pool.query('SELECT * FROM users WHERE id::text = $1 OR employee_id = $1 LIMIT 1', [String(userId)]);
-    const user = result.rows[0];
-    if (!user) {
-      return sendJson(res, 404, { success: false, message: 'User not found' });
-    }
-    const ok = user.password && String(user.password).startsWith('$2')
-      ? await bcrypt.compare(currentPassword, user.password)
-      : user.password === currentPassword;
-    if (!ok) {
-      return sendJson(res, 401, { success: false, message: 'Current password is incorrect' });
-    }
-    const hashed = await bcrypt.hash(newPassword, 10);
-    await pool.query(
-      `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
-      [hashed, user.id]
-    );
-    return sendJson(res, 200, { success: true, message: 'Password updated successfully' });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Password update failed' });
-  }
-});
-
-/**
- * POST /auth/change-required-password — forced first-login password change.
- * -------------------------------------------------------------------------
- * The third, deliberately distinct password flow. A user provisioned (or
- * admin-reset) with a temporary password has `must_change_password = TRUE`
- * in PostgreSQL; the app blocks them behind the forced-change modal until
- * they set a real one. This endpoint is SEPARATE from the other two flows:
- *
- *   1. POST /users/:id/reset-password   — ADMIN-only reset of ANOTHER user
- *   2. POST /auth/change-password        — voluntary self-service, verifies
- *                                          the CURRENT password first
- *
- * Contract (fail closed everywhere):
- *   - authenticated session only; the target is ALWAYS the caller, derived
- *     from the verified bearer token — a client-supplied id is ignored, so
- *     no `users.edit` / admin capability / Settings Feature Access is ever
- *     required, and another user's password can never be changed here
- *   - the caller must exist AND currently have must_change_password = TRUE;
- *     otherwise 409 and this endpoint does NOT touch the password
- *   - password strength follows the forced-change UI minimum (>= 6 chars),
- *     hashed with the existing bcrypt policy (10 rounds)
- *   - the hash update and the flag clear happen in ONE UPDATE (atomic)
- *   - no plaintext password is logged and the hash is never returned
- */
-router.post('/auth/change-required-password', requireAuth, async (req: any, res) => {
-  const newPassword = String(req.body?.newPassword ?? req.body?.password ?? '');
-  if (newPassword.length < 6) {
-    return sendJson(res, 400, { success: false, message: 'Password must be at least 6 characters' });
-  }
-
-  // The caller's identity comes from the verified bearer token, never from
-  // the request body (which may not carry a target id at all).
-  const claim = req.currentUser || {};
-  const claimId = String(claim.id || '').trim();
-  const claimEmployeeId = String(claim.employeeId || '').trim();
-  const claimEmail = String(claim.email || '').trim();
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) {
-      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    }
-    const demoUser = fallbackStore.users.find(u =>
-      (claimId && String(u.id) === claimId) ||
-      (claimEmployeeId && String(u.employeeId).toUpperCase() === claimEmployeeId.toUpperCase()) ||
-      (claimEmail && String(u.email).toLowerCase() === claimEmail.toLowerCase())
-    );
-    if (!demoUser) {
-      return sendJson(res, 404, { success: false, message: 'User not found' });
-    }
-    if (demoUser.mustChangePassword !== true) {
-      return sendJson(res, 409, { success: false, message: 'No forced password change is required.' });
-    }
-    demoUser.password = await bcrypt.hash(newPassword, 10);
-    demoUser.mustChangePassword = false;
-    logAuthForcedPasswordChangeCompleted({ userId: demoUser.id });
-    const { password: _pw, ...safeUser } = demoUser;
-    return sendJson(res, 200, { success: true, data: { ...safeUser, name: demoUser.fullName || demoUser.name } });
-  }
-
-  try {
-    const pool = getPool();
-    const result = await pool.query(
-      `SELECT * FROM users
-       WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($3)
-       LIMIT 1`,
-      [claimId || claimEmployeeId || claimEmail, claimEmployeeId || claimId, claimEmail || claimId]
-    );
-    const user = result.rows[0];
-    if (!user) {
-      return sendJson(res, 404, { success: false, message: 'User not found' });
-    }
-    if (user.must_change_password !== true) {
-      return sendJson(res, 409, { success: false, message: 'No forced password change is required.' });
-    }
-
-    const hashed = await bcrypt.hash(newPassword, 10);
-    await pool.query(
-      `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
-      [hashed, user.id]
-    );
-
-    logAuthForcedPasswordChangeCompleted({ userId: user.id });
-
-    // Security-safe audit event (no password material). Best-effort: a
-    // missing/readonly audit table must never fail the password change.
-    try {
-      await pool.query(
-        `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
-         VALUES ($1, $1, 'required-password-change-completed', 'user', $1, '{}'::jsonb)`,
-        [user.id]
-      );
-    } catch { /* best-effort audit */ }
-
-    const fresh = await pool.query(`${USER_SELECT} WHERE u.id = $1`, [user.id]);
-    const row = fresh.rows[0] || user;
-    return sendJson(res, 200, { success: true, data: mapUserRow(row, row.manager_employee_id) });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Password change failed' });
-  }
-});
+router.use(authRouter);
 
 /* ====================================================================
    USERS
