@@ -13,6 +13,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, SystemNotification } from '../../shared/types';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
+import WhatsAppAction from '../components/WhatsAppAction';
 import LeadQualityPanel from '../components/LeadQualityPanel';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 
@@ -387,6 +388,7 @@ export default function Lead360() {
               {lead.currentStatus}
             </span>
             <LeadQualityBadge quality={lead.leadQuality} />
+            <WhatsAppAction mobile={lead.mobile} name={lead.prospectName} />
             {canAccess('lead_tracking', 'edit') && (
               <>
                 <button
@@ -454,28 +456,31 @@ export default function Lead360() {
             {/* Icon-only actions: the phone number / email line next to them can
                 be arbitrarily long, so labels used to collide with it. The icons
                 keep their accessible names. */}
-            {canAccess('lead_tracking', 'edit') && (
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
-                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#978C21] text-white"
-                  aria-label="Update lead status"
-                  title="Update status"
-                >
-                  <Target className="h-[18px] w-[18px]" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
-                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
-                  aria-label="Edit lead"
-                  title="Edit lead"
-                >
-                  <Edit2 className="h-[18px] w-[18px]" />
-                </button>
-              </div>
-            )}
+            <div className="flex shrink-0 items-center gap-2">
+              <WhatsAppAction variant="icon" mobile={lead.mobile} name={lead.prospectName} />
+              {canAccess('lead_tracking', 'edit') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#978C21] text-white"
+                    aria-label="Update lead status"
+                    title="Update status"
+                  >
+                    <Target className="h-[18px] w-[18px]" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/edit`)}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
+                    aria-label="Edit lead"
+                    title="Edit lead"
+                  >
+                    <Edit2 className="h-[18px] w-[18px]" />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-stone-100 pt-4">
             {[

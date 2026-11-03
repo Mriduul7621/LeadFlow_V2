@@ -29,6 +29,7 @@ import { roadshowService, type Roadshow } from '../../roadshows/services/roadsho
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import type { LeadQuality } from '../../shared/types';
 import LeadQualityBadge from '../../leads/components/LeadQualityBadge';
+import WhatsAppAction from '../../leads/components/WhatsAppAction';
 import { toast } from 'sonner';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
@@ -458,6 +459,15 @@ export default function DailyWorkbench() {
     return workItems.find(i => i.key === selectedKey) || null;
   }, [workItems, selectedKey]);
 
+  // WhatsApp contact for the selected item: follow-up queue rows carry
+  // the lead mobile directly; scheduled activities carry leadMobile.
+  // WhatsAppAction hides itself when the number is missing/invalid.
+  const selectedMobile = selectedItem
+    ? selectedItem.source === 'follow_up'
+      ? (selectedItem.raw as FollowUpQueueItem).mobile
+      : (selectedItem.raw as ScheduledActivity).leadMobile
+    : null;
+
   // ---- Actions: scheduled complete/cancel/edit (reuse existing service) ----
   const handleComplete = async (item: WorkItem) => {
     if (item.source !== 'scheduled') return;
@@ -828,6 +838,7 @@ export default function DailyWorkbench() {
                   >
                     Open Lead <ExternalLink className="w-3.5 h-3.5" />
                   </Link>
+                  <WhatsAppAction mobile={selectedMobile} name={selectedItem.leadName} />
                   {selectedItem.leadQuality && (
                     <LeadQualityBadge quality={selectedItem.leadQuality} />
                   )}
