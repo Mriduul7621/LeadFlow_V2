@@ -209,10 +209,13 @@ describe('Role Feature Access — source guards', () => {
 
   it('server remains the final authorization boundary for leads.edit', () => {
     // Phase 1 PR #6: the lead handlers live in production/leads.routes.ts
-    // (mounted by production.routes.ts; same router).
+    // (mounted by production.routes.ts; same router). The Phase 1 finale
+    // moved the dashboard handler (whose fail-closed gate this test also
+    // reads) to production/dashboard.routes.ts.
     const prod =
       read('server/routes/production.routes.ts') +
-      read('server/routes/production/leads.routes.ts');
+      read('server/routes/production/leads.routes.ts') +
+      read('server/routes/production/dashboard.routes.ts');
     assert.ok(prod.includes("hasPermissionCode(caller, 'leads.edit')"), 'server must enforce leads.edit');
     assert.ok(prod.includes('fail closed') || prod.includes('Fail closed'), 'fail-closed semantics preserved');
   });

@@ -100,6 +100,7 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
         read('server/routes/production/metadata.routes.ts'),
         read('server/routes/production/users.routes.ts'),
         read('server/routes/production/leads.routes.ts'),
+        read('server/routes/production/dashboard.routes.ts'),
       ].join('\n')
     );
 

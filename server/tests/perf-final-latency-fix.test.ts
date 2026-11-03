@@ -295,7 +295,8 @@ describe('Performance fix — source guards', () => {
   it('D5. hot authorization lookups run in parallel, not sequentially', () => {
     const routes =
       read('server/routes/production.routes.ts') +
-      read('server/routes/production/leads.routes.ts');
+      read('server/routes/production/leads.routes.ts') +
+      read('server/routes/production/dashboard.routes.ts');
     assert.ok(
       /const \[canDashboard, canLeads\] = await Promise\.all\(\[/.test(routes),
       'dashboard permission checks must be batched'
