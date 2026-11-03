@@ -224,7 +224,7 @@ describe('Lead Hardening - Assignment Scope', () => {
 
 describe('Lead Hardening - Auth & Persistence', () => {
   it('anon create/update/delete should be rejected - production.routes uses requireAuth for lead routes', () => {
-    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
     // Check that POST /leads and bulk and delete use requireAuth
     assert.ok(file.includes("router.post('/leads', requireAuth"), 'POST /leads must use requireAuth');
     assert.ok(file.includes("router.post('/leads/bulk', requireAuth"), 'POST /leads/bulk must use requireAuth');
@@ -257,7 +257,7 @@ describe('Lead Hardening - Auth & Persistence', () => {
   });
 
   it('bulk import enforces per-row authz', () => {
-    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
     // Look for bulk handler checks
     assert.ok(file.includes('isAssignedToAllowed'), 'bulk handler must check isAssignedToAllowed');
     assert.ok(file.includes('isLeadAccessible'), 'bulk handler must check isLeadAccessible for existing leads');
@@ -266,14 +266,14 @@ describe('Lead Hardening - Auth & Persistence', () => {
   });
 
   it('LEAD_UPSERT_SQL includes created_by and updated_by', () => {
-    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
     assert.ok(file.includes('created_by'), 'UPSERT must include created_by');
     assert.ok(file.includes('updated_by'), 'UPSERT must include updated_by');
     assert.ok(file.includes('deleted_by'), 'DELETE should set deleted_by');
   });
 
   it('spoofing fields are not trusted from client - assignedBy derived from session', () => {
-    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const file = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
     // Check that buildSecureLeadRecord uses caller.id for assignedBy
     assert.ok(file.includes('assignedById = caller.id'), 'assignedBy must be derived from caller.id');
     assert.ok(file.includes('createdBy: caller.id'), 'createdBy must be caller.id');

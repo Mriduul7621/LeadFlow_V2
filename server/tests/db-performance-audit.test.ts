@@ -742,7 +742,14 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
   ================================================================== */
 
   it('21. no ::text casts remain on visibility/assignedTo hot predicates', () => {
-    const routes = read('server/routes/production.routes.ts');
+    // Phase 1 PR #6: the visibility predicate builder lives in
+    // production/shared.ts and the lead query shapes in
+    // production/leads.routes.ts (both mounted into / imported by
+    // production.routes.ts; same router).
+    const routes =
+      read('server/routes/production.routes.ts') +
+      read('server/routes/production/shared.ts') +
+      read('server/routes/production/leads.routes.ts');
     assert.ok(!routes.includes('assigned_to::text = ANY'), 'visibility ANY must be uuid-typed');
     assert.ok(!routes.includes('created_by::text = ANY'), 'visibility ANY must be uuid-typed');
     assert.ok(routes.includes("l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[])"),

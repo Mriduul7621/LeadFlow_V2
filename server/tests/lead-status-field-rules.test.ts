@@ -119,7 +119,7 @@ describe('F6 — per-status required fields (specification)', () => {
   });
 
   it('F. server wiring: the endpoint enforces the table BEFORE it writes', () => {
-    const route = read('server/routes/production.routes.ts');
+    const route = read('server/routes/production/leads.routes.ts');
     const start = route.indexOf("router.post('/leads/:id/follow-up'");
     assert.ok(start > 0, 'the follow-up endpoint must exist');
     const handler = route.slice(start, start + 12000);

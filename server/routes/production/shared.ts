@@ -823,6 +823,28 @@ export async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): P
   return result.rows[0] || null;
 }
 
+/**
+ * Visibility predicate for lead listings — moved here in Phase 1
+ * PR #6 (leads extraction): shared by the leads list and the
+ * follow-up queue (production/leads.routes.ts) and by the dashboard
+ * handler, which stays in production.routes.ts this step. One
+ * definition, imported by both sides.
+ */
+export function buildDashboardVisibilitySql(
+  visibility: { all: boolean; userIds: string[]; employeeIds: string[] },
+  params: any[]
+): string {
+  if (visibility.all) return 'TRUE';
+  params.push(visibility.userIds);
+  const pUser = params.length;
+  // UUID-typed ANY (never a ::text cast on the indexed columns):
+  // visibility.userIds are users.id values resolved server-side, so the
+  // comparison stays sargable and the planner can BitmapOr the existing
+  // idx_leads_assigned_to / idx_leads_created_by indexes instead of
+  // seq-scanning leads. Result-identical to the previous text cast.
+  return `(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`;
+}
+
 /* ====================================================================
    LEAD VALUE / ASSIGNMENT HELPERS — moved here in Phase 1 PR #4
    (roadshows + scheduled-activities extraction): value conversions,
