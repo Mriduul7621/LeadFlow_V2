@@ -66,6 +66,9 @@ export default function Settings() {
   const [newName, setNewName] = useState(user?.name || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || '');
   const [activeSection, setActiveSection] = useState('overview');
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState('');
+  const [clearingData, setClearingData] = useState(false);
 
   // Password management states
   const [currentPassword, setCurrentPassword] = useState('');
@@ -430,12 +433,20 @@ export default function Settings() {
   };
 
   const handleClearData = async () => {
-    if (!confirm('CRITICAL: This will purge all lead intelligence from the database. This action is irreversible. Proceed?')) return;
+    // Typed-confirmation gate: the purge only runs when the admin has
+    // typed CLEAR_ALL into the inline danger panel below. The server
+    // enforces the same confirmation, so this is defence in depth.
+    if (clearConfirmText !== 'CLEAR_ALL' || clearingData) return;
+    setClearingData(true);
     try {
       await leadService.clearAllLeads();
       toast.success('Lead intelligence matrix purged successfully');
+      setClearConfirmOpen(false);
+      setClearConfirmText('');
     } catch (err) {
       toast.error('Database purge failed');
+    } finally {
+      setClearingData(false);
     }
   };
 
@@ -584,7 +595,8 @@ export default function Settings() {
                           <Wifi className="w-4 h-4" /> Check Connection
                         </button>
                       </div>
-                      <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 flex items-center justify-between italic">
+                      <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 italic">
+                        <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                            <div className="p-4 bg-red-50 text-red-500 rounded-sm border border-red-100">
                               <Database className="w-5 h-5" />
@@ -594,7 +606,30 @@ export default function Settings() {
                               <p className="text-[10px] text-red-400 font-bold uppercase mt-1 tracking-tight italic">Advanced system operations for administrators.</p>
                            </div>
                         </div>
-                        <button className="text-sm font-medium text-red-600 hover:underline" onClick={handleClearData}>Clear All Data</button>
+                        <button className="text-sm font-medium text-red-600 hover:underline" onClick={() => { setClearConfirmOpen(open => !open); setClearConfirmText(''); }}>{clearConfirmOpen ? 'Cancel' : 'Clear All Data'}</button>
+                        </div>
+                        {clearConfirmOpen && (
+                          <div className="mt-6 pt-6 border-t border-red-100 space-y-4">
+                            <p className="text-[11px] text-red-500 font-bold uppercase tracking-wider leading-relaxed">
+                              Critical: this will purge all lead intelligence from the database. Type CLEAR_ALL to confirm.
+                            </p>
+                            <div className="flex flex-col sm:flex-row gap-3">
+                              <input
+                                value={clearConfirmText}
+                                onChange={e => setClearConfirmText(e.target.value)}
+                                placeholder="Type CLEAR_ALL"
+                                className="flex-1 bg-white border border-red-200 rounded-sm px-4 py-3 text-sm font-bold tracking-widest outline-none placeholder:text-red-200"
+                              />
+                              <button
+                                onClick={handleClearData}
+                                disabled={clearConfirmText !== 'CLEAR_ALL' || clearingData}
+                                className="px-5 py-3 bg-red-600 text-white rounded-sm text-xs font-black uppercase tracking-widest disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-700 transition-all whitespace-nowrap"
+                              >
+                                {clearingData ? 'Purging...' : 'Purge All Leads'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

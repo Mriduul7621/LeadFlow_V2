@@ -243,7 +243,13 @@ export const leadService = {
   },
 
   async clearAllLeads(): Promise<void> {
-    await apiRequest('/api/leads/clear-all', { method: 'POST' });
+    // Server safety rail: the purge is refused (400) unless the body
+    // carries the typed confirmation.
+    await apiRequest('/api/leads/clear-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'CLEAR_ALL' }),
+    });
     localDb.clearAllLeads();
   },
 
@@ -455,7 +461,13 @@ export const leadService = {
   },
 
   async deleteLeadsByCampaign(campaignName: string): Promise<void> {
-    await apiRequest(`/api/leads/campaign/${encodeURIComponent(campaignName)}`, { method: 'DELETE' });
+    // Server safety rail: the purge is refused (400) unless the body
+    // repeats the exact campaign name as the typed confirmation.
+    await apiRequest(`/api/leads/campaign/${encodeURIComponent(campaignName)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: campaignName }),
+    });
     const leads = localDb.getLeads().filter(l => l.campaignName !== campaignName);
     localDb.saveLeads(leads);
   },

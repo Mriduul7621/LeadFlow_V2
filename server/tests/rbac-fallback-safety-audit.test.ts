@@ -793,7 +793,7 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
         `DB-outage lead read must fail (403/503), never 2xx — got ${list.status}`
       );
 
-      const clearAll = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${adminT()}`);
+      const clearAll = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${adminT()}`).send({ confirm: 'CLEAR_ALL' });
       assert.ok(
         clearAll.status === 403 || clearAll.status === 503,
         `DB-outage clear-all must fail (403/503) — got ${clearAll.status}`
@@ -822,6 +822,28 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
   /* 9. ADMIN-ONLY DESTRUCTION (runs LAST — it soft-deletes fixtures)    */
   /* ================================================================== */
 
+  it('D3a. typed confirmation gate: missing or wrong confirm is a 400 and deletes nothing', async () => {
+    const before = await request(app).get('/api/leads').set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(before.status, 200);
+    assert.ok(before.body.length > 0, 'fixture leads must exist before the gate checks');
+
+    // Clear-all WITHOUT the typed confirmation: refused, nothing deleted.
+    const noConfirm = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(noConfirm.status, 400, 'clear-all without confirm must be 400');
+    const afterNoConfirm = await request(app).get('/api/leads').set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(afterNoConfirm.body.length, before.body.length, 'confirm-less clear-all must delete nothing');
+
+    // Campaign purge with the WRONG confirmation: refused, nothing deleted.
+    const wrongConfirm = await request(app).delete('/api/leads/campaign/None').set('Authorization', `Bearer ${adminT()}`).send({ confirm: 'NotTheCampaign' });
+    assert.equal(wrongConfirm.status, 400, 'campaign purge with a wrong confirm must be 400');
+    const afterWrong = await request(app).get('/api/leads').set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(afterWrong.body.length, before.body.length, 'wrong-confirm campaign purge must delete nothing');
+
+    // Campaign purge with NO confirmation at all: also refused.
+    const noConfirmPurge = await request(app).delete('/api/leads/campaign/None').set('Authorization', `Bearer ${adminT()}`);
+    assert.equal(noConfirmPurge.status, 400, 'campaign purge without confirm must be 400');
+  });
+
   it('D3. campaign purge and clear-all remain ADMIN/SUPERADMIN-only and work for admins', async () => {
     // Non-admin still denied (re-assert after all grants accumulated).
     const bobPurge = await request(app).delete('/api/leads/campaign/None').set('Authorization', `Bearer ${bobT()}`);
@@ -829,10 +851,10 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
     const bobClear = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${bobT()}`);
     assert.equal(bobClear.status, 403, 'clear-all must stay admin-only');
 
-    const adminPurge = await request(app).delete('/api/leads/campaign/None').set('Authorization', `Bearer ${adminT()}`);
+    const adminPurge = await request(app).delete('/api/leads/campaign/None').set('Authorization', `Bearer ${adminT()}`).send({ confirm: 'None' });
     assert.equal(adminPurge.status, 200, 'admin campaign purge');
 
-    const superClear = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${superT()}`);
+    const superClear = await request(app).post('/api/leads/clear-all').set('Authorization', `Bearer ${superT()}`).send({ confirm: 'CLEAR_ALL' });
     assert.equal(superClear.status, 200, 'superadmin clear-all');
 
     // Everything is now soft-deleted: even admins list nothing.
