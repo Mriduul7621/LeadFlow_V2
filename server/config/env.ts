@@ -101,16 +101,6 @@ export const ENV_VAR_SPECS: EnvVarSpec[] = [
     description: 'Override PostgreSQL SSL handling (e.g. "disable" for local-only tunnels).',
   },
   {
-    name: 'VITE_SUPABASE_URL',
-    classification: 'OPTIONAL',
-    description: 'Supabase browser URL. Public; compiled into the client bundle.',
-  },
-  {
-    name: 'VITE_SUPABASE_ANON_KEY',
-    classification: 'OPTIONAL',
-    description: 'Supabase anon key. Public by design; row-level security scoped.',
-  },
-  {
     name: 'SESSION_SECRET',
     classification: 'OPTIONAL',
     description: 'Reserved. The current auth flow is JWT-based and does not consume this.',

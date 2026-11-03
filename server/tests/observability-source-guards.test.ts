@@ -143,9 +143,16 @@ describe('Observability source guards', () => {
   });
 
   it('7. auth observability events come from the central allowlisted catalog', () => {
-    const routes = read('server/routes/production.routes.ts');
+    // Phase 1: the production router is split across the monolith and
+    // production/ (shared foundation + auth domain) — the catalog rule
+    // applies to the whole router tree.
+    const routes = [
+      read('server/routes/production.routes.ts'),
+      read('server/routes/production/shared.ts'),
+      read('server/routes/production/auth.routes.ts'),
+    ].join('\n');
     assert.ok(
-      routes.includes("from '../observability/events.js'"),
+      routes.includes("observability/events.js'"),
       'auth events are imported from observability/events.ts'
     );
     for (const helper of [
@@ -155,7 +162,7 @@ describe('Observability source guards', () => {
       'logAuthForcedPasswordChangeCompleted',
       'logAuthAdminPasswordReset',
     ]) {
-      assert.ok(routes.includes(helper), `production.routes.ts uses ${helper}`);
+      assert.ok(routes.includes(helper), `production router uses ${helper}`);
     }
   });
 
