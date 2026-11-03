@@ -87,7 +87,19 @@ function editorCodes(): string[] {
 }
 
 describe('Role Permission Model — three-layer separation (source guards)', () => {
-  const prod = () => stripComments(read('server/routes/production.routes.ts'));
+  // Phase 1: the mounted production router is split across the monolith
+  // and production/ (shared foundation + extracted domains) — "enforced
+  // server-side on the mounted router" means the whole router tree.
+  const prod = () =>
+    stripComments(
+      [
+        read('server/routes/production.routes.ts'),
+        read('server/routes/production/shared.ts'),
+        read('server/routes/production/auth.routes.ts'),
+        read('server/routes/production/notifications.routes.ts'),
+        read('server/routes/production/metadata.routes.ts'),
+      ].join('\n')
+    );
 
   it('1. Feature Access and Action Permissions are separate constants', () => {
     const src = userMgmt();
@@ -190,7 +202,10 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
   });
 
   it('5c. requirePermissionCode is fail-closed and preserves the ADMIN/SUPERADMIN bypass', () => {
-    const src = read('server/routes/production.routes.ts');
+    // Phase 1 (metadata step): requirePermissionCode moved to
+    // production/shared.ts alongside hasPermissionCode (the metadata
+    // router imports it from there; the monolith imports it back).
+    const src = read('server/routes/production/shared.ts');
     const start = src.indexOf('function requirePermissionCode(');
     assert.ok(start >= 0, 'requirePermissionCode helper must exist');
     // Slice exactly the gate function (its closing brace at column 0).

@@ -597,6 +597,57 @@ export async function hasPermissionCode(caller: CallerDbInfo | null, permissionC
   return resolution;
 }
 
+/**
+ * requireAuth + canonical permission grant (permissions × role_permissions
+ * × user_permissions, resolved through hasPermissionCode).
+ *
+ * Semantics (fail closed everywhere):
+ *   - unauthenticated                    -> 401
+ *   - caller not resolvable              -> 403
+ *   - ADMIN / SUPERADMIN                 -> allowed (bypass inside
+ *                                           hasPermissionCode — behavior
+ *                                           identical to the previous
+ *                                           requireAdmin gate)
+ *   - permission definition missing      -> deny
+ *   - no explicit grant row              -> deny
+ *   - database failure                   -> deny (503)
+ *   - unknown permission code            -> deny
+ *
+ * Used for the administration mutations that map 1:1 to canonical action
+ * codes exposed in the Roles & Access editor (users.create, users.edit,
+ * users.delete, roles.manage, permissions.manage, departments.manage,
+ * teams.manage, hierarchy.manage, settings.manage). Capability is granted
+ * ONLY by an explicit canonical grant row — never by a Feature Access
+ * menu toggle.
+ */
+export function requirePermissionCode(permissionCode: string) {
+  return async (req: any, res: any, next: any): Promise<void> => {
+    if (!req.currentUser) {
+      res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
+      return;
+    }
+    try {
+      const caller = await getCallerDbInfo(req);
+      if (!caller) {
+        res.status(403).json({ success: false, message: 'Your account was not found. Please log in again.' });
+        return;
+      }
+      if (!(await hasPermissionCode(caller, permissionCode))) {
+        res.status(403).json({
+          success: false,
+          message: 'You do not have permission to perform this action.',
+          permission: permissionCode,
+        });
+        return;
+      }
+      next();
+    } catch (error: any) {
+      console.error(`Permission gate failed for ${permissionCode}:`, error?.message || error);
+      res.status(503).json({ success: false, message: 'Authorization service unavailable.' });
+    }
+  };
+}
+
 /** Resolve visibility for caller (admin => all).
  *  Memoized per caller instance (one request): routes that scope reads
  *  AND authorize writes resolve the visibility set once. */
