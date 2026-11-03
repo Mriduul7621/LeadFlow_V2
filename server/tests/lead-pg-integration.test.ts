@@ -404,7 +404,8 @@ describe('Lead API - Real PostgreSQL Integration', () => {
 
     const purged = await request(app)
       .delete('/api/leads/campaign/Admin%20Only%20Campaign')
-      .set('Authorization', `Bearer ${tokenAdmin}`);
+      .set('Authorization', `Bearer ${tokenAdmin}`)
+      .send({ confirm: 'Admin Only Campaign' });
     assert.equal(purged.status, 200, JSON.stringify(purged.body));
     assert.equal(purged.body.deleted, 1);
     const softDeleted: any = await pool.query(`SELECT is_deleted, deleted_by FROM leads WHERE id = $1`, [leadId]);
