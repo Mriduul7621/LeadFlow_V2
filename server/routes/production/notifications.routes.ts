@@ -17,6 +17,14 @@ import { Router } from 'express';
 import { getPool } from '../../database/connection.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import {
+  checkCronAuthorization,
+  deleteOwnPushSubscription,
+  getVapidConfig,
+  runDailyPushReminders,
+  upsertPushSubscription,
+  validatePushSubscriptionInput,
+} from '../../services/PushReminderService.js';
+import {
   asUuid,
   callerIsAdmin,
   clean,
@@ -281,6 +289,97 @@ router.post('/notifications/users/:userId/read-all', requireAuth, requireSelfOrA
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification update failed' });
+  }
+});
+
+/* ====================================================================
+   WEB PUSH — free follow-up reminders (Phase 2 PR #2)
+   ------------------------------------------------------------------
+   Opt-in per device: an agent enables reminders (Profile settings),
+   the browser's PushSubscription is stored (migration 048), and the
+   daily cron sends ONE summary push — "আজ Xটি follow-up due, Yটি
+   overdue" — that opens the Daily Workbench. Zero-cost: Web Push
+   protocol only. When the VAPID env vars are unset the whole feature
+   is disabled gracefully (public-key answers enabled:false, subscribe
+   answers 503, the cron no-ops) and nothing else changes.
+==================================================================== */
+
+router.get('/notifications/push/public-key', requireAuth, async (_req, res) => {
+  const vapid = getVapidConfig();
+  if (!vapid) return sendJson(res, 200, { success: true, data: { enabled: false } });
+  return sendJson(res, 200, { success: true, data: { enabled: true, publicKey: vapid.publicKey } });
+});
+
+router.post('/notifications/push/subscribe', requireAuth, async (req, res) => {
+  if (!getVapidConfig()) {
+    return sendJson(res, 503, { success: false, message: 'Push reminders are not enabled on this server.' });
+  }
+  const validation = validatePushSubscriptionInput(req.body);
+  if (validation.ok === false) {
+    return sendJson(res, 400, { success: false, message: validation.message });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!useDb() && !demoModeAllowed()) {
+      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    }
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 500) || null;
+    const saved = await upsertPushSubscription(caller.id, validation.value, userAgent);
+    return sendJson(res, 200, {
+      success: true,
+      data: { id: saved.id, endpoint: saved.endpoint, subscribed: true },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Push subscription failed' });
+  }
+});
+
+router.post('/notifications/push/unsubscribe', requireAuth, async (req, res) => {
+  const endpoint = String(req.body?.endpoint || '').trim();
+  if (!endpoint) {
+    return sendJson(res, 400, { success: false, message: 'endpoint is required.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!useDb() && !demoModeAllowed()) {
+      return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    }
+    // Self-scoped by construction: only the caller's own device row
+    // for this endpoint can be removed (see PushReminderService).
+    const removed = await deleteOwnPushSubscription(caller.id, endpoint);
+    return sendJson(res, 200, { success: true, data: { removed } });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Push unsubscribe failed' });
+  }
+});
+
+/**
+ * Daily reminder cron. NOT user-authenticated: Vercel Cron invokes it
+ * with `Authorization: Bearer <CRON_SECRET>` (accepted also as the
+ * `x-cron-secret` header for operator triggers). CRON_SECRET unset →
+ * the endpoint is disabled (503); a wrong secret → 401. VAPID unset →
+ * a clean no-op (200, enabled:false) so a cron that fires before the
+ * keys are configured can never error the schedule.
+ */
+router.get('/notifications/push/cron-daily', async (req, res) => {
+  const auth = checkCronAuthorization(req.headers as Record<string, unknown>);
+  if (auth === 'disabled') {
+    return sendJson(res, 503, { success: false, message: 'The reminder cron is not configured (CRON_SECRET is unset).' });
+  }
+  if (auth === 'unauthorized') {
+    return sendJson(res, 401, { success: false, message: 'Invalid cron secret.' });
+  }
+  try {
+    const summary = await runDailyPushReminders(new Date());
+    return sendJson(res, 200, { success: true, data: summary });
+  } catch (error: any) {
+    return sendJson(res, 500, { success: false, message: error?.message || 'Daily push run failed' });
   }
 });
 
