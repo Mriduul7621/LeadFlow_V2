@@ -606,7 +606,13 @@ describe('Performance & latency hardening — client source guards', () => {
   const LEAD_LIST = () => read('src/modules/leads/pages/LeadList.tsx');
   const LOGIN = () => read('src/modules/auth/pages/Login.tsx');
   const AUTH_FLOW = () => read('src/modules/auth/services/authFlow.ts');
-  const ROUTES = () => read('server/routes/production.routes.ts');
+  // Phase 1: the production router is split across the monolith and
+  // production/ (shared foundation + extracted domains) — read the tree.
+  const ROUTES = () =>
+    read('server/routes/production.routes.ts') +
+    read('server/routes/production/shared.ts') +
+    read('server/routes/production/auth.routes.ts') +
+    read('server/routes/production/notifications.routes.ts');
 
   /** All `setInterval(expr, N)` numeric intervals found in a source. */
   function intervals(src: string): number[] {

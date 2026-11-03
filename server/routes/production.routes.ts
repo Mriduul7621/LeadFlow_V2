@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getPool } from '../database/connection.js';
-import { resolveVisibility } from '../authz.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import { computeDepartmentHealth, computeHierarchyHealth, emptyDepartmentHealth } from '../utils/hierarchyHealth.js';
 import {
@@ -103,9 +102,11 @@ import {
 import { logAuthAdminPasswordReset } from '../observability/events.js';
 
 import authRouter from './production/auth.routes.js';
+import notificationsRouter from './production/notifications.routes.js';
 import {
   AUDIT_CHANGE_CAP,
   EMPLOYEE_ID_RE,
+  LEAD_SELECT,
   USER_SELECT,
   adminExistsInDb,
   asUuid,
@@ -114,8 +115,11 @@ import {
   dbErrorStatus,
   demoModeAllowed,
   ensureDefaultRoles,
+  findLeadByIdRaw,
   getCallerDbInfo,
+  hasPermissionCode,
   isCanonicalLowerUuid,
+  isLeadAccessible,
   isSelfRef,
   jsonbOr,
   logAccessChange,
@@ -123,19 +127,23 @@ import {
   normalizeRole,
   requireAdmin,
   requireAuth,
+  requireSelfOrAdmin,
+  resolveCallerVisibility,
   resolveRoleId,
+  resolveUserId,
   sendDbUnavailable,
   sendJson,
   summarizeAccessChanges,
   useDb,
   withMembershipDepartments,
   type CallerDbInfo,
+  type CallerVisibilityResult,
 } from './production/shared.js';
 
 // The caller-resolution surface stays importable from this module (the
 // test suite and the remaining domains consume it here); the single
 // definition lives in ./production/shared.js.
-export { getCallerDbInfo, type CallerDbInfo } from './production/shared.js';
+export { getCallerDbInfo, hasPermissionCode, resolveCallerVisibility, isLeadAccessible, type CallerDbInfo, type CallerVisibilityResult } from './production/shared.js';
 
 /**
  * production.routes.ts — LeadFlow mounted API.
@@ -219,31 +227,6 @@ function requirePermissionCode(permissionCode: string) {
 }
 
 
-/**
- * Allows the request when the route param identifies the caller
- * themselves, or when the caller is an administrator. Used for
- * user-scoped reads/writes (own notifications, own permission sheet,
- * own password change) so one authenticated user cannot mutate
- * another user's data.
- */
-function requireSelfOrAdmin(paramName: string) {
-  return (req: any, res: any, next: any): void => {
-    if (!req.currentUser) {
-      res.status(401).json({ success: false, message: 'Unauthorized. Please log in again.' });
-      return;
-    }
-    if (callerIsAdmin(req)) {
-      next();
-      return;
-    }
-    if (isSelfRef(req, req.params?.[paramName])) {
-      next();
-      return;
-    }
-    res.status(403).json({ success: false, message: 'You can only access your own records.' });
-  };
-}
-
 
 
 /** System roles that exist for platform administration and never take part
@@ -256,22 +239,6 @@ async function roleCodeOf(roleId: string | null): Promise<string | null> {
   const pool = getPool();
   const result = await pool.query('SELECT role_code FROM roles WHERE id = $1', [roleId]);
   return result.rows[0]?.role_code || null;
-}
-
-/** Resolve a user reference (uuid, employee id, or email) to a users.id. */
-async function resolveUserId(ref: any): Promise<string | null> {
-  if (!ref) return null;
-  const value = String(ref).trim();
-  if (!value) return null;
-  const pool = getPool();
-  const uuid = asUuid(value);
-  const result = await pool.query(
-    `SELECT id FROM users
-     WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2)
-     LIMIT 1`,
-    [uuid || value, value]
-  );
-  return result.rows[0]?.id || null;
 }
 
 /* ====================================================================
@@ -703,15 +670,6 @@ function mapLeadRow(row: any) {
   };
 }
 
-const LEAD_SELECT = `
-  SELECT l.*,
-         au.employee_id AS assigned_to_employee_id,
-         ab.employee_id AS assigned_by_employee_id
-  FROM leads l
-  LEFT JOIN users au ON au.id = l.assigned_to
-  LEFT JOIN users ab ON ab.id = l.assigned_by
-`;
-
 /**
  * Upper bound for GET /leads (the client's shared "visible leads" read).
  *
@@ -790,24 +748,6 @@ function mapFormFieldRow(row: any) {
   };
 }
 
-function mapNotificationRow(row: any) {
-  return {
-    id: row.id,
-    userId: row.recipient_key || row.user_employee_id || row.user_id,
-    title: row.title,
-    message: row.message,
-    leadId: row.lead_code || row.reference_id || '',
-    read: row.is_read === true,
-    date: row.created_at,
-  };
-}
-
-const NOTIFICATION_SELECT = `
-  SELECT n.*, u.employee_id AS user_employee_id
-  FROM notifications n
-  LEFT JOIN users u ON u.id = n.user_id
-`;
-
 /* ====================================================================
    HELPERS - shared value conversions
 ==================================================================== */
@@ -831,168 +771,6 @@ function importLeadCode(mobile: string): string {
    - Ownership + hierarchy/data-scope enforced server-side
    - Permission checks reuse existing permissions table
 ==================================================================== */
-
-export interface CallerVisibilityResult {
-  /** true = unrestricted (sees everyone) */
-  all: boolean;
-  userIds: string[];
-  employeeIds: string[];
-}
-
-/**
- * Per-caller authorization memo. The caller object is created once per
- * HTTP request (and shared by reference only within that request), so
- * memoizing on it is request-scoped: no authorization result ever leaks
- * across requests or users, and nothing survives longer than one request.
- */
-interface CallerAuthzMemo {
-  permissions: Map<string, Promise<boolean>>;
-  visibility: Promise<CallerVisibilityResult> | null;
-}
-
-function callerMemo(caller: CallerDbInfo): CallerAuthzMemo {
-  let memo = (caller as any).__authzMemo as CallerAuthzMemo | undefined;
-  if (!memo) {
-    memo = { permissions: new Map(), visibility: null };
-    (caller as any).__authzMemo = memo;
-  }
-  return memo;
-}
-
-
-/** Check if caller has a specific permission code (admin bypass).
- *
- * Resolution semantics (unchanged from the previous sequential lookups):
- *   ADMIN/SUPERADMIN            -> allow
- *   permission definition missing -> deny (fail closed)
- *   user override row exists     -> its is_allowed wins (precedence)
- *   else role grant row exists   -> its is_allowed
- *   else                         -> deny (fail closed)
- *   DB error                     -> deny (fail closed)
- *
- * The three lookups now run as ONE join, and each (caller, code) result is
- * memoized for the lifetime of the caller object — i.e. a single request —
- * so a route checking several codes pays for the resolution once.
- */
-export async function hasPermissionCode(caller: CallerDbInfo | null, permissionCode: string): Promise<boolean> {
-  if (!caller) return false;
-  const role = normalizeRole(caller.role_code);
-  if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
-  if (!useDb()) {
-    // Demo mode: allow only when caller exists, but still fail closed for unknown codes if we want strictness.
-    // For dev-demo usability, allow known lead codes; unknown codes deny.
-    const knownLeadCodes = new Set(['leads.view','leads.create','leads.edit','leads.delete','leads.assign','leads.transfer','leads.import','leads.export']);
-    if (!knownLeadCodes.has(permissionCode)) return false;
-    return true;
-  }
-  const memo = callerMemo(caller);
-  const cached = memo.permissions.get(permissionCode);
-  if (cached) return cached;
-  const resolution = (async () => {
-    try {
-      const pool = getPool();
-      // One round trip: definition + user override + role grant.
-      // Zero rows => the permission definition does not exist.
-      // Row presence is detected via the NOT NULL composite-PK column
-      // (neither grant table has a surrogate id column).
-      const result = await pool.query(
-        `SELECT
-           up.permission_id IS NOT NULL  AS has_user_override,
-           up.is_allowed             AS user_override_allowed,
-           rp.permission_id IS NOT NULL  AS has_role_grant,
-           rp.is_allowed             AS role_grant_allowed
-         FROM (SELECT id FROM permissions WHERE permission_code = $3 LIMIT 1) p
-         LEFT JOIN user_permissions up ON up.permission_id = p.id AND up.user_id = $1
-         LEFT JOIN role_permissions rp ON rp.permission_id = p.id AND rp.role_id = $2`,
-        [caller.id, caller.role_id || null, permissionCode]
-      );
-      if (result.rows.length === 0) {
-        // Fail closed: missing permission definition => deny
-        console.warn(`Permission definition missing for ${permissionCode} - denying access`);
-        return false;
-      }
-      const row = result.rows[0];
-      if (row.has_user_override) {
-        return row.user_override_allowed === true;
-      }
-      if (row.has_role_grant) {
-        return row.role_grant_allowed === true;
-      }
-      // No explicit grant => deny (fail closed)
-      return false;
-    } catch (e) {
-      console.warn(`Permission check failed for ${permissionCode}:`, (e as any)?.message || e);
-      // Fail closed on DB error
-      return false;
-    }
-  })();
-  memo.permissions.set(permissionCode, resolution);
-  return resolution;
-}
-
-/** Resolve visibility for caller (admin => all).
- *  Memoized per caller instance (one request): routes that scope reads
- *  AND authorize writes resolve the visibility set once. */
-export async function resolveCallerVisibility(caller: CallerDbInfo): Promise<CallerVisibilityResult> {
-  if (!caller) return { all: false, userIds: [], employeeIds: [] };
-  const role = normalizeRole(caller.role_code);
-  if (role === 'ADMIN' || role === 'SUPERADMIN') {
-    return { all: true, userIds: [], employeeIds: [] };
-  }
-  const memo = callerMemo(caller);
-  if (!memo.visibility) {
-    memo.visibility = resolveCallerVisibilityOnce(caller);
-  }
-  return memo.visibility;
-}
-
-async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
-  if (!useDb()) {
-    // Demo mode: compute downline from fallbackStore for MANAGER-like roles
-    // to allow realistic integration tests without PostgreSQL
-    try {
-      const allUsers = fallbackStore.users;
-      const callerUser = allUsers.find(u => u.id === caller.id || u.employeeId === caller.employee_id);
-      const roleUpper = normalizeRole(caller.role_code);
-      const isManagerLike = ['MANAGER','TEAM_LEAD','SM','BDM','CEO'].includes(roleUpper);
-      if (isManagerLike && callerUser) {
-        // BFS downline via managerId
-        const visited = new Set<string>();
-        const queue: string[] = [callerUser.employeeId];
-        const userIds: string[] = [caller.id];
-        const employeeIds: string[] = [caller.employee_id];
-        visited.add(callerUser.employeeId);
-        while (queue.length > 0) {
-          const currentEmp = queue.shift()!;
-          const directReports = allUsers.filter(u => String(u.managerId || '').toUpperCase() === String(currentEmp).toUpperCase());
-          for (const dr of directReports) {
-            if (!visited.has(dr.employeeId)) {
-              visited.add(dr.employeeId);
-              queue.push(dr.employeeId);
-              userIds.push(dr.id);
-              employeeIds.push(dr.employeeId);
-            }
-          }
-        }
-        return { all: false, userIds, employeeIds };
-      }
-    } catch {}
-    return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
-  }
-  try {
-    const vis = await resolveVisibility(caller.id, caller.role_code, caller.department_id);
-    if (!vis.all) {
-      if (!vis.userIds.includes(caller.id)) vis.userIds.push(caller.id);
-      const empUpper = vis.employeeIds.map((e: string) => String(e).toUpperCase());
-      if (caller.employee_id && !empUpper.includes(String(caller.employee_id).toUpperCase())) {
-        vis.employeeIds.push(caller.employee_id);
-      }
-    }
-    return vis;
-  } catch {
-    return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
-  }
-}
 
 /** Resolve assignedTo reference to userId + employeeId. */
 export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string } | null> {
@@ -1020,44 +798,6 @@ export async function resolveAssignedTo(ref: any): Promise<{ userId: string; emp
   } catch {
     return null;
   }
-}
-
-/** Check if a lead row is accessible to caller via visibility. */
-export function isLeadAccessible(leadRow: any, visibility: any, caller: CallerDbInfo): boolean {
-  if (!leadRow) return false;
-  if (visibility.all) return true;
-  // Support both DB row shape (assigned_to, custom_fields, created_by) and fallbackStore shape (assignedTo, customFields, etc)
-  const assignedToId = leadRow.assigned_to ? String(leadRow.assigned_to) : (leadRow.assignedTo ? '' : '');
-  // Fallback records expose assignedTo directly; PostgreSQL records use
-  // assigned_to and never consult custom_fields for ownership.
-  const isDbLeadRow = Object.prototype.hasOwnProperty.call(leadRow, 'assigned_to');
-  const customAssignedTo = isDbLeadRow ? '' : String(leadRow.assignedTo || '').trim();
-  const createdBy = leadRow.created_by ? String(leadRow.created_by) : (leadRow.createdBy ? String(leadRow.createdBy) : '');
-
-  if (assignedToId) {
-    if (visibility.userIds.includes(assignedToId)) return true;
-    if (assignedToId === caller.id) return true;
-  }
-  // Also check direct assigned_to as userId for fallbackStore shape where assignedTo is employeeId but we have userId mapping
-  // Check customAssignedTo (employeeId) against visible employeeIds
-  if (customAssignedTo) {
-    const upperCustom = customAssignedTo.toUpperCase();
-    const empIdsUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-    if (empIdsUpper.includes(upperCustom)) return true;
-    if (caller.employee_id && upperCustom === String(caller.employee_id).toUpperCase()) return true;
-    // Also check if customAssignedTo matches any visible userId's employeeId via direct comparison
-    // For fallbackStore, assignedTo is employeeId, so check against caller employeeId already done, and against visibility employeeIds
-  }
-  // Check if leadRow has assigned_to as userId in fallback shape? Actually fallbackStore leads store assignedTo as employeeId, not userId.
-  // For safety, also check if leadRow.id or assignedTo matches caller
-  if (!assignedToId && !customAssignedTo) {
-    if (createdBy && createdBy === caller.id) return true;
-    return false;
-  }
-  // If no assigned_to but customAssignedTo matched via employeeIds already, return true handled above
-  // Otherwise, check createdBy as fallback for unassigned leads
-  if (createdBy && createdBy === caller.id) return true;
-  return false;
 }
 
 /** Check if caller is allowed to assign a lead to target user. */
@@ -4400,258 +4140,12 @@ router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) 
 });
 
 /* ====================================================================
-   NOTIFICATIONS
+   NOTIFICATIONS — extracted to ./production/notifications.routes.ts
+   (Phase 1, no behaviour change); mounted here to preserve the
+   original registration position.
 ==================================================================== */
 
-router.get('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
-  if (sendDbUnavailable(res)) return;
-  if (!useDb()) {
-    const list = fallbackStore.notifications
-      .filter(item => item.userId === req.params.userId)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    return sendJson(res, 200, list);
-  }
-  try {
-    const pool = getPool();
-    const uuid = asUuid(req.params.userId);
-    // Performance audit (docs/DATABASE_PERFORMANCE_AUDIT.md):
-    //  1. the legacy cast-to-text user_id branch was provably redundant
-    //     (whenever it matched, $1 was a canonical uuid already covered
-    //     by `n.user_id = $2`) — removed;
-    //  2. the legacy `user_id IN (SELECT ... UPPER(employee_id) ...)`
-    //     hashed SubPlan made the planner estimate ~50% of the table
-    //     regardless of scale, defeating every index on this query.
-    //     employee_id is UNIQUE, so that subquery returns at most one
-    //     users.id — resolving it with one tiny indexed lookup first
-    //     keeps the result set EXACTLY the same while every remaining
-    //     branch is a plain equality the indexes can serve.
-    const empMatch = await pool.query(
-      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
-      [req.params.userId]
-    );
-    const empUserId = empMatch.rows[0]?.id || null;
-    const result = await pool.query(
-      `${NOTIFICATION_SELECT}
-       WHERE n.recipient_key = $1 OR n.user_id = $2 OR n.user_id = $3
-       ORDER BY n.created_at DESC`,
-      [req.params.userId, uuid || null, empUserId]
-    );
-    return sendJson(res, 200, result.rows.map(mapNotificationRow));
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification fetch failed' });
-  }
-});
-
-/**
- * Lead-scoped read: the notification history of a lead is only exposed
- * for leads the caller is already allowed to see. Same boundary as
- * GET /leads/:id (leads.view + server-side Data Visibility); an
- * inaccessible lead answers 404 so lead existence is not leaked.
- * (Previously plain requireAuth: any authenticated employee could read
- * the notification history of any lead, bypassing Data Visibility.)
- */
-router.get('/notifications/leads/:leadId', requireAuth, async (req, res) => {
-  if (sendDbUnavailable(res)) return;
-  try {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-    if (!(await hasPermissionCode(caller, 'leads.view'))) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
-    }
-    const leadParam = String(req.params.leadId || '').trim();
-    if (!leadParam) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
-
-    const visibility = await resolveCallerVisibility(caller);
-    const leadRow = await findLeadByIdRaw(leadParam, false);
-    if (!leadRow || !isLeadAccessible(leadRow, visibility, caller)) {
-      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-    }
-
-    if (!useDb()) {
-      const list = fallbackStore.notifications
-        .filter(item => item.leadId === leadParam)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      return sendJson(res, 200, list);
-    }
-    const uuid = asUuid(leadParam);
-    // The legacy cast-to-text reference_id branch was provably redundant:
-    // whenever it matched, the parameter was a canonical uuid already
-    // covered by `n.reference_id = $2`. Removing it is result-identical
-    // and leaves only sargable branches.
-    const result = await getPool().query(
-      `${NOTIFICATION_SELECT}
-       WHERE n.lead_code = $1 OR n.reference_id = $2
-       ORDER BY n.created_at DESC`,
-      [leadParam, uuid || null]
-    );
-    return sendJson(res, 200, result.rows.map(mapNotificationRow));
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification fetch failed' });
-  }
-});
-
-/**
- * Cross-user boundary (audit fix):
- *   - notifying SELF is a self-service action (authenticated only);
- *   - notifying ANOTHER user is a cross-user mutation. The only business
- *     flow that produces cross-user notifications is the lead
- *     assignment/transfer fan-out, so it requires one of the canonical
- *     routing grants (leads.assign / leads.transfer) — fail closed for
- *     everyone else instead of letting any authenticated employee push
- *     notifications to arbitrary accounts.
- */
-router.post('/notifications', requireAuth, async (req, res) => {
-  const payload = req.body || {};
-  const userIdRef = clean(payload.userId || payload.user_id);
-  const title = clean(payload.title);
-  const message = clean(payload.message);
-  if (!userIdRef || !title) {
-    return sendJson(res, 400, { success: false, message: 'userId and title are required' });
-  }
-
-  if (!isSelfRef(req, userIdRef)) {
-    const caller = await getCallerDbInfo(req);
-    if (!caller) {
-      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
-    }
-    const [canAssign, canTransfer] = await Promise.all([
-      hasPermissionCode(caller, 'leads.assign'),
-      hasPermissionCode(caller, 'leads.transfer'),
-    ]);
-    if (!canAssign && !canTransfer) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to notify another user.' });
-    }
-  }
-
-  if (!useDb()) {
-    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    const item = {
-      id: payload.id || createId('notification'),
-      userId: userIdRef,
-      title,
-      message: message || '',
-      leadId: clean(payload.leadId),
-      read: !!payload.read,
-      date: payload.date || new Date().toISOString(),
-    };
-    fallbackStore.notifications.push(item);
-    return sendJson(res, 200, { success: true, data: item });
-  }
-
-  try {
-    const resolvedUserId = await resolveUserId(userIdRef);
-    if (!resolvedUserId) {
-      return sendJson(res, 400, { success: false, message: 'Recipient user does not exist.' });
-    }
-    const result = await getPool().query(
-      `INSERT INTO notifications (user_id, recipient_key, title, message, lead_code, reference_id,
-                                  is_read, type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'info', NOW(), NOW())
-       RETURNING *`,
-      [resolvedUserId, userIdRef, title, message || null, clean(payload.leadId).slice(0, 50) || null,
-        asUuid(payload.leadId), !!payload.read]
-    );
-    return sendJson(res, 201, { success: true, data: mapNotificationRow(result.rows[0]) });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification save failed' });
-  }
-});
-
-router.post('/notifications/:id/read', requireAuth, async (req, res) => {
-  if (!useDb()) {
-    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    const item = fallbackStore.notifications.find(n => n.id === req.params.id);
-    if (!item) return sendJson(res, 404, { success: false, message: 'Notification not found' });
-    item.read = true;
-    return sendJson(res, 200, { success: true, data: item });
-  }
-  try {
-    // Sargable PK lookup; malformed (non-canonical-UUID) ids yield no row
-    // and 404, exactly like the legacy id::text comparison.
-    const found = await getPool().query(
-      `SELECT n.*, u.employee_id AS user_employee_id, u.email AS user_email
-       FROM notifications n
-       LEFT JOIN users u ON u.id = n.user_id
-       WHERE n.id = $1 LIMIT 1`,
-      [isCanonicalLowerUuid(req.params.id) ? req.params.id : null]
-    );
-    if (!found.rows[0]) return sendJson(res, 404, { success: false, message: 'Notification not found' });
-    if (!callerIsAdmin(req)) {
-      const row = found.rows[0];
-      const owned = isSelfRef(req, row.recipient_key) ||
-        isSelfRef(req, row.user_id) ||
-        isSelfRef(req, row.user_employee_id) ||
-        isSelfRef(req, row.user_email);
-      if (!owned) {
-        return sendJson(res, 403, { success: false, message: 'You can only access your own notifications.' });
-      }
-    }
-    const result = await getPool().query(
-      `UPDATE notifications SET is_read = TRUE, read_at = NOW(), updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
-      [found.rows[0].id]
-    );
-    return sendJson(res, 200, { success: true, data: mapNotificationRow(result.rows[0]) });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification update failed' });
-  }
-});
-
-router.post('/notifications/users/:userId/read-all', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
-  if (!useDb()) {
-    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    fallbackStore.notifications.filter(n => n.userId === req.params.userId).forEach(n => { n.read = true; });
-    return sendJson(res, 200, { success: true });
-  }
-  try {
-    const uuid = asUuid(req.params.userId);
-    // Same shape as the notification list query: the cast-to-text branch
-    // is gone and the employee_id subquery is pre-resolved to one users.id
-    // (employee_id is UNIQUE), so every branch is an index-served equality.
-    const empMatch = await getPool().query(
-      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
-      [req.params.userId]
-    );
-    const empUserId = empMatch.rows[0]?.id || null;
-    await getPool().query(
-      `UPDATE notifications SET is_read = TRUE, read_at = NOW(), updated_at = NOW()
-       WHERE recipient_key = $1 OR user_id = $2 OR user_id = $3`,
-      [req.params.userId, uuid || null, empUserId]
-    );
-    return sendJson(res, 200, { success: true });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification update failed' });
-  }
-});
-
-router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
-  if (!useDb()) {
-    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-    fallbackStore.notifications = fallbackStore.notifications.filter(n => n.userId !== req.params.userId);
-    return sendJson(res, 200, { success: true });
-  }
-  try {
-    const uuid = asUuid(req.params.userId);
-    // Same shape as the notification list query: the cast-to-text branch
-    // is gone and the employee_id subquery is pre-resolved to one users.id
-    // (employee_id is UNIQUE), so every branch is an index-served equality.
-    const empMatch = await getPool().query(
-      `SELECT id FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
-      [req.params.userId]
-    );
-    const empUserId = empMatch.rows[0]?.id || null;
-    await getPool().query(
-      `DELETE FROM notifications
-       WHERE recipient_key = $1 OR user_id = $2 OR user_id = $3`,
-      [req.params.userId, uuid || null, empUserId]
-    );
-    return sendJson(res, 200, { success: true });
-  } catch (error: any) {
-    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification delete failed' });
-  }
-});
+router.use(notificationsRouter);
 
 /* ====================================================================
    LEADS
@@ -6532,28 +6026,6 @@ function mapActivityRow(row: any) {
  * soft-delete filtering. Returns the raw DB row (with joined employee
  * columns when available) or fallback lead object.
  */
-async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): Promise<any | null> {
-  const raw = String(leadIdParam || '').trim();
-  if (!raw) return null;
-  if (!useDb()) {
-    const lead = fallbackStore.leads.find((l: any) => String(l.id) === raw || String((l as any).leadCode) === raw);
-    return lead || null;
-  }
-  const pool = getPool();
-  // Note: FOR UPDATE is only valid inside a transaction (client.query). Caller must handle when useDb() but not in tx.
-  // This helper is used both inside and outside tx; when forUpdate=true we use SELECT ... FOR UPDATE (caller must be inside tx via client).
-  // However to keep helper simple, we just do normal select; the transactional callers will do their own SELECT FOR UPDATE.
-  // Sargable dual lookup: lead_code equality OR PK equality. The id branch
-  // is only populated for canonical-lowercase UUID input — exactly the
-  // inputs that could match the legacy `l.id::text = $1` comparison — so
-  // the result set is unchanged while the PK index becomes usable.
-  const result = await pool.query(
-    `${LEAD_SELECT} WHERE (l.lead_code = $1 OR l.id = $2) AND l.is_deleted = FALSE LIMIT 1`,
-    [raw, isCanonicalLowerUuid(raw) ? raw : null]
-  );
-  return result.rows[0] || null;
-}
-
 /* ------------------------------------------------------------------
    GET /leads/follow-ups — operational follow-up queue (Step 4B)
    MUST be registered BEFORE /leads/:id so "follow-ups" is never an id.

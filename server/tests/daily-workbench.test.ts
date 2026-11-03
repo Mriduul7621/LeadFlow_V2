@@ -357,7 +357,9 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(!l.includes('setInterval(fetchPerms, 6000)'), 'no 6s roles poll');
     assert.ok(!l.includes('setInterval(fetchNotifs, 8000)'), 'no 8s notif poll');
     assert.ok(l.includes('NOTIFICATION_REFRESH_MS = 60_000'), 'notif refresh 60s');
-    const svc = read('server/routes/production.routes.ts');
+    // Phase 1 (notifications step): the permission resolution (hasPermissionCode)
+    // moved to production/shared.ts with the caller-authz cluster.
+    const svc = read('server/routes/production/shared.ts');
     assert.ok(svc.includes('has_user_override'), 'permission override still present');
     assert.ok(svc.includes('Fail closed'), 'fail-closed preserved');
   });

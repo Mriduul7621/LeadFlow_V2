@@ -310,7 +310,7 @@ describe('Server-side notification integration guards', () => {
   });
 
   it('17. generic POST /notifications still requires leads.assign/transfer for cross-user', () => {
-    const src = read('server/routes/production.routes.ts');
+    const src = read('server/routes/production/notifications.routes.ts');
     // Find the POST /notifications handler and check for permission gate
     const postNotifIdx = src.indexOf("router.post('/notifications',");
     assert.ok(postNotifIdx > 0, 'POST /notifications route must exist');
@@ -326,7 +326,7 @@ describe('Server-side notification integration guards', () => {
   });
 
   it('18. self-directed POST /notifications still works (no permission gate)', () => {
-    const src = read('server/routes/production.routes.ts');
+    const src = read('server/routes/production/notifications.routes.ts');
     const postNotifIdx = src.indexOf("router.post('/notifications',");
     const handlerSrc = src.slice(postNotifIdx, postNotifIdx + 2000);
     assert.ok(
@@ -336,7 +336,7 @@ describe('Server-side notification integration guards', () => {
   });
 
   it('19. GET /notifications/leads/:leadId requires leads.view + visibility', () => {
-    const src = read('server/routes/production.routes.ts');
+    const src = read('server/routes/production/notifications.routes.ts');
     // Already tested in PR #40 — just verify the route still exists
     assert.ok(
       src.includes("router.get('/notifications/leads/:leadId'"),
@@ -345,7 +345,7 @@ describe('Server-side notification integration guards', () => {
   });
 
   it('20. GET /notifications/users/:userId uses requireSelfOrAdmin', () => {
-    const src = read('server/routes/production.routes.ts');
+    const src = read('server/routes/production/notifications.routes.ts');
     assert.ok(
       src.includes("requireSelfOrAdmin('userId')"),
       'Notification user-scoped reads must use requireSelfOrAdmin'
@@ -456,7 +456,7 @@ describe('Regression guards from merged PRs', () => {
   });
 
   it('27. PR #40 notification user-scoped reads still use requireSelfOrAdmin', () => {
-    const src = read('server/routes/production.routes.ts');
+    const src = read('server/routes/production/notifications.routes.ts');
     assert.ok(
       src.includes("requireSelfOrAdmin('userId')"),
       'Notification user-scoped reads must use requireSelfOrAdmin'

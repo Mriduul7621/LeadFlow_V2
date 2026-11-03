@@ -65,7 +65,9 @@ describe('Permission sheet — server-precedence resolution', () => {
       !hook.includes('Boolean(row.is_allowed)'),
       'the old role-grant-only mapping must not come back — it ignored user_override'
     );
-    const server = read('server/routes/production.routes.ts');
+    // Phase 1 (notifications step): hasPermissionCode — the server rule the
+    // sheet mirrors — moved to production/shared.ts with the caller-authz cluster.
+    const server = read('server/routes/production/shared.ts');
     assert.ok(server.includes('if (row.has_user_override)'), 'the server rule the sheet mirrors must still exist');
     assert.ok(server.includes('user_override_allowed'), 'the override column must still be resolved server-side');
   });
