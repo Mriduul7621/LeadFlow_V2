@@ -8535,6 +8535,13 @@ router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req
   // Campaign purge intentionally remains the established PR #32
   // ADMIN/SUPERADMIN-only capability. It is not a leads.delete action.
   const campaign = req.params.campaign;
+  // Phase 0 safety rail: bulk destruction requires a typed confirmation —
+  // the request body must repeat the exact campaign name. requireAdmin has
+  // already run as middleware, so non-admins still fail 403 before this
+  // gate is ever evaluated.
+  if ((req.body || {}).confirm !== campaign) {
+    return sendJson(res, 400, { success: false, message: `Confirmation required: type "${campaign}" to purge this campaign's leads.` });
+  }
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.leads = fallbackStore.leads.filter((l: any) => l.campaignName !== campaign);
@@ -8542,12 +8549,39 @@ router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req
   }
   try {
     const caller = await getCallerDbInfo(req);
+    // Snapshot the affected leads BEFORE the purge (first 200, plus the
+    // true total) so the audit ledger records exactly what was removed.
+    // Rows are soft-deleted either way, so recovery stays possible.
+    const snapshotCount = await getPool().query(
+      `SELECT COUNT(*)::int AS total FROM leads WHERE custom_fields->>'campaignName' = $1 AND is_deleted = FALSE`,
+      [campaign]
+    );
+    const snapshotRows = await getPool().query(
+      `SELECT id, lead_code, customer_name, mobile FROM leads
+       WHERE custom_fields->>'campaignName' = $1 AND is_deleted = FALSE
+       ORDER BY created_at ASC LIMIT 200`,
+      [campaign]
+    );
+    const snapshotTotal = snapshotCount.rows[0]?.total ?? snapshotRows.rows.length;
     const result = await getPool().query(
       `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
        WHERE custom_fields->>'campaignName' = $1 AND is_deleted = FALSE
        RETURNING id`,
       [campaign, caller?.id || null]
     );
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'leads.campaign_purge',
+      entityType: 'lead',
+      entityId: null,
+      metadata: {
+        campaign,
+        deletedCount: result.rows.length,
+        snapshotTotal,
+        snapshot: snapshotRows.rows.map((r: any) => ({ leadCode: r.lead_code, name: r.customer_name, mobile: r.mobile })),
+        snapshotTruncated: snapshotTotal > snapshotRows.rows.length,
+      },
+    });
     return sendJson(res, 200, {
       success: true,
       message: result.rows.length > 0 ? 'Campaign leads deleted' : 'No leads found for that campaign',
@@ -8557,8 +8591,14 @@ router.delete('/leads/campaign/:campaign', requireAuth, requireAdmin, async (req
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Campaign leads delete failed' });
   }
 });
-
 router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
+  // Phase 0 safety rail: bulk destruction requires a typed confirmation —
+  // the request body must contain confirm: "CLEAR_ALL". requireAdmin has
+  // already run as middleware, so non-admins still fail 403 before this
+  // gate is ever evaluated.
+  if ((req.body || {}).confirm !== 'CLEAR_ALL') {
+    return sendJson(res, 400, { success: false, message: 'Confirmation required: type CLEAR_ALL to purge all leads.' });
+  }
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     fallbackStore.leads = [];
@@ -8566,17 +8606,40 @@ router.post('/leads/clear-all', requireAuth, requireAdmin, async (req, res) => {
   }
   try {
     const caller = await getCallerDbInfo(req);
+    // Snapshot the affected leads BEFORE the purge (first 200, plus the
+    // true total) so the audit ledger records exactly what was removed.
+    // Rows are soft-deleted either way, so recovery stays possible.
+    const snapshotCount = await getPool().query(
+      `SELECT COUNT(*)::int AS total FROM leads WHERE is_deleted = FALSE`
+    );
+    const snapshotRows = await getPool().query(
+      `SELECT id, lead_code, customer_name, mobile FROM leads
+       WHERE is_deleted = FALSE
+       ORDER BY created_at ASC LIMIT 200`
+    );
+    const snapshotTotal = snapshotCount.rows[0]?.total ?? snapshotRows.rows.length;
     const result = await getPool().query(
       `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $1, updated_by = $1, updated_at = NOW()
        WHERE is_deleted = FALSE RETURNING id`,
       [caller?.id || null]
     );
+    await logAccessChange({
+      actorId: req.currentUser?.id,
+      actionCode: 'leads.clear_all',
+      entityType: 'lead',
+      entityId: null,
+      metadata: {
+        deletedCount: result.rows.length,
+        snapshotTotal,
+        snapshot: snapshotRows.rows.map((r: any) => ({ leadCode: r.lead_code, name: r.customer_name, mobile: r.mobile })),
+        snapshotTruncated: snapshotTotal > snapshotRows.rows.length,
+      },
+    });
     return sendJson(res, 200, { success: true, message: 'All leads cleared', deleted: result.rows.length });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead clear failed' });
   }
 });
-
 
 /* ====================================================================
    DASHBOARD — server-authoritative metrics (Step 5)
