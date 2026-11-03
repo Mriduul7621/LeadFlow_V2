@@ -762,7 +762,7 @@ describe('Database performance audit — migrations, indexes, query shapes', () 
   });
 
   it('22. notification queries keep sargable equality branches (no cast, no OR-ed subplan)', () => {
-    const routes = read('server/routes/production.routes.ts');
+    const routes = read('server/routes/production/notifications.routes.ts');
     assert.ok(!routes.includes('user_id::text'), 'redundant cast-to-text user_id branch must stay removed');
     assert.ok(!routes.includes('user_id IN (SELECT id FROM users WHERE UPPER(employee_id)'),
       'hashed SubPlan employee branch must stay replaced by the pre-resolved equality');

@@ -203,7 +203,10 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     assert.ok(block.includes('401'), 'unauthenticated requests must be rejected');
     assert.ok(!callerBypassInGate(block), 'the bypass must live in hasPermissionCode, not be re-implemented per-gate');
     // hasPermissionCode keeps the fail-closed + admin bypass semantics.
-    const hpc = src.slice(src.indexOf('export async function hasPermissionCode'), src.indexOf('export async function resolveCallerVisibility'));
+    // Phase 1 (notifications step): hasPermissionCode / resolveCallerVisibility
+    // moved to production/shared.ts with the rest of the caller-authz cluster.
+    const sharedSrc = read('server/routes/production/shared.ts');
+    const hpc = sharedSrc.slice(sharedSrc.indexOf('export async function hasPermissionCode'), sharedSrc.indexOf('export async function resolveCallerVisibility'));
     assert.ok(hpc.includes("role === 'ADMIN' || role === 'SUPERADMIN'"), 'ADMIN/SUPERADMIN bypass preserved');
     assert.ok(/Fail closed|fail closed/i.test(hpc), 'fail-closed semantics documented in hasPermissionCode');
     assert.ok(hpc.includes('return false;'), 'hasPermissionCode must deny by default');
