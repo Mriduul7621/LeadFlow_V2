@@ -90,7 +90,9 @@ describe('Authorization ordering — F15', () => {
     ['/users/bulk/validate', 'No rows supplied for validation'],
   ] as const) {
     it(`F15. ${endpoint} answers the permission question before the payload question`, () => {
-      const src = read('server/routes/production.routes.ts');
+      // Phase 1 (users/access step): the bulk-user handlers live in
+      // production/users.routes.ts (mounted by production.routes.ts).
+      const src = read('server/routes/production/users.routes.ts');
       const start = src.indexOf(`router.post('${endpoint}'`);
       assert.ok(start > 0, `${endpoint} handler must exist`);
       const body = src.slice(start, src.indexOf('\nrouter.', start + 10));

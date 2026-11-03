@@ -265,14 +265,17 @@ describe('Role Feature Access — source guards', () => {
   });
 
   it('server exposes role permission read/write endpoints', () => {
-    const prod = read('server/routes/production.routes.ts');
+    // Phase 1 (users/access step): the roles endpoints live in
+    // production/users.routes.ts (mounted by production.routes.ts).
+    const prod = read('server/routes/production/users.routes.ts');
     assert.ok(prod.includes("router.get('/roles/:roleId/permissions'"), 'GET role permissions endpoint must exist');
     assert.ok(prod.includes("router.put('/roles/:roleId/permissions'"), 'PUT role permissions endpoint must exist');
     assert.ok(prod.includes('requireAdmin'), 'role permission writes must be admin-gated');
   });
 
   it('role permission matrix read is admin-gated (not just authenticated)', () => {
-    const prod = read('server/routes/production.routes.ts');
+    // Phase 1 (users/access step): see the endpoints test above.
+    const prod = read('server/routes/production/users.routes.ts');
     const getIdx = prod.indexOf("router.get('/roles/:roleId/permissions'");
     assert.ok(getIdx >= 0, 'GET role permissions endpoint must exist');
     const line = prod.slice(getIdx, getIdx + 120);

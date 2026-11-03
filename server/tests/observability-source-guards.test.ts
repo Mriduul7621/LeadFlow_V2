@@ -150,6 +150,7 @@ describe('Observability source guards', () => {
       read('server/routes/production.routes.ts'),
       read('server/routes/production/shared.ts'),
       read('server/routes/production/auth.routes.ts'),
+      read('server/routes/production/users.routes.ts'),
     ].join('\n');
     assert.ok(
       routes.includes("observability/events.js'"),
