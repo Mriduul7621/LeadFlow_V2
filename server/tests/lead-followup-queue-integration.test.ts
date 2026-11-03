@@ -468,7 +468,7 @@ describe('Follow-up Queue — GET /api/leads/follow-ups (Step 4B)', () => {
   });
 
   it('Q. no localStorage write fallback in queue route/page', async () => {
-    const route = fs.readFileSync(path.join(process.cwd(), 'server/routes/production.routes.ts'), 'utf-8');
+    const route = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
     const start = route.indexOf("router.get('/leads/follow-ups'");
     const end = route.indexOf("router.get('/leads/:id'", start);
     const body = route.slice(start, end);

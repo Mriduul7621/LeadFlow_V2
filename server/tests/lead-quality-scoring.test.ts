@@ -605,7 +605,9 @@ describe('Lead Quality — fallback (demo-mode) aggregates', () => {
 });
 
 describe('Lead Quality — route wiring guards', () => {
-  const routes = () => read('server/routes/production.routes.ts');
+  const routes = () =>
+    read('server/routes/production.routes.ts') +
+    read('server/routes/production/leads.routes.ts');
 
   it('quality endpoint, filters, sorts, and aggregates are wired', () => {
     const src = routes();

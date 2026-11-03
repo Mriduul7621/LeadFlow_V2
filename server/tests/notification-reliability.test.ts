@@ -276,32 +276,34 @@ describe('Client notification source guards', () => {
 ==================================================================== */
 
 describe('Server-side notification integration guards', () => {
-  it('13. production.routes.ts imports NotificationService', () => {
-    const src = read('server/routes/production.routes.ts');
+  it('13. production/leads.routes.ts imports NotificationService', () => {
+    // Phase 1 PR #6: the leads handlers (incl. POST /leads) live in
+    // production/leads.routes.ts (mounted by production.routes.ts).
+    const src = read('server/routes/production/leads.routes.ts');
     assert.ok(
-      src.includes("from '../services/NotificationService.js'"),
-      'production.routes.ts must import NotificationService'
+      src.includes("from '../../services/NotificationService.js'"),
+      'leads.routes.ts must import NotificationService'
     );
   });
 
-  it('14. production.routes.ts does NOT use SAVEPOINT — notification failure aborts entire transaction', () => {
-    const src = read('server/routes/production.routes.ts');
+  it('14. production/leads.routes.ts does NOT use SAVEPOINT — notification failure aborts entire transaction', () => {
+    const src = read('server/routes/production/leads.routes.ts');
     assert.ok(
       !src.includes('SAVEPOINT notification_sp'),
       'Notification creation must NOT use SAVEPOINT — must be part of main transaction (Option A)'
     );
   });
 
-  it('15. production.routes.ts creates notifications server-side in POST /leads', () => {
-    const src = read('server/routes/production.routes.ts');
+  it('15. production/leads.routes.ts creates notifications server-side in POST /leads', () => {
+    const src = read('server/routes/production/leads.routes.ts');
     assert.ok(
       src.includes('createAssignmentNotifications(client'),
       'POST /leads must create notifications server-side using transaction client'
     );
   });
 
-  it('16. production.routes.ts uses transaction for lead upsert', () => {
-    const src = read('server/routes/production.routes.ts');
+  it('16. production/leads.routes.ts uses transaction for lead upsert', () => {
+    const src = read('server/routes/production/leads.routes.ts');
     // The POST /leads handler should use BEGIN/COMMIT for the DB path
     assert.ok(
       src.includes("await client.query('BEGIN')"),

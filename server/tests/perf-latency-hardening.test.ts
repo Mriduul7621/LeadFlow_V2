@@ -613,7 +613,8 @@ describe('Performance & latency hardening — client source guards', () => {
     read('server/routes/production/shared.ts') +
     read('server/routes/production/auth.routes.ts') +
     read('server/routes/production/notifications.routes.ts') +
-    read('server/routes/production/metadata.routes.ts');
+    read('server/routes/production/metadata.routes.ts') +
+    read('server/routes/production/leads.routes.ts');
 
   /** All `setInterval(expr, N)` numeric intervals found in a source. */
   function intervals(src: string): number[] {

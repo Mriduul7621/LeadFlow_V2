@@ -277,7 +277,7 @@ describe('Performance fix — source guards', () => {
   });
 
   it('D4. the follow-up queue filter is sargable and reads in parallel', () => {
-    const routes = read('server/routes/production.routes.ts');
+    const routes = read('server/routes/production/leads.routes.ts');
     assert.ok(
       routes.includes('bucketRangePredicate'),
       'bucket filters must compile to half-open ranges so index 038 can serve them'
@@ -293,7 +293,9 @@ describe('Performance fix — source guards', () => {
   });
 
   it('D5. hot authorization lookups run in parallel, not sequentially', () => {
-    const routes = read('server/routes/production.routes.ts');
+    const routes =
+      read('server/routes/production.routes.ts') +
+      read('server/routes/production/leads.routes.ts');
     assert.ok(
       /const \[canDashboard, canLeads\] = await Promise\.all\(\[/.test(routes),
       'dashboard permission checks must be batched'

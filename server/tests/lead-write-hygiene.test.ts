@@ -46,7 +46,7 @@ describe('Lead write hygiene — F10 / F11 / F12', () => {
   });
 
   it('F11. GET /api/leads applies the requested offset, with a ceiling', () => {
-    const route = read('server/routes/production.routes.ts');
+    const route = read('server/routes/production/leads.routes.ts');
     assert.ok(route.includes('const listOffset ='), 'the endpoint must compute an offset');
     assert.ok(/LIMIT \$\{listLimit\} OFFSET \$\{listOffset\}/.test(route), 'the SQL must carry the offset');
     assert.ok(route.includes('LIST_OFFSET_CEILING'), 'a hostile offset must be clamped');
@@ -56,7 +56,7 @@ describe('Lead write hygiene — F10 / F11 / F12', () => {
   });
 
   it('F12. the server reports a mobile-number match instead of a silent overwrite', () => {
-    const route = read('server/routes/production.routes.ts');
+    const route = read('server/routes/production/leads.routes.ts');
     assert.ok(route.includes("let matchedBy: 'leadCode' | 'mobile' | null = null;"), 'the match must be tracked');
     assert.ok(route.includes("if (existingLead) matchedBy = 'mobile';"), 'a phone match is recorded as such');
     assert.ok(route.includes('data: mappedLead, matchedBy }'), 'the response must carry the match');

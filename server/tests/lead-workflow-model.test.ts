@@ -96,7 +96,7 @@ describe('Lead workflow model', () => {
   it('separates feature visibility from canonical action controls', () => {
     const pool = read('src/modules/leads/pages/AllLeads.tsx');
     const workspace = read('src/modules/leads/pages/LeadList.tsx');
-    const server = read('server/routes/production.routes.ts');
+    const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
 
     assert.ok(pool.includes("canAccess('all_leads', 'view')"));
     assert.ok(pool.includes("canAccess('all_leads', 'assign')"));
@@ -112,7 +112,7 @@ describe('Lead workflow model', () => {
   it('keeps server visibility authoritative and prevents stale owner shadowing', () => {
     const workspace = read('src/modules/leads/pages/LeadList.tsx');
     const pool = read('src/modules/leads/pages/AllLeads.tsx');
-    const server = read('server/routes/production.routes.ts');
+    const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
 
     assert.ok(workspace.includes('const visibleLeads = await leadService.getLeads();'));
     assert.ok(pool.includes('const visibleLeads = await leadService.getLeads();'));
@@ -126,7 +126,7 @@ describe('Lead workflow model', () => {
 
   it('preserves a single record path into workspace and follow-up history', () => {
     const leadService = read('src/modules/leads/services/leadService.ts');
-    const server = read('server/routes/production.routes.ts');
+    const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
     const workspace = read('src/modules/leads/pages/LeadList.tsx');
 
     assert.ok(leadService.includes("'/api/leads'"));
@@ -139,7 +139,7 @@ describe('Lead workflow model', () => {
 
   it('aligns campaign purge UI policy with the admin-only server policy', () => {
     const pool = read('src/modules/leads/pages/AllLeads.tsx');
-    const server = read('server/routes/production.routes.ts');
+    const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
     const workflowDocs = read('docs/LEAD_WORKFLOW_MODEL.md');
     const permissionDocs = read('docs/ROLE_PERMISSION_MODEL.md');
 
@@ -159,7 +159,7 @@ describe('Lead workflow model', () => {
   });
 
   it('keeps transfer authorization distinct while preserving assignment and visibility boundaries', () => {
-    const server = read('server/routes/production.routes.ts');
+    const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
     const workflowDocs = read('docs/LEAD_WORKFLOW_MODEL.md');
     const featureDocs = read('docs/ROLE_FEATURE_ACCESS_ALIGNMENT.md');
 

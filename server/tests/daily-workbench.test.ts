@@ -227,7 +227,11 @@ describe('Daily Workbench — source guards', () => {
   });
 
   it('server remains final authorization boundary', () => {
-    const prod = read('server/routes/production.routes.ts');
+    // Lead handlers moved to production/leads.routes.ts in Phase 1
+    // PR #6 (mounted by production.routes.ts; same router).
+    const prod =
+      read('server/routes/production.routes.ts') +
+      read('server/routes/production/leads.routes.ts');
     assert.ok(prod.includes("hasPermissionCode(caller, 'leads.edit')"), 'server must check leads.edit for scheduled mutations');
     // Scheduled-activity handlers moved to production/roadshows.routes.ts
     // in Phase 1 PR #4 (mounted by production.routes.ts; same router).
