@@ -250,8 +250,8 @@ describe('Auto-assignment — HTTP (PGlite, real migrations)', () => {
     e2 = await addUser('EMP002', 'EMPLOYEE', tl.id);
   });
 
-  it('migration 049 is registered as the last migration', () => {
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '049_lead_auto_assignment_flag');
+  it('migration 049 is registered (050_processed_followup_mutations later became the tail)', () => {
+    assert.ok(MIGRATION_IDS.includes('049_lead_auto_assignment_flag'));
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('049_lead_auto_assignment_flag'));
   });
 

@@ -5,6 +5,7 @@ import './index.css';
 import { installAuthenticatedFetch } from './lib/apiClient';
 import { installGlobalChunkRecovery } from './utils/chunkRecovery';
 import { registerPushServiceWorker } from './modules/notifications/services/pushService';
+import { installFollowUpOutboxSync } from './modules/leads/services/followUpSync';
 
 installAuthenticatedFetch();
 
@@ -14,6 +15,11 @@ installAuthenticatedFetch();
 // boot can never break on it (including inside the Capacitor shell,
 // where push is unsupported and this is a no-op in practice).
 void registerPushServiceWorker();
+
+// Offline follow-up outbox: install the flush triggers (app start,
+// `online`, visibility return, fresh login). Flushing is a no-op when
+// the signed-in user has nothing queued.
+installFollowUpOutboxSync();
 
 // Safety net for stale-dynamic-chunk failures that never reach a React
 // error boundary (stale entry script / modulepreload on a hard load with

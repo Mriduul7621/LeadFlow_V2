@@ -752,9 +752,14 @@ describe('Performance & latency hardening — client source guards', () => {
     assert.ok(!createBody.includes('coalesceGet'), 'createLead must not be coalesced with other reads');
     assert.ok(createBody.indexOf('cacheLead(saved)') > createCall,
       'local cache must be written only after the confirmed response');
-    const fuBody = svc.slice(svc.indexOf('async updateLeadStatus'), svc.indexOf('async getLead('));
+    // Since Phase 3 PR #2 the awaited POST lives in postFollowUpOnce
+    // (same module); updateLeadStatus delegates to it and only the
+    // confirmed response reaches cacheLead — the invariant is unchanged.
+    const fuBody = svc.slice(svc.indexOf('export async function postFollowUpOnce'), svc.indexOf('export const leadService'));
     assert.ok(fuBody.includes('await apiRequest'), 'follow-up save must await the server');
     assert.ok(fuBody.indexOf('cacheLead(lead)') > fuBody.indexOf('await apiRequest'), 'follow-up cache write only after commit');
+    const updBody = svc.slice(svc.indexOf('async updateLeadStatus'), svc.indexOf('async getLead('));
+    assert.ok(updBody.includes('postFollowUpOnce'), 'updateLeadStatus must go through the awaited postFollowUpOnce');
     // The notification fan-out is fully server-side now — sendHierarchyNotifications deleted.
     assert.ok(!svc.includes('sendHierarchyNotifications('), 'sendHierarchyNotifications must be fully removed from client code');
   });

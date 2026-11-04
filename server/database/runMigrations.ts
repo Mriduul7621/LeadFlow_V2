@@ -59,6 +59,7 @@ import { up as departmentHeadsAndMirrorTeams } from "./migrations/046_department
 import { up as roleTemplates } from "./migrations/047_role_templates.js";
 import { up as pushSubscriptions } from "./migrations/048_push_subscriptions.js";
 import { up as leadAutoAssignmentFlag } from "./migrations/049_lead_auto_assignment_flag.js";
+import { up as processedFollowupMutations } from "./migrations/050_processed_followup_mutations.js";
 
 import {
   loadLedger,
@@ -161,6 +162,7 @@ const migrations: Migration[] = [
     { id: "047_role_templates", name: "Role Templates", run: roleTemplates },
     { id: "048_push_subscriptions", name: "Push Subscriptions", run: pushSubscriptions },
     { id: "049_lead_auto_assignment_flag", name: "Lead Auto-Assignment Flag", run: leadAutoAssignmentFlag },
+    { id: "050_processed_followup_mutations", name: "Processed Follow-up Mutations", run: processedFollowupMutations },
 
 ];
 

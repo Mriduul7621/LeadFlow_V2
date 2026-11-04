@@ -30,6 +30,8 @@ import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import type { LeadQuality } from '../../shared/types';
 import LeadQualityBadge from '../../leads/components/LeadQualityBadge';
 import WhatsAppAction from '../../leads/components/WhatsAppAction';
+import OutboxIndicator from '../components/OutboxIndicator';
+import { FOLLOWUP_SYNCED } from '../../leads/services/followUpOutbox';
 import { toast } from 'sonner';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
@@ -414,6 +416,14 @@ export default function DailyWorkbench() {
     void load();
   }, [load]);
 
+  // An offline follow-up that just synced changed the authoritative
+  // queue — reload so the agent sees the lead leave the due list.
+  useEffect(() => {
+    const onSynced = () => void load();
+    window.addEventListener(FOLLOWUP_SYNCED, onSynced);
+    return () => window.removeEventListener(FOLLOWUP_SYNCED, onSynced);
+  }, [load]);
+
   const workItems = useMemo(() => {
     // Today's execution queue: overdue follow-ups + today follow-ups + today scheduled (pending)
     const queueFollowUps = [...overdueFollowUps, ...todayFollowUps];
@@ -572,6 +582,7 @@ export default function DailyWorkbench() {
           <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
         </div>
         <div className="flex items-center gap-2">
+          <OutboxIndicator />
           <button
             type="button"
             onClick={() => void load()}

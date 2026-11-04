@@ -6,6 +6,10 @@ import { filterLeadsByScope } from '../../users/utils/dataScope';
 import { apiRequest, apiRequestEnvelope, ApiError } from '../../shared/api/http';
 import { coalesceGet } from '../../shared/api/coalesce';
 import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
+import { newMutationId } from '../utils/followUpOutboxCore';
+import { enqueueFollowUp, FollowUpQueuedOfflineError } from './followUpOutbox';
+
+export { FollowUpQueuedOfflineError } from './followUpOutbox';
 
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
 export interface FollowUpQueueItem {
@@ -96,6 +100,36 @@ function cacheLead(lead: Lead): void {
   } else {
     localDb.createLead(lead);
   }
+}
+
+/**
+ * ONE attempt at the follow-up write with an idempotency key
+ * (Phase 3 PR #2). Shared by the live submit path (updateLeadStatus)
+ * and the offline outbox flush (followUpSync): the server applies a
+ * clientMutationId exactly once (migration 050), so re-posting the
+ * same payload + id after a lost response is safe. No queueing here —
+ * this function either returns the authoritative lead or throws the
+ * ApiError the caller must classify.
+ */
+export async function postFollowUpOnce(
+  leadId: string,
+  payload: Record<string, any>,
+  clientMutationId: string,
+): Promise<Lead | null> {
+  const result = await apiRequest<any>(`/api/leads/${encodeURIComponent(leadId)}/follow-up`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, clientMutationId }),
+  });
+
+  // Server returns { lead, activity } (unwrapped from { success, data })
+  // For backward compat, also handle bare Lead response
+  const lead: Lead | null = result && typeof result === 'object' && 'lead' in result ? (result.lead as Lead) : (result as Lead);
+  if (lead) {
+    cacheLead(lead);
+    return lead;
+  }
+  return null;
 }
 
 export const leadService = {
@@ -293,20 +327,31 @@ export const leadService = {
     // Remove undefined values — preserves partial-update semantics
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
-    const result = await apiRequest<any>(`/api/leads/${encodeURIComponent(leadId)}/follow-up`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    // Server returns { lead, activity } (unwrapped from { success, data })
-    // For backward compat, also handle bare Lead response
-    const lead: Lead | null = result && typeof result === 'object' && 'lead' in result ? (result.lead as Lead) : (result as Lead);
-    if (lead) {
-      cacheLead(lead);
-      return lead;
+    // One idempotency key per user submission: if the response is
+    // lost (offline area, dropped connection), the outbox retry with
+    // the same key can never apply the follow-up twice server-side.
+    const mutationId = newMutationId();
+    try {
+      return await postFollowUpOnce(leadId, payload, mutationId);
+    } catch (err) {
+      // Network failure ONLY (ApiError status 0 = the request never
+      // reached the server): save the submission to the durable
+      // on-device outbox and throw the dedicated error so call sites
+      // can say "Saved offline — will sync" instead of "failed".
+      // Every definitive server answer (4xx validation/permission,
+      // 5xx) surfaces exactly as it did before this feature.
+      if (err instanceof ApiError && err.status === 0) {
+        const cached = localDb.getLead(leadId) as any;
+        const entry = enqueueFollowUp({
+          leadId,
+          leadLabel: cached?.prospectName || cached?.leadCode || leadId,
+          payload,
+          mutationId,
+        });
+        throw new FollowUpQueuedOfflineError(entry);
+      }
+      throw err;
     }
-    return null;
   },
 
   async getLead(leadId: string): Promise<Lead | null> {
