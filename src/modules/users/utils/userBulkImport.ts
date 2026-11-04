@@ -8,8 +8,15 @@
  * - Client preview mapping
  */
 
-import * as XLSX from 'xlsx';
 import type { RolePermission } from '../../shared/types';
+import {
+  parseSpreadsheetBytes,
+  gridToKeyedRows,
+  gridWithDefval,
+  downloadWorkbook,
+  LEGACY_XLS_MESSAGE,
+  type ExcelSheetSpec,
+} from '../../shared/utils/excel';
 
 export const USER_BULK_MAX_ROWS = 1000;
 
@@ -162,8 +169,8 @@ export interface ReferenceDataForTemplate {
   teams: TeamRef[];
 }
 
-export function buildUserImportTemplate(refData: ReferenceDataForTemplate): XLSX.WorkBook {
-  const wb = XLSX.utils.book_new();
+export function buildUserImportTemplate(refData: ReferenceDataForTemplate): ExcelSheetSpec[] {
+  const sheets: ExcelSheetSpec[] = [];
 
   // Sheet 1: Users
   const exampleRows = [
@@ -197,23 +204,12 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): XLSX
     },
   ];
 
-  const wsUsers = XLSX.utils.json_to_sheet(exampleRows, { header: [...USER_TEMPLATE_HEADERS] });
-  // Set column widths
-  (wsUsers as any)['!cols'] = [
-    { wch: 16 }, // Employee ID
-    { wch: 22 }, // Full Name
-    { wch: 28 }, // Email
-    { wch: 16 }, // Phone
-    { wch: 20 }, // Designation
-    { wch: 18 }, // Department
-    { wch: 16 }, // Role
-    { wch: 28 }, // Reporting Manager Employee ID
-    { wch: 16 }, // Team
-    { wch: 20 }, // Temporary Password
-    { wch: 20 }, // Must Change Password
-    { wch: 12 }, // Status
-  ];
-  XLSX.utils.book_append_sheet(wb, wsUsers, 'Users');
+  sheets.push({
+    name: 'Users',
+    rows: exampleRows,
+    headers: [...USER_TEMPLATE_HEADERS],
+    columnWidths: [16, 22, 28, 16, 20, 18, 16, 28, 16, 20, 20, 12],
+  });
 
   // Sheet 2: Reference Values
   const refRows: any[] = [];
@@ -240,9 +236,7 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): XLSX
   refRows.push({ Category: '', Value: '', Description: '' });
   refRows.push({ Category: 'Password Rules', Value: 'Min 6 chars', Description: 'If blank, server generates securely and returns once' });
 
-  const wsRef = XLSX.utils.json_to_sheet(refRows);
-  (wsRef as any)['!cols'] = [{ wch: 36 }, { wch: 28 }, { wch: 42 }];
-  XLSX.utils.book_append_sheet(wb, wsRef, 'Reference Values');
+  sheets.push({ name: 'Reference Values', rows: refRows, columnWidths: [36, 28, 42] });
 
   // Sheet 3: Instructions
   const instructions = [
@@ -265,39 +259,38 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): XLSX
     { Instruction: 'Columns', Details: 'Employee ID*, Full Name*, Email, Phone, Designation, Department*, Role*, Reporting Manager Employee ID, Team, Temporary Password, Must Change Password, Status' },
   ];
 
-  const wsInstr = XLSX.utils.json_to_sheet(instructions);
-  (wsInstr as any)['!cols'] = [{ wch: 18 }, { wch: 120 }];
-  XLSX.utils.book_append_sheet(wb, wsInstr, 'Instructions');
+  sheets.push({ name: 'Instructions', rows: instructions, columnWidths: [18, 120] });
 
-  return wb;
+  return sheets;
 }
 
-export function downloadUserImportTemplate(refData: ReferenceDataForTemplate, fileName = 'User_Import_Template.xlsx'): void {
-  const wb = buildUserImportTemplate(refData);
-  XLSX.writeFile(wb, fileName);
+export async function downloadUserImportTemplate(refData: ReferenceDataForTemplate, fileName = 'User_Import_Template.xlsx'): Promise<void> {
+  await downloadWorkbook(fileName, buildUserImportTemplate(refData));
 }
 
 export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkRow[]; headerRow: string[] }> {
   return new Promise((resolve, reject) => {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.xls') && !lowerName.endsWith('.xlsx')) {
+      reject(new Error(LEGACY_XLS_MESSAGE));
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
-        const data = e.target?.result;
-        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
+        const bytes = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = await parseSpreadsheetBytes(bytes, lowerName.endsWith('.csv') ? 'csv' : 'xlsx');
         // Prefer Users sheet, else first sheet
-        let sheetName = 'Users';
-        if (!workbook.SheetNames.includes(sheetName)) sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
+        const sheet = workbook.sheets.find(s => s.name === 'Users') || workbook.sheets[0];
         if (!sheet) {
           reject(new Error('No sheet found in workbook'));
           return;
         }
 
-        const jsonRows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
+        const jsonRows = gridToKeyedRows(sheet.grid);
         if (jsonRows.length === 0) {
-          // Try header:1 to get headers
-          const headerRows = XLSX.utils.sheet_to_json<any>(sheet, { header: 1 }) as any[][];
-          const headerRow = (headerRows[0] || []).map((h: any) => clean(h));
+          // Fall back to the raw grid to surface the headers.
+          const headerRow = (gridWithDefval(sheet.grid)[0] || []).map((h: any) => clean(h));
           resolve({ rows: [], headerRow });
           return;
         }
@@ -352,7 +345,7 @@ export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkR
       }
     };
     reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   });
 }
 
