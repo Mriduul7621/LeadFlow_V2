@@ -10,7 +10,7 @@ import { useAuthStore } from '../../auth/store/authStore';
 import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { toast } from 'sonner';
-import * as XLSX from 'xlsx';
+import { downloadWorkbook } from '../../shared/utils/excel';
 import BackButton from '../../shared/components/BackButton';
 
 export default function NcpProgress() {
@@ -147,7 +147,7 @@ export default function NcpProgress() {
     return '';
   };
 
-  const handleExportNcpLeads = () => {
+  const handleExportNcpLeads = async () => {
     const data = leads.map(l => ({
       'Client Name': l.prospectName,
       'Area': l.area,
@@ -157,11 +157,12 @@ export default function NcpProgress() {
       'Projected NCP': l.projectedNCP,
       'Status': l.currentStatus,
     }));
-    const worksheet = XLSX.utils.json_to_sheet(data);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "NCP_Ledger");
-    XLSX.writeFile(workbook, `NCP_Progress_Ledger_${period}.xlsx`);
-    toast.success("NCP Ledger downloaded successfully!");
+    try {
+      await downloadWorkbook(`NCP_Progress_Ledger_${period}.xlsx`, [{ name: "NCP_Ledger", rows: data }]);
+      toast.success("NCP Ledger downloaded successfully!");
+    } catch {
+      toast.error("Failed to generate export file");
+    }
   };
 
   return (

@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Upload, Download, AlertTriangle, CheckCircle2, XCircle, FileSpreadsheet, Copy, ShieldCheck, Info } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { downloadWorkbook, LEGACY_XLS_MESSAGE } from '../../shared/utils/excel';
 import { parseUserImportFile, downloadUserImportTemplate, mapToServerRows, type ParsedUserBulkRow, USER_BULK_MAX_ROWS } from '../utils/userBulkImport';
 import { userService } from '../services/userService';
 import { orgService } from '../../hierarchy/services/orgService';
@@ -104,7 +104,11 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
   const handleFile = useCallback(async (file: File) => {
     if (!file) return;
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (!['xlsx', 'xls', 'csv'].includes(ext || '')) {
+    if (ext === 'xls') {
+      toast.error(LEGACY_XLS_MESSAGE);
+      return;
+    }
+    if (!['xlsx', 'csv'].includes(ext || '')) {
       toast.error('Please upload an XLSX or CSV file');
       return;
     }
@@ -148,11 +152,11 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
         orgService.getDepartments(),
         adminService.getTeams().catch(() => [] as any),
       ]);
-      downloadUserImportTemplate({ roles, departments, teams } as any);
+      await downloadUserImportTemplate({ roles, departments, teams } as any);
       toast.success('Template downloaded');
     } catch {
       toast.warning('Failed to build template, downloading blank');
-      downloadUserImportTemplate({ roles: [], departments: [], teams: [] } as any);
+      await downloadUserImportTemplate({ roles: [], departments: [], teams: [] } as any);
     }
   }, []);
 
@@ -201,36 +205,44 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
     }
   }, [commitResult]);
 
-  const handleDownloadCredentials = useCallback(() => {
+  const handleDownloadCredentials = useCallback(async () => {
     if (!commitResult?.credentials?.length) return;
-    const ws = XLSX.utils.json_to_sheet(commitResult.credentials.map(c => ({
-      'Employee ID': c.employeeId,
-      'Full Name': c.fullName,
-      'Temporary Password': c.temporaryPassword,
-      'Must Change Password': c.mustChangePassword ? 'Yes' : 'No',
-    })));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Credentials');
-    XLSX.writeFile(wb, `User_Credentials_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    try {
+      await downloadWorkbook(`User_Credentials_${new Date().toISOString().slice(0, 10)}.xlsx`, [{
+        name: 'Credentials',
+        rows: commitResult.credentials.map(c => ({
+          'Employee ID': c.employeeId,
+          'Full Name': c.fullName,
+          'Temporary Password': c.temporaryPassword,
+          'Must Change Password': c.mustChangePassword ? 'Yes' : 'No',
+        })),
+      }]);
+    } catch {
+      toast.error('Failed to generate credentials file');
+    }
   }, [commitResult]);
 
-  const handleDownloadErrors = useCallback(() => {
+  const handleDownloadErrors = useCallback(async () => {
     if (!serverPreview) return;
     const errorRows = serverPreview.rows.filter(r => !r.isValid);
-    const ws = XLSX.utils.json_to_sheet(errorRows.map(r => ({
-      'Row Number': r.rowNumber,
-      'Employee ID': r.employeeId,
-      'Full Name': r.fullName,
-      'Role': r.roleInput,
-      'Department': r.departmentInput,
-      'Manager': r.managerInput,
-      'Action': r.action,
-      'Errors': r.errors.join('; '),
-      'Warnings': r.warnings.join('; '),
-    })));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Errors');
-    XLSX.writeFile(wb, `User_Import_Errors_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    try {
+      await downloadWorkbook(`User_Import_Errors_${new Date().toISOString().slice(0, 10)}.xlsx`, [{
+        name: 'Errors',
+        rows: errorRows.map(r => ({
+          'Row Number': r.rowNumber,
+          'Employee ID': r.employeeId,
+          'Full Name': r.fullName,
+          'Role': r.roleInput,
+          'Department': r.departmentInput,
+          'Manager': r.managerInput,
+          'Action': r.action,
+          'Errors': r.errors.join('; '),
+          'Warnings': r.warnings.join('; '),
+        })),
+      }]);
+    } catch {
+      toast.error('Failed to generate errors file');
+    }
   }, [serverPreview]);
 
   if (!open) return null;
@@ -283,7 +295,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                 <button onClick={() => fileInputRef.current?.click()} className="mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm hover:bg-blue-700">
                   Browse File
                 </button>
-                <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFileInputChange} />
+                <input ref={fileInputRef} type="file" accept=".xlsx,.csv" className="hidden" onChange={onFileInputChange} />
                 {fileName && <p className="mt-3 text-xs text-gray-600">Selected: {fileName}</p>}
               </div>
 

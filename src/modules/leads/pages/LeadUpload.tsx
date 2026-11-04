@@ -16,8 +16,14 @@ import {
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
+import {
+  parseSpreadsheetBytes,
+  gridToKeyedRows,
+  gridWithDefval,
+  downloadWorkbook,
+  LEGACY_XLS_MESSAGE,
+} from '../../shared/utils/excel';
 import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { REAL_SHEET_HEADERS, mapRowForPreview, formatSheetCellForDisplay, isDateColumn, type PreviewRow } from '../utils/leadUploadMapping';
@@ -72,7 +78,7 @@ export default function LeadUpload() {
     );
   }
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
     // Exact real spreadsheet headers with the business example row.
     const templateData = [
       {
@@ -103,11 +109,12 @@ export default function LeadUpload() {
     ];
 
     try {
-      const worksheet = XLSX.utils.json_to_sheet(templateData, { header: [...REAL_SHEET_HEADERS] });
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Leads Template');
-      worksheet['!cols'] = REAL_SHEET_HEADERS.map(() => ({ wch: 18 }));
-      XLSX.writeFile(workbook, 'Shanta_Life_Leads_Upload_Template.xlsx');
+      await downloadWorkbook('Shanta_Life_Leads_Upload_Template.xlsx', [{
+        name: 'Leads Template',
+        rows: templateData,
+        headers: [...REAL_SHEET_HEADERS],
+        columnWidths: REAL_SHEET_HEADERS.map(() => 18),
+      }]);
       toast.success('Correct format template downloaded! Fill and upload this sheet.');
     } catch (err) {
       toast.error('Failed to generate download spreadsheet template.');
@@ -168,21 +175,28 @@ export default function LeadUpload() {
   };
 
   const processFile = (file: File) => {
-    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.xls') && !lowerName.endsWith('.xlsx')) {
+      // Legacy binary .xls can no longer be parsed (Phase 4: the old
+      // SheetJS reader was replaced for security). Ask for a re-save.
+      toast.error(LEGACY_XLS_MESSAGE);
+      return;
+    }
+    if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.csv')) {
       setFile(file);
       setProcessing(true);
 
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
-          const bstr = e.target?.result;
-          const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
-          const wsname = wb.SheetNames[0];
-          const ws = wb.Sheets[wsname];
-          const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const bytes = new Uint8Array(e.target?.result as ArrayBuffer);
+          const parsed = await parseSpreadsheetBytes(bytes, lowerName.endsWith('.csv') ? 'csv' : 'xlsx');
+          const sheet = parsed.sheets[0];
+          if (!sheet) throw new Error('No sheet found in file');
+          const data = gridWithDefval(sheet.grid);
           // Rows keyed by the FIRST ROW's headers - raw rows are submitted
           // unchanged and the server maps the exact headers authoritatively.
-          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+          const rows = gridToKeyedRows(sheet.grid);
           setFullData(rows);
           setPreviewData(data.slice(0, 7)); // Preview header + 6 rows
           setImportResult(null);
@@ -198,13 +212,13 @@ export default function LeadUpload() {
             toast.error('No data rows found in the file (only the header row).');
             setServerPreview(null);
           }
-        } catch (err) {
-          toast.error('Failed to parse file. Check integrity.');
+        } catch (err: any) {
+          toast.error(err?.message === LEGACY_XLS_MESSAGE ? LEGACY_XLS_MESSAGE : 'Failed to parse file. Check integrity.');
         } finally {
           setProcessing(false);
         }
       };
-      reader.readAsBinaryString(file);
+      reader.readAsArrayBuffer(file);
     } else {
       toast.error('Invalid protocol. Please inject Excel or CSV format.');
     }
@@ -292,7 +306,7 @@ export default function LeadUpload() {
                   type="file"
                   className="absolute inset-0 opacity-0 cursor-pointer z-10"
                   onChange={handleChange}
-                  accept=".xlsx, .xls, .csv"
+                  accept=".xlsx, .csv"
                />
 
                <div className="w-20 h-20 bg-white rounded-sm shadow-xl flex items-center justify-center mb-8 border border-slate-50">
@@ -517,7 +531,7 @@ export default function LeadUpload() {
                </div>
                 <ul className="space-y-6">
                   {[
-                     { label: 'Protocols', val: 'XLSX, XLS, CSV' },
+                     { label: 'Protocols', val: 'XLSX, CSV' },
                      { label: 'Max Payload', val: '5,000 Entities' },
                      { label: 'Mandatory', val: 'Name, Phone' },
                      { label: 'Assigned To', val: 'Active Employee ID' },

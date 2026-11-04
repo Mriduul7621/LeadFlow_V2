@@ -12,7 +12,7 @@ import { UserRole, Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
-import * as XLSX from 'xlsx';
+import { downloadWorkbook } from '../../shared/utils/excel';
 import BackButton from '../../shared/components/BackButton';
 
 export default function ExecutionIntelligence() {
@@ -196,7 +196,7 @@ export default function ExecutionIntelligence() {
     return result;
   };
 
-  const handleExportTeamStats = () => {
+  const handleExportTeamStats = async () => {
     const data = teamStats.map(r => ({
       'Team / Area': r.team,
       'Total Assigned': r.assigned,
@@ -208,11 +208,12 @@ export default function ExecutionIntelligence() {
       'Collected NCP (BDT)': r.collected,
       'Projected NCP (BDT)': r.projected,
     }));
-    const worksheet = XLSX.utils.json_to_sheet(data);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Team_Breakout");
-    XLSX.writeFile(workbook, `Execution_Intelligence_Export_${period}.xlsx`);
-    toast.success("Team breakout list downloaded successfully!");
+    try {
+      await downloadWorkbook(`Execution_Intelligence_Export_${period}.xlsx`, [{ name: "Team_Breakout", rows: data }]);
+      toast.success("Team breakout list downloaded successfully!");
+    } catch {
+      toast.error("Failed to generate export file");
+    }
   };
 
   return (
