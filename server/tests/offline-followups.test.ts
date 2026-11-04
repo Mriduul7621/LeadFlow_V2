@@ -183,8 +183,8 @@ describe('Offline follow-up capture — idempotent sync (Phase 3 PR #2)', () => 
     return { ...res.rows[0], activities: acts.rows[0].n };
   }
 
-  it('migration 050 is registered as the last migration', () => {
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '050_processed_followup_mutations');
+  it('migration 050 is registered (051_lead_sla_config later became the tail)', () => {
+    assert.ok(MIGRATION_IDS.includes('050_processed_followup_mutations'));
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('050_processed_followup_mutations'));
   });
 

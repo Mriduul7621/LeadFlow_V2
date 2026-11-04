@@ -23,12 +23,13 @@ import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useRoadshowAccess } from '../../shared/hooks/useRoadshowAccess';
-import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
+import { leadService, type FollowUpQueueItem, type LeadSlaInfo } from '../../leads/services/leadService';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
 import { roadshowService, type Roadshow } from '../../roadshows/services/roadshowService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import type { LeadQuality } from '../../shared/types';
 import LeadQualityBadge from '../../leads/components/LeadQualityBadge';
+import LeadSlaChip from '../../leads/components/LeadSlaChip';
 import WhatsAppAction from '../../leads/components/WhatsAppAction';
 import OutboxIndicator from '../components/OutboxIndicator';
 import { FOLLOWUP_SYNCED } from '../../leads/services/followUpOutbox';
@@ -123,6 +124,9 @@ interface WorkItem {
   // band attached by the follow-ups / scheduled-activities APIs; used for
   // prioritization display only — never recomputed here).
   leadQuality: LeadQuality | null;
+  // Server-computed first-contact SLA for follow-up items (Phase 3
+  // PR #3); null for scheduled items and whenever the SLA switch is off.
+  sla: LeadSlaInfo | null;
 }
 
 function toWorkItems(
@@ -155,6 +159,7 @@ function toWorkItems(
       raw: fu,
       sortTime: parseTimeSort(iso),
       leadQuality: fu.leadQuality ?? null,
+      sla: fu.sla ?? null,
     });
   }
 
@@ -180,6 +185,7 @@ function toWorkItems(
       raw: sa,
       sortTime: parseTimeSort(sa.scheduledAt),
       leadQuality: sa.leadQuality ?? null,
+      sla: null,
     });
   }
 
@@ -770,6 +776,7 @@ export default function DailyWorkbench() {
                           <strong>{item.leadName}</strong>
                           <small>{meta.label} · {formatDhakaDue(item.scheduledAt || '')}</small>
                           <span className="lf-mobile-lead-status">{itemStatus}</span>
+                          <LeadSlaChip sla={item.sla} className="mt-1 self-start" />
                         </span>
                       </button>
                       {/* Quick status update from the queue (the lead only, not the

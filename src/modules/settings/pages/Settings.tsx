@@ -19,7 +19,8 @@ import {
   Radio,
   Wifi,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Timer
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -78,6 +79,16 @@ export default function Settings() {
   const [autoAssignSaving, setAutoAssignSaving] = useState(false);
   const autoAssignEnabled = autoAssignOption?.status === 'Active';
 
+  // First-Contact SLA (Phase 3 PR #3): Metadata Engine options — type
+  // 'LeadSla': value 'enabled' is the switch (seeded Inactive by
+  // migration 051; missing row = OFF), value 'firstContactHours'
+  // carries the window in meta.hours (default 24).
+  const [slaEnabledOption, setSlaEnabledOption] = useState<DropdownOption | null>(null);
+  const [slaLoaded, setSlaLoaded] = useState(false);
+  const [slaSaving, setSlaSaving] = useState(false);
+  const [slaHoursDraft, setSlaHoursDraft] = useState('24');
+  const slaEnabled = slaEnabledOption?.status === 'Active';
+
   // Password management states
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -124,6 +135,22 @@ export default function Settings() {
     return () => { cancelled = true; };
   }, [isSystemAdmin]);
 
+  useEffect(() => {
+    if (!isSystemAdmin) return;
+    let cancelled = false;
+    metadataService.getAllValues('LeadSla')
+      .then(values => {
+        if (cancelled) return;
+        setSlaEnabledOption(values.find(v => v.value === 'enabled') || null);
+        const hoursRow = values.find(v => v.value === 'firstContactHours') || null;
+        const h = Number(hoursRow?.meta?.hours);
+        setSlaHoursDraft(String(Number.isFinite(h) && h > 0 ? Math.round(h) : 24));
+        setSlaLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setSlaLoaded(true); });
+    return () => { cancelled = true; };
+  }, [isSystemAdmin]);
+
   const handleToggleAutoAssign = async () => {
     if (autoAssignSaving) return;
     setAutoAssignSaving(true);
@@ -147,6 +174,55 @@ export default function Settings() {
       toast.error('Could not update the auto-assignment switch');
     } finally {
       setAutoAssignSaving(false);
+    }
+  };
+
+  const handleToggleSla = async () => {
+    if (slaSaving) return;
+    setSlaSaving(true);
+    try {
+      if (!slaEnabledOption) {
+        // First enable on a database where the seeded row is absent
+        // (e.g. legacy-adopted): create the switch in its ON state.
+        const saved = await metadataService.addValue(
+          'LeadSla', 'enabled',
+          { featureFlag: true },
+          'First-contact SLA tracking'
+        );
+        setSlaEnabledOption(saved);
+        toast.success('First-contact SLA tracking enabled');
+      } else {
+        const saved = await metadataService.toggleActive(slaEnabledOption);
+        setSlaEnabledOption(saved);
+        toast.success(saved.status === 'Active' ? 'First-contact SLA tracking enabled' : 'First-contact SLA tracking disabled');
+      }
+    } catch {
+      toast.error('Could not update the SLA switch');
+    } finally {
+      setSlaSaving(false);
+    }
+  };
+
+  const handleSaveSlaHours = async () => {
+    if (slaSaving) return;
+    const hours = Math.round(Number(slaHoursDraft));
+    if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
+      toast.error('SLA window must be between 1 and 720 hours');
+      return;
+    }
+    setSlaSaving(true);
+    try {
+      await metadataService.addValue(
+        'LeadSla', 'firstContactHours',
+        { hours },
+        'First-contact window (hours)'
+      );
+      setSlaHoursDraft(String(hours));
+      toast.success(`First-contact SLA window set to ${hours}h`);
+    } catch {
+      toast.error('Could not update the SLA window');
+    } finally {
+      setSlaSaving(false);
     }
   };
 
@@ -660,6 +736,47 @@ export default function Settings() {
                             onChange={handleToggleAutoAssign}
                           />
                           {autoAssignEnabled ? 'On' : 'Off'}
+                        </label>
+                      </div>
+                      <div className="bg-white rounded-[12px] border border-stone-100 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded-[10px] bg-red-50 border border-red-100 flex items-center justify-center text-red-600">
+                            <Timer className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-stone-700">First-Contact SLA</h4>
+                            <p className="text-[11px] text-stone-400 font-medium mt-1">When on, a newly assigned lead with no recorded first contact inside the window is badged in the Workbench, alerted to its assignee and escalated to their manager in the morning run. Off by default.</p>
+                            <div className="flex items-center gap-2 mt-3">
+                              <label className="text-[11px] font-bold text-stone-500" htmlFor="sla-hours-input">Window (hours)</label>
+                              <input
+                                id="sla-hours-input"
+                                type="number"
+                                min={1}
+                                max={720}
+                                value={slaHoursDraft}
+                                disabled={!slaLoaded || slaSaving}
+                                onChange={e => setSlaHoursDraft(e.target.value)}
+                                className="w-20 px-2 py-1.5 border border-stone-200 rounded-[8px] text-xs font-bold text-stone-700"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleSaveSlaHours}
+                                disabled={!slaLoaded || slaSaving}
+                                className="px-3 py-1.5 bg-stone-700 hover:bg-stone-800 text-white rounded-[8px] text-[11px] font-bold disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-bold text-stone-600 whitespace-nowrap cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={slaEnabled}
+                            disabled={!slaLoaded || slaSaving}
+                            onChange={handleToggleSla}
+                          />
+                          {slaEnabled ? 'On' : 'Off'}
                         </label>
                       </div>
                       <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 italic">

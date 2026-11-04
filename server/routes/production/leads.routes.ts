@@ -81,6 +81,10 @@ import {
   type AutoAssignPick,
 } from '../../services/AutoAssignmentService.js';
 import {
+  computeLeadSla,
+  getLeadSlaConfig,
+} from '../../services/LeadSlaService.js';
+import {
   AUDIT_CHANGE_CAP,
   LEAD_SELECT,
   asUuid,
@@ -2236,6 +2240,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     offset = Math.floor(offset);
 
     const bounds = getDhakaBusinessDayBounds(new Date());
+    // First-contact SLA (Phase 3 PR #3): config read once per request;
+    // when the switch is OFF nothing below changes — items carry no
+    // `sla` field and the response shape is exactly as before.
+    const slaConfig = await getLeadSlaConfig();
+    const slaNow = new Date();
     // `visibility` was resolved with the permission check above (request-
     // scoped memo — no second lookup).
 
@@ -2319,6 +2328,22 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       );
       const items = page.map((l: any) => {
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+        // Demo SLA mirror: same clock-start chain the demo
+        // auto-assignment rule uses (assignedDate → timestamp →
+        // creationDate); contact stamp is lastFollowUpDate.
+        const sla = slaConfig.enabled
+          ? computeLeadSla(
+              {
+                assignedTo: l.assignedTo,
+                assignedAt: l.assignedDate || l.timestamp || null,
+                createdAt: l.creationDate || l.timestamp || null,
+                lastContactedAt: l.lastFollowUpDate || null,
+                currentStatus: l.currentStatus,
+              },
+              slaConfig.firstContactHours,
+              slaNow
+            )
+          : null;
         return {
           id: l.id,
           leadCode: l.id,
@@ -2339,6 +2364,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
           dueState: classify(l),
           latestActivity: null,
           leadQuality: demoQualityById.get(String(l.id)),
+          ...(sla ? { sla } : {}),
         };
       });
       return sendJson(res, 200, {
@@ -2427,7 +2453,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const listSql = `
       SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.area, l.priority,
              l.current_status, l.next_follow_up_at, l.last_contacted_at,
-             l.created_at, l.expected_premium,
+             l.created_at, l.assigned_at, l.assigned_to, l.expected_premium,
              COALESCE(l.follow_up_count, 0) AS follow_up_count,
              l.custom_fields,
              au.employee_id AS assigned_to_employee_id,
@@ -2480,6 +2506,22 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     const items = listRes.rows.map((row: any) => {
       const cf = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
       const nfd = row.next_follow_up_at;
+      // First-contact SLA for this row (Phase 3 PR #3) — null (and
+      // therefore absent from the item) when the switch is OFF, the
+      // lead is unassigned, or its status is terminal.
+      const sla = slaConfig.enabled
+        ? computeLeadSla(
+            {
+              assignedTo: row.assigned_to,
+              assignedAt: row.assigned_at,
+              createdAt: row.created_at,
+              lastContactedAt: row.last_contacted_at,
+              currentStatus: row.current_status,
+            },
+            slaConfig.firstContactHours,
+            slaNow
+          )
+        : null;
       return {
         id: row.lead_code || row.id,
         dbId: row.id,
@@ -2509,6 +2551,7 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
           queueActivity.get(String(row.id)),
           queueScheduled.get(String(row.id))
         ),
+        ...(sla ? { sla } : {}),
       };
     });
 
