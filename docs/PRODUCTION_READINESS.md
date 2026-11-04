@@ -357,3 +357,5 @@ here):
 
 See `PRODUCTION_RELEASE_RUNBOOK.md`, `BACKUP_RESTORE_RUNBOOK.md` and
 `INCIDENT_RESPONSE_RUNBOOK.md` for operating procedure.
+
+<!-- Production redeploy trigger: 2026-11-04 (post Phase 4, PRs #100-#101) -->
