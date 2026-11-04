@@ -1,6 +1,7 @@
 import { useAuthStore, authHydrationSettled } from '../store/authStore';
 import { apiRequest, ApiError } from '../../shared/api/http';
 import { extractLoginPayload, extractSessionUser } from './loginContract';
+import { resetHomeLanding } from './homeLanding';
 import { User } from '../../shared/types';
 
 /**
@@ -69,6 +70,11 @@ export async function activateSession(session: EstablishedSession, ctx: Activate
   sessionConfirmedByLogin = true;
 
   useAuthStore.getState().setInitialized(true);
+  // A fresh login starts a new auth session: re-arm the once-per-session
+  // landing decision so the root route sends this user to their home
+  // page (Workbench-first — see HomeLanding / resolveHomePath). The
+  // navigation target itself is unchanged: `/` decides.
+  resetHomeLanding(session.user.id);
   ctx.navigate('/');
 
   try {
