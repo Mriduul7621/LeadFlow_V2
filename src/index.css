@@ -414,6 +414,75 @@
 }
 
 
+/* Hub-style header — thin utility bar + floating rounded nav pill,
+   mirroring the Learning Hub / shantalife.com shell (2026-11-04). The
+   utility bar's right side carries the live Asia/Dhaka clock where the
+   Hub carries its E-BOOK link and BN|EN switcher. */
+.leadflow-utility-bar {
+  background: #F6F2E7;
+  border-bottom: 1px solid rgba(60, 60, 59, .08);
+}
+.leadflow-utility-inner {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 2px 16px;
+}
+.leadflow-utility-clock {
+  color: #3C3C3B;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.leadflow-nav-shell {
+  padding: 8px 12px;
+  background: rgba(253, 251, 247, .88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+@media (min-width: 640px) {
+  .leadflow-nav-shell { padding-left: 20px; padding-right: 20px; }
+}
+@media (min-width: 1024px) {
+  .leadflow-nav-shell { padding-left: 24px; padding-right: 24px; }
+}
+.leadflow-nav-pill {
+  display: flex;
+  height: 56px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(60, 60, 59, .09);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 10px 30px -18px rgba(38, 38, 37, .45);
+}
+/* Profile chip (Learning Hub behaviour): avatar + name in a pill that
+   leads to the Profile page; padding tightens on small screens where
+   the name is hidden. */
+.leadflow-profile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  border: 1px solid rgba(60, 60, 59, .12);
+  border-radius: 9999px;
+  background: #FDFBF7;
+  text-decoration: none;
+  transition: border-color .15s ease, background .15s ease;
+}
+.leadflow-profile-chip:hover {
+  border-color: rgba(151, 140, 33, .5);
+  background: #F5F3E5;
+}
+@media (max-width: 767px) {
+  .leadflow-profile-chip { padding: 4px; }
+}
+
 /* LeadFlow mobile-app shell — reference-inspired, CSS-only presentation layer. */
 .leadflow-mobile-nav {
   display: none;
@@ -509,38 +578,56 @@
   }
 }
 @media (min-width: 1280px) {
+  /* Centre destinations inside the floating pill, Learning Hub
+     geometry: full-height text links, and the active link carries a
+     Sunset Orange (#F37021) underline instead of the old filled chip. */
   .leadflow-desktop-nav {
     display: flex;
-    align-items: center;
+    flex: 1;
+    height: 56px;
+    align-items: stretch;
     justify-content: center;
-    gap: 4px;
+    gap: 2px;
+    min-width: 0;
   }
   .leadflow-desktop-nav-item {
+    position: relative;
     display: inline-flex;
-    min-height: 42px;
     align-items: center;
     gap: 7px;
     padding: 0 13px;
-    border-radius: 10px;
     color: #686B5B;
     font-size: 13px;
     font-weight: 600;
     text-decoration: none;
-    transition: color .16s ease, background .16s ease;
+    white-space: nowrap;
+    transition: color .16s ease;
   }
   .leadflow-desktop-nav-item:hover {
-    background: #F6F5EF;
     color: #353A24;
   }
   .leadflow-desktop-nav-item.is-active {
-    background: #F1F0E4;
-    color: #6B6D16;
+    color: #3C3C3B;
     font-weight: 700;
   }
+  .leadflow-desktop-nav-item.is-active::after {
+    content: "";
+    position: absolute;
+    left: 13px;
+    right: 13px;
+    bottom: 9px;
+    height: 3px;
+    border-radius: 9999px;
+    background: #F37021;
+  }
+  /* Add Lead stays a filled CTA (it is an action, not a destination)
+     and opts out of the underline treatment. */
   .leadflow-desktop-nav-item.is-primary {
-    min-height: 46px;
+    align-self: center;
+    min-height: 42px;
     padding-right: 16px;
     padding-left: 16px;
+    border-radius: 10px;
     background: #727A18;
     color: #FFFFFF;
     font-size: 14px;
@@ -549,6 +636,9 @@
   .leadflow-desktop-nav-item.is-primary:hover {
     background: #626A14;
     color: #FFFFFF;
+  }
+  .leadflow-desktop-nav-item.is-primary.is-active::after {
+    content: none;
   }
 }
 @media (max-width: 767px) {
@@ -564,12 +654,23 @@
     overflow-x: clip;
   }
   header.sticky {
-    height: 58px !important;
-    padding-left: 14px !important;
-    padding-right: 12px !important;
-    background: rgba(255,255,255,.96) !important;
-    border-bottom-color: #ECECE4 !important;
+    background: rgba(253,251,247,.96) !important;
     box-shadow: 0 2px 12px rgba(40, 42, 22, .035);
+  }
+  .leadflow-utility-inner {
+    min-height: 32px;
+    padding: 2px 12px;
+  }
+  .leadflow-utility-clock {
+    font-size: 11px;
+  }
+  .leadflow-nav-shell {
+    padding: 6px 10px;
+  }
+  .leadflow-nav-pill {
+    height: 52px;
+    padding: 0 8px;
+    border-radius: 14px;
   }
   .leadflow-main :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
     min-height: 44px;
