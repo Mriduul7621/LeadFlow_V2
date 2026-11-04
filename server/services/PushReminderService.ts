@@ -26,6 +26,11 @@
  *     network sender behind an injectable seam (`_setPushSenderForTest`,
  *     mirroring connection.ts's `_setTestPoolForTest` convention) so
  *     tests never touch a real push service.
+ *
+ * Phase 3 PR #3: the same morning run also performs first-contact
+ * SLA breach detection (LeadSlaService) — in-app alerts are created
+ * before the push fan-out (independent of VAPID configuration), and
+ * each assignee's breach count is folded into their payload.
  */
 import { timingSafeEqual } from 'node:crypto';
 import webpush from 'web-push';
@@ -42,6 +47,10 @@ import {
   useDb,
   type CallerDbInfo,
 } from '../routes/production/shared.js';
+import {
+  runLeadSlaBreachAlerts,
+  type SlaBreachRunSummary,
+} from './LeadSlaService.js';
 
 /* ====================================================================
    Configuration (VAPID + cron secret)
@@ -281,6 +290,12 @@ async function touchPushSubscription(endpoint: string): Promise<void> {
 export interface FollowUpReminderCounts {
   dueToday: number;
   overdue: number;
+  /**
+   * First-contact SLA breaches among leads assigned to this user
+   * (Phase 3 PR #3). Optional: absent/0 keeps the payload byte-for-byte
+   * what it was before SLA tracking existed.
+   */
+  slaBreaches?: number;
 }
 
 /**
@@ -366,6 +381,17 @@ export function buildDailyReminderPayload(
   const parts: string[] = [];
   if (counts.dueToday > 0) parts.push(`আজ ${counts.dueToday}টি follow-up due`);
   if (counts.overdue > 0) parts.push(`${counts.overdue}টি overdue`);
+  const slaBreaches = Number(counts.slaBreaches || 0);
+  if (slaBreaches > 0) {
+    // SLA breach line (Phase 3 PR #3): a separate sentence appended
+    // after the follow-up counts. With no breaches the body stays
+    // byte-for-byte the pre-SLA wording.
+    const breachSentence = `${slaBreaches}টি lead-এর first-contact SLA পার হয়ে গেছে।`;
+    const body = parts.length
+      ? `${parts.join(', ')} আছে। ${breachSentence} Workbench-এ দেখে নিন।`
+      : `${breachSentence} Workbench-এ দেখে নিন।`;
+    return { title: PUSH_REMINDER_TITLE, body, url };
+  }
   const body = parts.length
     ? `${parts.join(', ')} আছে। Workbench-এ দেখে নিন।`
     : 'আজ কোনো follow-up due নেই।';
@@ -453,6 +479,19 @@ export interface DailyPushRunSummary {
   pruned: number;
   failed: number;
   skippedNoDue: number;
+  /**
+   * First-contact SLA breach detection that rides this same morning
+   * run (Phase 3 PR #3): in-app alerts are created even when Web Push
+   * itself is not configured, and per-assignee breach counts feed the
+   * push payload below.
+   */
+  sla: {
+    enabled: boolean;
+    breached: number;
+    alerted: number;
+    escalated: number;
+    deduped: number;
+  };
 }
 
 /**
@@ -464,7 +503,27 @@ export interface DailyPushRunSummary {
 export async function runDailyPushReminders(now: Date = new Date()): Promise<DailyPushRunSummary> {
   const summary: DailyPushRunSummary = {
     enabled: false, usersTargeted: 0, sent: 0, pruned: 0, failed: 0, skippedNoDue: 0,
+    sla: { enabled: false, breached: 0, alerted: 0, escalated: 0, deduped: 0 },
   };
+
+  // First-contact SLA breach detection rides this existing morning
+  // run — no new cron. It creates IN-APP alerts, so it runs (and is
+  // fully no-op when the SLA switch is off) even when Web Push is
+  // not configured; a detection failure never breaks the push run.
+  let slaRun: SlaBreachRunSummary | null = null;
+  try {
+    slaRun = await runLeadSlaBreachAlerts(now);
+    summary.sla = {
+      enabled: slaRun.enabled,
+      breached: slaRun.breached,
+      alerted: slaRun.alerted,
+      escalated: slaRun.escalated,
+      deduped: slaRun.deduped,
+    };
+  } catch (error: any) {
+    console.warn(`[push-reminders] SLA breach detection failed: ${error?.message || 'unknown error'}`);
+  }
+
   if (!isPushConfigured()) return summary;
   summary.enabled = true;
 
@@ -484,12 +543,15 @@ export async function runDailyPushReminders(now: Date = new Date()): Promise<Dai
     const caller = await resolveSubscribedUserCaller(userId);
     if (!caller) continue;
     const counts = await computeFollowUpReminderCounts(caller, now);
-    if (counts.dueToday + counts.overdue === 0) {
+    const slaBreaches = slaRun?.breachesByAssignee.get(userId) || 0;
+    if (counts.dueToday + counts.overdue + slaBreaches === 0) {
       summary.skippedNoDue++;
       continue;
     }
     summary.usersTargeted++;
-    const payloadJson = JSON.stringify(buildDailyReminderPayload(counts));
+    const payloadJson = JSON.stringify(
+      buildDailyReminderPayload({ ...counts, slaBreaches })
+    );
     for (const sub of userSubs) {
       try {
         await send({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, payloadJson);

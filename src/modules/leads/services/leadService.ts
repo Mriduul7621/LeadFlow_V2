@@ -11,6 +11,21 @@ import { enqueueFollowUp, FollowUpQueuedOfflineError } from './followUpOutbox';
 
 export { FollowUpQueuedOfflineError } from './followUpOutbox';
 
+/**
+ * First-contact SLA state for a queue row (Phase 3 PR #3), computed
+ * server-side by LeadSlaService and attached only when the admin SLA
+ * switch is ON — absent entirely when the feature is off, and absent
+ * for unassigned / terminal-status leads.
+ */
+export interface LeadSlaInfo {
+  state: 'within' | 'due_soon' | 'breached' | 'met';
+  clockStartAt: string;
+  deadlineAt: string;
+  remainingMs: number;
+  overdueMs: number;
+  firstContactAt: string | null;
+}
+
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
 export interface FollowUpQueueItem {
   id: string;
@@ -33,6 +48,8 @@ export interface FollowUpQueueItem {
   latestActivity?: { status?: string; remarks?: string; createdAt?: string } | null;
   /** Server-computed compact Lead Quality for this queue row's lead. */
   leadQuality?: LeadQuality | null;
+  /** Server-computed first-contact SLA (present only when SLA is ON). */
+  sla?: LeadSlaInfo | null;
 }
 
 export interface FollowUpQueueResult {
