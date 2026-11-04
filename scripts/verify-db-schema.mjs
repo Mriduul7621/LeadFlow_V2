@@ -78,6 +78,7 @@ const EXPECTED_TABLES = [
   'products',
   'campaigns',
   'notifications',
+  'push_subscriptions',
   'department_hierarchies',
 ];
 

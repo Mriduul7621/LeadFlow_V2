@@ -2,6 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useAuthStore } from '../../auth/store/authStore';
 import { userService } from '../../users/services/userService';
 import { apiRequest, jsonBody } from '../../shared/api/http';
+import {
+  disablePushReminders,
+  enablePushReminders,
+  getPushReminderState,
+  type PushReminderState,
+} from '../../notifications/services/pushService';
 import { toast } from 'sonner';
 
 export default function ProfileSettings() {
@@ -14,6 +20,41 @@ export default function ProfileSettings() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
+  const [pushState, setPushState] = useState<PushReminderState | 'loading'>('loading');
+  const [pushBusy, setPushBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPushReminderState()
+      .then(state => {
+        if (!cancelled) setPushState(state);
+      })
+      .catch(() => {
+        if (!cancelled) setPushState('server-disabled');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const togglePushReminders = async (enabled: boolean) => {
+    setPushBusy(true);
+    try {
+      const next = enabled ? await enablePushReminders() : await disablePushReminders();
+      setPushState(next);
+      if (enabled && next === 'subscribed') {
+        toast.success('Follow-up reminders are on for this device.');
+      } else if (enabled && next === 'denied') {
+        toast.error('Notifications are blocked in your browser settings for this site.');
+      } else if (!enabled && next === 'unsubscribed') {
+        toast.success('Follow-up reminders are off for this device.');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update reminder settings.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   useEffect(() => {
     setName(user?.name || '');
@@ -130,6 +171,53 @@ export default function ProfileSettings() {
             {savingPassword ? 'Updating…' : 'Update password'}
           </button>
         </form>
+      </section>
+
+      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
+        <h2 className="text-base font-semibold text-stone-800">Follow-up reminders</h2>
+        <p className="mt-1 text-sm text-stone-500">
+          Get one free push notification on this device each morning with your follow-ups due
+          today and overdue. Tapping it opens My Work. Nothing is sent to customers.
+        </p>
+        <div className="mt-5">
+          {pushState === 'loading' ? (
+            <p className="text-sm text-stone-500">Checking reminder availability…</p>
+          ) : pushState === 'unsupported' ? (
+            <p className="text-sm text-stone-500">
+              This browser or app does not support push notifications, so reminders are
+              unavailable on this device.
+            </p>
+          ) : pushState === 'server-disabled' ? (
+            <p className="text-sm text-stone-500">
+              Reminders are not enabled on the server yet, so this device cannot subscribe.
+            </p>
+          ) : (
+            <>
+              <label className="flex min-h-11 cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={pushState === 'subscribed'}
+                  disabled={pushBusy}
+                  onChange={event => togglePushReminders(event.target.checked)}
+                />
+                <span className="text-sm font-medium text-stone-700">
+                  Daily follow-up reminder on this device
+                </span>
+              </label>
+              {pushState === 'denied' && (
+                <p className="mt-1 text-sm text-stone-500">
+                  Notifications are blocked for this site in your browser settings. Allow
+                  notifications there, then turn this on again.
+                </p>
+              )}
+              {pushState === 'subscribed' && (
+                <p className="mt-1 text-sm text-stone-500">
+                  On — you will get one summary each morning when follow-ups are due.
+                </p>
+              )}
+            </>
+          )}
+        </div>
       </section>
     </div>
   );

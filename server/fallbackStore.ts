@@ -70,6 +70,18 @@ export interface FallbackNotification {
   date: string;
 }
 
+/** Demo-mode mirror of the push_subscriptions table (migration 048). */
+export interface FallbackPushSubscription {
+  id: string;
+  userId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userAgent?: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
 export interface FallbackMetadataType {
   key: string;
   label: string;
@@ -196,6 +208,7 @@ export const fallbackStore = {
     { id: 'status_converted', type: 'lead_status', value: 'Converted', label: 'Converted', status: 'Active', sortOrder: 10 },
     { id: 'status_not_interested', type: 'lead_status', value: 'Not Interested', label: 'Not Interested', status: 'Active', sortOrder: 11 },
   ] as FallbackOption[],
+  pushSubscriptions: [] as FallbackPushSubscription[],
   workflowRules: [] as FallbackWorkflowRule[],
   leadActivities: [] as FallbackLeadActivity[],
   scheduledActivities: [] as FallbackScheduledActivity[],

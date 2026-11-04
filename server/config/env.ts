@@ -123,6 +123,30 @@ export const ENV_VAR_SPECS: EnvVarSpec[] = [
     description:
       'Single PostgreSQL operation duration at or above which a db_query_slow warning is emitted (default 750 ms). SQL text and parameters are never logged.',
   },
+  {
+    name: 'VAPID_PUBLIC_KEY',
+    classification: 'OPTIONAL',
+    description:
+      'Web Push VAPID public key for the free follow-up reminder pushes. Served to signed-in clients via GET /api/notifications/push/public-key so browsers can subscribe. When unset (with its pair), push reminders are disabled and the app behaves exactly as before.',
+  },
+  {
+    name: 'VAPID_PRIVATE_KEY',
+    classification: 'OPTIONAL',
+    description:
+      'Web Push VAPID private key. Server-only secret used to sign push requests; never exposed to the browser. Generate the pair with: npx web-push generate-vapid-keys.',
+  },
+  {
+    name: 'VAPID_SUBJECT',
+    classification: 'OPTIONAL',
+    description:
+      'Web Push VAPID subject: a mailto: or https: contact URI identifying the sender to push services. Defaults to mailto:admin@shantalife.com when unset.',
+  },
+  {
+    name: 'CRON_SECRET',
+    classification: 'OPTIONAL',
+    description:
+      'Bearer secret guarding the daily push-reminder cron endpoint (GET /api/notifications/push/cron-daily). Vercel Cron sends it automatically as "Authorization: Bearer <CRON_SECRET>". When unset, the cron endpoint is disabled.',
+  },
 ];
 
 /* ==================================================================== */
