@@ -25,6 +25,22 @@ Both production entrypoints — `api/index.ts` (Vercel serverless) and
 `server.ts` (standalone) — mount the same configuration validation, the same
 liveness endpoint, and the same readiness endpoint.
 
+**Server layout (post-Phase-1).** `server/routes/production.routes.ts` is a
+148-line mount shell: it holds the re-export surface, `GET /db-status`, and
+one `router.use(...)` mount per domain. All route handlers live in
+`server/routes/production/` — `auth.routes.ts`, `notifications.routes.ts`,
+`metadata.routes.ts`, `roadshows.routes.ts`, `users.routes.ts`,
+`leads.routes.ts`, `dashboard.routes.ts` — over `shared.ts` (JWT/auth
+middleware and `signToken`, caller/visibility resolution, the audit helper).
+Authentication is custom JWT (bcrypt + `jsonwebtoken`) and data access is
+raw `pg` against PostgreSQL; there is no Supabase client/SDK in the stack.
+
+**Spreadsheet handling (client).** Excel import/export runs through one
+wrapper, `src/modules/shared/utils/excel.ts`, on `exceljs` (lazy-loaded
+chunk; replaced the vulnerable, unmaintained `xlsx@0.18.5` in PR #100).
+Legacy binary `.xls` uploads are rejected with a clear "save as .xlsx or
+.csv" message — `exceljs` cannot read the pre-2007 format.
+
 ---
 
 ## 2. Liveness vs readiness
@@ -79,13 +95,17 @@ The canonical catalog lives in `server/config/env.ts`
 
 | Variable | Class | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | **REQUIRED** | PostgreSQL (Supabase) connection string. Server-only. |
+| `DATABASE_URL` | **REQUIRED** | PostgreSQL connection string (the production database is hosted on Supabase; the app connects with the plain `pg` driver — no Supabase client/SDK). Server-only. |
 | `JWT_SECRET` | **REQUIRED** | Strong, production-specific signing secret. Weak/default values are rejected. |
 | `NODE_ENV` | REQUIRED | `production` for standalone; Vercel sets it automatically. |
 | `TRUST_PROXY` | OPTIONAL | Trusted reverse-proxy hop count for rate-limit client IPs. |
 | `PORT`, `PGSSL` | OPTIONAL | Standalone listen port / SSL override. |
-| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | OPTIONAL | Public browser config (compiled into the client bundle). |
 | `SESSION_SECRET` | OPTIONAL | Reserved; the current auth flow is JWT-based. |
+| `OBSERVABILITY_LOG_LEVEL` | OPTIONAL | Structured log level (`debug` \| `info` \| `warn` \| `error`). |
+| `OBSERVABILITY_SLOW_REQUEST_MS`, `OBSERVABILITY_SLOW_DB_MS` | OPTIONAL | Slow-request / slow-query warning thresholds (defaults 2000 ms / 750 ms). |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | OPTIONAL | Web Push key pair for the follow-up reminder pushes (§3.1). Unset = push reminders disabled. Generate with `npx web-push generate-vapid-keys`. |
+| `VAPID_SUBJECT` | OPTIONAL | VAPID contact URI; defaults to `mailto:admin@shantalife.com` when unset. |
+| `CRON_SECRET` | OPTIONAL | Bearer secret guarding the daily push-reminder cron endpoint (§3.1). Unset = cron endpoint disabled (503). |
 
 **In production:**
 
@@ -99,8 +119,8 @@ The canonical catalog lives in `server/config/env.ts`
 
 Consequences are enforced where they matter:
 
-- `production.routes.ts` `signToken` refuses to sign a token in production
-  when the secret is missing or weak.
+- The production router's `signToken` (`server/routes/production/shared.ts`)
+  refuses to sign a token in production when the secret is missing or weak.
 - The readiness endpoint reports `config.ok: false` with the offending
   variable names.
 - Startup logs a secret-free `[config]` summary + per-issue lines.
@@ -111,7 +131,10 @@ Consequences are enforced where they matter:
   and `JWT_SECRET` are server-only and never appear in `vite.config.ts`
   `define` or any `import.meta.env` value.
 - Only **public-by-design** variables may reach the client, and only via the
-  `VITE_` prefix (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
+  `VITE_` prefix. The only one remaining is the build-time
+  `VITE_API_BASE_URL` (API origin, set in `vite.config.ts` / `src/lib/apiBase.ts`);
+  the former `VITE_SUPABASE_*` pair was removed with the unused Supabase
+  client (PR #85, PR #100).
 - A prior finding — `GEMINI_API_KEY` injected into the bundle via
   `vite.config.ts` — has been **fixed**: the key is not used by any runtime
   feature, so the Vite `define` entry, the only client import of
@@ -120,6 +143,35 @@ Consequences are enforced where they matter:
   prove the key name/value cannot be bundled into browser assets.
 - If a server-side AI call is ever added, it must go through a server API
   boundary and **never** return the raw key to the client.
+
+### 3.1 Feature switches and the daily reminder cron
+
+Two Phase-3 automations are **runtime feature switches, default OFF**,
+stored as Metadata options and toggled by an admin in
+**Settings → Overview**. Until an admin enables one, behaviour is exactly
+as before (all reads fail closed to OFF):
+
+- **Lead Auto-Assignment** — option `LeadAutoAssignment` / `enabled`
+  (seeded INACTIVE by migration 049). When ON, leads that arrive without
+  an assignee are auto-assigned to the least-loaded active member of the
+  creator's visibility scope, with the same audit + notification trail as
+  a manual assignment.
+- **First-Contact SLA** — options `LeadSla` / `enabled` (switch) and
+  `LeadSla` / `firstContactHours` (`meta.hours`, **default 24**, clamped
+  1–720), seeded by migration 051. When ON, the Workbench shows SLA
+  chips and breached leads raise one-time assignee + manager alerts.
+
+**Push reminders** (PR #95) are env-gated instead: they need
+`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (+ optional `VAPID_SUBJECT`) and
+`CRON_SECRET` set on the Vercel project; with the keys unset the feature
+is fully disabled and nothing else changes. One daily Vercel cron —
+`30 2 * * *` UTC = **08:30 Asia/Dhaka** — calls
+`GET /api/notifications/push/cron-daily`. **Caveat:** this repo's
+`vercel.json` still uses the legacy `routes` array; after each deploy,
+verify the cron is actually listed under **Vercel → Settings → Cron
+Jobs**. If it is not, trigger the same endpoint from any external
+scheduler with the `x-cron-secret` header (or
+`Authorization: Bearer <CRON_SECRET>`).
 
 ---
 
@@ -156,6 +208,11 @@ existing `rbac-fallback-safety-audit.test.ts`.
 - No migration-tracking table exists (migrations are re-runnable idempotent
   DDL, not a versioned ledger). Destructive migrations must be reviewed
   explicitly (see the release runbook).
+- The migration sequence currently runs to **051**: 048
+  `push_subscriptions`, 049 Lead Auto-Assignment flag seed, 050
+  `processed_followup_mutations` (offline follow-up idempotency), 051
+  Lead SLA config seed. Migrations 049/051 only seed Metadata option
+  rows; the features they gate default to OFF (§3.1).
 
 `npm run verify:db-schema` performs a **read-only** schema readiness check:
 connect, `SELECT 1`, compare `information_schema` against the expected table
@@ -173,7 +230,7 @@ Recorded during the audit; not all are fixed in this stage.
 | --- | --- | --- | --- |
 | 1 | ~~`GEMINI_API_KEY` injected into the browser bundle via `vite.config.ts`.~~ | ~~HIGH~~ **FIXED** | The Vite `define` injection, the only client import of `@google/genai`, and the now-unused dependency were removed. The key is **not** used by any runtime feature (the client Gemini import was an unused placeholder). Source guards + built-output search prove it cannot be bundled. |
 | 2 | Migration failures are logged but not surfaced as a readiness signal (see §5). | **HIGH** | Mitigated operationally by `verify:db-schema` + release-runbook gate; structural fix deferred. |
-| 3 | `server/db.ts` and `server/server.ts` are legacy, unused duplicates (not imported by either entrypoint); `server/db.ts` contains a contradictory "fallback to in-memory" log line and unconditionally `rejectUnauthorized: false`. | MEDIUM | Left untouched (avoid rewriting); they are dead code and should be deleted in a cleanup PR. |
+| 3 | `server/db.ts` and `server/server.ts` are legacy, unused duplicates (not imported by either entrypoint); `server/db.ts` contains a contradictory "fallback to in-memory" log line and unconditionally `rejectUnauthorized: false`. | MEDIUM | **Partially resolved:** `server/server.ts` and the rest of the dead modular tree were deleted in PR #93; `server/db.ts` remains (still unreferenced) for a future cleanup. |
 | 4 | `DATABASE_URL` connections use `ssl: { rejectUnauthorized: false }` (Supabase convention). | MEDIUM | Accepted for Supabase; document for non-Supabase hosts in the deployment runbook. |
 | 5 | Backup/restore scripts (`scripts/backup-db.ts`, `restore-db.ts`, `reset-db.ts`, `migrate.ts`, `health-check.ts`) are empty placeholders. | MEDIUM | Documented as unimplemented; procedure covered in `BACKUP_RESTORE_RUNBOOK.md` via `pg_dump`. |
 | 6 | `server/utils/jwt.ts` (legacy JWT path) still falls back to the development secret and only checks `NODE_ENV === 'production'` (not `VERCEL`). The active production router (`production.routes.ts`) is hardened; the legacy path is not used by either entrypoint. | MEDIUM | Documented; delete with the legacy cleanup (see #3). |
