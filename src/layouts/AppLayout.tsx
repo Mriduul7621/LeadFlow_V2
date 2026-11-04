@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  LayoutDashboard, 
-  ClipboardList, 
+import {
+  LayoutDashboard,
+  ClipboardList,
   ChevronRight,
+  ChevronDown,
   LogOut,
-  Calendar,
-  Clock,
   X,
   Bell,
   Target,
   Lock,
-  AlertCircle,
   WifiOff,
   Plus,
   MoreHorizontal,
@@ -33,6 +31,7 @@ import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/
 import { ANY_ROLE, resolveMenuVisibility } from './menuVisibility';
 import { resolveFeatureRouteAccess } from './featureRouteAccess';
 import { buildSidebarGroups } from './sidebarNav';
+import DhakaClock from './DhakaClock';
 import { usePermissions } from '../modules/shared/hooks/usePermissions';
 
 interface MenuItem {
@@ -296,40 +295,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
-  const [dhakaTime, setDhakaTime] = useState<{ dateStr: string; timeStr: string }>({
-    dateStr: '',
-    timeStr: ''
-  });
-
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      try {
-        const dateStr = now.toLocaleDateString('en-GB', {
-          timeZone: 'Asia/Dhaka',
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric'
-        });
-        const timeStr = now.toLocaleTimeString('en-GB', {
-          timeZone: 'Asia/Dhaka',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true
-        });
-        setDhakaTime({ dateStr, timeStr });
-      } catch {
-        setDhakaTime({
-          dateStr: now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-          timeStr: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true })
-        });
-      }
-    };
-    updateTime();
-    const intervalId = setInterval(updateTime, 60000);
-    return () => clearInterval(intervalId);
-  }, []);
-
   useEffect(() => {
     const onOnline = () => setIsOffline(false);
     const onOffline = () => setIsOffline(true);
@@ -479,7 +444,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[#FDFBF7] flex text-brand-text font-sans">
       <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
-        <header className="h-[64px] bg-white/90 backdrop-blur-md border-b border-stone-100 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30 flex-shrink-0">
+        <header className="sticky top-0 z-30 flex-shrink-0">
+          {/* Hub-style header — mirrors the Learning Hub / shantalife.com
+              shell: a thin right-aligned utility bar above a floating
+              rounded nav pill. Where the Hub's utility bar carries its
+              E-BOOK link and BN|EN switcher, LeadFlow carries the live
+              Asia/Dhaka date + time instead (Mahadi's spec, 2026-11-04);
+              the offline badge keeps the clock company on the left. */}
+          <div className="leadflow-utility-bar">
+            <div className="leadflow-utility-inner">
+              {isOffline && (
+                <span className="mr-auto inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 border border-red-200 text-[11px] font-bold text-red-700" role="status" aria-live="polite">
+                  <WifiOff className="w-3.5 h-3.5" />
+                  Connection degraded
+                </span>
+              )}
+              <DhakaClock className="leadflow-utility-clock" />
+            </div>
+          </div>
+          <div className="leadflow-nav-shell">
+            <div className="leadflow-nav-pill">
           <button
             type="button"
             id="leadflow-sidebar-toggle"
@@ -493,38 +477,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Menu className="h-[18px] w-[18px]" />
           </button>
 
-          <div className="flex items-center gap-2 lg:hidden">
-             <img src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO" alt="Shanta Life" className="h-7 w-auto max-w-[112px] object-contain" referrerPolicy="no-referrer" />
+          <div className="flex items-center shrink-0">
+            <img
+              src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
+              alt="Shanta Life"
+              className="h-7 sm:h-8 w-auto max-w-[112px] sm:max-w-none object-contain"
+              referrerPolicy="no-referrer"
+            />
           </div>
-
-          <div className="hidden lg:flex items-center gap-3">
-             <img 
-               src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-               alt="Shanta Life"
-               className="h-8 w-auto object-contain"
-               referrerPolicy="no-referrer"
-             />
-             <div className="hidden md:flex items-center gap-2 ml-4 pl-4 border-l border-stone-100">
-                <div className="flex items-center gap-2 bg-[#FFFCF8] border border-stone-100 rounded-full px-3 py-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-[#978C21]" />
-                  <span className="text-xs font-semibold text-stone-600 tracking-tight" aria-label="Current date">
-                    {dhakaTime.dateStr || '—'}
-                  </span>
-                  <span className="text-stone-300">·</span>
-                  <Clock className="w-3.5 h-3.5 text-[#978C21]" />
-                  <span className="text-xs font-mono font-bold text-stone-700 tracking-tight" aria-label="Current time">
-                    {dhakaTime.timeStr || '--:--'}
-                  </span>
-                </div>
-                {isOffline && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-[11px] font-bold text-red-700" role="status" aria-live="polite">
-                    <WifiOff className="w-3.5 h-3.5" />
-                    Connection degraded
-                  </span>
-                )}
-             </div>
-          </div>
-
           <nav className="leadflow-desktop-nav" aria-label="Primary navigation">
             {visiblePrimaryItems.map(item => {
               const active = isPrimaryItemActive(item.path);
@@ -542,15 +502,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          <div className="flex md:hidden items-center gap-2">
-            <span className="text-xs font-mono font-semibold text-stone-600">{dhakaTime.timeStr || '--:--'}</span>
-            {isOffline && <AlertCircle className="w-4 h-4 text-red-500" aria-label="Offline" />}
-          </div>
-
-          <div className="flex items-center gap-2 md:gap-3">
+          <div className="ml-auto flex items-center gap-2 md:gap-3">
              <div className="flex items-center gap-1 md:gap-2">
                 <div className="relative">
-                   <button 
+                   <button
                      onClick={() => setIsNotifOpen(!isNotifOpen)}
                      className="relative p-2.5 border border-stone-100 rounded-[10px] text-stone-500 hover:text-[#978C21] hover:bg-stone-50 transition-all duration-150 hover:border-stone-200 bg-white shadow-sm"
                      aria-label="Notifications"
@@ -630,24 +585,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                    )}
                 </div>
                 
-                <div className="relative group">
+                <div className="flex items-center gap-1">
+                  {/* Profile chip — mirrors the Learning Hub: avatar +
+                      name, and the chip itself leads to the Profile page
+                      (/settings). Sign-out stays in the menu beside it. */}
+                  <Link
+                    to="/settings"
+                    className="leadflow-profile-chip"
+                    aria-label={`${user.name} · Profile`}
+                    title={user.name}
+                  >
+                    <span className="w-8 h-8 rounded-full bg-stone-800 flex items-center justify-center overflow-hidden shrink-0">
+                      {user.avatarUrl ? (
+                        <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="text-white font-bold text-[13px]">
+                          {user.name.charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                    </span>
+                    <span className="hidden md:block max-w-[140px] truncate text-[12.5px] font-bold text-stone-800">
+                      {user.name}
+                    </span>
+                  </Link>
+                  <div className="relative group">
                   <button
                     onClick={() => setIsUserMenuOpen((open) => !open)}
-                    className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-stone-50 transition-colors border border-transparent hover:border-stone-100"
+                    className="p-1.5 rounded-full hover:bg-stone-50 transition-colors"
                     aria-haspopup="menu"
                     aria-expanded={isUserMenuOpen}
                     aria-label="User menu"
                   >
-                    <div className="w-9 h-9 rounded-full bg-stone-800 flex items-center justify-center border-2 border-white shadow-sm overflow-hidden">
-                      {user.avatarUrl ? (
-                        <img src={user.avatarUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      ) : (
-                        <span className="text-white font-bold text-sm">
-                          {user.name.charAt(0).toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-stone-400 hidden md:block rotate-90 group-hover:text-stone-600 transition-colors" />
+                    <ChevronDown className="w-4 h-4 text-stone-400 group-hover:text-stone-600 transition-colors" />
                   </button>
                   {isUserMenuOpen && (
                     <button
@@ -678,8 +647,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       Logout
                     </button>
                   </div>
+                  </div>
                 </div>
              </div>
+          </div>
+            </div>
           </div>
         </header>
 
