@@ -70,6 +70,14 @@ export default function Settings() {
   const [clearConfirmText, setClearConfirmText] = useState('');
   const [clearingData, setClearingData] = useState(false);
 
+  // Lead Auto-Assignment feature switch (Phase 3): a Metadata Engine
+  // option — type 'LeadAutoAssignment', value 'enabled', status is the
+  // switch. Seeded Inactive by migration 049; missing row = OFF.
+  const [autoAssignOption, setAutoAssignOption] = useState<DropdownOption | null>(null);
+  const [autoAssignLoaded, setAutoAssignLoaded] = useState(false);
+  const [autoAssignSaving, setAutoAssignSaving] = useState(false);
+  const autoAssignEnabled = autoAssignOption?.status === 'Active';
+
   // Password management states
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -102,6 +110,45 @@ export default function Settings() {
       checkDbStatus();
     }
   }, [activeSection]);
+
+  useEffect(() => {
+    if (!isSystemAdmin) return;
+    let cancelled = false;
+    metadataService.getAllValues('LeadAutoAssignment')
+      .then(values => {
+        if (cancelled) return;
+        setAutoAssignOption(values.find(v => v.value === 'enabled') || null);
+        setAutoAssignLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setAutoAssignLoaded(true); });
+    return () => { cancelled = true; };
+  }, [isSystemAdmin]);
+
+  const handleToggleAutoAssign = async () => {
+    if (autoAssignSaving) return;
+    setAutoAssignSaving(true);
+    try {
+      if (!autoAssignOption) {
+        // First enable on a database where the seeded row is absent
+        // (e.g. legacy-adopted): create the switch in its ON state.
+        const saved = await metadataService.addValue(
+          'LeadAutoAssignment', 'enabled',
+          { featureFlag: true, rule: 'least_loaded' },
+          'Auto-assign unassigned leads'
+        );
+        setAutoAssignOption(saved);
+        toast.success('Lead auto-assignment enabled');
+      } else {
+        const saved = await metadataService.toggleActive(autoAssignOption);
+        setAutoAssignOption(saved);
+        toast.success(saved.status === 'Active' ? 'Lead auto-assignment enabled' : 'Lead auto-assignment disabled');
+      }
+    } catch {
+      toast.error('Could not update the auto-assignment switch');
+    } finally {
+      setAutoAssignSaving(false);
+    }
+  };
 
   const handleUpdateName = async () => {
     if (!user || !newName.trim()) return;
@@ -594,6 +641,26 @@ export default function Settings() {
                         >
                           <Wifi className="w-4 h-4" /> Check Connection
                         </button>
+                      </div>
+                      <div className="bg-white rounded-[12px] border border-stone-100 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded-[10px] bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
+                            <Users className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-stone-700">Lead Auto-Assignment</h4>
+                            <p className="text-[11px] text-stone-400 font-medium mt-1">When on, a new lead with no assignee is routed to the least-loaded active member of the creator's team. Off by default; leads with an assignee are never changed.</p>
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-bold text-stone-600 whitespace-nowrap cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={autoAssignEnabled}
+                            disabled={!autoAssignLoaded || autoAssignSaving}
+                            onChange={handleToggleAutoAssign}
+                          />
+                          {autoAssignEnabled ? 'On' : 'Off'}
+                        </label>
                       </div>
                       <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 italic">
                         <div className="flex items-center justify-between">

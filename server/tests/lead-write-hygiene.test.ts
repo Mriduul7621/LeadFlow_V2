@@ -59,8 +59,8 @@ describe('Lead write hygiene — F10 / F11 / F12', () => {
     const route = read('server/routes/production/leads.routes.ts');
     assert.ok(route.includes("let matchedBy: 'leadCode' | 'mobile' | null = null;"), 'the match must be tracked');
     assert.ok(route.includes("if (existingLead) matchedBy = 'mobile';"), 'a phone match is recorded as such');
-    assert.ok(route.includes('data: mappedLead, matchedBy }'), 'the response must carry the match');
-    assert.ok(route.includes('data: lead, matchedBy }'), 'the demo path must carry it too');
+    assert.ok(route.includes('data: mappedLead, matchedBy, autoAssigned:'), 'the response must carry the match');
+    assert.ok(route.includes('data: lead, matchedBy, autoAssigned:'), 'the demo path must carry it too');
     // The documented upsert itself must NOT become an error (case 11 in
     // lead-authz-integration asserts an owner may upsert the same mobile).
     assert.ok(!/409[\s\S]{0,80}DUPLICATE_LEAD/.test(route), 'the upsert contract stays a 200');

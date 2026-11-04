@@ -70,6 +70,18 @@ import {
   createAssignmentNotificationsDemo,
 } from '../../services/NotificationService.js';
 import {
+  AUTO_ASSIGN_AUDIT_ACTION,
+  AUTO_ASSIGN_RULE,
+  buildAutoAssignHistoryEntry,
+  buildDemoAutoAssignCandidates,
+  isAutoAssignmentEnabled,
+  loadAutoAssignCandidates,
+  pickAutoAssignee,
+  resolveAutoAssignment,
+  type AutoAssignPick,
+} from '../../services/AutoAssignmentService.js';
+import {
+  AUDIT_CHANGE_CAP,
   LEAD_SELECT,
   asUuid,
   buildDashboardVisibilitySql,
@@ -852,6 +864,25 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       targetAssigned = { userId: caller.id, employeeId: caller.employee_id };
     }
 
+    // Phase 3 auto-assignment (opt-in, default OFF — see
+    // AutoAssignmentService): a brand-new lead with NO explicit assignee
+    // would today default to the creator. When an admin has enabled the
+    // switch, the least-loaded active member of the caller's assignment
+    // scope receives it instead — by construction the same people a
+    // manual assignment by this caller could target (the pool comes
+    // from the caller's Data Visibility set). Explicit assignments and
+    // updates of existing leads never reach this block; an empty pool
+    // or the rule picking the creator keeps today's default untouched.
+    let autoAssignPick: AutoAssignPick | null = null;
+    const explicitAssigneeSupplied = assignmentRequested && clean(payload.assignedTo) !== '';
+    if (!existingLead && !explicitAssigneeSupplied) {
+      const pick = await resolveAutoAssignment(caller, visibility);
+      if (pick && pick.userId !== caller.id && isAssignedToAllowed(pick, visibility, caller)) {
+        autoAssignPick = pick;
+        targetAssigned = { userId: pick.userId, employeeId: pick.employeeId };
+      }
+    }
+
     if (assignmentRequested && !isAssignedToAllowed(targetAssigned, visibility, caller)) {
       return sendJson(res, 403, { success: false, message: 'You do not have permission to assign leads to that user. Assignment is limited to your authorized scope.' });
     }
@@ -924,6 +955,22 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         nextCustomFields.assignedDate = new Date().toISOString();
       }
       (record as any).customFields = nextCustomFields;
+    }
+
+    // Auto-assigned creates carry the canonical assignment-history
+    // entry naming the rule, so the routing decision is auditable from
+    // the lead itself; the notification blocks below key off this
+    // entry exactly like a manual assignment.
+    if (autoAssignPick) {
+      const autoEntry = buildAutoAssignHistoryEntry(
+        autoAssignPick,
+        caller.employee_id,
+        `assign_auto_${Date.now()}`
+      );
+      (record as any).assignmentHistory = [
+        ...(((record as any).assignmentHistory as any[]) || []),
+        autoEntry,
+      ];
     }
 
     if (!useDb()) {
@@ -1019,7 +1066,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         }
       }
 
-      return sendJson(res, 200, { success: true, data: lead, matchedBy });
+      return sendJson(res, 200, { success: true, data: lead, matchedBy, autoAssigned: Boolean(autoAssignPick) });
     }
 
     // ── PostgreSQL path: transactional upsert + server-side notifications ──
@@ -1086,6 +1133,25 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       await client.query('COMMIT');
       perf.span('db.commit');
 
+      // Machine-made routing decisions get an audit_logs entry on top
+      // of the canonical assignment history (logAccessChange never
+      // throws, and it runs only after the lead itself has committed).
+      if (autoAssignPick) {
+        await logAccessChange({
+          actorId: caller.id,
+          targetUserId: autoAssignPick.userId,
+          actionCode: AUTO_ASSIGN_AUDIT_ACTION,
+          entityType: 'lead',
+          entityId: String(row.id),
+          metadata: {
+            rule: AUTO_ASSIGN_RULE,
+            source: 'single_create',
+            poolSize: autoAssignPick.poolSize,
+            openLeadsAtPick: autoAssignPick.openLeads,
+          },
+        });
+      }
+
       // One primary-key lookup for both joined employee ids (was two
       // sequential lookups on the response path).
       const employeeIds = await employeeIdsFor([row.assigned_to, row.assigned_by]);
@@ -1111,7 +1177,7 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       // `matchedBy === 'mobile'` means: this was NOT a new prospect, it was an
       // existing lead found by phone number, so the caller must not claim a
       // creation (F12).
-      return sendJson(res, 200, { success: true, data: mappedLead, matchedBy });
+      return sendJson(res, 200, { success: true, data: mappedLead, matchedBy, autoAssigned: Boolean(autoAssignPick) });
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
       perf.finish(res);
@@ -1146,6 +1212,10 @@ router.post('/leads', requireAuth, async (req: any, res) => {
      any hard failure rolls the whole import back and reports failure —
      success is never reported unless PostgreSQL committed.
    - Audit actors always derive from the authenticated session.
+   - Phase 3: with the LeadAutoAssignment switch ON, blank-assignee
+     rows that INSERT a new lead are auto-routed to the least-loaded
+     active member of the importer's scope and counted in the
+     response's `autoAssigned` field (see AutoAssignmentService).
 ==================================================================== */
 
 const BULK_IMPORT_MAX_ROWS = 5000;
@@ -1698,7 +1768,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
 
     /* ---- 5. Dry run: report the plan without writing anything ---- */
     if (dryRun) {
-      return sendJson(res, 200, { success: true, data: summarize({ dryRun: true }) });
+      return sendJson(res, 200, { success: true, data: summarize({ dryRun: true, autoAssigned: 0 }) });
     }
 
     /* ---- 6. Commit ---- */
@@ -1706,11 +1776,32 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
       // Dev-demo in-memory mode: same planning, non-persistent store. Never
       // active in production and never reported as a DB success.
+      // Phase 3 auto-assignment mirrors the DB path: blank-assignee
+      // INSERT rows are routed by the same rule when the switch is on,
+      // with loads advanced in memory so the batch distributes.
+      const demoAutoCandidates = (await isAutoAssignmentEnabled())
+        ? buildDemoAutoAssignCandidates(visibility.all ? null : visibility.userIds)
+        : [];
+      let demoAutoAssigned = 0;
       for (const action of actions) {
         const p = action.planned;
         if (action.action === 'skip') continue;
+        let rowAutoPick: AutoAssignPick | null = null;
         try {
-          const record = buildDemoImportRecord(p, caller);
+          let effectivePlanned = p;
+          if (!p.assigned && action.action === 'insert' && demoAutoCandidates.length > 0) {
+            const candidate = pickAutoAssignee(demoAutoCandidates);
+            if (candidate) {
+              rowAutoPick = { ...candidate, poolSize: demoAutoCandidates.length };
+              effectivePlanned = { ...p, assigned: { userId: candidate.userId, employeeId: candidate.employeeId } };
+            }
+          }
+          const record = buildDemoImportRecord(effectivePlanned, caller);
+          if (rowAutoPick) {
+            record.assignmentHistory = [
+              buildAutoAssignHistoryEntry(rowAutoPick, caller.employee_id, `assign_auto_${Date.now()}_${p.row.index}`),
+            ];
+          }
           if (action.action === 'insert') {
             fallbackStore.leads.push(record);
           } else if (action.existing) {
@@ -1720,12 +1811,38 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
             if (idx >= 0) fallbackStore.leads[idx] = { ...fallbackStore.leads[idx], ...record };
             else fallbackStore.leads.push(record);
           }
+          if (rowAutoPick) {
+            demoAutoAssigned++;
+            const chosen = demoAutoCandidates.find(c => c.userId === rowAutoPick!.userId);
+            if (chosen) {
+              chosen.openLeads += 1;
+              chosen.lastAssignedAt = new Date().toISOString();
+            }
+          }
         } catch (err: any) {
           errors.push({ index: p.row.index, message: err?.message || 'Row failed (demo mode)' });
         }
       }
-      return sendJson(res, 200, { success: true, data: summarize() });
+      return sendJson(res, 200, { success: true, data: summarize({ autoAssigned: demoAutoAssigned }) });
     }
+
+    // Phase 3 auto-assignment (opt-in, default OFF): rows with a
+    // blank "Assigned To" that INSERT a new lead are routed to the
+    // least-loaded active member of the importer's assignment scope.
+    // Pool loads are read once here and advanced in memory per pick,
+    // so one import distributes its rows across the team in row order.
+    // UPDATE rows keep the bulk contract — a blank cell preserves the
+    // existing owner, never re-routes.
+    // NOTE: the flag read + candidate load MUST stay before BEGIN.
+    // They are advisory reads that fail closed (flag OFF / empty pool)
+    // when their tables are missing — but on a single-connection
+    // backend (PGlite) even a swallowed query error would abort the
+    // import transaction if it ran inside it.
+    const autoCandidates = (await isAutoAssignmentEnabled())
+      ? await loadAutoAssignCandidates(getPool(), visibility.all ? null : visibility.userIds)
+      : [];
+    let autoAssignedCount = 0;
+    const autoAssignedLeadCodes: string[] = [];
 
     const pool = getPool();
     const client = await pool.connect();
@@ -1763,15 +1880,34 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       for (const action of actions) {
         const p = action.planned;
         if (action.action === 'skip') { skipped++; continue; }
+        let rowAutoPick: AutoAssignPick | null = null;
         try {
           await client.query('SAVEPOINT bulk_row');
+          // Auto-assignment applies to NEW leads only (insert, or the
+          // batch-internal upsert that creates the lead): an explicit
+          // "Assigned To" is never overridden, and existing leads keep
+          // their owner (the update path below preserves blanks).
+          let rowAssigned = p.assigned;
+          if (!p.assigned && action.action !== 'update' && autoCandidates.length > 0) {
+            const candidate = pickAutoAssignee(autoCandidates);
+            if (candidate) {
+              rowAutoPick = { ...candidate, poolSize: autoCandidates.length };
+              rowAssigned = { userId: candidate.userId, employeeId: candidate.employeeId };
+            }
+          }
           const record = await buildSecureLeadRecord(
             importRowPayload(p),
             caller,
-            p.assigned,
+            rowAssigned,
             { allowUnassigned: true, preserveSuppliedDates: true }
           );
           if ('error' in record) throw new Error(record.error);
+          if (rowAutoPick) {
+            (record as any).assignmentHistory = [
+              ...(((record as any).assignmentHistory as any[]) || []),
+              buildAutoAssignHistoryEntry(rowAutoPick, caller.employee_id, `assign_auto_${Date.now()}_${p.row.index}`),
+            ];
+          }
 
           // Server-side assignment history merge when reassigning an
           // existing lead (actor = authenticated caller).
@@ -1823,6 +1959,15 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
             if (ups.rows[0]._inserted === false) updated++;
             else inserted++;
           }
+          if (rowAutoPick) {
+            autoAssignedCount++;
+            autoAssignedLeadCodes.push(action.leadCode);
+            const chosen = autoCandidates.find(c => c.userId === rowAutoPick!.userId);
+            if (chosen) {
+              chosen.openLeads += 1;
+              chosen.lastAssignedAt = new Date().toISOString();
+            }
+          }
           await client.query('RELEASE SAVEPOINT bulk_row');
         } catch (rowErr: any) {
           try { await client.query('ROLLBACK TO SAVEPOINT bulk_row'); } catch {}
@@ -1831,6 +1976,26 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       }
 
       await client.query('COMMIT');
+      // One audit_logs entry per import that auto-assigned (written
+      // only after the import committed, so it can never claim
+      // assignments a rollback discarded); each affected lead also
+      // carries its own canonical assignment-history entry.
+      if (autoAssignedCount > 0) {
+        await logAccessChange({
+          actorId: caller.id,
+          targetUserId: null,
+          actionCode: AUTO_ASSIGN_AUDIT_ACTION,
+          entityType: 'lead_import',
+          entityId: null,
+          metadata: {
+            rule: AUTO_ASSIGN_RULE,
+            source: 'bulk_import',
+            autoAssigned: autoAssignedCount,
+            leadCodes: autoAssignedLeadCodes.slice(0, AUDIT_CHANGE_CAP),
+            truncated: autoAssignedLeadCodes.length > AUDIT_CHANGE_CAP,
+          },
+        });
+      }
       const failed = rows.length - inserted - updated - skipped;
       return sendJson(res, 200, {
         success: true,
@@ -1843,6 +2008,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
           errors,
           warnings,
           campaignsRegistered,
+          autoAssigned: autoAssignedCount,
         },
       });
     } catch (error: any) {

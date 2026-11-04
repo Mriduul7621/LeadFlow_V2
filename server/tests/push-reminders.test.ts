@@ -197,8 +197,8 @@ describe('daily reminder payload', () => {
 ==================================================================== */
 
 describe('migration 048_push_subscriptions', () => {
-  it('is registered as the last migration', () => {
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '048_push_subscriptions');
+  it('is registered in runMigrations (049_lead_auto_assignment_flag later became the tail)', () => {
+    assert.ok(MIGRATION_IDS.includes('048_push_subscriptions'));
     assert.ok(read('server/database/runMigrations.ts').includes('048_push_subscriptions'));
   });
 

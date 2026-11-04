@@ -58,6 +58,7 @@ import { up as defaultRoleAccess } from "./migrations/045_default_role_access.js
 import { up as departmentHeadsAndMirrorTeams } from "./migrations/046_department_heads_and_mirror_teams.js";
 import { up as roleTemplates } from "./migrations/047_role_templates.js";
 import { up as pushSubscriptions } from "./migrations/048_push_subscriptions.js";
+import { up as leadAutoAssignmentFlag } from "./migrations/049_lead_auto_assignment_flag.js";
 
 import {
   loadLedger,
@@ -159,6 +160,7 @@ const migrations: Migration[] = [
     { id: "046_department_heads_and_mirror_teams", name: "Department Heads + Mirror Teams", run: departmentHeadsAndMirrorTeams },
     { id: "047_role_templates", name: "Role Templates", run: roleTemplates },
     { id: "048_push_subscriptions", name: "Push Subscriptions", run: pushSubscriptions },
+    { id: "049_lead_auto_assignment_flag", name: "Lead Auto-Assignment Flag", run: leadAutoAssignmentFlag },
 
 ];
 
