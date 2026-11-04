@@ -71,6 +71,15 @@ export interface FallbackNotification {
 }
 
 /** Demo-mode mirror of the push_subscriptions table (migration 048). */
+/** Demo-mode mirror of processed_followup_mutations (migration 050). */
+export interface FallbackProcessedFollowupMutation {
+  mutationId: string;
+  leadId: string | null;
+  userId: string | null;
+  appliedAt: string;
+  responseBody: any;
+}
+
 export interface FallbackPushSubscription {
   id: string;
   userId: string;
@@ -209,6 +218,7 @@ export const fallbackStore = {
     { id: 'status_not_interested', type: 'lead_status', value: 'Not Interested', label: 'Not Interested', status: 'Active', sortOrder: 11 },
   ] as FallbackOption[],
   pushSubscriptions: [] as FallbackPushSubscription[],
+  processedFollowupMutations: [] as FallbackProcessedFollowupMutation[],
   workflowRules: [] as FallbackWorkflowRule[],
   leadActivities: [] as FallbackLeadActivity[],
   scheduledActivities: [] as FallbackScheduledActivity[],

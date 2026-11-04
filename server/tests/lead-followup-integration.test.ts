@@ -625,7 +625,14 @@ describe('Lead Follow-up / Activity History — Server-authoritative (Step 4A)',
     // The payload should not contain changedBy key; we check that the function does not send it in JSON
     // Instead just verify it doesn't explicitly set changedBy in payload
     assert.ok(!payloadChangedBy || updateBody.includes('changedBy is intentionally'), 'updateLeadStatus must not send changedBy');
-    assert.ok(updateBody.includes('/follow-up'), 'updateLeadStatus should call dedicated follow-up endpoint');
+    // Since Phase 3 PR #2 the POST itself lives in postFollowUpOnce
+    // (same module): updateLeadStatus delegates to it with a minted
+    // clientMutationId, and the offline outbox flush reuses it.
+    assert.ok(updateBody.includes('postFollowUpOnce'), 'updateLeadStatus should delegate to postFollowUpOnce');
+    const postOnceStart = content.indexOf('export async function postFollowUpOnce(');
+    assert.ok(postOnceStart >= 0, 'postFollowUpOnce not found');
+    const postOnceBody = content.slice(postOnceStart, content.indexOf('export const leadService', postOnceStart));
+    assert.ok(postOnceBody.includes('/follow-up'), 'postFollowUpOnce should call dedicated follow-up endpoint');
   });
 
   it('U. DB failure never falls back to local write success', async () => {

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, FileText, Target } from 'lucide-react';
 import { toast } from 'sonner';
-import { leadService } from '../services/leadService';
+import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
 import { scheduledActivityService } from '../../scheduledActivities/services/scheduledActivityService';
 import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
@@ -284,6 +284,14 @@ export default function LeadUpdate() {
       toast.success(t('updSuccess'));
       navigate(`/leads/${encodeURIComponent(lead.id)}`);
     } catch (err: any) {
+      if (err instanceof FollowUpQueuedOfflineError) {
+        // The follow-up itself is safely queued on this device and
+        // will sync automatically (the meeting calendar mirror is not
+        // queued — it is retried with the form, like before).
+        toast.success('Saved offline — this follow-up will sync automatically when you are back online.');
+        navigate(`/leads/${encodeURIComponent(lead.id)}`);
+        return;
+      }
       console.error('[lead-update] save failed:', err);
       toast.error(err?.message || t('updError'));
     } finally {

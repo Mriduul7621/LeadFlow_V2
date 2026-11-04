@@ -23,7 +23,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, LeadQuality, LeadStatus } from '../../shared/types';
 import { toast } from 'sonner';
-import { leadService } from '../services/leadService';
+import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { usePermissions } from '../../shared/hooks/usePermissions';
@@ -328,6 +328,12 @@ export default function LeadList() {
       setSelectedLead(null);
       setFormRemarks(''); // clear comments textarea
     } catch (err) {
+      if (err instanceof FollowUpQueuedOfflineError) {
+        toast.success('Saved offline — this follow-up will sync automatically when you are back online.');
+        setSelectedLead(null);
+        setFormRemarks('');
+        return;
+      }
       toast.error('Failed to update lead status');
     }
   };
@@ -344,6 +350,11 @@ export default function LeadList() {
       else loadLeads();
       setSelectedLead(null);
     } catch (err) {
+      if (err instanceof FollowUpQueuedOfflineError) {
+        toast.success('Saved offline — this follow-up will sync automatically when you are back online.');
+        setSelectedLead(null);
+        return;
+      }
       toast.error('Failed to update lead status');
     }
   };

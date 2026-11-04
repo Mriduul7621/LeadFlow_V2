@@ -2743,6 +2743,16 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     // Meeting Fixed / Proposal Sent / Not Interested). It is resolved to the
     // canonical status here, so the API keeps the UI's semantics.
     const rawNextAction = body.nextAction ?? body.next_action;
+    // Offline-capture idempotency key (Phase 3 PR #2): an optional UUID
+    // the client mints per user submission and reuses on every retry of
+    // that submission (its on-device outbox flushes until it gets a
+    // definitive answer). When present, the mutation is applied exactly
+    // once — see the claim/replay logic in both write paths below and
+    // migration 050. Absent => behaviour is exactly as before.
+    const clientMutationId = asUuid(body.clientMutationId ?? body.client_mutation_id);
+    if ((body.clientMutationId ?? body.client_mutation_id) != null && !clientMutationId) {
+      return sendJson(res, 400, { success: false, message: 'Invalid clientMutationId.' });
+    }
 
     // Normalize
     const statusInput = rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '' ? String(rawStatus).trim() : undefined;
@@ -2844,6 +2854,17 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
       }
 
+      // Idempotency replay (demo mirror of the DB claim below): this
+      // mutation was already applied — answer from the recorded outcome
+      // WITHOUT applying it a second time.
+      if (clientMutationId) {
+        const prior = ((fallbackStore as any).processedFollowupMutations || [])
+          .find((m: any) => m.mutationId === clientMutationId);
+        if (prior) {
+          return sendJson(res, 200, { ...(prior.responseBody || {}), deduplicated: true });
+        }
+      }
+
       const nowIso = new Date().toISOString();
       // Determine new status (preserve existing when not supplied)
       const newStatus = validatedStatus !== undefined ? validatedStatus : (lead as any).currentStatus || 'New';
@@ -2936,7 +2957,20 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         (fallbackStore as any).leadActivities || [],
         (fallbackStore as any).scheduledActivities || []
       );
-      return sendJson(res, 200, { success: true, data: { lead: lead, activity: mappedActivity } });
+      const demoResponseBody = { success: true, data: { lead: lead, activity: mappedActivity } };
+      if (clientMutationId) {
+        if (!Array.isArray((fallbackStore as any).processedFollowupMutations)) (fallbackStore as any).processedFollowupMutations = [];
+        (fallbackStore as any).processedFollowupMutations.push({
+          mutationId: clientMutationId,
+          leadId: String((lead as any).id),
+          userId: caller.id,
+          appliedAt: nowIso,
+          // Snapshot must not alias the live lead object (it keeps
+          // mutating) — store a deep copy, like the DB JSONB snapshot.
+          responseBody: JSON.parse(JSON.stringify(demoResponseBody)),
+        });
+      }
+      return sendJson(res, 200, demoResponseBody);
     }
 
     // ---------- PostgreSQL path (transactional atomic) ----------
@@ -2944,6 +2978,40 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Idempotency claim (Phase 3 PR #2, migration 050): inside the
+      // SAME transaction that applies the follow-up. Only the claim
+      // winner proceeds; a concurrent/late retry blocks on the PK until
+      // the winner commits, then replays the stored outcome below. If
+      // this transaction rolls back, the claim rolls back with it, so a
+      // failed application never burns the mutation id.
+      let mutationClaimed = false;
+      if (clientMutationId) {
+        const claim = await client.query(
+          `INSERT INTO processed_followup_mutations (mutation_id, user_id)
+           VALUES ($1, $2)
+           ON CONFLICT (mutation_id) DO NOTHING
+           RETURNING mutation_id`,
+          [clientMutationId, caller.id]
+        );
+        if (claim.rows.length === 0) {
+          const prior = await client.query(
+            `SELECT response_body FROM processed_followup_mutations WHERE mutation_id = $1`,
+            [clientMutationId]
+          );
+          await client.query('COMMIT');
+          const stored = prior.rows[0]?.response_body;
+          perf.finish(res);
+          if (stored) {
+            return sendJson(res, 200, { ...stored, deduplicated: true });
+          }
+          // Claimed and committed but no snapshot survived (only
+          // reachable if the winner crashed between COMMIT and the
+          // snapshot write): the follow-up WAS applied exactly once —
+          // say so honestly instead of re-applying or pretending.
+          return sendJson(res, 409, { success: false, message: 'This follow-up was already submitted and applied. Please refresh the lead to see it.' });
+        }
+        mutationClaimed = true;
+      }
       // Lock the lead row to prevent lost updates / concurrent history overwrite.
       // Same sargable dual lookup as findLeadByIdRaw: lead_code equality or
       // PK equality (id branch only for canonical-lowercase UUID input, the
@@ -2965,6 +3033,13 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         await client.query('ROLLBACK');
         perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to update this lead.' });
+      }
+
+      if (mutationClaimed) {
+        await client.query(
+          `UPDATE processed_followup_mutations SET lead_id = $1 WHERE mutation_id = $2`,
+          [leadRow.id, clientMutationId]
+        );
       }
 
       // Server timestamp (authoritative) — one instant for both the activity and the lead update
@@ -3137,7 +3212,21 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       const mappedActivity = mapActivityRow({ ...activityInsert.rows[0], actor_employee_id: caller.employee_id });
       perf.finish(res);
 
-      return sendJson(res, 200, { success: true, data: { lead: mappedLead, activity: mappedActivity } });
+      const responseBody = { success: true, data: { lead: mappedLead, activity: mappedActivity } };
+      if (mutationClaimed) {
+        // Record the outcome so a retry of this mutation replays it
+        // instead of re-applying. Best-effort by design: the claim row
+        // already guarantees once-only application, and a missing
+        // snapshot degrades a retry to the honest 409 above — never to
+        // a double application.
+        try {
+          await getPool().query(
+            `UPDATE processed_followup_mutations SET response_body = $1::jsonb WHERE mutation_id = $2`,
+            [JSON.stringify(responseBody), clientMutationId]
+          );
+        } catch { /* snapshot is best-effort; see note above */ }
+      }
+      return sendJson(res, 200, responseBody);
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch {}
       perf.finish(res);
