@@ -97,6 +97,13 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     // Every gated page route keeps BOTH gates — no route may render the
     // lazy page outside the ProtectedRoute + FeatureGate chain.
     //
+    // Phase 2 PR #3 sanctioned exception: the ROOT route wraps its
+    // LazyPage in <HomeLanding> (the once-per-session Workbench-first
+    // landing decision) BETWEEN FeatureGate and the LazyPage. The
+    // guarantee is unchanged — the Dashboard's LazyPage still renders
+    // below both gates inside the same Suspense boundary whenever it
+    // renders at all — so the chain pattern allows that one wrapper.
+    //
     // The counts are derived from the route table itself instead of the
     // previous hardcoded 18: the mobile navigation redesign (PR #52/#53)
     // legitimately added routes (/more, /reports, /administration,
@@ -105,7 +112,7 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     // into a false failure. The guarantee is stronger stated as an identity:
     // EVERY ProtectedRoute element and EVERY <LazyPage> render must carry
     // the full chain.
-    const routeCount = (app.match(/element:\s*<ProtectedRoute><FeatureGate route="[^"]*"><LazyPage/g) || []).length;
+    const routeCount = (app.match(/element:\s*<ProtectedRoute><FeatureGate route="[^"]*">(?:<HomeLanding>)?<LazyPage/g) || []).length;
     const protectedElements = (app.match(/element:\s*<ProtectedRoute/g) || []).length;
     const lazyPages = (app.match(/<LazyPage page=/g) || []).length;
     assert.ok(routeCount >= 18, `the original 18 gated page routes must all remain, saw ${routeCount}`);

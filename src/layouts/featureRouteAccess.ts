@@ -184,6 +184,43 @@ export function resolveFeatureRouteAccess(
  *   - no matrix yet -> the answer may still change -> wait,
  *   - matrix present -> the answer is final.
  */
+/** The two candidate landing pages for the post-login / root decision. */
+export const DASHBOARD_HOME_PATH = '/';
+export const WORKBENCH_HOME_PATH = '/workbench';
+
+/**
+ * Post-login / root landing decision (Phase 2 — Workbench-first).
+ * ------------------------------------------------------------------
+ * A field user's day starts at the Daily Workbench (follow-ups due and
+ * overdue — the actionable page), not the Dashboard. The decision is
+ * ACCESS-based, not role-name-based: it is exactly the Layer B decision
+ * for `/workbench` above, so it can never disagree with the sidebar or
+ * the route gate.
+ *
+ * Evidence from the permission model: `/workbench` carries the ANY_ROLE
+ * static fallback (and its data endpoint is auth-only), so EVERY
+ * authenticated role — the sales hierarchy (RO/RM/ASM/BDM/BE/BH), ADMIN,
+ * and database/custom codes (MANAGER, TEAM_LEAD, EMPLOYEE, SBE, SM,
+ * CEO) — has Workbench access by default. The only callers kept on the
+ * Dashboard are roles an admin explicitly hid `/workbench` from via a
+ * dynamic `menuAccess['/workbench'] = false` entry (and the degenerate
+ * no-role case, which fails to the historical default). The fail-closed
+ * `workbench: { view: false }` seed in adminService is NOT this gate: it
+ * is the Roles & Access editor's feature-permission default, itself
+ * derived from menuAccess.
+ *
+ * Pure and directly unit-testable; the once-per-session application of
+ * this decision lives in HomeLanding (modules/auth/components).
+ */
+export function resolveHomePath(
+  userRoleName: string | null | undefined,
+  matchedPermission: RolePermission | undefined
+): string {
+  return resolveFeatureRouteAccess(WORKBENCH_HOME_PATH, userRoleName, matchedPermission)
+    ? WORKBENCH_HOME_PATH
+    : DASHBOARD_HOME_PATH;
+}
+
 export function canResolveRouteAccess(
   routeKey: string,
   userRoleName: string | null | undefined,

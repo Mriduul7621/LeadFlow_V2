@@ -9,6 +9,7 @@ import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import AdminRoute from './modules/auth/components/AdminRoute';
 import FeatureGate from './modules/auth/components/FeatureGate';
+import HomeLanding from './modules/auth/components/HomeLanding';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
@@ -106,7 +107,10 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    element: <ProtectedRoute><FeatureGate route="/"><LazyPage page={<Dashboard />} /></FeatureGate></ProtectedRoute>,
+    // HomeLanding applies the once-per-session Workbench-first landing
+    // decision; the Dashboard element itself is unchanged and renders
+    // for every later visit to `/` (sidebar Home) within the session.
+    element: <ProtectedRoute><FeatureGate route="/"><HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/more',
