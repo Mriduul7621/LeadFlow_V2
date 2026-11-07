@@ -845,6 +845,26 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         if (!resolved) {
           return sendJson(res, 400, { success: false, message: `Assigned user "${requestedAssignee}" not found.` });
         }
+        if (!resolved.isActive) {
+          // Mirror the bulk-import rule (an assignee must be an ACTIVE
+          // user): a manual create / reassign / transfer may not route a
+          // lead to a deactivated colleague. One exemption — re-saving a
+          // lead whose CURRENT owner has since been deactivated, with the
+          // payload still naming that same owner, performs no new
+          // assignment and stays allowed; the deactivation flow owns
+          // moving those leads to an active colleague.
+          const currentOwnerKey = existingLead
+            ? (existingLeadIsDbRow
+              ? String(existingLead.assigned_to || '')
+              : String(existingLead.assignedTo || '').toUpperCase())
+            : '';
+          const targetKey = existingLeadIsDbRow
+            ? String(resolved.userId)
+            : String(resolved.employeeId).toUpperCase();
+          if (!existingLead || currentOwnerKey !== targetKey) {
+            return sendJson(res, 400, { success: false, message: `Assigned user "${requestedAssignee}" is inactive and cannot be assigned leads.` });
+          }
+        }
         targetAssigned = resolved;
       } else {
         // An explicit blank is an authorized unassignment, not self-assignment.
