@@ -78,17 +78,28 @@ export const DEFAULT_GRANTS: Record<string, string[]> = {
   RO: FIELD_EXEC,
 };
 
-/** role_code -> data visibility. Only applied while the value is still 'Own'. */
+/**
+ * role_code -> data visibility. Only applied while the value is still 'Own'.
+ *
+ * Organogram fix (2026-11): RM (Relationship Manager) is the FIRST-LINE
+ * supervisor — it manages its own downline of ROs, not the whole
+ * department — so its default is 'DownTeam', not 'FullTeam'. RO
+ * (Relationship Officer) is the base field agent and, like EMPLOYEE /
+ * SBE / BE, has NO entry here: its default stays 'Own'. MANAGER / SM
+ * remain the department-wide roles ('FullTeam'); CEO / BH stay
+ * 'Organization'. Existing databases whose RM/RO rows already hold the
+ * old written defaults are narrowed by migration 052, which only moves
+ * rows still holding the exact old default value.
+ */
 export const DEFAULT_VISIBILITY: Record<string, string> = {
   CEO: 'Organization',
   BH: 'Organization',
   MANAGER: 'FullTeam',
   SM: 'FullTeam',
-  RM: 'FullTeam',
+  RM: 'DownTeam',
   TEAM_LEAD: 'DownTeam',
   BDM: 'DownTeam',
   ASM: 'DownTeam',
-  RO: 'DownTeam',
 };
 
 /** Named sets, exported for documentation and tests. */
