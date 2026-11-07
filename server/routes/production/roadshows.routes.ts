@@ -29,6 +29,7 @@ import {
   fetchScheduledQualitySignals,
 } from '../../utils/leadQualitySignals.js';
 import {
+  buildDashboardVisibilitySql,
   callerIsAdmin,
   clean,
   dateOrNull,
@@ -463,7 +464,6 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     // Demo mode (no DB) — filter in-memory
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
       let rows = (fallbackStore as any).scheduledActivities || [];
       // Visibility via lead
       const leadById = new Map((fallbackStore.leads || []).map((l: any) => [String(l.id), l]));
@@ -487,10 +487,13 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
         const lead = leadById.get(String(sa.leadId || sa.lead_id));
         if (!lead) return false;
         if (lead.is_deleted === true) return false;
-        if (!visibility.all) {
-          const assigned = String((lead as any).assignedTo || '').toUpperCase();
-          if (!assigned || !visEmp.includes(assigned)) return false;
-        }
+        // THE lead-access predicate — same unified rule as the DB
+        // list (assignee in scope OR creator in scope).
+        if (!isLeadAccessible(
+          { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return false;
         // Also respect soft-deleted lead check already done
         return true;
       });
@@ -564,13 +567,9 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       params.push(dhakaStartUtc(next.y, next.m, next.d).toISOString());
       where.push(`sa.scheduled_at < $${params.length}::timestamp`);
     }
-    if (!visibility.all) {
-      params.push(visibility.userIds);
-      const pUser = params.length;
-      // UUID-typed ANY keeps the predicate sargable (userIds are
-      // server-resolved users.id values) — see buildDashboardVisibilitySql.
-      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
-    }
+    // THE lead-visibility predicate — one shared definition
+    // (buildDashboardVisibilitySql), identical to the leads list.
+    where.push(buildDashboardVisibilitySql(visibility, params));
 
     const whereSql = where.join(' AND ');
     const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
@@ -646,11 +645,11 @@ router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       if (!row) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(row.leadId || row.lead_id));
       if (!lead || lead.is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...row, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
     }
 
@@ -784,13 +783,13 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
         perf.finish(res);
         return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) {
-          perf.finish(res);
-          return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-        }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
       // Determine assigned_to: requested assignee else lead's assigned_to
       if (requestedAssignee) {
@@ -1006,11 +1005,11 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const nowIso = new Date().toISOString();
       const updated = { ...existing };
       if (patch.activity_type !== undefined) { updated.activityType = patch.activity_type; updated.activity_type = patch.activity_type; }
@@ -1111,11 +1110,11 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
       }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       (fallbackStore as any).scheduledActivities.splice(idx, 1);
       return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
     }
@@ -1185,11 +1184,11 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       if (String(sched.status).toLowerCase() !== 'scheduled') { perf.finish(res); return sendJson(res, 409, { success: false, message: `Scheduled activity already ${sched.status}.` }); }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
       if (!lead || (lead as any).is_deleted === true) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
-      }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const nowIso = new Date().toISOString();
       const historyId = createId('activity');
       const isFollowUp = String(sched.activityType || sched.activity_type).toLowerCase() === 'follow_up';
@@ -1440,11 +1439,11 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
       if (String(sched.status).toLowerCase() === 'cancelled') return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' });
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      }
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       const nowIso = new Date().toISOString();
       sched.status = 'cancelled';
       sched.updatedBy = caller.id;
