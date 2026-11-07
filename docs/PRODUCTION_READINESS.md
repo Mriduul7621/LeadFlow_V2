@@ -208,14 +208,17 @@ existing `rbac-fallback-safety-audit.test.ts`.
 - No migration-tracking table exists (migrations are re-runnable idempotent
   DDL, not a versioned ledger). Destructive migrations must be reviewed
   explicitly (see the release runbook).
-- The migration sequence currently runs to **052**: 048
+- The migration sequence currently runs to **053**: 048
   `push_subscriptions`, 049 Lead Auto-Assignment flag seed, 050
   `processed_followup_mutations` (offline follow-up idempotency), 051
   Lead SLA config seed, 052 RM/RO default-visibility narrowing
   (organogram fix 1: RM `FullTeam` → `DownTeam`, RO `DownTeam` →
   `Own`, only for rows still holding the exact old default — admin-set
-  values are untouched). Migrations 049/051 only seed Metadata option
-  rows; the features they gate default to OFF (§3.1).
+  values are untouched), 053 one-time repair of reporting chains left
+  stale by user deletes (organogram fix 3: reruns the standard
+  reporting-chain recompute over the derived columns only — no
+  `manager_id` source links are rewritten). Migrations 049/051 only
+  seed Metadata option rows; the features they gate default to OFF (§3.1).
 
 `npm run verify:db-schema` performs a **read-only** schema readiness check:
 connect, `SELECT 1`, compare `information_schema` against the expected table

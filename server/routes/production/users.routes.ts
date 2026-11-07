@@ -15,7 +15,9 @@
  *
  * validateReportingLink / recomputeReportingChains stay importable
  * from production.routes.ts via a re-export (the test suite imports
- * them from there); their single definition lives here.
+ * them from there). validateReportingLink is defined here;
+ * recomputeReportingChains is defined in database/reportingChains.ts
+ * (shared with migration 053) and re-exported from here.
  *
  * production.routes.ts mounts this router at the exact position the
  * handlers originally occupied, so route registration order (and
@@ -24,6 +26,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getPool } from '../../database/connection.js';
+import { recomputeReportingChains } from '../../database/reportingChains.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import {
   computeDepartmentHealth,
@@ -241,82 +244,14 @@ export async function validateReportingLink(
 }
 
 /**
- * Server-authoritative recompute of reporting_chain / subordinates for all
- * users (derived from users.manager_id), plus the era-B `hierarchies` sync
- * rows. Called after any user create/update that can change the tree.
- *
- * Every database error propagates to the caller: the caller runs this
- * inside the same transaction as the user write and rolls the whole
- * transaction back on failure, so NOTHING here may swallow errors.
- * (Exported for regression tests; the HTTP routes remain the only callers
- * in production code.)
+ * The reporting-chain recompute itself lives in
+ * database/reportingChains.ts — the database layer owns the derivation
+ * so migration 053's one-time repair runs the exact same code as the
+ * create / update / delete handlers below. It is re-exported here so
+ * the historical import surface (production.routes.ts re-export, the
+ * regression tests that import it from there) is unchanged.
  */
-export async function recomputeReportingChains(exec: { query: Function }): Promise<void> {
-  const result = await exec.query('SELECT id, employee_id, manager_id FROM users');
-  const byId = new Map<string, { id: string; employeeId: string; managerId: string | null }>();
-  for (const row of result.rows) {
-    byId.set(row.id, { id: row.id, employeeId: row.employee_id, managerId: row.manager_id || null });
-  }
-  const childrenOf = new Map<string, string[]>();
-  for (const u of byId.values()) {
-    if (!u.managerId) continue;
-    const list = childrenOf.get(u.managerId) || [];
-    list.push(u.id);
-    childrenOf.set(u.managerId, list);
-  }
-
-  const chainMemo = new Map<string, string[]>();
-  const chainOf = (id: string, guard: Set<string>): string[] => {
-    if (chainMemo.has(id)) return chainMemo.get(id)!;
-    const user = byId.get(id);
-    if (!user || !user.managerId || guard.has(id)) return [];
-    guard.add(id);
-    const manager = byId.get(user.managerId);
-    const chain = manager ? [manager.employeeId, ...chainOf(user.managerId, guard)] : [];
-    guard.delete(id);
-    chainMemo.set(id, chain);
-    return chain;
-  };
-
-  const subsMemo = new Map<string, string[]>();
-  const subsOf = (id: string): string[] => {
-    if (subsMemo.has(id)) return subsMemo.get(id)!;
-    const kids = childrenOf.get(id) || [];
-    const all: string[] = [];
-    for (const kid of kids) {
-      const kidUser = byId.get(kid);
-      if (kidUser) all.push(kidUser.employeeId, ...subsOf(kid));
-    }
-    subsMemo.set(id, all);
-    return all;
-  };
-
-  for (const user of byId.values()) {
-    const chain = chainOf(user.id, new Set());
-    const subs = subsOf(user.id);
-    await exec.query(
-      `UPDATE users SET reporting_chain = $2, subordinates = $3, updated_at = NOW() WHERE id = $1`,
-      [user.id, JSON.stringify(chain), JSON.stringify(subs)]
-    );
-    if (user.managerId) {
-      await exec.query(
-        `INSERT INTO hierarchies (user_id, manager_id, level, path, created_at, updated_at)
-         VALUES ($1, $2, GREATEST($3, 1), $4, NOW(), NOW())
-         ON CONFLICT (user_id) DO UPDATE SET
-           manager_id = EXCLUDED.manager_id,
-           level = EXCLUDED.level,
-           path = EXCLUDED.path,
-           updated_at = NOW()`,
-        [user.id, user.managerId, chain.length + 1, JSON.stringify(chain)]
-      );
-    } else {
-      // No error swallowing here: a failed DELETE inside the caller's
-      // transaction would abort that transaction, and the caller must see
-      // the failure so it can roll back instead of committing partial data.
-      await exec.query('DELETE FROM hierarchies WHERE user_id = $1', [user.id]);
-    }
-  }
-}
+export { recomputeReportingChains };
 
 /**
  * Ladder + setup status for the admin hierarchy screen.
@@ -1128,6 +1063,21 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
     if (isSelfRef(req, req.params.id)) {
       return sendJson(res, 400, { success: false, message: 'You cannot delete your own account. Ask another administrator.' });
     }
+    // Demo parity for organogram fix 3: the demo upline walk follows
+    // managerId live, so re-pointing the reports' links to the deleted
+    // user's own manager (skip-level) is the whole chain maintenance.
+    const demoTarget = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
+    if (demoTarget) {
+      const inheritedManager = demoTarget.managerId || demoTarget.reportingManagerId || '';
+      for (const u of fallbackStore.users) {
+        if (u === demoTarget) continue;
+        const mgrRef = String(u.managerId || u.reportingManagerId || '');
+        if (mgrRef && (mgrRef === demoTarget.employeeId || mgrRef === demoTarget.id)) {
+          u.managerId = inheritedManager;
+          u.reportingManagerId = inheritedManager;
+        }
+      }
+    }
     fallbackStore.users = fallbackStore.users.filter(u => u.id !== req.params.id && u.employeeId !== req.params.id);
     return sendJson(res, 200, { success: true, message: 'User deleted' });
   }
@@ -1187,17 +1137,54 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
           note: `Transferred when ${existing.employee_id} was removed`,
         })
       : null;
+    // Organogram fix 3: a deleted manager must not strand their
+    // reports. The edit path recomputes the tree after every write,
+    // but the delete path historically relied on the manager_id FK
+    // (ON DELETE SET NULL) — reports were left manager-less and every
+    // DERIVED chain (reporting_chain / subordinates / hierarchies)
+    // kept naming the deleted employee, so chain consumers resolved
+    // wrongly (SLA escalation prefers the stored chain and silently
+    // skipped the dead level). So, before the row goes, the direct
+    // reports inherit the deleted user's own manager (skip-level —
+    // the chain stays connected; the reports of a deleted top-level
+    // user become top-level). The ladder's 1–2 level rule governs
+    // links an admin PICKS; an inherited link that spans more is
+    // surfaced by the hierarchy health screen for tidying, exactly
+    // like links left out-of-ladder by a role-level change.
+    const reportsResult = await client.query(
+      'SELECT id, employee_id FROM users WHERE manager_id = $1 ORDER BY employee_id ASC',
+      [existing.id]
+    );
+    const directReports = reportsResult.rows as Array<{ id: string; employee_id: string }>;
+    let reportsNewManagerEmployeeId: string | null = null;
+    if (directReports.length > 0 && existing.manager_id) {
+      const mgrRow = await client.query('SELECT employee_id FROM users WHERE id = $1', [existing.manager_id]);
+      reportsNewManagerEmployeeId = mgrRow.rows[0]?.employee_id || null;
+    }
+    if (directReports.length > 0) {
+      await client.query(
+        'UPDATE users SET manager_id = $2, updated_at = NOW() WHERE manager_id = $1',
+        [existing.id, existing.manager_id || null]
+      );
+    }
     await client.query('DELETE FROM hierarchies WHERE user_id = $1', [existing.id]).catch(() => undefined);
     await client.query('DELETE FROM notifications WHERE user_id = $1', [existing.id]).catch(() => undefined);
     // Phase C: close memberships FIRST so the mirror teams lose the member
     // cleanly (a cascade would erase the row without updating the teams).
     await closeUserMemberships(client, existing.id);
     await client.query('DELETE FROM users WHERE id = $1', [existing.id]);
+    // Same server-authoritative recompute the edit path runs: every
+    // derived chain now reflects the post-delete tree (the deleted
+    // employee drops out of their former manager's subordinates, the
+    // re-pointed reports' chains start at their new manager, and the
+    // hierarchies sync rows follow). Runs inside the transaction, so
+    // a recompute failure rolls the whole delete back.
+    await recomputeReportingChains(client);
     await client.query('COMMIT');
     // target_user_id is left NULL on purpose: the row it pointed at is gone
     // (the FK is ON DELETE SET NULL anyway), so the employee id is recorded
     // in the metadata where it stays readable.
-    if (removalTransfer) {
+    if (removalTransfer || directReports.length > 0) {
       await logAccessChange({
         actorId: req.currentUser?.id,
         targetUserId: null,
@@ -1206,8 +1193,10 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
         entityId: existing.id,
         metadata: {
           employeeId: existing.employee_id,
-          transferredLeads: removalTransfer.transferred,
+          transferredLeads: removalTransfer?.transferred ?? 0,
           transferTargetEmployeeId: removal.target?.employeeId || null,
+          reportsRepointed: directReports.length,
+          reportsNewManagerEmployeeId,
         },
       });
     }
