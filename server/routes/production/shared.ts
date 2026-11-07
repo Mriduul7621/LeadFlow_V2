@@ -879,8 +879,16 @@ export const dateOrNull = (value: any): string | null => {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 };
 
-/** Resolve assignedTo reference to userId + employeeId. */
-export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string } | null> {
+/**
+ * Resolve assignedTo reference to userId + employeeId (+ activity).
+ * `isActive` mirrors the bulk-import rule exactly: DB rows read
+ * users.is_active (COALESCE TRUE, the same expression bulkResolveUserRefs
+ * uses); demo users read the status text (status ?? employmentStatus),
+ * with an explicit isActive === false also honoured. Callers that ROUTE
+ * work to the resolved user (manual lead assignment) must refuse an
+ * inactive target; read-only callers (list/queue filters) ignore it.
+ */
+export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string; isActive: boolean } | null> {
   if (!ref) return null;
   const value = String(ref).trim();
   if (!value) return null;
@@ -891,17 +899,19 @@ export async function resolveAssignedTo(ref: any): Promise<{ userId: string; emp
       u.email.toLowerCase() === value.toLowerCase()
     );
     if (!user) return null;
-    return { userId: user.id, employeeId: user.employeeId };
+    const statusText = String((user as any).status ?? (user as any).employmentStatus ?? 'Active');
+    const isActive = (user as any).isActive !== false && statusText.toLowerCase() !== 'inactive';
+    return { userId: user.id, employeeId: user.employeeId, isActive };
   }
   try {
     const pool = getPool();
     const uuid = asUuid(value);
     const result = await pool.query(
-      `SELECT id, employee_id FROM users WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2) LIMIT 1`,
+      `SELECT id, employee_id, COALESCE(is_active, TRUE) AS is_active FROM users WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2) LIMIT 1`,
       [uuid || value, value]
     );
     if (!result.rows[0]) return null;
-    return { userId: result.rows[0].id, employeeId: result.rows[0].employee_id };
+    return { userId: result.rows[0].id, employeeId: result.rows[0].employee_id, isActive: result.rows[0].is_active === true };
   } catch {
     return null;
   }
