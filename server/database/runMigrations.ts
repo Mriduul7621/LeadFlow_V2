@@ -61,6 +61,7 @@ import { up as pushSubscriptions } from "./migrations/048_push_subscriptions.js"
 import { up as leadAutoAssignmentFlag } from "./migrations/049_lead_auto_assignment_flag.js";
 import { up as processedFollowupMutations } from "./migrations/050_processed_followup_mutations.js";
 import { up as leadSlaConfig } from "./migrations/051_lead_sla_config.js";
+import { up as visibilityDefaultsRmRo } from "./migrations/052_visibility_defaults_rm_ro.js";
 
 import {
   loadLedger,
@@ -165,6 +166,8 @@ const migrations: Migration[] = [
     { id: "049_lead_auto_assignment_flag", name: "Lead Auto-Assignment Flag", run: leadAutoAssignmentFlag },
     { id: "050_processed_followup_mutations", name: "Processed Follow-up Mutations", run: processedFollowupMutations },
     { id: "051_lead_sla_config", name: "Lead First-Contact SLA Config", run: leadSlaConfig },
+
+    { id: "052_visibility_defaults_rm_ro", name: "Visibility Defaults RM/RO", run: visibilityDefaultsRmRo },
 
 ];
 

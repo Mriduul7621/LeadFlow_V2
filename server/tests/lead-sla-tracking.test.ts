@@ -20,7 +20,7 @@
  *   - the push payload gains the breach sentence only for users
  *     with breaches; everyone else's body is byte-identical.
  *
- * The HTTP suite drives the real chain — runMigrations() (001→051) +
+ * The HTTP suite drives the real chain — runMigrations() (001→052) +
  * seedRoles() + default role grants — against PGlite, mirroring
  * lead-auto-assignment.test.ts.
  */
@@ -423,8 +423,8 @@ describe('First-contact SLA — HTTP + cron (PGlite, real migrations)', () => {
     e2 = await addUser('EMP002', 'EMPLOYEE', tl.id);
   });
 
-  it('migration 051 is registered as the tail and seeds OFF + 24h, idempotently', async () => {
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '051_lead_sla_config');
+  it('migration 051 is registered and seeds OFF + 24h, idempotently (052_visibility_defaults_rm_ro later became the tail)', async () => {
+    assert.ok(MIGRATION_IDS.includes('051_lead_sla_config'));
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('051_lead_sla_config'));
 
     // Seeded state straight after runMigrations: switch OFF, 24h.
