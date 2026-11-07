@@ -62,6 +62,7 @@ import { up as leadAutoAssignmentFlag } from "./migrations/049_lead_auto_assignm
 import { up as processedFollowupMutations } from "./migrations/050_processed_followup_mutations.js";
 import { up as leadSlaConfig } from "./migrations/051_lead_sla_config.js";
 import { up as visibilityDefaultsRmRo } from "./migrations/052_visibility_defaults_rm_ro.js";
+import { up as deleteChainRepair } from "./migrations/053_delete_chain_repair.js";
 
 import {
   loadLedger,
@@ -168,6 +169,8 @@ const migrations: Migration[] = [
     { id: "051_lead_sla_config", name: "Lead First-Contact SLA Config", run: leadSlaConfig },
 
     { id: "052_visibility_defaults_rm_ro", name: "Visibility Defaults RM/RO", run: visibilityDefaultsRmRo },
+
+    { id: "053_delete_chain_repair", name: "Delete Chain Repair", run: deleteChainRepair },
 
 ];
 

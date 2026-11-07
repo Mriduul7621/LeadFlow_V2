@@ -201,10 +201,9 @@ describe('Visibility defaults — RM downline-only, RO own (organogram fix 1)', 
     assert.equal(DEFAULT_VISIBILITY.SM, 'FullTeam', 'department heads keep FullTeam');
     assert.equal(DEFAULT_VISIBILITY.CEO, 'Organization');
 
-    assert.equal(
-      MIGRATION_IDS[MIGRATION_IDS.length - 1],
-      '052_visibility_defaults_rm_ro',
-      'migration 052 is registered as the tail'
+    assert.ok(
+      MIGRATION_IDS.includes('052_visibility_defaults_rm_ro'),
+      'migration 052 stays registered (053_delete_chain_repair later became the tail)'
     );
     const runner = readFileSync('server/database/runMigrations.ts', 'utf8');
     assert.ok(runner.includes('052_visibility_defaults_rm_ro'), 'runner names migration 052');
