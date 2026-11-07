@@ -713,42 +713,57 @@ async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
   }
 }
 
-/** Check if a lead row is accessible to caller via visibility. */
+/**
+ * THE lead-access predicate (row-level twin of buildDashboardVisibilitySql).
+ * ------------------------------------------------------------------
+ * Organogram Fix 2: one rule everywhere. A lead is accessible to a
+ * caller iff the caller's resolved visibility set contains the lead's
+ * assignee OR its creator:
+ *
+ *     assigned_to ∈ visibility.userIds  OR  created_by ∈ visibility.userIds
+ *
+ * The SQL surfaces (leads list, follow-up queue, dashboard counts,
+ * scheduled-activities list) have always used exactly this rule; this
+ * checker is what detail/mutation endpoints use, and it must never
+ * disagree with them — a lead the list shows must open, and a lead in
+ * neither chain stays invisible (callers answer 404, no existence leak).
+ *
+ * DB rows (an own `assigned_to` property is present): only the
+ * assigned_to / created_by COLUMNS count — custom_fields is never an
+ * ownership source for PostgreSQL records (a stale custom owner must
+ * not resurrect access).
+ *
+ * fallbackStore rows (demo mode): `assignedTo` carries an employeeId
+ * while `createdBy` may carry a users.id (server-written records) or
+ * an employeeId (client-shaped seeds), so both arms accept either id
+ * space — the same dual-space treatment the assignee arm has always
+ * had in demo mode.
+ */
 export function isLeadAccessible(leadRow: any, visibility: any, caller: CallerDbInfo): boolean {
   if (!leadRow) return false;
   if (visibility.all) return true;
-  // Support both DB row shape (assigned_to, custom_fields, created_by) and fallbackStore shape (assignedTo, customFields, etc)
-  const assignedToId = leadRow.assigned_to ? String(leadRow.assigned_to) : (leadRow.assignedTo ? '' : '');
-  // Fallback records expose assignedTo directly; PostgreSQL records use
-  // assigned_to and never consult custom_fields for ownership.
+  const userIds: string[] = visibility.userIds || [];
+  const inUserScope = (value: string): boolean =>
+    Boolean(value) && (userIds.includes(value) || value === caller.id);
   const isDbLeadRow = Object.prototype.hasOwnProperty.call(leadRow, 'assigned_to');
-  const customAssignedTo = isDbLeadRow ? '' : String(leadRow.assignedTo || '').trim();
-  const createdBy = leadRow.created_by ? String(leadRow.created_by) : (leadRow.createdBy ? String(leadRow.createdBy) : '');
-
-  if (assignedToId) {
-    if (visibility.userIds.includes(assignedToId)) return true;
-    if (assignedToId === caller.id) return true;
+  if (isDbLeadRow) {
+    const assignedToId = leadRow.assigned_to ? String(leadRow.assigned_to) : '';
+    const createdBy = leadRow.created_by ? String(leadRow.created_by) : '';
+    return inUserScope(assignedToId) || inUserScope(createdBy);
   }
-  // Also check direct assigned_to as userId for fallbackStore shape where assignedTo is employeeId but we have userId mapping
-  // Check customAssignedTo (employeeId) against visible employeeIds
-  if (customAssignedTo) {
-    const upperCustom = customAssignedTo.toUpperCase();
-    const empIdsUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-    if (empIdsUpper.includes(upperCustom)) return true;
-    if (caller.employee_id && upperCustom === String(caller.employee_id).toUpperCase()) return true;
-    // Also check if customAssignedTo matches any visible userId's employeeId via direct comparison
-    // For fallbackStore, assignedTo is employeeId, so check against caller employeeId already done, and against visibility employeeIds
-  }
-  // Check if leadRow has assigned_to as userId in fallback shape? Actually fallbackStore leads store assignedTo as employeeId, not userId.
-  // For safety, also check if leadRow.id or assignedTo matches caller
-  if (!assignedToId && !customAssignedTo) {
-    if (createdBy && createdBy === caller.id) return true;
-    return false;
-  }
-  // If no assigned_to but customAssignedTo matched via employeeIds already, return true handled above
-  // Otherwise, check createdBy as fallback for unassigned leads
-  if (createdBy && createdBy === caller.id) return true;
-  return false;
+  const empIdsUpper = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+  const inEmployeeScope = (value: string): boolean => {
+    if (!value) return false;
+    const upper = value.toUpperCase();
+    return empIdsUpper.includes(upper)
+      || Boolean(caller.employee_id) && upper === String(caller.employee_id).toUpperCase();
+  };
+  const assignedTo = String(leadRow.assignedTo || '').trim();
+  const createdBy = leadRow.createdBy
+    ? String(leadRow.createdBy)
+    : (leadRow.created_by ? String(leadRow.created_by) : '');
+  return inUserScope(assignedTo) || inEmployeeScope(assignedTo)
+    || inUserScope(createdBy) || inEmployeeScope(createdBy);
 }
 
 /**
@@ -824,11 +839,15 @@ export async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): P
 }
 
 /**
- * Visibility predicate for lead listings — moved here in Phase 1
- * PR #6 (leads extraction): shared by the leads list and the
- * follow-up queue (production/leads.routes.ts) and by the dashboard
- * handler, which stays in production.routes.ts this step. One
- * definition, imported by both sides.
+ * THE lead-visibility SQL predicate — one definition (Organogram
+ * Fix 2). Every SQL surface that scopes leads by caller visibility
+ * uses this builder: the leads list and the follow-up queue
+ * (production/leads.routes.ts), the dashboard handler
+ * (production/dashboard.routes.ts) and the scheduled-activities list
+ * (production/roadshows.routes.ts). Its row-level twin is
+ * isLeadAccessible above; the two must always agree:
+ *   accessible ⇔ assigned_to ∈ userIds OR created_by ∈ userIds.
+ * (Moved here in Phase 1 PR #6, leads extraction.)
  */
 export function buildDashboardVisibilitySql(
   visibility: { all: boolean; userIds: string[]; employeeIds: string[] },

@@ -38,6 +38,7 @@ import {
   demoModeAllowed,
   getCallerDbInfo,
   hasPermissionCode,
+  isLeadAccessible,
   requireAuth,
   resolveCallerVisibility,
   sendDbUnavailable,
@@ -308,12 +309,19 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
       const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
+      // Lead rows scope through THE lead-access predicate
+      // (isLeadAccessible) — the same unified rule the DB branch
+      // enforces via buildDashboardVisibilitySql (assignee in scope
+      // OR creator in scope); these demo filters used to check the
+      // assignee only. (visEmp below still scopes the AGENT list,
+      // which is a user set, not lead access.)
       let leads = (fallbackStore.leads || []).filter((l: any) => {
         if (l.is_deleted === true) return false;
-        if (!visibility.all) {
-          const assigned = String(l.assignedTo || '').toUpperCase();
-          if (!assigned || !visEmp.includes(assigned)) return false;
-        }
+        if (!isLeadAccessible(
+          { assignedTo: (l as any).assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return false;
         if (period.start && period.end) {
           const t = new Date(l.timestamp || l.creationDate || l.created_at || 0).getTime();
           if (!(t >= period.start.getTime() && t < period.end.getTime())) return false;
@@ -326,10 +334,11 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         if (l.is_deleted === true) return false;
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
         if (!nfd) return false;
-        if (!visibility.all) {
-          const assigned = String(l.assignedTo || '').toUpperCase();
-          if (!assigned || !visEmp.includes(assigned)) return false;
-        }
+        if (!isLeadAccessible(
+          { assignedTo: (l as any).assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return false;
         const st = String(l.currentStatus || '');
         if (terminal.has(st.toLowerCase())) return false;
         return true;

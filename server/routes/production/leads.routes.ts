@@ -579,17 +579,18 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
     }
     const visibility = await resolveCallerVisibility(caller);
-    const scope = (list: any[]) => {
-      if (visibility.all) return list;
-      return list.filter((l: any) => {
-        const assigned = String(l.assignedTo || '').toUpperCase();
-        const callerEmpUpper = String(caller.employee_id || '').toUpperCase();
-        if (assigned && assigned === callerEmpUpper) return true;
-        // Also check if assignedTo matches any visible employee
-        const visEmpUpper = visibility.employeeIds.map((e: string) => String(e).toUpperCase());
-        return assigned && visEmpUpper.includes(assigned);
-      });
-    };
+    // THE lead-access predicate (isLeadAccessible) — the same unified
+    // rule the DB list enforces via buildDashboardVisibilitySql:
+    // assignee in scope OR creator in scope. (This demo filter used to
+    // check the assignee only, so creator-chain leads the DB list
+    // shows were hidden here.)
+    const scope = (list: any[]) => list.filter((l: any) =>
+      isLeadAccessible(
+        { assignedTo: (l as any).assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )
+    );
     const visible = scope(fallbackStore.leads || []);
     const qualityById = compactQualityForFallbackLeads(
       visible,
@@ -643,13 +644,11 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
     }
     perf.span('authz.visibility');
-    if (!visibility.all) {
-      params.push(visibility.userIds);
-      const pUser = params.length;
-      // UUID-typed ANY keeps the predicate sargable (userIds are
-      // server-resolved users.id values) — see buildDashboardVisibilitySql.
-      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
-    }
+    // THE lead-visibility predicate — one shared definition
+    // (buildDashboardVisibilitySql), identical to the follow-up queue,
+    // the dashboard counts and the scheduled-activities list, and to
+    // the row-level isLeadAccessible the detail endpoints enforce.
+    where.push(buildDashboardVisibilitySql(visibility, params));
     // An explicit, smaller `limit` is honoured (the dashboard's "Recent
     // Leads" strip asks for 5 rows instead of the full max), while the
     // configured ceiling is always the hard cap — a caller can only ever
@@ -2281,15 +2280,19 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
       const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
       let rows = (fallbackStore.leads || []).filter((l: any) => {
         if (l.is_deleted === true) return false;
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
         if (!nfd) return false;
-        if (!visibility.all) {
-          const assigned = String(l.assignedTo || '').toUpperCase();
-          if (!assigned || !visEmp.includes(assigned)) return false;
-        }
+        // THE lead-access predicate — same unified rule as the DB
+        // queue's buildDashboardVisibilitySql scope (assignee in scope
+        // OR creator in scope); this demo filter used to check the
+        // assignee only.
+        if (!isLeadAccessible(
+          { assignedTo: (l as any).assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return false;
         const st = String(l.currentStatus || '');
         if (!includeTerminal && terminal.has(st.toLowerCase())) return false;
         if (statusFilter && st !== statusFilter) return false;
@@ -2413,13 +2416,9 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       params.push(dhakaStartUtc(next.y, next.m, next.d).toISOString());
       where.push(`l.next_follow_up_at < $${params.length}::timestamp`);
     }
-    if (!visibility.all) {
-      params.push(visibility.userIds);
-      const pUser = params.length;
-      // UUID-typed ANY keeps the predicate sargable (userIds are
-      // server-resolved users.id values) — see buildDashboardVisibilitySql.
-      where.push(`(l.assigned_to = ANY($${pUser}::uuid[]) OR l.created_by = ANY($${pUser}::uuid[]))`);
-    }
+    // THE lead-visibility predicate — one shared definition
+    // (buildDashboardVisibilitySql), identical to the leads list.
+    where.push(buildDashboardVisibilitySql(visibility, params));
 
     const todayLit = bounds.todayStartIso.replace(/'/g, "''");
     const tomorrowLit = bounds.tomorrowStartIso.replace(/'/g, "''");
@@ -3448,10 +3447,14 @@ router.get('/leads/:id/scheduled-activities', requireAuth, async (req: any, res)
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === leadParam);
       if (!lead) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       if ((lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-      const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
-      if (!visibility.all) {
-        const assigned = String((lead as any).assignedTo || '').toUpperCase();
-        if (!assigned || !visEmp.includes(assigned)) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      // THE lead-access predicate — identical to the DB branch below
+      // (this demo branch used to check the assignee only).
+      if (!isLeadAccessible(
+        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+        visibility,
+        caller
+      )) {
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
       }
       leadRow = lead;
       const items = ((fallbackStore as any).scheduledActivities || [])
