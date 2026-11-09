@@ -296,6 +296,13 @@ export interface FollowUpReminderCounts {
    * what it was before SLA tracking existed.
    */
   slaBreaches?: number;
+  /**
+   * Meetings (calendar upgrade PR E) the user is involved in TODAY
+   * (Asia/Dhaka) as organiser, assignee or non-declined attendee.
+   * Optional: absent/0 keeps the payload byte-for-byte what it was
+   * before meeting counts existed.
+   */
+  meetingsToday?: number;
 }
 
 /**
@@ -361,6 +368,61 @@ export async function computeFollowUpReminderCounts(
   return counts;
 }
 
+/**
+ * Meetings scheduled TODAY (Asia/Dhaka business day) that involve ONE
+ * user directly: they organised it, they are the assignee, or they are
+ * an attendee who has not declined. Only activity_type='meeting' rows
+ * in status 'scheduled' count — follow-ups and calls already have
+ * their own counts above, and a lead-less task is the organiser's own
+ * list, not a meeting. Fails soft to 0: on schemas that predate the
+ * meeting model (no scheduled_activities / attendees table) there are
+ * simply no meetings to count, and the daily run must never break.
+ */
+export async function computeTodaysMeetingCount(
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  if (!userId) return 0;
+  const bounds = getDhakaBusinessDayBounds(now);
+  if (!useDb()) {
+    let count = 0;
+    for (const entry of (fallbackStore as any).scheduledActivities || []) {
+      if (String(entry.activityType || entry.activity_type || '').toLowerCase() !== 'meeting') continue;
+      if (String(entry.status || '').toLowerCase() !== 'scheduled') continue;
+      const at = new Date(entry.scheduledAt || entry.scheduled_at).getTime();
+      if (!Number.isFinite(at) || at < bounds.todayStart.getTime() || at >= bounds.tomorrowStart.getTime()) continue;
+      const involved =
+        String(entry.created_by || entry.createdBy || '') === String(userId) ||
+        String(entry.assigned_to || '') === String(userId) ||
+        (Array.isArray(entry.attendees) && entry.attendees.some(
+          (a: any) => String(a.userId) === String(userId) && String(a.response || 'pending') !== 'declined'
+        ));
+      if (involved) count++;
+    }
+    return count;
+  }
+  try {
+    const result = await getPool().query(
+      `SELECT COUNT(DISTINCT sa.id)::int AS cnt
+       FROM scheduled_activities sa
+       WHERE sa.activity_type = 'meeting'
+         AND sa.status = 'scheduled'
+         AND sa.scheduled_at >= $1::timestamp
+         AND sa.scheduled_at < $2::timestamp
+         AND (sa.created_by = $3::uuid
+              OR sa.assigned_to = $3::uuid
+              OR EXISTS (SELECT 1 FROM scheduled_activity_attendees saa
+                          WHERE saa.activity_id = sa.id
+                            AND saa.user_id = $3::uuid
+                            AND saa.response <> 'declined'))`,
+      [bounds.todayStartIso, bounds.tomorrowStartIso, userId],
+    );
+    return Number(result.rows[0]?.cnt || 0);
+  } catch {
+    return 0;
+  }
+}
+
 /* ====================================================================
    Payload (pure)
 ==================================================================== */
@@ -381,19 +443,27 @@ export function buildDailyReminderPayload(
   const parts: string[] = [];
   if (counts.dueToday > 0) parts.push(`আজ ${counts.dueToday}টি follow-up due`);
   if (counts.overdue > 0) parts.push(`${counts.overdue}টি overdue`);
+  // Sentence composition: each non-zero family contributes ONE Bangla
+  // sentence, joined with '। '. For every input that existed before
+  // the meeting line (PR E) this produces byte-for-byte the legacy
+  // bodies — follow-ups alone, follow-ups + SLA sentence, SLA alone,
+  // and the empty "no follow-up due" body are all unchanged.
+  const sentences: string[] = [];
+  if (parts.length) sentences.push(`${parts.join(', ')} আছে`);
   const slaBreaches = Number(counts.slaBreaches || 0);
   if (slaBreaches > 0) {
     // SLA breach line (Phase 3 PR #3): a separate sentence appended
-    // after the follow-up counts. With no breaches the body stays
-    // byte-for-byte the pre-SLA wording.
-    const breachSentence = `${slaBreaches}টি lead-এর first-contact SLA পার হয়ে গেছে।`;
-    const body = parts.length
-      ? `${parts.join(', ')} আছে। ${breachSentence} Workbench-এ দেখে নিন।`
-      : `${breachSentence} Workbench-এ দেখে নিন।`;
-    return { title: PUSH_REMINDER_TITLE, body, url };
+    // after the follow-up counts.
+    sentences.push(`${slaBreaches}টি lead-এর first-contact SLA পার হয়ে গেছে`);
   }
-  const body = parts.length
-    ? `${parts.join(', ')} আছে। Workbench-এ দেখে নিন।`
+  const meetingsToday = Number(counts.meetingsToday || 0);
+  if (meetingsToday > 0) {
+    // Meeting line (calendar upgrade PR E): today's meetings the user
+    // is part of, counted by computeTodaysMeetingCount.
+    sentences.push(`আজ ${meetingsToday}টি meeting আছে`);
+  }
+  const body = sentences.length
+    ? `${sentences.join('। ')}। Workbench-এ দেখে নিন।`
     : 'আজ কোনো follow-up due নেই।';
   return { title: PUSH_REMINDER_TITLE, body, url };
 }
@@ -432,6 +502,60 @@ async function defaultPushSender(target: PushSendTarget, payloadJson: string): P
 function isSubscriptionGoneError(error: any): boolean {
   const statusCode = Number(error?.statusCode);
   return statusCode === 404 || statusCode === 410;
+}
+
+export interface PushToUserSummary {
+  /** False when Web Push is not configured — the call was a no-op. */
+  configured: boolean;
+  attempted: number;
+  sent: number;
+  pruned: number;
+  failed: number;
+}
+
+/**
+ * Best-effort Web Push to ONE user's devices (calendar upgrade PR E —
+ * meeting invites / moves / reminders). Mirrors the daily runner's
+ * delivery semantics exactly: same sender seam (tests stub it the
+ * same way), gone subscriptions (404/410) are pruned, transient
+ * failures are counted and logged, never thrown. When push is not
+ * configured or the user has no subscription this is a clean no-op —
+ * the in-app notification is the durable record either way.
+ */
+export async function sendPushToUser(
+  userId: string,
+  payload: { title: string; body: string; url?: string },
+): Promise<PushToUserSummary> {
+  const summary: PushToUserSummary = { configured: false, attempted: 0, sent: 0, pruned: 0, failed: 0 };
+  if (!isPushConfigured()) return summary;
+  summary.configured = true;
+  const subscriptions = (await listPushSubscriptions()).filter(s => s.userId === userId);
+  if (subscriptions.length === 0) return summary;
+  const payloadJson = JSON.stringify({
+    title: payload.title,
+    body: payload.body,
+    url: payload.url || PUSH_REMINDER_URL,
+  });
+  const send = senderOverride || defaultPushSender;
+  for (const sub of subscriptions) {
+    summary.attempted++;
+    try {
+      await send({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, payloadJson);
+      summary.sent++;
+      await touchPushSubscription(sub.endpoint);
+    } catch (error: any) {
+      if (isSubscriptionGoneError(error)) {
+        await deletePushSubscriptionByEndpoint(sub.endpoint);
+        summary.pruned++;
+      } else {
+        summary.failed++;
+        console.warn(
+          `[push] send to user ${userId} failed: ${error?.message || 'unknown error'}`,
+        );
+      }
+    }
+  }
+  return summary;
 }
 
 /** Resolve the CallerDbInfo for a subscribed user (cron has no request). */
@@ -544,13 +668,17 @@ export async function runDailyPushReminders(now: Date = new Date()): Promise<Dai
     if (!caller) continue;
     const counts = await computeFollowUpReminderCounts(caller, now);
     const slaBreaches = slaRun?.breachesByAssignee.get(userId) || 0;
-    if (counts.dueToday + counts.overdue + slaBreaches === 0) {
+    // Today's meetings (PR E) ride the same summary: a user whose
+    // only morning news is a meeting still gets the push, with the
+    // meeting count as its own sentence in the payload.
+    const meetingsToday = await computeTodaysMeetingCount(userId, now);
+    if (counts.dueToday + counts.overdue + slaBreaches + meetingsToday === 0) {
       summary.skippedNoDue++;
       continue;
     }
     summary.usersTargeted++;
     const payloadJson = JSON.stringify(
-      buildDailyReminderPayload({ ...counts, slaBreaches })
+      buildDailyReminderPayload({ ...counts, slaBreaches, meetingsToday })
     );
     for (const sub of userSubs) {
       try {

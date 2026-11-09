@@ -24,6 +24,7 @@ import {
   upsertPushSubscription,
   validatePushSubscriptionInput,
 } from '../../services/PushReminderService.js';
+import { runMeetingReminders } from '../../services/MeetingNotificationService.js';
 import {
   asUuid,
   callerIsAdmin,
@@ -382,6 +383,37 @@ router.get('/notifications/push/cron-daily', async (req, res) => {
     return sendJson(res, 500, { success: false, message: error?.message || 'Daily push run failed' });
   }
 });
+
+/**
+ * Meeting-reminder runner (calendar upgrade PR E). Same cron-secret
+ * guard as the daily endpoint above (CRON_SECRET unset → 503, wrong
+ * secret → 401). There is deliberately NO high-frequency Vercel cron
+ * for this — the free plan cannot run one — so an external scheduler
+ * (e.g. cron-job.org) calls this endpoint every ~15 minutes with the
+ * `x-cron-secret` header, exactly the documented fallback pattern of
+ * the daily cron. Each run scans a 20-minute due window and delivery
+ * is idempotent per (activity, recipient, scheduled_at), so
+ * overlapping or repeated calls never double-send. In-app reminders
+ * are created whether or not Web Push (VAPID) is configured.
+ */
+async function handleMeetingReminderCron(req: any, res: any) {
+  const auth = checkCronAuthorization(req.headers as Record<string, unknown>);
+  if (auth === 'disabled') {
+    return sendJson(res, 503, { success: false, message: 'The reminder cron is not configured (CRON_SECRET is unset).' });
+  }
+  if (auth === 'unauthorized') {
+    return sendJson(res, 401, { success: false, message: 'Invalid cron secret.' });
+  }
+  try {
+    const summary = await runMeetingReminders(new Date());
+    return sendJson(res, 200, { success: true, data: summary });
+  } catch (error: any) {
+    return sendJson(res, 500, { success: false, message: error?.message || 'Meeting reminder run failed' });
+  }
+}
+
+router.get('/notifications/push/cron-meeting-reminders', handleMeetingReminderCron);
+router.post('/notifications/push/cron-meeting-reminders', handleMeetingReminderCron);
 
 router.delete('/notifications/users/:userId', requireAuth, requireSelfOrAdmin('userId'), async (req, res) => {
   if (!useDb()) {
