@@ -3576,7 +3576,7 @@ router.get('/leads/:id/scheduled-activities', requireAuth, async (req: any, res)
 
     const r = await getPool().query(
       `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
+       FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id
        WHERE sa.lead_id = $1 ORDER BY sa.scheduled_at ASC`,
       [leadRow.id]
     );

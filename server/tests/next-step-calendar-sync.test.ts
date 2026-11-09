@@ -346,7 +346,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
 
   it('migration 054 is registered as the tail and adds the link columns + unique partial index', async () => {
     assert.ok(MIGRATION_IDS.includes('054_next_step_calendar_sync'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '054_next_step_calendar_sync', '054 is the migration tail');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '055_meeting_data_model', '055 is the migration tail (054 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('054_next_step_calendar_sync'), 'runner names migration 054');
     const cols: any = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'scheduled_activities' AND column_name IN ('source_activity_id', 'source_kind')`
