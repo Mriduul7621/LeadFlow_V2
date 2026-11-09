@@ -52,8 +52,14 @@ test('C. conditional fields follow the specified business rules', () => {
 test('D. submission is server-authoritative and meetings mirror to the calendar', () => {
   const page = read('src/modules/leads/pages/LeadUpdate.tsx');
   assert.ok(page.includes('leadService.updateLeadStatus('), 'status update goes through the server-authoritative service');
-  assert.ok(page.includes("scheduledActivityService.create("), 'Meeting Fixed also creates a scheduled calendar activity');
-  assert.ok(page.includes("activityType: 'meeting'"), 'the calendar entry is a meeting');
+  // PR A moved the meeting mirror server-side: the follow-up write
+  // itself now creates the linked calendar entry in the same
+  // transaction (NextStepCalendarSync), so the page must NOT fire a
+  // second, unlinked client create (it could fail after the status
+  // had saved, and it duplicated the server entry).
+  assert.ok(!page.includes('scheduledActivityService.create('), 'the page no longer mirrors meetings client-side (server owns the mirror)');
+  const sync = read('server/services/NextStepCalendarSync.ts');
+  assert.ok(sync.includes("'meeting'"), 'the server sync creates the calendar entry as a meeting for meeting next steps');
   const svc = read('src/modules/leads/services/leadService.ts');
   assert.ok(/api\/leads\/\$\{encodeURIComponent\(leadId\)\}\/follow-up/.test(svc) || svc.includes('/follow-up'), 'the service posts to the server follow-up endpoint');
 });

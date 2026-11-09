@@ -188,6 +188,13 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   useEffect(() => {
     let result = events;
 
+    // Cancelled activities never render on the calendar (the row is
+    // kept server-side for audit; completing one keeps it visible as
+    // history, cancelling removes it from the grid — Outlook-style).
+    // This is also what makes a cleared next-step date disappear: the
+    // server cancels the synced entry instead of deleting it.
+    result = result.filter(e => String(e.status).toLowerCase() !== 'cancelled');
+
     // Type filter (follow_up is stored as follow_up)
     result = result.filter(e => {
       if (e.type === 'call') return filterTypes.call;

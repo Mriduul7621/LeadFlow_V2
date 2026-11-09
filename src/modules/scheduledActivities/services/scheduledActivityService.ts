@@ -48,6 +48,12 @@ export interface ScheduledActivity {
   completed_by?: string | null;
   completedActivityId?: string | null;
   completed_activity_id?: string | null;
+  // Next-step sync provenance (migration 054): set when the server
+  // keeps this entry in sync with a follow-up's next step.
+  sourceActivityId?: string | null;
+  source_activity_id?: string | null;
+  sourceKind?: string | null;
+  source_kind?: string | null;
   // joined lead convenience
   leadCustomerName?: string | null;
   leadMobile?: string | null;

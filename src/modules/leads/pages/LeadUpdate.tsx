@@ -3,7 +3,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, FileText, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
-import { scheduledActivityService } from '../../scheduledActivities/services/scheduledActivityService';
 import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { useTranslation } from '../../shared/utils/translations';
@@ -263,23 +262,13 @@ export default function LeadUpdate() {
         needsMeeting && meetingType ? meetingType : undefined,
       );
 
-      // Mirror a fixed meeting onto the Task Calendar (server assigns it to
-      // the lead's owner and resolves the external lead id).
-      if (needsMeeting) {
-        try {
-          await scheduledActivityService.create({
-            leadId: lead.id,
-            activityType: 'meeting',
-            title: `Meeting - ${lead.prospectName}`,
-            scheduledAt: asIso(meetingAt)!,
-            meetingType: meetingType || undefined,
-            remarks: remarks.trim() || undefined,
-          });
-        } catch (calErr) {
-          console.warn('[lead-update] calendar mirror failed (status was saved):', calErr);
-          toast.message(t('updMeetingCalendarSkipped'));
-        }
-      }
+      // No client-side calendar mirror any more: the follow-up write
+      // above is mirrored onto the Task Calendar by the server in the
+      // same transaction (PR A — NextStepCalendarSync), for meetings
+      // as for calls/follow-ups, including offline submissions once
+      // they sync. The old second request here could fail silently
+      // after the status had already saved, and duplicated the entry
+      // the server now owns.
 
       toast.success(t('updSuccess'));
       navigate(`/leads/${encodeURIComponent(lead.id)}`);

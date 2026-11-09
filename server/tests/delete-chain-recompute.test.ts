@@ -270,10 +270,9 @@ describe('User delete recomputes the reporting chain (organogram fix 3)', () => 
 
   /* ---------------------------------------------------------------- */
   it('E. migration 053 repairs already-stale derived chains and is idempotent', async () => {
-    assert.equal(
-      MIGRATION_IDS[MIGRATION_IDS.length - 1],
-      '053_delete_chain_repair',
-      'migration 053 is registered as the tail'
+    assert.ok(
+      MIGRATION_IDS.includes('053_delete_chain_repair'),
+      'migration 053 stays registered (054_next_step_calendar_sync later became the tail)'
     );
     const { mgr, tl1, emp } = await buildChain();
 
