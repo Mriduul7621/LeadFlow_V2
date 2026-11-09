@@ -14,6 +14,9 @@
  *   PUT    /calendar/weekend     settings.manage — replace the
  *                                weekend day set ([5,6] default).
  *   POST   /calendar/holidays    settings.manage — add a holiday.
+ *   POST   /calendar/holidays/import  settings.manage — bulk-load
+ *                                a year's holidays from the canonical
+ *                                JSON file (PR F); duplicates skip.
  *   PUT    /calendar/holidays/:id  settings.manage — edit one.
  *   DELETE /calendar/holidays/:id  settings.manage — remove one.
  *
@@ -42,7 +45,9 @@ import {
   isValidHolidayDate,
   listCalendarHolidays,
   mapHolidayRow,
+  MAX_HOLIDAY_IMPORT_ROWS,
   normalizeHolidayCategory,
+  normalizeImportHolidayRow,
   parseWeekendDays,
   setCalendarWeekendDays,
   type CalendarHoliday,
@@ -192,6 +197,102 @@ router.post('/calendar/holidays', requireAuth, requirePermissionCode('settings.m
     if (isUniqueViolation(error)) return sendJson(res, 400, { success: false, message: DUPLICATE_MESSAGE });
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Holiday creation failed' });
   }
+});
+
+/* ====================================================================
+   HOLIDAY JSON IMPORT — settings.manage (PR F)
+   ------------------------------------------------------------------
+   Bulk-load a year of holidays from the canonical JSON file so an
+   admin never needs code help for a new gazette list. Every row is
+   validated (normalizeImportHolidayRow accepts the canonical shape
+   AND the DB shape); valid new rows import, (date, name) duplicates
+   — against the database or within the file — are skipped via
+   ON CONFLICT DO NOTHING, and invalid rows come back with reasons.
+   Partial success is deliberate: one bad row never blocks a year.
+   The response reports honest counts: received / added /
+   skippedDuplicates / rejected[{index, date?, reason}].
+==================================================================== */
+
+router.post('/calendar/holidays/import', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.holidays)) {
+    return sendJson(res, 400, {
+      success: false,
+      message: 'Request body must be a JSON object with a "holidays" array.',
+    });
+  }
+  const rows: unknown[] = body.holidays;
+  if (rows.length > MAX_HOLIDAY_IMPORT_ROWS) {
+    return sendJson(res, 400, {
+      success: false,
+      message: `Too many holidays in one import (received ${rows.length}, max ${MAX_HOLIDAY_IMPORT_ROWS}). Split the file and import in parts.`,
+    });
+  }
+
+  const valid: ReturnType<typeof normalizeImportHolidayRow>[] = [];
+  const rejected: { index: number; date?: string; reason: string }[] = [];
+  rows.forEach((raw, index) => {
+    const out = normalizeImportHolidayRow(raw);
+    if ('reason' in out) {
+      const rawDate = (raw as any)?.date ?? (raw as any)?.holiday_date;
+      rejected.push({
+        index,
+        ...(typeof rawDate === 'string' && rawDate ? { date: rawDate } : {}),
+        reason: out.reason,
+      });
+    } else {
+      valid.push(out);
+    }
+  });
+
+  const caller = await getCallerDbInfo(req).catch(() => null);
+  const actorId = caller?.id && asUuid(caller.id) ? caller.id : null;
+  let added = 0;
+
+  try {
+    if (!useDb()) {
+      const store = fallbackStore as any;
+      if (!Array.isArray(store.calendarHolidays)) store.calendarHolidays = [];
+      for (const out of valid) {
+        if ('row' in out) {
+          const p = out.row;
+          if (store.calendarHolidays.some((h: any) => h.date === p.date && h.name === p.name)) continue;
+          store.calendarHolidays.push({ id: createId('holiday'), ...p });
+          added += 1;
+        }
+      }
+    } else {
+      const pool = getPool();
+      for (const out of valid) {
+        if ('row' in out) {
+          const p = out.row;
+          const result = await pool.query(
+            `INSERT INTO calendar_holidays (holiday_date, name, name_bn, category, moon_dependent, regional, note, created_by, updated_by)
+             VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $8)
+             ON CONFLICT (holiday_date, name) DO NOTHING`,
+            [p.date, p.name, p.nameBn, p.category, p.moonDependent, p.regional, p.note, actorId]
+          );
+          if ((result.rowCount ?? 0) > 0) added += 1;
+        }
+      }
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Holiday import failed' });
+  }
+
+  const skippedDuplicates = valid.length - added;
+  await logAccessChange({
+    actorId,
+    actionCode: 'calendar.holidays.import',
+    entityType: 'calendar_holidays',
+    entityId: null,
+    metadata: { received: rows.length, added, skippedDuplicates, rejected: rejected.length },
+  });
+  return sendJson(res, 200, {
+    success: true,
+    data: { received: rows.length, added, skippedDuplicates, rejected },
+  });
 });
 
 router.put('/calendar/holidays/:id', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
