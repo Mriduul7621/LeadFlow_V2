@@ -51,6 +51,16 @@ export default function AllLeads() {
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[] | null>(null);
   const [poolTab, setPoolTab] = useState<LeadPoolTab>('unassigned');
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  // Routing targets are ACTIVE users only — the server refuses a manual
+  // assignment to an inactive user (mirroring the bulk-import rule), so
+  // the pickers stop offering them. A per-lead picker keeps the lead's
+  // current handler visible even when that handler has since been
+  // deactivated: re-saving must not silently unassign the lead.
+  const assignableUsers = allUsers.filter((u: any) => u.status !== 'Inactive');
+  const pickerUsersFor = (currentEmployeeId: string) =>
+    currentEmployeeId && !assignableUsers.some((u: any) => u.employeeId === currentEmployeeId)
+      ? [...assignableUsers, ...allUsers.filter((u: any) => u.employeeId === currentEmployeeId)]
+      : assignableUsers;
   const [campaignOptions, setCampaignOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   // F3: GET /api/leads answering 403 means the role holds no leads.view yet —
@@ -507,7 +517,7 @@ export default function AllLeads() {
                   >
                      <option value="">-- SELECT RE-ROUTE HANDLER --</option>
                      <option value="unassign">-- MARK AS UNASSIGNED --</option>
-                     {allUsers.map(u => (
+                     {assignableUsers.map(u => (
                         <option key={u.employeeId} value={u.employeeId}>
                            {u.role}: {u.name} (ID: {u.employeeId})
                         </option>
@@ -635,7 +645,7 @@ export default function AllLeads() {
                                       className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                                     >
                                        <option value="unassign">-- UNASSIGNED --</option>
-                                       {allUsers.map(u => (
+                                       {pickerUsersFor(inlineAssigneeId).map(u => (
                                           <option key={u.employeeId} value={u.employeeId}>
                                              {u.role}: {u.name} (ID: {u.employeeId})
                                           </option>
@@ -912,7 +922,7 @@ export default function AllLeads() {
                        className="w-full bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider p-3 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                      >
                         <option value="">-- UNASSIGNED (BLANK) --</option>
-                        {allUsers.map((u) => (
+                        {pickerUsersFor(editAssignee).map((u) => (
                            <option key={u.employeeId} value={u.employeeId}>
                               {u.role.toUpperCase()}: {u.name} (Employee ID: {u.employeeId})
                            </option>
