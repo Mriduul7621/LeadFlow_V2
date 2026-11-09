@@ -104,6 +104,7 @@ import {
   requireAuth,
   requirePermissionCode,
   requireSelfOrAdmin,
+  resolveCallerVisibility,
   resolveRoleId,
   resolveUserId,
   sendDbUnavailable,
@@ -267,7 +268,9 @@ export { recomputeReportingChains };
  * Reports links whose manager no longer matches the ladder rules
  * (e.g. after levels were changed) without blocking the save.
  */
-async function buildHierarchyConfig() {
+async function buildHierarchyConfig(
+  callerVisibility?: { all: boolean; userIds: string[]; employeeIds: string[] }
+) {
   const pool = getPool();
   await ensureDefaultRoles();
   const roles = (await getRoleRows(pool)).filter(
@@ -370,6 +373,25 @@ async function buildHierarchyConfig() {
     console.warn('Ownership health unavailable:', error?.message || error);
   }
 
+  // Peer lead-visibility (same rule as the roster counts): the per-person
+  // stranded-owner list names individuals with their open-lead counts, so a
+  // caller only sees the owners inside their own data-visibility scope.
+  // Admins / Organization scope keep the full list — this screen is the
+  // cleanup tool for exactly those stranded leads. (`totalOpenLeads` is an
+  // organisation-level setup total, not attributable to any person, and is
+  // left as computed.)
+  if (callerVisibility && !callerVisibility.all) {
+    const visibleEmployees = new Set(
+      (callerVisibility.employeeIds || []).map(e => String(e).toUpperCase())
+    );
+    ownership = {
+      ...ownership,
+      inactiveOwnersWithOpenLeads: ownership.inactiveOwnersWithOpenLeads.filter(o =>
+        visibleEmployees.has(String(o.employeeId).toUpperCase())
+      ),
+    };
+  }
+
   return {
     levels,
     unassignedRoles,
@@ -406,6 +428,24 @@ async function withOpenLeadCounts(exec: any, rows: any[]): Promise<any[]> {
   const ids = rows.map(r => String(r.id)).filter(Boolean);
   const counts = await fetchOpenLeadCountMap(exec, ids);
   return rows.map(r => ({ ...r, open_lead_count: counts.get(String(r.id)) ?? 0 }));
+}
+
+/**
+ * Peer lead-visibility rule (Mahadi's decision, 2026-11-09): an employee
+ * must not see ANOTHER employee's lead data — per-person open-lead counts
+ * included. A roster row keeps its count only when that person sits inside
+ * the CALLER's data-visibility scope (the same scope set that drives lead
+ * access: Own / DownTeam / FullTeam / Organization from PRs #103/#104).
+ * Out-of-scope rows carry `open_lead_count: null`, which mapUserRow already
+ * renders as "counts not loaded for this caller" — the roster itself
+ * (names, structure) stays visible for pickers and the org chart, and
+ * admins / Organization scope keep every count (the deactivation-handover
+ * warning on the Users screen reads them).
+ */
+function maskOpenLeadCountsForCaller(rows: any[], visibility: { all: boolean; userIds: string[] }): any[] {
+  if (!rows || visibility?.all) return rows;
+  const visible = new Set((visibility?.userIds || []).map(String));
+  return rows.map(r => (visible.has(String(r.id)) ? r : { ...r, open_lead_count: null }));
 }
 
 function mapDepartmentRow(row: any) {
@@ -482,7 +522,7 @@ router.get('/users/check-admin', requireAuth, async (_req, res) => {
   }
 });
 
-router.get('/users', requireAuth, async (_req, res) => {
+router.get('/users', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
     const users = fallbackStore.users.map(({ password: _pw, ...safe }) => safe);
@@ -495,7 +535,12 @@ router.get('/users', requireAuth, async (_req, res) => {
     // needs each person's member departments to mirror the server's scope.
     const memberships = await getMembershipDepartmentMap(pool);
     const withCounts = await withOpenLeadCounts(pool, result.rows);
-    return sendJson(res, 200, withCounts.map(row => mapUserRow(
+    // Peer lead-visibility: counts ride along only for people inside the
+    // caller's own data-visibility scope (see maskOpenLeadCountsForCaller).
+    const caller = await getCallerDbInfo(req as any);
+    const visibility = await resolveCallerVisibility(caller as any);
+    const masked = maskOpenLeadCountsForCaller(withCounts, visibility);
+    return sendJson(res, 200, masked.map(row => mapUserRow(
       { ...row, department_ids: memberships.get(String(row.id)) || [] },
       row.manager_employee_id
     )));
@@ -597,7 +642,12 @@ router.get('/users/:id', requireAuth, async (req, res) => {
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'User not found' });
     const row = await withMembershipDepartments(getPool(), result.rows[0]);
     const [withCount] = await withOpenLeadCounts(getPool(), [row]);
-    return sendJson(res, 200, mapUserRow(withCount || row, row.manager_employee_id));
+    // Same peer rule as the roster: another person's open-lead count is
+    // only exposed when they sit inside the caller's visibility scope.
+    const caller = await getCallerDbInfo(req as any);
+    const visibility = await resolveCallerVisibility(caller as any);
+    const [masked] = maskOpenLeadCountsForCaller([withCount || row], visibility);
+    return sendJson(res, 200, mapUserRow(masked || row, row.manager_employee_id));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'User fetch failed' });
   }
@@ -3334,7 +3384,7 @@ router.delete('/hierarchies/:id', requireAuth, requirePermissionCode('hierarchy.
    COMPANY-WIDE REPORTING LADDER (Level 1 = CEO ... Level N)
 ==================================================================== */
 
-router.get('/hierarchy-config', requireAuth, async (_req, res) => {
+router.get('/hierarchy-config', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
   if (!useDb()) {
     return sendJson(res, 200, {
@@ -3345,7 +3395,9 @@ router.get('/hierarchy-config', requireAuth, async (_req, res) => {
     });
   }
   try {
-    return sendJson(res, 200, await buildHierarchyConfig());
+    const caller = await getCallerDbInfo(req as any);
+    const visibility = await resolveCallerVisibility(caller as any);
+    return sendJson(res, 200, await buildHierarchyConfig(visibility));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Hierarchy config fetch failed' });
   }
@@ -3391,7 +3443,9 @@ router.put('/hierarchy-config', requireAuth, requirePermissionCode('hierarchy.ma
       }
     }
     await client.query('COMMIT');
-    return sendJson(res, 200, { success: true, data: await buildHierarchyConfig() });
+    const caller = await getCallerDbInfo(req as any);
+    const visibility = await resolveCallerVisibility(caller as any);
+    return sendJson(res, 200, { success: true, data: await buildHierarchyConfig(visibility) });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Hierarchy config save failed' });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Check, ChevronDown, Clock3, MapPinned, Pencil, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useAuthStore } from '../../auth/store/authStore';
 import { userService } from '../../users/services/userService';
 import type { User } from '../../shared/types';
 import BackButton from '../../shared/components/BackButton';
@@ -92,6 +93,7 @@ function StatusPill({ status }: { status: RoadshowStatus }) {
 
 export default function RoadshowPage() {
   const { canAccess, userRoleNormalized } = usePermissions();
+  const { user: currentUser } = useAuthStore();
   const canView = canAccess('roadshow_follow_up', 'view');
   const canCreate = canAccess('roadshow_follow_up', 'create');
   const canEdit = canAccess('roadshow_follow_up', 'edit');
@@ -111,6 +113,7 @@ export default function RoadshowPage() {
   const [forbidden, setForbidden] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingCreatorId, setEditingCreatorId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<RoadshowFormState>(EMPTY_FORM);
 
@@ -164,6 +167,7 @@ export default function RoadshowPage() {
 
   const resetForm = () => {
     setEditingId(null);
+    setEditingCreatorId(null);
     setForm(EMPTY_FORM);
   };
 
@@ -171,6 +175,7 @@ export default function RoadshowPage() {
     if (!canEdit || (roadshow.status === 'execute' && !isAdmin) || (roadshow.status === 'cancel' && !isAdmin)) return;
     setSelectedId(roadshow.id);
     setEditingId(roadshow.id);
+    setEditingCreatorId(roadshow.createdBy);
     setForm({
       organization: roadshow.organization,
       location: roadshow.location,
@@ -180,10 +185,16 @@ export default function RoadshowPage() {
     });
   };
 
+  // Assignment rule: the assigned people are exactly the roadshow's
+  // creator plus the picked "assist" users — the creator's row is pinned
+  // in the picker below and always sent, so a roadshow can be saved with
+  // zero assists (creator only).
+  const pinnedAssigneeId = editingId ? editingCreatorId : (currentUser?.id ?? null);
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form.organization.trim() || !form.location.trim() || !form.scheduledAt || !form.assignedUserIds.length) {
-      toast.error('Organization, location, date/time, and at least one assignee are required.');
+    if (!form.organization.trim() || !form.location.trim() || !form.scheduledAt) {
+      toast.error('Organization, location, and date/time are required.');
       return;
     }
     if (Number.isNaN(new Date(form.scheduledAt).getTime())) {
@@ -196,12 +207,16 @@ export default function RoadshowPage() {
     }
     setSaving(true);
     try {
+      const input = toInput({
+        ...form,
+        assignedUserIds: [...new Set([...(pinnedAssigneeId ? [pinnedAssigneeId] : []), ...form.assignedUserIds])],
+      });
       if (editingId) {
-        await roadshowService.update(editingId, { ...toInput(form), status: form.status });
+        await roadshowService.update(editingId, { ...input, status: form.status });
         toast.success(form.status === 'execute' ? 'Roadshow executed. Its source code is now active.' : 'Roadshow updated.');
         setActiveTab('status');
       } else {
-        await roadshowService.create(toInput(form));
+        await roadshowService.create(input);
         toast.success('Roadshow added.');
         setActiveTab('status');
       }
@@ -301,18 +316,20 @@ export default function RoadshowPage() {
             )}
           </div>
           <fieldset className="space-y-2">
-            <legend className="text-xs font-semibold text-stone-700">Assign users <span className="font-normal text-stone-500">(select one or more)</span></legend>
+            <legend className="text-xs font-semibold text-stone-700">Assist users <span className="font-normal text-stone-500">(the creator is always assigned — pick who assists)</span></legend>
             {activeUsers.length === 0 ? (
               <p className="text-xs text-stone-500">No active users are available to assign.</p>
             ) : (
               <div className="grid max-h-48 gap-2 overflow-y-auto rounded-lg border border-stone-200 p-3 sm:grid-cols-2">
                 {activeUsers.map(person => {
-                  const checked = form.assignedUserIds.includes(person.id);
+                  const isPinned = pinnedAssigneeId != null && person.id === pinnedAssigneeId;
+                  const checked = isPinned || form.assignedUserIds.includes(person.id);
                   return (
                     <label key={person.id} className="flex min-h-10 items-center gap-2 rounded-md px-2 text-sm text-stone-700 hover:bg-stone-50">
                       <input
                         type="checkbox"
                         checked={checked}
+                        disabled={isPinned}
                         onChange={event => setForm(current => ({
                           ...current,
                           assignedUserIds: event.target.checked
@@ -320,7 +337,7 @@ export default function RoadshowPage() {
                             : current.assignedUserIds.filter(id => id !== person.id),
                         }))}
                       />
-                      <span className="truncate">{person.name} <span className="text-xs text-stone-400">· {person.employeeId}</span></span>
+                      <span className="truncate">{person.name} <span className="text-xs text-stone-400">· {person.employeeId}{isPinned ? (editingId ? ' · Creator — always assigned' : ' · You, the creator — always assigned') : ''}</span></span>
                     </label>
                   );
                 })}

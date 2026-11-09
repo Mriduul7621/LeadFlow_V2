@@ -62,6 +62,40 @@ const router = Router();
 
 const ROADSHOW_STATUSES = ['pending', 'execute', 'reschedule', 'cancel'] as const;
 
+/**
+ * Roadshow assignment rule (Mahadi's decision, 2026-11-09): the assigned
+ * people are exactly the roadshow's CREATOR plus the employees picked as
+ * "assist" — nobody else is ever added implicitly, and the creator can
+ * never be removed from their own roadshow's assignee set. Assist picks
+ * must be ACTIVE users: an inactive pick is refused with the same
+ * semantics as the lead-assignment rule (PR #106 — 400, naming the
+ * person), while an unknown id keeps the historical "unavailable"
+ * refusal. Returns the effective assignee id set or an error message.
+ */
+async function resolveRoadshowAssignees(
+  exec: { query: Function },
+  creatorId: string | null,
+  pickedIds: unknown[]
+): Promise<{ ids: string[] } | { error: string }> {
+  const picked = [...new Set(pickedIds.map(v => String(v ?? '').trim()).filter(Boolean))];
+  if (picked.length > 0) {
+    const found = await exec.query(
+      `SELECT id, employee_id, COALESCE(is_active, TRUE) AS is_active FROM users WHERE id = ANY($1::uuid[])`,
+      [picked]
+    );
+    const byId = new Map<string, any>(found.rows.map((r: any) => [String(r.id), r]));
+    for (const id of picked) {
+      const row = byId.get(String(id));
+      if (!row) return { error: 'One or more selected assignees are unavailable.' };
+      if (row.is_active !== true) {
+        return { error: `Assigned user "${row.employee_id}" is inactive and cannot be assigned to a roadshow.` };
+      }
+    }
+  }
+  const ids = [...new Set([...(creatorId ? [creatorId] : []), ...picked])];
+  return { ids };
+}
+
 function roadshowOrganizationKey(organization: string): string {
   return organization
     .normalize('NFKD')
@@ -196,8 +230,8 @@ router.post('/roadshows', requireAuth, requirePermissionCode('roadshows.create')
   const scheduledAt = req.body?.scheduledAt;
   const assignedUserIds = Array.isArray(req.body?.assignedUserIds) ? [...new Set(req.body.assignedUserIds.map((id: unknown) => clean(id)).filter(Boolean))] : [];
   const date = typeof scheduledAt === 'string' ? new Date(scheduledAt) : null;
-  if (!organization || !location || !date || !Number.isFinite(date.getTime()) || !assignedUserIds.length) {
-    return sendJson(res, 400, { success: false, message: 'Organization, location, date/time, and at least one assignee are required.' });
+  if (!organization || !location || !date || !Number.isFinite(date.getTime())) {
+    return sendJson(res, 400, { success: false, message: 'Organization, location, and date/time are required.' });
   }
   try {
     const caller = await getCallerDbInfo(req);
@@ -206,13 +240,13 @@ router.post('/roadshows', requireAuth, requirePermissionCode('roadshows.create')
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const users = await client.query(
-        `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND COALESCE(is_active, TRUE) = TRUE`,
-        [assignedUserIds]
-      );
-      if (users.rows.length !== assignedUserIds.length) {
+      // The creator is always an assignee of their own roadshow; the
+      // client's picks are the "assist" set (see resolveRoadshowAssignees).
+      // Zero assist picks is valid — the creator alone is assigned.
+      const resolvedAssignees = await resolveRoadshowAssignees(client, caller.id, assignedUserIds);
+      if ('error' in resolvedAssignees) {
         await client.query('ROLLBACK');
-        return sendJson(res, 400, { success: false, message: 'One or more selected assignees are unavailable.' });
+        return sendJson(res, 400, { success: false, message: resolvedAssignees.error });
       }
       const created = await client.query(
         `INSERT INTO roadshows (organization, location, scheduled_at, created_by, updated_by)
@@ -220,7 +254,7 @@ router.post('/roadshows', requireAuth, requirePermissionCode('roadshows.create')
         [organization, location, date.toISOString(), caller.id]
       );
       const roadshowId = created.rows[0].id;
-      for (const userId of assignedUserIds) {
+      for (const userId of resolvedAssignees.ids) {
         await client.query(`INSERT INTO roadshow_assignees (roadshow_id, user_id) VALUES ($1, $2)`, [roadshowId, userId]);
       }
       await client.query('COMMIT');
@@ -292,19 +326,26 @@ router.put('/roadshows/:id', requireAuth, async (req: any, res) => {
         : Array.isArray(body.assignedUserIds)
           ? [...new Set(body.assignedUserIds.map((userId: unknown) => clean(userId)).filter(Boolean))]
           : [];
-      if (assignedUserIds && assignedUserIds.length === 0) {
-        await client.query('ROLLBACK');
-        return sendJson(res, 400, { success: false, message: 'At least one assignee is required.' });
-      }
+      // Same rule as create: the roadshow's CREATOR stays assigned, the
+      // submitted picks are the assist set — an edit replaces the assists,
+      // never the creator. An empty assist set is valid while a creator
+      // exists; with neither, the historical refusal stands.
+      let effectiveAssigneeIds: string[] | null = null;
       if (assignedUserIds) {
-        const users = await client.query(
-          `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND COALESCE(is_active, TRUE) = TRUE`,
-          [assignedUserIds]
+        const resolvedAssignees = await resolveRoadshowAssignees(
+          client,
+          existing.created_by ? String(existing.created_by) : null,
+          assignedUserIds
         );
-        if (users.rows.length !== assignedUserIds.length) {
+        if ('error' in resolvedAssignees) {
           await client.query('ROLLBACK');
-          return sendJson(res, 400, { success: false, message: 'One or more selected assignees are unavailable.' });
+          return sendJson(res, 400, { success: false, message: resolvedAssignees.error });
         }
+        if (resolvedAssignees.ids.length === 0) {
+          await client.query('ROLLBACK');
+          return sendJson(res, 400, { success: false, message: 'At least one assignee is required.' });
+        }
+        effectiveAssigneeIds = resolvedAssignees.ids;
       }
 
       let sourceCode = existing.source_code as string | null;
@@ -340,9 +381,9 @@ router.put('/roadshows/:id', requireAuth, async (req: any, res) => {
           WHERE id = $1`,
         [id, organization, location, date.toISOString(), nextStatus, sourceCode, caller.id]
       );
-      if (assignedUserIds) {
+      if (effectiveAssigneeIds) {
         await client.query(`DELETE FROM roadshow_assignees WHERE roadshow_id = $1`, [id]);
-        for (const userId of assignedUserIds) {
+        for (const userId of effectiveAssigneeIds) {
           await client.query(`INSERT INTO roadshow_assignees (roadshow_id, user_id) VALUES ($1, $2)`, [id, userId]);
         }
       }
@@ -762,6 +803,13 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
         perf.finish(res);
         return sendJson(res, 400, { success: false, message: 'assignedTo was not found.' });
       }
+      // An EXPLICIT assignee must be active (PR #106 closed this for lead
+      // assignment; scheduled activities take the same rule). The default
+      // path — inheriting the lead's current owner — is untouched.
+      if (!resolved.isActive) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: `Assigned user "${String(rawAssignedTo).trim()}" is inactive and cannot be assigned activities.` });
+      }
       if (!(await hasPermissionCode(caller, 'leads.assign'))) {
         perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign activities.' });
@@ -979,6 +1027,10 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       } else {
         const resolved = await resolveAssignedTo(String(rawAssignedTo).trim());
         if (!resolved) return sendJson(res, 400, { success: false, message: 'assignedTo was not found.' });
+        // Same active-only rule for an explicit reassignment (PR #106).
+        if (!resolved.isActive) {
+          return sendJson(res, 400, { success: false, message: `Assigned user "${String(rawAssignedTo).trim()}" is inactive and cannot be assigned activities.` });
+        }
         const visibilityForAssign = await resolveCallerVisibility(caller);
         if (!(await hasPermissionCode(caller, 'leads.assign'))) {
           return sendJson(res, 403, { success: false, message: 'You do not have permission to reassign activities.' });

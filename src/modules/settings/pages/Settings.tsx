@@ -1172,8 +1172,8 @@ export default function Settings() {
 
                     <div className="space-y-4 pt-4 border-t border-slate-150">
                       {[
-                        { label: 'Push Real-Time Assignments Alerts', desc: 'Notify assignee immediately', enabled: true },
-                        { label: 'Upline Team Tracking Emails to Managers', desc: 'Propagate assignment notifications up hierarchy', enabled: true },
+                        { label: 'In-App Assignment Alerts', desc: 'Assignee and upline managers are notified in the app immediately', enabled: true },
+                        { label: 'Daily Push Summary', desc: 'Opt-in browser push each morning with due and overdue follow-ups', enabled: true },
                         { label: 'Tomorrow Call Reminders', desc: 'Display alerts for calls scheduled next calendar day', enabled: true },
                       ].map((n, i) => (
                         <div key={i} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-sm">
