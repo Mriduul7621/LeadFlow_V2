@@ -1,5 +1,16 @@
+import { parseTimestampAsUtc } from '../utils/businessTime.js';
+
 let pgliteInstance: any = null;
 let pglitePool: any = null;
+
+// Same stored-timestamp convention as the real pg pool
+// (database/connection.ts): TIMESTAMP values (OID 1114) hold UTC
+// wall time and must be parsed AS UTC, not in the process timezone —
+// otherwise a test/dev process running in Asia/Dhaka reads every
+// timestamp 6 hours early.
+const PGLITE_OPTIONS = {
+  parsers: { 1114: (value: string) => parseTimestampAsUtc(value) },
+};
 
 class PGliteClient {
   private db: any;
@@ -44,7 +55,7 @@ class PGlitePool {
 export async function getPGliteInstanceAsync(): Promise<any> {
   if (!pgliteInstance) {
     const { PGlite } = await import('@electric-sql/pglite');
-    pgliteInstance = new PGlite();
+    pgliteInstance = new PGlite(PGLITE_OPTIONS);
   }
   return pgliteInstance;
 }
@@ -59,7 +70,7 @@ export function getPGliteInstance(): any {
 export async function createPGlitePoolAsync(): Promise<any> {
   if (!pgliteInstance) {
     const { PGlite } = await import('@electric-sql/pglite');
-    pgliteInstance = new PGlite();
+    pgliteInstance = new PGlite(PGLITE_OPTIONS);
   }
   if (!pglitePool) {
     pglitePool = new PGlitePool(pgliteInstance);

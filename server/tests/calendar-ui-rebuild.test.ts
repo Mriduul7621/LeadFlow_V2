@@ -25,6 +25,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { storedTimestampIso, parseTimestampAsUtc } from '../utils/businessTime.js';
+import { mapScheduledActivityRow } from '../routes/production/shared.js';
 import {
   categoryOfScheduled,
   isManagedEntry,
@@ -37,6 +39,7 @@ import {
   layoutDayEvents,
   slotPrefill,
   toDateStr,
+  widenRangeYmd,
   apiTypeForKind,
   kindRequiresLead,
   kindForCategory,
@@ -238,6 +241,64 @@ describe('slotPrefill — empty-slot click → create form values', () => {
 
   it('zero-pads single-digit months, days, hours and minutes', () => {
     assert.deepEqual(slotPrefill(new Date(2027, 0, 5), 9, 5), { date: '2027-01-05', startTime: '09:05', endTime: '09:35' });
+  });
+});
+
+describe('storedTimestampIso — stored UTC wall time, read AS UTC (Dhaka standard)', () => {
+  // The Dhaka pin: these assertions must hold in EVERY process
+  // timezone. Before the fix, the mapper/sync used `new Date(naive)`,
+  // which parses in the process timezone — under TZ=Asia/Dhaka the
+  // naive value below came back as 03:00Z (a −6h shift), corrupting
+  // calendar entries whenever the server process was not UTC.
+  it('a naive stored value is the UTC wall time, verbatim', () => {
+    assert.equal(storedTimestampIso('2027-02-01 09:00:00'), '2027-02-01T09:00:00.000Z');
+    assert.equal(storedTimestampIso('2027-02-01T09:00:00'), '2027-02-01T09:00:00.000Z');
+    assert.equal(storedTimestampIso('2026-11-10 00:30:00'), '2026-11-10T00:30:00.000Z');
+  });
+
+  it('zoned strings keep their instant', () => {
+    assert.equal(storedTimestampIso('2027-02-01T09:00:00.000Z'), '2027-02-01T09:00:00.000Z');
+    assert.equal(storedTimestampIso('2027-02-01T09:00:00+06:00'), '2027-02-01T03:00:00.000Z');
+  });
+
+  it('Date objects pass through; empty/garbage → null', () => {
+    assert.equal(storedTimestampIso(new Date('2027-02-01T09:00:00.000Z')), '2027-02-01T09:00:00.000Z');
+    assert.equal(storedTimestampIso(null), null);
+    assert.equal(storedTimestampIso(undefined), null);
+    assert.equal(storedTimestampIso(''), null);
+    assert.equal(storedTimestampIso('not-a-date'), null);
+  });
+
+  it('the driver parser (parseTimestampAsUtc, OID 1114) reads stored text as the UTC instant', () => {
+    // Registered in database/connection.ts (pg) and
+    // database/pglitePool.ts (PGlite): without it the drivers build
+    // the Date in the process timezone and a Dhaka process reads
+    // every stored timestamp 6 hours early.
+    assert.equal(parseTimestampAsUtc('2027-02-01 09:00:00').toISOString(), '2027-02-01T09:00:00.000Z');
+    assert.equal(parseTimestampAsUtc('2026-11-10 00:30:00.5').toISOString(), '2026-11-10T00:30:00.500Z');
+  });
+
+  it('the calendar DTO (mapScheduledActivityRow) emits the stored instant in any process TZ', () => {
+    const dto = mapScheduledActivityRow({ id: 'x', scheduled_at: '2027-02-01 09:00:00', status: 'scheduled' });
+    assert.equal(dto.scheduledAt, '2027-02-01T09:00:00.000Z');
+    assert.equal(dto.scheduled_at, '2027-02-01T09:00:00.000Z');
+  });
+});
+
+describe('widenRangeYmd — fetch window covers the Dhaka/UTC day edge', () => {
+  it('widens by one day on both ends', () => {
+    assert.deepEqual(widenRangeYmd({ from: '2026-11-08', to: '2026-11-14' }), { from: '2026-11-07', to: '2026-11-15' });
+  });
+
+  it('crosses month, year and leap-day boundaries with pure date maths', () => {
+    assert.deepEqual(widenRangeYmd({ from: '2026-03-01', to: '2026-03-01' }), { from: '2026-02-28', to: '2026-03-02' });
+    assert.deepEqual(widenRangeYmd({ from: '2027-01-01', to: '2027-01-01' }), { from: '2026-12-31', to: '2027-01-02' });
+    assert.deepEqual(widenRangeYmd({ from: '2028-03-01', to: '2028-03-01' }), { from: '2028-02-29', to: '2028-03-02' });
+  });
+
+  it('days=0 is the identity; malformed input passes through untouched', () => {
+    assert.deepEqual(widenRangeYmd({ from: '2026-11-08', to: '2026-11-14' }, 0), { from: '2026-11-08', to: '2026-11-14' });
+    assert.deepEqual(widenRangeYmd({ from: 'junk', to: '2026-11-14' }), { from: 'junk', to: '2026-11-15' });
   });
 });
 

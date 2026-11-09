@@ -224,6 +224,33 @@ export function layoutDayEvents<T extends { id: string; startMin: number; endMin
 }
 
 /* ------------------------------------------------------------------ */
+/* Fetch-range widening                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Widen a visible YYYY-MM-DD range by `days` on both ends FOR
+ * FETCHING ONLY. The component derives the range in Asia/Dhaka
+ * dates, while the server filters the stored UTC-wall timestamps
+ * by those literal days — an event at 00:00–05:59 Dhaka on the
+ * first visible day is stored on the PREVIOUS UTC day and would
+ * fall outside the server's window. Over-fetched rows are harmless:
+ * every surface places events by their local (Dhaka) day, so rows
+ * outside the visible range simply never render. Pure string-date
+ * maths via Date.UTC — identical in every timezone.
+ */
+export function widenRangeYmd(range: { from: string; to: string }, days = 1): { from: string; to: string } {
+  const shift = (ymd: string, delta: number): string => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+    if (!m) return ymd;
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + delta);
+    const d = new Date(t);
+    return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  };
+  const n = Math.max(0, Math.floor(days));
+  return { from: shift(range.from, -n), to: shift(range.to, n) };
+}
+
+/* ------------------------------------------------------------------ */
 /* Slot → create-form prefill                                          */
 /* ------------------------------------------------------------------ */
 

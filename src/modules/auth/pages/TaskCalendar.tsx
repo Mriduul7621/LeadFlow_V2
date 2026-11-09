@@ -45,6 +45,7 @@ import {
   slotPrefill,
   toDateStr,
   visibleWeekDates,
+  widenRangeYmd,
   type CalendarCategory,
   type EventFormKind,
 } from '../../calendar/utils/calendarLayout';
@@ -270,13 +271,20 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   }, [embedded, viewMode, currentDate, weekendDays]);
 
   // Server-authoritative scheduled activities + roadshows for the range.
+  // The fetch window is widened ±1 day (see widenRangeYmd): the range
+  // above is in Asia/Dhaka dates but the server filters stored UTC
+  // timestamps by those literal days, so an event in the first six
+  // hours of the first visible Dhaka day would otherwise be missed.
+  // Placement below is by local day, so the extra rows never render
+  // on a wrong day.
+  const fetchRange = useMemo(() => widenRangeYmd(range), [range]);
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      scheduledActivityService.list({ from: range.from, to: range.to, limit: 500 }).catch(() => [] as ScheduledActivity[]),
-      roadshowService.list({ from: range.from, to: range.to }).catch(() => [] as Roadshow[]),
+      scheduledActivityService.list({ from: fetchRange.from, to: fetchRange.to, limit: 500 }).catch(() => [] as ScheduledActivity[]),
+      roadshowService.list({ from: fetchRange.from, to: fetchRange.to }).catch(() => [] as Roadshow[]),
     ])
       .then(([activities, roadshows]) => {
         if (cancelled) return;
@@ -293,7 +301,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [user, range, refreshKey]);
+  }, [user, fetchRange, refreshKey]);
 
   const filteredEvents = useMemo(() => {
     let result = events.filter(e => String(e.status).toLowerCase() !== 'cancelled');

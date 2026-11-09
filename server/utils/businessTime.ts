@@ -85,6 +85,58 @@ export function overdueDays(nextFollowUpAt: Date | string | null | undefined, bo
   return Math.floor((bounds.todayStart.getTime() - t) / 86400000);
 }
 
+/**
+ * Serialize a STORED timestamp value to its ISO instant.
+ *
+ * LeadFlow's TIMESTAMP (without time zone) columns hold UTC wall
+ * time — the instant's UTC representation (see the scheduled
+ * activities convention: "Business time is Asia/Dhaka; scheduled_at
+ * is stored as UTC"). A naive value coming back from the database
+ * (a string from PGlite / a text-returning driver) must therefore be
+ * read AS UTC. `new Date(naiveString)` would parse it in the server
+ * PROCESS's local timezone instead, shifting the instant by the
+ * process offset (e.g. −6h when the process runs in Asia/Dhaka) —
+ * correctness must never depend on the server's own timezone.
+ * Values that already carry a zone, and Date objects (the real pg
+ * driver has already fixed their instant), pass through unchanged.
+ * Returns null for empty/unparseable input.
+ */
+export function storedTimestampIso(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const withZone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(text) ? text : `${text.replace(' ', 'T')}Z`;
+  const date = new Date(withZone);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * Driver parser for TIMESTAMP (without time zone) values, OID 1114.
+ *
+ * The default pg / PGlite parser builds the returned Date in the
+ * server PROCESS's local timezone. Because these columns store UTC
+ * wall time (see storedTimestampIso), that default silently shifts
+ * every timestamp whenever the process does not run in UTC — under
+ * an Asia/Dhaka process each value arrives 6 hours early, and any
+ * code re-serializing it (DTO mappers, the next-step calendar sync)
+ * persists/displays the shifted instant. Parsing the text AS UTC at
+ * the driver makes every process timezone correct; in a UTC process
+ * (production) the result is identical to the default parser.
+ * Registered for the real pg pool in database/connection.ts and for
+ * PGlite in database/pglitePool.ts. Exotic values the UTC parse
+ * cannot handle (infinity, BC dates) fall back to the default parse.
+ */
+export function parseTimestampAsUtc(value: string): Date {
+  const text = String(value);
+  const iso = text.replace(' ', 'T');
+  const zoned = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(iso) ? iso : `${iso}Z`;
+  const parsed = new Date(zoned);
+  return Number.isFinite(parsed.getTime()) ? parsed : new Date(text);
+}
+
 export function parseYmd(value: string | undefined | null): { y: number; m: number; d: number } | null {
   if (!value) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value).trim());

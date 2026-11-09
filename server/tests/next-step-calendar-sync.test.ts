@@ -7,6 +7,11 @@ import { readFileSync } from 'node:fs';
 
 import { _setTestPoolForTest, _resetPoolsForTest, closePool } from '../database/connection.js';
 import { getPGliteInstanceAsync, createPGlitePoolAsync, resetPGlite } from '../database/pglitePool.js';
+import { storedTimestampIso } from '../utils/businessTime.js';
+// Stored TIMESTAMP values are UTC wall time (businessTime convention):
+// assertions on raw rows read them back via storedTimestampIso — never
+// `new Date(naive)`, which would parse in the test process's own
+// timezone and shift the instant (e.g. −6h under TZ=Asia/Dhaka).
 import { MIGRATION_IDS } from '../database/runMigrations.js';
 import { up as migrate054 } from '../database/migrations/054_next_step_calendar_sync.js';
 import { syncNextStepAfterFollowUp } from '../services/NextStepCalendarSync.js';
@@ -364,7 +369,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     assert.equal(bf1Entries[0].status, 'scheduled');
     assert.equal(bf1Entries[0].activity_type, 'follow_up');
     assert.equal(bf1Entries[0].assigned_to, employeeA.id);
-    assert.equal(new Date(bf1Entries[0].scheduled_at).toISOString(), new Date(BF1_AT).toISOString());
+    assert.equal(storedTimestampIso(bf1Entries[0].scheduled_at), new Date(BF1_AT).toISOString());
 
     const bf3Entries = await entriesFor(bf3.id);
     assert.equal(bf3Entries.length, 1);
@@ -394,7 +399,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     assert.equal(e.activity_type, 'follow_up');
     assert.equal(e.source_kind, 'follow_up');
     assert.equal(e.source_activity_id, body.data.activity.id, 'entry is linked to the follow-up that set it');
-    assert.equal(new Date(e.scheduled_at).toISOString(), new Date(D1).toISOString());
+    assert.equal(storedTimestampIso(e.scheduled_at), new Date(D1).toISOString());
     assert.equal(e.assigned_to, dbLead.assigned_to, 'assigned to the lead owner, like a manual entry');
 
     // And it renders through the calendar list API with the lead joined.
@@ -413,7 +418,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     const entriesM = await entriesFor(dbM.id);
     assert.equal(entriesM.length, 1);
     assert.equal(entriesM[0].activity_type, 'meeting');
-    assert.equal(new Date(entriesM[0].scheduled_at).toISOString(), new Date(D_MEET).toISOString());
+    assert.equal(storedTimestampIso(entriesM[0].scheduled_at), new Date(D_MEET).toISOString());
     assert.equal(entriesM[0].meeting_type, 'In-Person');
     assert.equal(entriesM[0].title, 'Meeting - Meet Prospect', 'meeting title matches the retired client mirror');
 
@@ -423,7 +428,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     const entriesC = await entriesFor(dbC.id);
     assert.equal(entriesC.length, 1);
     assert.equal(entriesC[0].activity_type, 'call');
-    assert.equal(new Date(entriesC[0].scheduled_at).toISOString(), new Date(D_CALL).toISOString());
+    assert.equal(storedTimestampIso(entriesC[0].scheduled_at), new Date(D_CALL).toISOString());
   });
 
   it('change: a second follow-up supersedes — one open entry, history preserved (two follow-ups = two entries)', async () => {
@@ -435,7 +440,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     assert.equal(entries.length, 2, 'two follow-ups produced two entries in total');
     const open = entries.filter(e => e.status === 'scheduled');
     assert.equal(open.length, 1, 'exactly one entry stays open');
-    assert.equal(new Date(open[0].scheduled_at).toISOString(), new Date(D2).toISOString());
+    assert.equal(storedTimestampIso(open[0].scheduled_at), new Date(D2).toISOString());
     assert.equal(open[0].source_activity_id, second.data.activity.id);
     const closed = entries.filter(e => e.status !== 'scheduled');
     assert.equal(closed.length, 1);
@@ -463,7 +468,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     const after2 = await entriesFor(dbLead.id);
     assert.equal(after2.length, 1, 'still one row for the same follow-up');
     assert.equal(after2[0].id, after1[0].id, 'same row — moved, not recreated');
-    assert.equal(new Date(after2[0].scheduled_at).toISOString(), new Date(D3).toISOString());
+    assert.equal(storedTimestampIso(after2[0].scheduled_at), new Date(D3).toISOString());
   });
 
   it('clear: re-saving the lead without a next step cancels the entry (row preserved)', async () => {
@@ -521,7 +526,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     assert.equal(completedRow.status, 'completed');
     const next = entries.find(e => e.id !== first.id);
     assert.equal(next.status, 'scheduled');
-    assert.equal(new Date(next.scheduled_at).toISOString(), new Date(D2).toISOString());
+    assert.equal(storedTimestampIso(next.scheduled_at), new Date(D2).toISOString());
     assert.equal(next.source_kind, 'scheduled_complete');
     assert.equal(next.source_activity_id, done.body.data.activity.id);
   });
