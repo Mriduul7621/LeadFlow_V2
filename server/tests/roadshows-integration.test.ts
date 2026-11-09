@@ -169,7 +169,12 @@ describe('Roadshow Follow-up API', () => {
     const created = await request(app).post('/api/roadshows').set('Authorization', auth(admin)).send(input([agent.id]));
     assert.equal(created.status, 201, JSON.stringify(created.body));
     assert.equal(created.body.data.status, 'pending');
-    assert.equal(created.body.data.assignedUsers[0].id, agent.id);
+    // Assignment rule (2026-11-09): creator + assist picks — the admin
+    // created it, so the assignee set is exactly {admin, agent}.
+    assert.deepEqual(
+      created.body.data.assignedUsers.map((u: any) => u.id).sort(),
+      [admin.id, agent.id].sort()
+    );
 
     const mine = await request(app).get('/api/roadshows?mine=true').set('Authorization', auth(agent));
     assert.equal(mine.status, 200, JSON.stringify(mine.body));
