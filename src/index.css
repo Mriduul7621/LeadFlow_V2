@@ -1709,3 +1709,106 @@
   .lf-cal-pill { gap: 0; padding: 3px 4px; font-size: 9px; }
   .lf-cal-pill-time { display: none; }
 }
+
+/* Category variants added by the PR D rebuild: team meetings and
+   roadshows join the original four pill colours. */
+.lf-cal-pill--team { background: #E9EAFD; border-left-color: #6366F1; color: #4338CA; }
+.lf-cal-pill--roadshow { background: #FDE8EC; border-left-color: #E11D48; color: #9F1239; }
+
+/* ================================================================
+   Task Calendar — time grid (Day / Work week / Week), PR D
+   Hour rows are 48px (HOUR_PX in TaskCalendar.tsx); event blocks
+   are absolutely positioned inside each day column.
+   ================================================================ */
+.lf-tg {
+  overflow: hidden;
+  border: 1px solid #E7E5DC;
+  border-radius: 14px;
+  background: #FFFFFF;
+}
+.lf-tg-scroll { overflow-y: auto; overflow-x: auto; max-height: 640px; position: relative; }
+.lf-tg-head {
+  display: grid;
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: #FBFAF7;
+  border-bottom: 1px solid #E7E5DC;
+}
+.lf-tg-headcell {
+  padding: 8px 6px 7px;
+  border-left: 1px solid #F0EFE8;
+  text-align: center;
+  min-width: 0;
+}
+.lf-tg-headcell:first-child { border-left: 0; }
+.lf-tg-headcell.is-weekend { background: #F4F2EA; }
+.lf-tg-headcell.is-today { background: #F9F8F1; }
+.lf-tg-dayname { display: block; color: #6E7570; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.lf-tg-daynum {
+  display: inline-flex; min-width: 24px; height: 24px; margin-top: 2px;
+  align-items: center; justify-content: center; border-radius: 999px;
+  color: #29352E; font-size: 13px; font-weight: 800; line-height: 1;
+}
+.lf-tg-daynum.is-today { background: #978C21; color: #FFFFFF; }
+.lf-tg-holiday {
+  display: block; margin-top: 3px; color: #756C1B; font-size: 9px; font-weight: 800;
+  line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lf-tg-body { display: grid; position: relative; }
+.lf-tg-gutter { position: relative; }
+.lf-tg-hourlabel {
+  position: absolute; right: 6px; transform: translateY(-50%);
+  color: #A8A99F; font-size: 9px; font-weight: 800; font-family: monospace; white-space: nowrap;
+}
+.lf-tg-col {
+  position: relative;
+  border-left: 1px solid #F0EFE8;
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 47px, #F0EFE8 47px, #F0EFE8 48px);
+  cursor: pointer;
+}
+.lf-tg-col.is-weekend { background-color: #FCFBF8; }
+.lf-tg-col.is-holiday { background-color: #FBF8EC; }
+.lf-tg-col.is-today { background-color: #FDFCF6; }
+.lf-tg-now {
+  position: absolute; left: 0; right: 0; height: 2px; background: #DC2626; z-index: 5; pointer-events: none;
+}
+.lf-tg-now::before {
+  content: ''; position: absolute; left: -4px; top: -4px; width: 10px; height: 10px;
+  border-radius: 999px; background: #DC2626;
+}
+.lf-tg-event {
+  position: absolute;
+  border: 0; border-left: 3px solid transparent; border-radius: 6px;
+  padding: 3px 6px; text-align: left; cursor: pointer; overflow: hidden;
+  font-size: 10px; font-weight: 700; line-height: 1.3; z-index: 4;
+  transition: filter .12s ease;
+}
+.lf-tg-event:hover { filter: brightness(.96); }
+.lf-tg-event.is-completed { opacity: .55; }
+.lf-tg-event.is-completed .lf-tg-event-title { text-decoration: line-through; }
+.lf-tg-event-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 800; }
+.lf-tg-event-time { display: block; font-size: 9px; font-weight: 800; opacity: .75; font-family: monospace; }
+.lf-tg-event--followup { background: #E7F6EE; border-left-color: #10B981; color: #047857; }
+.lf-tg-event--call { background: #E8F2FD; border-left-color: #3B82F6; color: #1D4ED8; }
+.lf-tg-event--customer_meeting { background: #FEF3E2; border-left-color: #F59E0B; color: #B45309; }
+.lf-tg-event--team_meeting { background: #E9EAFD; border-left-color: #6366F1; color: #4338CA; }
+.lf-tg-event--task { background: #F1EBFD; border-left-color: #8B5CF6; color: #6D28D9; }
+.lf-tg-event--roadshow { background: #FDE8EC; border-left-color: #E11D48; color: #9F1239; }
+
+/* Mini month (left rail) */
+.lf-mini-day {
+  position: relative; width: 100%; aspect-ratio: 1 / 1; max-height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: #3F4A42; border-radius: 8px; cursor: pointer; border: 0; background: transparent;
+}
+.lf-mini-day:hover { background: #F3F1E6; }
+.lf-mini-day.is-outside { color: #C3C4BB; }
+.lf-mini-day.is-weekend { color: #A8A99F; }
+.lf-mini-day.is-selected { background: #EFECCE; font-weight: 800; }
+.lf-mini-day.is-today { box-shadow: inset 0 0 0 2px #978C21; font-weight: 800; }
+.lf-mini-dot {
+  position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 999px; background: #978C21;
+}
+.lf-mini-dot.is-holiday { background: #E11D48; }

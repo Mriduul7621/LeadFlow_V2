@@ -19,6 +19,7 @@ import { fallbackStore } from '../../fallbackStore.js';
 import { resolveVisibility } from '../../authz.js';
 import { applyDefaultRoleAccess } from '../../database/roleAccessDefaults.js';
 import { getUserDepartmentIds } from '../../utils/departmentMirror.js';
+import { storedTimestampIso } from '../../utils/businessTime.js';
 import { getRequestMemo } from '../../utils/requestAuthz.js';
 import { logAuthTokenRejected } from '../../observability/events.js';
 import { DEFAULT_STATUS_DICTIONARY } from '../leadImport.js';
@@ -996,6 +997,12 @@ export function mapScheduledActivityRow(row: any) {
   const completedAtRaw = row.completed_at ?? row.completedAt ?? null;
   const completedByRaw = row.completed_by ?? row.completedBy ?? null;
   const completedActRaw = row.completed_activity_id ?? row.completedActivityId ?? null;
+  // Stored TIMESTAMP columns hold UTC wall time (businessTime
+  // convention) — serialize via storedTimestampIso so a naive value
+  // is read AS UTC, never in the server process's own timezone
+  // (`new Date(naive)` would shift the instant, e.g. −6h when the
+  // process runs in Asia/Dhaka; the Task Calendar consumes this DTO).
+  const ts = (snake: any, camel: any) => storedTimestampIso(snake ?? camel);
   return {
     id: row.id,
     leadId: row.lead_id || row.leadId || null,
@@ -1003,8 +1010,8 @@ export function mapScheduledActivityRow(row: any) {
     activityType: row.activity_type || row.activityType,
     activity_type: row.activity_type || row.activityType,
     title: row.title ?? null,
-    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
-    scheduled_at: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : (row.scheduledAt ? new Date(row.scheduledAt).toISOString() : null),
+    scheduledAt: ts(row.scheduled_at, row.scheduledAt),
+    scheduled_at: ts(row.scheduled_at, row.scheduledAt),
     durationMinutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
     duration_minutes: row.duration_minutes != null ? Number(row.duration_minutes) : (row.durationMinutes != null ? Number(row.durationMinutes) : null),
     remarks: row.remarks ?? null,
@@ -1019,12 +1026,12 @@ export function mapScheduledActivityRow(row: any) {
     assigned_to: row.assigned_to || row.assignedTo || null,
     updatedBy: row.updated_by || row.updatedBy || null,
     updated_by: row.updated_by || row.updatedBy || null,
-    createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
-    created_at: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || null),
-    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
-    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || null),
-    completedAt: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
-    completed_at: completedAtRaw ? new Date(completedAtRaw).toISOString() : null,
+    createdAt: ts(row.created_at, row.createdAt),
+    created_at: ts(row.created_at, row.createdAt),
+    updatedAt: ts(row.updated_at, row.updatedAt),
+    updated_at: ts(row.updated_at, row.updatedAt),
+    completedAt: storedTimestampIso(completedAtRaw),
+    completed_at: storedTimestampIso(completedAtRaw),
     completedBy: completedByRaw || null,
     completed_by: completedByRaw || null,
     completedActivityId: completedActRaw || null,

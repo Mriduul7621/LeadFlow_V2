@@ -1,7 +1,17 @@
-import { Pool, QueryResult, QueryResultRow } from "pg";
+import { Pool, QueryResult, QueryResultRow, types as pgTypes } from "pg";
 
 import { instrumentPoolForObservability } from "../observability/dbTiming.js";
 import { getRequestContext, nowMs } from "../observability/context.js";
+import { parseTimestampAsUtc } from "../utils/businessTime.js";
+
+// TIMESTAMP (without time zone), OID 1114, stores UTC wall time in
+// this app (utils/businessTime.ts). Parse it AS UTC so timestamps are
+// correct whatever timezone the server process runs in — the default
+// parser uses the process timezone and shifts values by its offset
+// (e.g. −6h under Asia/Dhaka). In a UTC process this is identical to
+// the default. TIMESTAMPTZ and DATE parsing are intentionally
+// untouched (true instants / calendar dates respectively).
+pgTypes.setTypeParser(1114, (value: string) => parseTimestampAsUtc(value));
 
 let pool: Pool | null = null;
 let pglitePool: any = null;

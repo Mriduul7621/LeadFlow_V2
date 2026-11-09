@@ -80,7 +80,7 @@
  * in-memory fallbackStore (NotificationService convention).
  */
 
-import { TERMINAL_LEAD_STATUSES } from '../utils/businessTime.js';
+import { TERMINAL_LEAD_STATUSES, storedTimestampIso } from '../utils/businessTime.js';
 import { createId } from '../fallbackStore.js';
 
 type Queryable = {
@@ -300,7 +300,12 @@ export async function reconcileLeadNextStepCalendar(
       return { synced: true };
     }
 
-    const atIso = new Date(lead.next_follow_up_at).toISOString();
+    // The stored column holds UTC wall time (businessTime convention):
+    // read it AS UTC — `new Date(...)` would parse it in the server
+    // process's own timezone and shift the mirrored entry (e.g. −6h
+    // under an Asia/Dhaka process).
+    const atIso = storedTimestampIso(lead.next_follow_up_at);
+    if (!atIso) return { synced: false };
     const openRes = await db.query(
       `SELECT id FROM scheduled_activities
         WHERE lead_id = $1 AND source_kind IS NOT NULL AND status = 'scheduled'
@@ -507,7 +512,8 @@ export function reconcileLeadNextStepCalendarDemo(store: any, args: {
     for (const row of openManaged(true)) demoCloseEntry(row, 'cancelled', args.actorId, null, nowIso);
     return;
   }
-  const atIso = new Date(nextAt).toISOString();
+  const atIso = storedTimestampIso(nextAt);
+  if (!atIso) return;
   const existing = openManaged(true)
     .sort((a, b) => new Date(b.createdAt ?? b.created_at).getTime() - new Date(a.createdAt ?? a.created_at).getTime())[0];
   const assignedTo = lead.assignedTo ?? lead.assigned_to ?? null;
