@@ -20,7 +20,8 @@ import {
   Wifi,
   CheckCircle2,
   AlertTriangle,
-  Timer
+  Timer,
+  CalendarDays
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -33,9 +34,13 @@ import { workflowService } from '../../workflow/services/workflowService';
 import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
 import { databaseStatusService } from '../../../services/syncService';
+import { calendarService, type CalendarHoliday } from '../../calendar/services/calendarService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 const STATUS_COLOR_CHOICES = ['slate', 'blue', 'amber', 'orange', 'teal', 'indigo', 'purple', 'violet', 'yellow', 'green', 'red'];
 const STATUS_COLOR_HEX: Record<string, string> = {
@@ -225,6 +230,122 @@ export default function Settings() {
       setSlaSaving(false);
     }
   };
+
+  // Calendar Settings (calendar upgrade PR C): weekend days +
+  // government holidays from GET /calendar/config; mutations are
+  // gated server-side by settings.manage. Weekend default is
+  // Fri + Sat ([5, 6]) — seeded by migration 056.
+  const canEditCalendar = isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata');
+  const [calendarLoaded, setCalendarLoaded] = useState(false);
+  const [weekendDraft, setWeekendDraft] = useState<number[]>([5, 6]);
+  const [weekendSaved, setWeekendSaved] = useState<number[]>([5, 6]);
+  const [weekendSaving, setWeekendSaving] = useState(false);
+  const [holidays, setHolidays] = useState<CalendarHoliday[]>([]);
+  const [holidayYear, setHolidayYear] = useState<string>('all');
+  const [holidayForm, setHolidayForm] = useState<{ date: string; name: string; category: 'general' | 'executive'; moonDependent: boolean; regional: boolean }>({
+    date: '', name: '', category: 'general', moonDependent: false, regional: false,
+  });
+  const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null);
+  const [holidaySaving, setHolidaySaving] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeSection !== 'calendar' || calendarLoaded) return;
+    let cancelled = false;
+    calendarService.getConfig()
+      .then(cfg => {
+        if (cancelled) return;
+        setWeekendDraft(cfg.weekendDays);
+        setWeekendSaved(cfg.weekendDays);
+        setHolidays(cfg.holidays);
+        setCalendarLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setCalendarLoaded(true); });
+    return () => { cancelled = true; };
+  }, [activeSection, calendarLoaded]);
+
+  const weekendDirty = JSON.stringify([...weekendDraft].sort()) !== JSON.stringify([...weekendSaved].sort());
+
+  const toggleWeekendDay = (day: number) => {
+    setWeekendDraft(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b));
+  };
+
+  const handleSaveWeekend = async () => {
+    if (weekendSaving) return;
+    setWeekendSaving(true);
+    try {
+      const saved = await calendarService.saveWeekendDays(weekendDraft);
+      setWeekendDraft(saved);
+      setWeekendSaved(saved);
+      toast.success('Weekend updated');
+    } catch {
+      toast.error('Could not update the weekend');
+    } finally {
+      setWeekendSaving(false);
+    }
+  };
+
+  const resetHolidayForm = () => {
+    setHolidayForm({ date: '', name: '', category: 'general', moonDependent: false, regional: false });
+    setEditingHolidayId(null);
+  };
+
+  const handleHolidaySubmit = async () => {
+    if (holidaySaving) return;
+    if (!holidayForm.date || !holidayForm.name.trim()) {
+      toast.error('Holiday date and name are required');
+      return;
+    }
+    setHolidaySaving(true);
+    try {
+      const input = { ...holidayForm, name: holidayForm.name.trim() };
+      if (editingHolidayId) {
+        const saved = await calendarService.updateHoliday(editingHolidayId, input);
+        setHolidays(prev => prev.map(h => h.id === saved.id ? saved : h).sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name)));
+        toast.success('Holiday updated');
+      } else {
+        const saved = await calendarService.createHoliday(input);
+        setHolidays(prev => [...prev, saved].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name)));
+        toast.success('Holiday added');
+      }
+      resetHolidayForm();
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not save the holiday');
+    } finally {
+      setHolidaySaving(false);
+    }
+  };
+
+  const handleHolidayEdit = (h: CalendarHoliday) => {
+    setEditingHolidayId(h.id);
+    setDeleteConfirmId(null);
+    setHolidayForm({ date: h.date, name: h.name, category: h.category, moonDependent: h.moonDependent, regional: h.regional });
+  };
+
+  const handleHolidayDelete = async (id: string) => {
+    try {
+      await calendarService.deleteHoliday(id);
+      setHolidays(prev => prev.filter(h => h.id !== id));
+      if (editingHolidayId === id) resetHolidayForm();
+      setDeleteConfirmId(null);
+      toast.success('Holiday deleted');
+    } catch {
+      toast.error('Could not delete the holiday');
+    }
+  };
+
+  const holidayYears = Array.from(new Set(holidays.map(h => h.date.slice(0, 4)))).sort();
+  const visibleHolidays = holidayYear === 'all' ? holidays : holidays.filter(h => h.date.slice(0, 4) === holidayYear);
+  const holidayGroups: { year: string; months: { label: string; items: CalendarHoliday[] }[] }[] = [];
+  for (const h of visibleHolidays) {
+    const year = h.date.slice(0, 4);
+    const monthLabel = MONTH_LABELS[Number(h.date.slice(5, 7)) - 1];
+    let yg = holidayGroups.find(g => g.year === year);
+    if (!yg) { yg = { year, months: [] }; holidayGroups.push(yg); }
+    let mg = yg.months.find(m => m.label === monthLabel);
+    if (!mg) { mg = { label: monthLabel, items: [] }; yg.months.push(mg); }
+    mg.items.push(h);
+  }
 
   const handleUpdateName = async () => {
     if (!user || !newName.trim()) return;
@@ -576,6 +697,7 @@ export default function Settings() {
   const sections = [
     { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
     { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Configure dashboard and system behavior', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays, desc: 'Weekend days and government holidays', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
   ].filter(section => section.allowed);
 
@@ -1230,8 +1352,211 @@ export default function Settings() {
                     </div>
                   </div>
                 </motion.div>
+              ) : activeSection === 'calendar' ? (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-white p-10 rounded-sm border border-slate-100 shadow-sm space-y-8 italic text-left"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
+                        <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
+                      </button>
+                      <h3 className="font-bold text-xl text-slate-800">Calendar</h3>
+                    </div>
+                  </div>
+
+                  <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
+                    <div>
+                      <h4 className="text-[11px] font-black uppercase tracking-widest text-[#978C21]">Weekend Days</h4>
+                      <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed mt-2">
+                        Days shaded as the weekend on the Task Calendar. Default: Friday + Saturday.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-4 border-t border-slate-150">
+                      {WEEKDAY_LABELS.map((label, day) => (
+                        <button
+                          key={label}
+                          type="button"
+                          disabled={!canEditCalendar || weekendSaving}
+                          onClick={() => toggleWeekendDay(day)}
+                          className={cn(
+                            "px-4 py-2.5 rounded-full text-[11px] font-black uppercase tracking-widest border transition-all disabled:opacity-50",
+                            weekendDraft.includes(day)
+                              ? "bg-[#978C21] text-white border-[#978C21]"
+                              : "bg-white text-slate-500 border-slate-200 hover:border-[#978C21]/50"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      {canEditCalendar && (
+                        <button
+                          type="button"
+                          onClick={handleSaveWeekend}
+                          disabled={!weekendDirty || weekendSaving}
+                          className="ml-2 px-4 py-2.5 bg-stone-700 hover:bg-stone-800 text-white rounded-[10px] text-xs font-bold disabled:opacity-40 flex items-center gap-2"
+                        >
+                          <Save className="w-4 h-4" /> {weekendSaving ? 'Saving...' : 'Save'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-[#978C21]">Government Holidays</h4>
+                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed mt-2">
+                          Bangladesh government holidays (MoPA gazette). Add, edit or remove days whenever the government changes them.
+                        </p>
+                      </div>
+                      <select
+                        value={holidayYear}
+                        onChange={e => setHolidayYear(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-sm px-3 py-2 text-[11px] font-black uppercase tracking-widest outline-none"
+                      >
+                        <option value="all">All years</option>
+                        {holidayYears.map(y => <option key={y} value={y}>{y}</option>)}
+                      </select>
+                    </div>
+
+                    {canEditCalendar && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-white border border-slate-100 rounded-sm">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Date</label>
+                          <input
+                            type="date"
+                            value={holidayForm.date}
+                            onChange={e => setHolidayForm(f => ({ ...f, date: e.target.value }))}
+                            className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Name</label>
+                          <input
+                            type="text"
+                            value={holidayForm.name}
+                            onChange={e => setHolidayForm(f => ({ ...f, name: e.target.value }))}
+                            placeholder="e.g. Victory Day"
+                            className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Category</label>
+                          <select
+                            value={holidayForm.category}
+                            onChange={e => setHolidayForm(f => ({ ...f, category: e.target.value as 'general' | 'executive' }))}
+                            className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none"
+                          >
+                            <option value="general">General</option>
+                            <option value="executive">Executive Order</option>
+                          </select>
+                        </div>
+                        <div className="flex items-end gap-6 pb-2">
+                          <label className="flex items-center gap-2 text-[11px] font-bold text-stone-600 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={holidayForm.moonDependent}
+                              onChange={e => setHolidayForm(f => ({ ...f, moonDependent: e.target.checked }))}
+                            />
+                            Moon-dependent
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] font-bold text-stone-600 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={holidayForm.regional}
+                              onChange={e => setHolidayForm(f => ({ ...f, regional: e.target.checked }))}
+                            />
+                            Regional only
+                          </label>
+                        </div>
+                        <div className="md:col-span-2 flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={handleHolidaySubmit}
+                            disabled={holidaySaving}
+                            className="px-4 py-2.5 bg-[#978C21] hover:bg-[#8a7f1e] text-white rounded-[10px] text-xs font-bold disabled:opacity-40 flex items-center gap-2"
+                          >
+                            <Plus className="w-4 h-4" /> {editingHolidayId ? 'Update Holiday' : 'Add Holiday'}
+                          </button>
+                          {editingHolidayId && (
+                            <button
+                              type="button"
+                              onClick={resetHolidayForm}
+                              className="px-4 py-2.5 bg-white border border-slate-200 text-slate-500 rounded-[10px] text-xs font-bold flex items-center gap-2"
+                            >
+                              <X className="w-4 h-4" /> Cancel Edit
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-6 pt-2">
+                      {!calendarLoaded ? (
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Loading holidays...</p>
+                      ) : holidayGroups.length === 0 ? (
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">No holidays in this selection.</p>
+                      ) : holidayGroups.map(group => (
+                        <div key={group.year} className="space-y-4">
+                          <h5 className="text-sm font-black text-slate-700 tracking-tight">{group.year}</h5>
+                          {group.months.map(monthGroup => (
+                            <div key={monthGroup.label} className="space-y-2">
+                              <h6 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{monthGroup.label}</h6>
+                              <div className="space-y-2">
+                                {monthGroup.items.map(h => (
+                                  <div key={h.id} className="flex flex-wrap items-center justify-between gap-3 p-4 bg-white border border-slate-100 rounded-sm">
+                                    <div className="flex flex-wrap items-center gap-3 min-w-0">
+                                      <span className="text-[11px] font-black text-slate-700 uppercase whitespace-nowrap">
+                                        {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                                      </span>
+                                      <span className="text-[11px] font-bold text-slate-600">{h.name}</span>
+                                      <span className={cn(
+                                        "px-2 py-0.5 text-[9px] font-black uppercase tracking-widest rounded border",
+                                        h.category === 'general'
+                                          ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                                          : "bg-sky-50 text-sky-600 border-sky-100"
+                                      )}>
+                                        {h.category === 'general' ? 'General' : 'Executive Order'}
+                                      </span>
+                                      {h.moonDependent && (
+                                        <span className="px-2 py-0.5 bg-amber-50 text-amber-600 text-[9px] font-black uppercase tracking-widest rounded border border-amber-100">Moon-dependent</span>
+                                      )}
+                                      {h.regional && (
+                                        <span className="px-2 py-0.5 bg-violet-50 text-violet-600 text-[9px] font-black uppercase tracking-widest rounded border border-violet-100">Regional</span>
+                                      )}
+                                    </div>
+                                    {canEditCalendar && (
+                                      <div className="flex items-center gap-2">
+                                        {deleteConfirmId === h.id ? (
+                                          <>
+                                            <button type="button" onClick={() => handleHolidayDelete(h.id)} className="px-3 py-1.5 bg-red-600 text-white rounded-[8px] text-[11px] font-bold">Confirm Delete</button>
+                                            <button type="button" onClick={() => setDeleteConfirmId(null)} className="px-3 py-1.5 bg-white border border-slate-200 text-slate-500 rounded-[8px] text-[11px] font-bold">Cancel</button>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <button type="button" onClick={() => handleHolidayEdit(h)} className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-[8px] text-[11px] font-bold hover:border-[#978C21]/50">Edit</button>
+                                            <button type="button" onClick={() => setDeleteConfirmId(h.id)} className="p-1.5 text-slate-300 hover:text-red-500">
+                                              <Trash2 className="w-4 h-4" />
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
               ) : (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   className="bg-white p-20 rounded-sm border border-slate-100 shadow-sm text-center italic"

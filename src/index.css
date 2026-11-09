@@ -1623,6 +1623,19 @@
 .lf-cal-cell:nth-child(-n + 7) { border-top: 0; }
 .lf-cal-cell:hover { background: #FDFCF7; }
 .lf-cal-cell.is-weekend { background: #FCFBF8; }
+.lf-cal-cell.is-holiday { background: #F5F1DE; }
+.lf-cal-holiday {
+  margin-bottom: 4px;
+  color: #756C1B;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .lf-cal-cell.is-outside { background: #FAF9F6; }
 .lf-cal-cell.is-outside .lf-cal-daynum { color: #B9BAB2; }
 .lf-cal-cell.is-today { background: #F9F8F1; }

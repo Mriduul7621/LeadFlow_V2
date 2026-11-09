@@ -65,6 +65,7 @@ import { up as visibilityDefaultsRmRo } from "./migrations/052_visibility_defaul
 import { up as deleteChainRepair } from "./migrations/053_delete_chain_repair.js";
 import { up as nextStepCalendarSync } from "./migrations/054_next_step_calendar_sync.js";
 import { up as meetingDataModel } from "./migrations/055_meeting_data_model.js";
+import { up as calendarSettingsHolidays } from "./migrations/056_calendar_settings_holidays.js";
 
 import {
   loadLedger,
@@ -177,6 +178,8 @@ const migrations: Migration[] = [
     { id: "054_next_step_calendar_sync", name: "Next-Step Calendar Sync", run: nextStepCalendarSync },
 
     { id: "055_meeting_data_model", name: "Meeting Data Model", run: meetingDataModel },
+
+    { id: "056_calendar_settings_holidays", name: "Calendar Settings + BD Govt Holidays", run: calendarSettingsHolidays },
 
 ];
 
