@@ -4,6 +4,7 @@ import { getPool } from '../database/connection.js';
 import authRouter from './production/auth.routes.js';
 import notificationsRouter from './production/notifications.routes.js';
 import metadataRouter from './production/metadata.routes.js';
+import calendarRouter from './production/calendar.routes.js';
 import roadshowsRouter from './production/roadshows.routes.js';
 import usersRouter from './production/users.routes.js';
 import leadsRouter from './production/leads.routes.js';
@@ -110,6 +111,14 @@ router.use(usersRouter);
 ==================================================================== */
 
 router.use(metadataRouter);
+
+/* ====================================================================
+   CALENDAR SETTINGS — ./production/calendar.routes.ts (calendar
+   upgrade PR C): weekend config + government holidays. New paths
+   (/calendar/*) — no overlap with the domains above.
+==================================================================== */
+
+router.use(calendarRouter);
 
 /* ====================================================================
    NOTIFICATIONS — extracted to ./production/notifications.routes.ts

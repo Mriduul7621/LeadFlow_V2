@@ -25,6 +25,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../store/authStore';
 import { scheduledActivityService, type ScheduledActivity } from '../../scheduledActivities/services/scheduledActivityService';
+import { calendarService } from '../../calendar/services/calendarService';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import BackButton from '../../shared/components/BackButton';
@@ -84,6 +85,30 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     followup: true,
     task: true
   });
+
+  // Calendar Settings (PR C): weekend days + government holidays come
+  // from GET /calendar/config — no hardcoded weekend assumption. The
+  // Bangladesh default (Fri + Sat) applies until the config loads or
+  // if it cannot be fetched.
+  const [weekendDays, setWeekendDays] = useState<number[]>([5, 6]);
+  const [holidaysByDate, setHolidaysByDate] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    calendarService.getConfig()
+      .then(cfg => {
+        if (cancelled) return;
+        setWeekendDays(cfg.weekendDays);
+        const byDate: Record<string, string[]> = {};
+        for (const h of cfg.holidays) {
+          (byDate[h.date] = byDate[h.date] || []).push(h.name);
+        }
+        setHolidaysByDate(byDate);
+      })
+      .catch(() => { /* defaults stay in place */ });
+    return () => { cancelled = true; };
+  }, [user]);
 
   // Modal State
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
@@ -409,7 +434,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
         <div className="lf-cal-body">
           {cells.map((day, index) => {
             const inMonth = day.getMonth() === month;
-            const weekend = day.getDay() === 0 || day.getDay() === 6;
+            const weekend = weekendDays.includes(day.getDay());
+            const dateKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+            const holidayNames = holidaysByDate[dateKey] || [];
             const dayEvents = getEventsForDay(day);
             const activeToday = isToday(day);
             const rendered = dayEvents.slice(0, 3);
@@ -422,6 +449,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   'lf-cal-cell',
                   !inMonth && 'is-outside',
                   weekend && 'is-weekend',
+                  holidayNames.length > 0 && 'is-holiday',
                   activeToday && 'is-today',
                 )}
                 onClick={() => handleDayClick(day, dayEvents)}
@@ -432,6 +460,12 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                     <span className="lf-cal-cell-count" aria-hidden="true">{dayEvents.length}</span>
                   )}
                 </div>
+
+                {holidayNames.length > 0 && (
+                  <div className="lf-cal-holiday" title={holidayNames.join(' · ')}>
+                    {holidayNames.join(' · ')}
+                  </div>
+                )}
 
                 <div className="lf-cal-events">
                   {rendered.map(event => (
