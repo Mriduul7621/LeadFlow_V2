@@ -21,7 +21,14 @@ import { Router } from 'express';
 import { getPool } from '../../database/connection.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import { createPerf } from '../../utils/perf.js';
-import { addCalendarDays, dhakaStartUtc, parseYmd } from '../../utils/businessTime.js';
+import { addCalendarDays, dhakaStartUtc, parseYmd, storedTimestampIso } from '../../utils/businessTime.js';
+import {
+  notifyMeetingClosed,
+  notifyMeetingInvites,
+  notifyMeetingMoved,
+  notifyMeetingRsvp,
+  type MeetingActivityRef,
+} from '../../services/MeetingNotificationService.js';
 import {
   compactQualityForFallbackLeads,
   compactScoreLeadRow,
@@ -655,6 +662,50 @@ function demoLeadlessVisible(entry: any, visibility: any, caller: any): boolean 
   return false;
 }
 
+/* ------------------------------------------------------------------
+   MEETING NOTIFICATIONS (PR E) — fan-out hooks for the handlers
+   below. Every hook runs AFTER the business mutation has committed
+   (or, in demo mode, after the store write) and goes through
+   MeetingNotificationService, which never throws: a notification
+   failure can never fail a mutation that is already durable.
+   ------------------------------------------------------------------ */
+
+/** Build the notification service's activity ref from a DB/demo row. */
+function meetingNotifyActivity(row: any, leadCustomerName?: string | null): MeetingActivityRef {
+  return {
+    id: String(row.id),
+    title: row.title ?? null,
+    activityType: row.activity_type || row.activityType || null,
+    scheduledAt: storedTimestampIso(row.scheduled_at ?? row.scheduledAt),
+    leadCustomerName: leadCustomerName ?? row.lead_customer_name ?? null,
+    createdBy: row.created_by || row.createdBy ? String(row.created_by || row.createdBy) : null,
+  };
+}
+
+/** Notification recipients from attached attendee objects. */
+function attendeeRecipients(attendees: any[] | undefined | null): { userId: string; employeeId: string }[] {
+  return (Array.isArray(attendees) ? attendees : []).map((a: any) => ({
+    userId: String(a.userId),
+    employeeId: a.employeeId ? String(a.employeeId) : '',
+  }));
+}
+
+/** PR E: fetch a DB row's attendees and send the closed notice. */
+async function notifyClosedFromDbRow(row: any, kind: 'cancelled' | 'completed', leadCustomerName?: string | null): Promise<void> {
+  const schema = await probeMeetingSchema();
+  let attendees: any[] = [];
+  if (schema.attendees) {
+    const map = await fetchAttendeesByActivity([String(row.id)]);
+    attendees = map.get(String(row.id)) || [];
+  }
+  await notifyMeetingClosed({
+    activity: meetingNotifyActivity(row, leadCustomerName),
+    organiserId: String(row.created_by || ''),
+    attendees: attendeeRecipients(attendees),
+    kind,
+  });
+}
+
 /** Demo-mode attendee objects for an entry (organiser-in-list ⇒ accepted). */
 function demoAttendeeObjects(attendees: { userId: string; employeeId: string }[], organiserId: string): any[] {
   return attendees.map(a => {
@@ -1016,6 +1067,16 @@ router.post('/scheduled-activities/:id/rsvp', requireAuth, async (req: any, res)
       if (!mine) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       mine.response = response;
       mine.respondedAt = new Date().toISOString();
+      // PR E: tell the organiser (idempotent per response value).
+      const responderUser = fallbackStore.users.find((u: any) => String(u.id) === String(caller.id));
+      await notifyMeetingRsvp({
+        activity: meetingNotifyActivity(row),
+        responder: {
+          userId: String(caller.id),
+          name: (responderUser as any)?.fullName || (responderUser as any)?.name || caller.employee_id,
+        },
+        response: response as 'accepted' | 'declined',
+      });
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...row }) });
     }
 
@@ -1049,6 +1110,17 @@ router.post('/scheduled-activities/:id/rsvp', requireAuth, async (req: any, res)
     );
     const outRow = out.rows[0] || row;
     await attachAttendees([outRow], meetingSchema);
+    // PR E: tell the organiser (idempotent per response value — a
+    // re-sent answer dedupes, a flipped answer notifies again).
+    const myAttendee = (outRow.attendees || []).find((a: any) => String(a.userId) === String(caller.id));
+    await notifyMeetingRsvp({
+      activity: meetingNotifyActivity(outRow),
+      responder: {
+        userId: String(caller.id),
+        name: myAttendee?.fullName || caller.employee_id,
+      },
+      response: response as 'accepted' | 'declined',
+    });
     return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(outRow) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'RSVP failed.' });
@@ -1275,6 +1347,14 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
       };
       (entry as any).priority = priority;
       (fallbackStore as any).scheduledActivities.push(entry);
+      // PR E: invite the attendees (the organiser is never notified).
+      if (attendeeSet.length > 0) {
+        await notifyMeetingInvites({
+          activity: meetingNotifyActivity(entry, lead ? ((lead as any).prospectName || (lead as any).customerName || null) : null),
+          organiserId: String(caller.id),
+          attendees: attendeeSet,
+        });
+      }
       perf.span('db.insert');
       perf.finish(res);
       return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(lead ? { ...entry, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus } : { ...entry }) });
@@ -1348,6 +1428,14 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     );
     const outRow = out.rows[0] || insertedRow;
     await attachAttendees([outRow], meetingSchema);
+    // PR E: invite the attendees (the organiser is never notified).
+    if (attendeeSet.length > 0) {
+      await notifyMeetingInvites({
+        activity: meetingNotifyActivity(outRow),
+        organiserId: String(caller.id),
+        attendees: attendeeSet,
+      });
+    }
     return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(outRow) });
   } catch (error: any) {
     try { createPerf('scheduled.create').finish(res); } catch {}
@@ -1551,6 +1639,38 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       updated.updatedAt = nowIso;
       updated.updated_at = nowIso;
       (fallbackStore as any).scheduledActivities[idx] = updated;
+      // PR E fan-out: gained attendees get an invite; retained
+      // attendees get a "moved" notice when the time changed (the
+      // just-invited already hold the new time, so they are excluded
+      // from "moved").
+      {
+        const organiserId = String(existing.created_by || existing.createdBy || '');
+        const leadName = lead ? ((lead as any).prospectName || (lead as any).customerName || null) : null;
+        const oldRecipients = attendeeRecipients(existing.attendees);
+        const newRecipients = attendeeRecipients(updated.attendees);
+        const oldIds = new Set(oldRecipients.map(a => a.userId));
+        const gained = newRecipients.filter(a => !oldIds.has(a.userId));
+        const gainedIds = new Set(gained.map(a => a.userId));
+        if (gained.length > 0) {
+          await notifyMeetingInvites({
+            activity: meetingNotifyActivity(updated, leadName),
+            organiserId,
+            attendees: gained,
+          });
+        }
+        const oldAt = storedTimestampIso(existing.scheduled_at ?? existing.scheduledAt);
+        const newAt = storedTimestampIso(updated.scheduled_at ?? updated.scheduledAt);
+        if (oldAt && newAt && oldAt !== newAt) {
+          const retained = newRecipients.filter(a => !gainedIds.has(a.userId));
+          if (retained.length > 0) {
+            await notifyMeetingMoved({
+              activity: meetingNotifyActivity(updated, leadName),
+              organiserId,
+              attendees: retained,
+            });
+          }
+        }
+      }
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(lead ? { ...updated, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus } : { ...updated }) });
     }
 
@@ -1580,6 +1700,14 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     }
     if (String(existingRow.status).toLowerCase() !== 'scheduled') {
       return sendJson(res, 409, { success: false, message: `Cannot edit a ${existingRow.status} activity.` });
+    }
+
+    // PR E: snapshot the pre-edit attendee set — the notification
+    // fan-out after the update diffs it against the post-edit set.
+    let oldAttendees: { userId: string; employeeId: string }[] = [];
+    if (meetingSchema.attendees) {
+      const oldAttendeeMap = await fetchAttendeesByActivity([String(existingRow.id)]);
+      oldAttendees = attendeeRecipients(oldAttendeeMap.get(String(existingRow.id)) || []);
     }
 
     const setClauses: string[] = [];
@@ -1628,6 +1756,35 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     );
     const outRow = out.rows[0] || updRow;
     await attachAttendees([outRow], meetingSchema);
+    // PR E fan-out: gained attendees → invite; retained attendees →
+    // "moved" when the time changed (the just-invited already hold
+    // the new time, so they are excluded from "moved").
+    {
+      const organiserId = String(existingRow.created_by || '');
+      const finalAttendees = attendeeRecipients(outRow.attendees);
+      const oldIds = new Set(oldAttendees.map(a => a.userId));
+      const gained = finalAttendees.filter(a => !oldIds.has(a.userId));
+      const gainedIds = new Set(gained.map(a => a.userId));
+      if (gained.length > 0) {
+        await notifyMeetingInvites({
+          activity: meetingNotifyActivity(outRow),
+          organiserId,
+          attendees: gained,
+        });
+      }
+      const oldAt = storedTimestampIso(existingRow.scheduled_at);
+      const newAt = storedTimestampIso(outRow.scheduled_at);
+      if (patch.scheduled_at !== undefined && oldAt && newAt && oldAt !== newAt) {
+        const retained = finalAttendees.filter(a => !gainedIds.has(a.userId));
+        if (retained.length > 0) {
+          await notifyMeetingMoved({
+            activity: meetingNotifyActivity(outRow),
+            organiserId,
+            attendees: retained,
+          });
+        }
+      }
+    }
     return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(outRow) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity update failed.' });
@@ -1771,6 +1928,13 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
         sched.updated_by = caller.id;
         sched.updatedAt = nowIsoLL;
         sched.updated_at = nowIsoLL;
+        // PR E: tell the attendees the event is done.
+        await notifyMeetingClosed({
+          activity: meetingNotifyActivity(sched),
+          organiserId: String(sched.created_by || sched.createdBy || ''),
+          attendees: attendeeRecipients(sched.attendees),
+          kind: 'completed',
+        });
         perf.span('db.complete');
         perf.finish(res);
         return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(sched), activity: null } });
@@ -1877,6 +2041,13 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
           excludeScheduledId: String(sched.id),
         });
       }
+      // PR E: tell the attendees the event is done.
+      await notifyMeetingClosed({
+        activity: meetingNotifyActivity(sched, (lead as any).prospectName || (lead as any).customerName || null),
+        organiserId: String(sched.created_by || sched.createdBy || ''),
+        attendees: attendeeRecipients(sched.attendees),
+        kind: 'completed',
+      });
       perf.span('db.complete');
       perf.finish(res);
       return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(sched), activity: mapActivityRow(activity) } });
@@ -1915,6 +2086,13 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
         const schedOutLL = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
         const outRowLL = schedOutLL.rows[0] || schedRow;
         await attachAttendees([outRowLL], completeSchema);
+        // PR E: tell the attendees the event is done.
+        await notifyMeetingClosed({
+          activity: meetingNotifyActivity(outRowLL),
+          organiserId: String(schedRow.created_by || ''),
+          attendees: attendeeRecipients(outRowLL.attendees),
+          kind: 'completed',
+        });
         return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(outRowLL), activity: null } });
       }
       if (schedRow.lead_is_deleted === true) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
@@ -2038,6 +2216,8 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
           excludeScheduledId: String(schedRow.id),
         });
         await client.query('COMMIT');
+        // PR E: tell the attendees the event is done.
+        await notifyClosedFromDbRow(schedRow, 'completed', leadRow.customer_name ?? null);
         perf.span('db.complete');
         perf.finish(res);
         const schedOut = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
@@ -2059,6 +2239,8 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       const insertedId2 = actInsert2.rows[0].id;
       await client.query(`UPDATE scheduled_activities SET status='completed', completed_at=$1, completed_by=$2, completed_activity_id=$3, updated_by=$2, updated_at=NOW() WHERE id=$4`, [nowForDb, caller.id, insertedId2, schedRow.id]);
       await client.query('COMMIT');
+      // PR E: tell the attendees the event is done.
+      await notifyClosedFromDbRow(schedRow, 'completed');
       perf.span('db.complete');
       perf.finish(res);
       const schedOut2 = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
@@ -2108,6 +2290,13 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
         sched.updated_by = caller.id;
         sched.updatedAt = nowIsoLL;
         sched.updated_at = nowIsoLL;
+        // PR E: tell the attendees the meeting is off.
+        await notifyMeetingClosed({
+          activity: meetingNotifyActivity(sched),
+          organiserId: String(sched.created_by || sched.createdBy || ''),
+          attendees: attendeeRecipients(sched.attendees),
+          kind: 'cancelled',
+        });
         return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...sched }) });
       }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
@@ -2123,36 +2312,52 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
       sched.updated_by = caller.id;
       sched.updatedAt = nowIso;
       sched.updated_at = nowIso;
+      // PR E: tell the attendees the meeting is off.
+      await notifyMeetingClosed({
+        activity: meetingNotifyActivity(sched, (lead as any).prospectName || (lead as any).customerName || null),
+        organiserId: String(sched.created_by || sched.createdBy || ''),
+        attendees: attendeeRecipients(sched.attendees),
+        kind: 'cancelled',
+      });
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...sched, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
     }
     const client = await getPool().connect();
     try {
       await client.query('BEGIN');
       const r = await client.query(
-        `SELECT sa.*, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields
+        `SELECT sa.*, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.customer_name AS lead_customer_name
          FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id
          WHERE sa.id = $1 FOR UPDATE OF sa`,
         [isCanonicalLowerUuid(id) ? id : null]
       );
       if (!r.rows[0]) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const row = r.rows[0];
+      // PR E: the attendee set drives both the lead-less visibility
+      // arms below and the cancellation fan-out after commit.
+      const cancelSchema = await probeMeetingSchema();
+      let cancelAttendees: any[] = [];
+      if (cancelSchema.attendees) {
+        const attMap = await fetchAttendeesByActivity([String(row.id)]);
+        cancelAttendees = attMap.get(String(row.id)) || [];
+      }
       if (row.lead_id) {
         if (row.lead_is_deleted === true) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
         if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       } else {
         // Lead-less cancel (migration 055): visibility via the meeting arms.
-        const cancelSchema = await probeMeetingSchema();
-        let cancelAttendees: any[] = [];
-        if (cancelSchema.attendees) {
-          const attMap = await fetchAttendeesByActivity([String(row.id)]);
-          cancelAttendees = attMap.get(String(row.id)) || [];
-        }
         if (!isLeadlessVisible(row, cancelAttendees.map((a: any) => String(a.userId)), visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       }
       if (String(row.status).toLowerCase() === 'completed') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Cannot cancel a completed activity.' }); }
       if (String(row.status).toLowerCase() === 'cancelled') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' }); }
       await client.query(`UPDATE scheduled_activities SET status='cancelled', updated_by=$1, updated_at=NOW() WHERE id=$2`, [caller.id, row.id]);
       await client.query('COMMIT');
+      // PR E: tell the attendees the meeting is off.
+      await notifyMeetingClosed({
+        activity: meetingNotifyActivity(row),
+        organiserId: String(row.created_by || ''),
+        attendees: attendeeRecipients(cancelAttendees),
+        kind: 'cancelled',
+      });
       const out = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [row.id]);
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(out.rows[0]) });
     } catch (e: any) {

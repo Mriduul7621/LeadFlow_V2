@@ -173,6 +173,25 @@ Jobs**. If it is not, trigger the same endpoint from any external
 scheduler with the `x-cron-secret` header (or
 `Authorization: Bearer <CRON_SECRET>`).
 
+**Meeting reminders** (calendar upgrade PR E) ride a second
+cron-secret endpoint in the same style:
+`GET|POST /api/notifications/push/cron-meeting-reminders`. It delivers
+the per-meeting reminders chosen on each event (`reminder_minutes`,
+migration 055) — an in-app notification plus a Web Push attempt — to
+the organiser, the assignee and every attendee who has not declined.
+Meeting invites, time changes, cancellations/completions and RSVP
+answers also notify in-app (+ push) at the moment they happen, and
+the 08:30 daily summary above additionally mentions how many
+meetings the user has today. There is deliberately **no
+high-frequency Vercel cron** (the free plan cannot run one): point
+any free external scheduler (e.g. cron-job.org) at the
+meeting-reminder endpoint **every 15 minutes** with the
+`x-cron-secret` header (or `Authorization: Bearer <CRON_SECRET>`),
+the same fallback pattern as the daily cron. Delivery is idempotent
+per (activity, recipient, scheduled time) — overlapping schedules
+and repeat calls never double-send, and a rescheduled meeting
+re-arms under its new time.
+
 ---
 
 ## 4. Database failure policy (preserved, now covered by tests)
