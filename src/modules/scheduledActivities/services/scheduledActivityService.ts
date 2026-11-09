@@ -14,6 +14,16 @@ import type { LeadQuality } from '../../shared/types';
 export type ScheduledActivityType = 'call' | 'meeting' | 'follow_up' | 'task';
 export type ScheduledActivityStatus = 'scheduled' | 'completed' | 'cancelled';
 export type ScheduledActivityPriority = 'LOW' | 'NORMAL' | 'MEDIUM' | 'HIGH';
+export type ScheduledActivityAttendeeResponse = 'pending' | 'accepted' | 'declined';
+
+/** One invited colleague on a (usually lead-less) meeting — migration 055. */
+export interface ScheduledActivityAttendee {
+  userId: string;
+  employeeId?: string | null;
+  fullName?: string | null;
+  response: ScheduledActivityAttendeeResponse | string;
+  respondedAt?: string | null;
+}
 
 export interface ScheduledActivity {
   id: string;
@@ -54,6 +64,13 @@ export interface ScheduledActivity {
   source_activity_id?: string | null;
   sourceKind?: string | null;
   source_kind?: string | null;
+  // Meeting data model (migration 055): leadId is null for lead-less
+  // events (team meetings / standalone tasks); reminderMinutes is the
+  // minutes-before-start reminder (null = none); attendees carries
+  // the invite list with RSVP state.
+  reminderMinutes?: number | null;
+  reminder_minutes?: number | null;
+  attendees?: ScheduledActivityAttendee[];
   // joined lead convenience
   leadCustomerName?: string | null;
   leadMobile?: string | null;
@@ -137,7 +154,11 @@ export const scheduledActivityService = {
   },
 
   async create(payload: {
-    leadId: string;
+    // Optional since migration 055: omit for a lead-less team
+    // meeting / standalone task (activityType 'meeting' | 'task',
+    // title then required). attendeeIds invites colleagues (active
+    // users only); reminderMinutes sets the reminder offset.
+    leadId?: string | null;
     activityType: ScheduledActivityType;
     scheduledAt: string;
     title?: string | null;
@@ -148,6 +169,8 @@ export const scheduledActivityService = {
     meetingType?: string | null;
     location?: string | null;
     assignedTo?: string | null;
+    attendeeIds?: string[];
+    reminderMinutes?: number | null;
   }): Promise<ScheduledActivity> {
     return apiRequest<ScheduledActivity>('/api/scheduled-activities', {
       method: 'POST',
@@ -169,12 +192,25 @@ export const scheduledActivityService = {
       meetingType: string | null;
       location: string | null;
       assignedTo: string | null;
+      // Migration 055: presence replaces the invite set (retained
+      // attendees keep their RSVP); reminderMinutes null clears.
+      attendeeIds: string[];
+      reminderMinutes: number | null;
     }>
   ): Promise<ScheduledActivity> {
     return apiRequest<ScheduledActivity>(`/api/scheduled-activities/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  },
+
+  /** RSVP to a meeting invite (migration 055). Attendees only. */
+  async rsvp(id: string, response: 'accepted' | 'declined'): Promise<ScheduledActivity> {
+    return apiRequest<ScheduledActivity>(`/api/scheduled-activities/${encodeURIComponent(id)}/rsvp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response }),
     });
   },
 

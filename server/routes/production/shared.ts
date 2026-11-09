@@ -998,8 +998,8 @@ export function mapScheduledActivityRow(row: any) {
   const completedActRaw = row.completed_activity_id ?? row.completedActivityId ?? null;
   return {
     id: row.id,
-    leadId: row.lead_id || row.leadId,
-    lead_id: row.lead_id || row.leadId,
+    leadId: row.lead_id || row.leadId || null,
+    lead_id: row.lead_id || row.leadId || null,
     activityType: row.activity_type || row.activityType,
     activity_type: row.activity_type || row.activityType,
     title: row.title ?? null,
@@ -1035,6 +1035,13 @@ export function mapScheduledActivityRow(row: any) {
     source_activity_id: row.source_activity_id || row.sourceActivityId || null,
     sourceKind: row.source_kind || row.sourceKind || null,
     source_kind: row.source_kind || row.sourceKind || null,
+    // Meeting data model (migration 055): minutes before start at
+    // which a reminder is wanted (NULL = none), and the attendee list
+    // the routes attach after a bulk fetch (empty for rows that carry
+    // no invites or on pre-055 schemas, where the routes attach []).
+    reminderMinutes: row.reminder_minutes != null ? Number(row.reminder_minutes) : (row.reminderMinutes != null ? Number(row.reminderMinutes) : null),
+    reminder_minutes: row.reminder_minutes != null ? Number(row.reminder_minutes) : (row.reminderMinutes != null ? Number(row.reminderMinutes) : null),
+    attendees: Array.isArray(row.attendees) ? row.attendees : [],
     leadCustomerName: row.lead_customer_name || row.customer_name || row.leadCustomerName || null,
     leadMobile: row.lead_mobile || row.leadMobile || null,
     leadStatus: row.lead_current_status || row.leadStatus || null,

@@ -411,9 +411,12 @@ router.put('/roadshows/:id', requireAuth, async (req: any, res) => {
    ------------------------------------------------------------------
    Dedicated table `scheduled_activities` powers both the Dashboard
    Daily Execution panel (Today/Tomorrow) and the Task Calendar.
-   Each row is scoped to a lead; visibility is inherited from the
-   parent lead via the same Own/DownTeam/FullTeam/Organization
-   enforcement used for GET /leads and GET /leads/follow-ups.
+   Rows are usually scoped to a lead, with visibility inherited from
+   the parent lead via the same Own/DownTeam/FullTeam/Organization
+   enforcement used for GET /leads and GET /leads/follow-ups. Since
+   migration 055 a row may instead be LEAD-LESS (a team meeting or
+   standalone task with attendees + RSVP) — those rows carry their
+   own visibility arms (see the meeting helpers below).
    Business time is Asia/Dhaka; scheduled_at is stored as UTC.
    All mutations are PostgreSQL-authoritative with a dev-demo
    fallbackStore mirror for local development.
@@ -440,6 +443,231 @@ function normalizePriority(value: any): string | null {
   const v = String(value).trim().toUpperCase();
   if (!SCHEDULED_PRIORITIES.includes(v as any)) return null;
   return v;
+}
+
+/* ====================================================================
+   MEETING DATA MODEL (migration 055, PR B) — lead-less events,
+   attendees, RSVP, reminders.
+   ------------------------------------------------------------------
+   A scheduled activity may now have NO lead (an internal team
+   meeting or a standalone task). The organiser is `created_by`;
+   invited colleagues live in `scheduled_activity_attendees` with an
+   RSVP response. Visibility for lead-less rows (no existence leak —
+   every surface answers the same 404 as for an invisible lead):
+       caller created it, OR caller is an attendee, OR caller is the
+       assignee, OR created_by ∈ caller's visibility set
+       (resolveCallerVisibility — a manager sees their downline's
+       meetings). Lead rows keep the PR #104 lead predicate unchanged.
+
+   Organiser/attendee rule (documented choice): the creator is the
+   organiser and is NOT required in attendeeIds; when the organiser
+   IS listed, their attendee row is stored as 'accepted' (they
+   obviously attend their own meeting) — everyone else starts
+   'pending'. The organiser never RSVPs (POST /:id/rsvp refuses with
+   a clear 400).
+
+   Schema probing follows the PR A pattern: migration 055 auto-runs
+   on server boot, but pre-055 schemas (older test fixtures, a dev DB
+   that has not booted the new build) must degrade, never crash — the
+   probe reads information_schema (which always exists), so no failed
+   SQL can poison a caller's transaction.
+==================================================================== */
+
+const ATTENDEE_RESPONSES = ['pending', 'accepted', 'declined'] as const;
+
+async function probeMeetingSchema(): Promise<{ attendees: boolean; reminder: boolean }> {
+  if (!useDb()) return { attendees: true, reminder: true };
+  try {
+    const r = await getPool().query(
+      `SELECT (
+         EXISTS (SELECT 1 FROM information_schema.tables
+                  WHERE table_name = 'scheduled_activity_attendees')
+       ) AS attendees, (
+         EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name = 'scheduled_activities' AND column_name = 'reminder_minutes')
+       ) AS reminder`
+    );
+    return { attendees: Boolean(r.rows[0]?.attendees), reminder: Boolean(r.rows[0]?.reminder) };
+  } catch {
+    return { attendees: false, reminder: false };
+  }
+}
+
+/**
+ * Resolve attendee refs (user uuid / employee id / email) to users.
+ * Same active-only semantics as lead assignment (PR #106): an
+ * inactive attendee is refused with a 400 naming the person; an
+ * unknown ref is a 400 naming the ref. Deduped by user id.
+ */
+async function resolveAttendees(
+  rawRefs: any[]
+): Promise<{ attendees: { userId: string; employeeId: string }[] } | { error: string }> {
+  const refs = [...new Set((rawRefs || []).map(v => String(v ?? '').trim()).filter(Boolean))];
+  const out: { userId: string; employeeId: string }[] = [];
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    const resolved = await resolveAssignedTo(ref);
+    if (!resolved) return { error: `attendee "${ref}" was not found.` };
+    if (!resolved.isActive) {
+      return { error: `Assigned user "${resolved.employeeId}" is inactive and cannot be added as an attendee.` };
+    }
+    if (!seen.has(resolved.userId)) {
+      seen.add(resolved.userId);
+      out.push({ userId: resolved.userId, employeeId: resolved.employeeId });
+    }
+  }
+  return { attendees: out };
+}
+
+/** reminderMinutes: NULL/empty → null (no reminder); else an integer 0..10080 (a week). */
+function parseReminderMinutes(raw: any): { value: number | null } | { error: string } {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { value: null };
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 10080) {
+    return { error: 'reminderMinutes must be an integer between 0 and 10080.' };
+  }
+  return { value: n };
+}
+
+/** Bulk attendee fetch for a page of activities — never per-row. */
+async function fetchAttendeesByActivity(activityIds: string[]): Promise<Map<string, any[]>> {
+  const map = new Map<string, any[]>();
+  const ids = [...new Set((activityIds || []).map(String).filter(Boolean))];
+  if (ids.length === 0) return map;
+  const r = await getPool().query(
+    `SELECT a.activity_id, a.user_id, u.employee_id, u.full_name, a.response, a.responded_at
+     FROM scheduled_activity_attendees a
+     JOIN users u ON u.id = a.user_id
+     WHERE a.activity_id = ANY($1::uuid[])
+     ORDER BY u.full_name ASC`,
+    [ids]
+  );
+  for (const row of r.rows || []) {
+    const key = String(row.activity_id);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push({
+      userId: String(row.user_id),
+      employeeId: row.employee_id || null,
+      fullName: row.full_name || null,
+      response: row.response || 'pending',
+      respondedAt: row.responded_at ? new Date(row.responded_at).toISOString() : null,
+    });
+  }
+  return map;
+}
+
+/** Attach `attendees` arrays to DB rows (empty arrays pre-055). */
+async function attachAttendees(rows: any[], schema: { attendees: boolean }): Promise<void> {
+  if (!rows || rows.length === 0) return;
+  if (!schema.attendees) {
+    for (const row of rows) row.attendees = [];
+    return;
+  }
+  const map = await fetchAttendeesByActivity(rows.map((r: any) => String(r.id)));
+  for (const row of rows) row.attendees = map.get(String(row.id)) || [];
+}
+
+/** Insert invite rows for a freshly created activity (organiser-in-list ⇒ accepted). */
+async function insertAttendees(
+  exec: { query: Function },
+  activityId: string,
+  organiserId: string,
+  attendees: { userId: string }[]
+): Promise<void> {
+  for (const a of attendees) {
+    const isOrganiser = String(a.userId) === String(organiserId);
+    await exec.query(
+      `INSERT INTO scheduled_activity_attendees (activity_id, user_id, response, responded_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (activity_id, user_id) DO NOTHING`,
+      [activityId, a.userId, isOrganiser ? 'accepted' : 'pending', isOrganiser ? new Date() : null]
+    );
+  }
+}
+
+/**
+ * Replace an activity's invite set: retained users keep their RSVP,
+ * removed users' rows go away, new users start 'pending' (organiser
+ * 'accepted', as on create).
+ */
+async function replaceAttendees(
+  exec: { query: Function },
+  activityId: string,
+  organiserId: string,
+  attendees: { userId: string }[]
+): Promise<void> {
+  const ids = attendees.map(a => a.userId);
+  if (ids.length > 0) {
+    await exec.query(
+      `DELETE FROM scheduled_activity_attendees WHERE activity_id = $1 AND NOT (user_id = ANY($2::uuid[]))`,
+      [activityId, ids]
+    );
+  } else {
+    await exec.query(`DELETE FROM scheduled_activity_attendees WHERE activity_id = $1`, [activityId]);
+  }
+  await insertAttendees(exec, activityId, organiserId, attendees);
+  if (ids.includes(String(organiserId))) {
+    await exec.query(
+      `UPDATE scheduled_activity_attendees
+       SET response = 'accepted', responded_at = COALESCE(responded_at, NOW())
+       WHERE activity_id = $1 AND user_id = $2`,
+      [activityId, organiserId]
+    );
+  }
+}
+
+/** Row-level lead-less visibility (DB rows) — the arms listed in the header. */
+function isLeadlessVisible(row: any, attendeeUserIds: string[], visibility: any, caller: any): boolean {
+  if (!row) return false;
+  if (visibility.all) return true;
+  const userIds: string[] = visibility.userIds || [];
+  if (row.created_by && userIds.includes(String(row.created_by))) return true;
+  if (row.assigned_to && String(row.assigned_to) === String(caller.id)) return true;
+  if ((attendeeUserIds || []).includes(String(caller.id))) return true;
+  return false;
+}
+
+/** SQL twin of isLeadlessVisible for the calendar list. */
+function leadlessVisibilitySql(visibility: any, params: any[], caller: any, hasAttendees: boolean): string {
+  if (visibility.all) return 'TRUE';
+  params.push(visibility.userIds);
+  const pUser = params.length;
+  params.push(caller.id);
+  const pCaller = params.length;
+  const attendeeArm = hasAttendees
+    ? ` OR EXISTS (SELECT 1 FROM scheduled_activity_attendees saa WHERE saa.activity_id = sa.id AND saa.user_id = $${pCaller}::uuid)`
+    : '';
+  return `(sa.created_by = ANY($${pUser}::uuid[]) OR sa.assigned_to = $${pCaller}::uuid${attendeeArm})`;
+}
+
+/** Demo-mode lead-less visibility (attendees live on the entry object). */
+function demoLeadlessVisible(entry: any, visibility: any, caller: any): boolean {
+  if (!entry) return false;
+  if (visibility.all) return true;
+  const userIds: string[] = visibility.userIds || [];
+  const createdBy = entry.created_by || entry.createdBy || null;
+  if (createdBy && userIds.includes(String(createdBy))) return true;
+  const assignedUuid = entry.assigned_to || null;
+  const assignedEmp = entry.assignedTo || entry.assigned_to || null;
+  if (assignedUuid && String(assignedUuid) === String(caller.id)) return true;
+  if (assignedEmp && caller.employee_id && String(assignedEmp).toUpperCase() === String(caller.employee_id).toUpperCase()) return true;
+  if (Array.isArray(entry.attendees) && entry.attendees.some((a: any) => String(a.userId) === String(caller.id))) return true;
+  return false;
+}
+
+/** Demo-mode attendee objects for an entry (organiser-in-list ⇒ accepted). */
+function demoAttendeeObjects(attendees: { userId: string; employeeId: string }[], organiserId: string): any[] {
+  return attendees.map(a => {
+    const u = fallbackStore.users.find(x => x.id === a.userId);
+    const isOrganiser = String(a.userId) === String(organiserId);
+    return {
+      userId: a.userId,
+      employeeId: a.employeeId,
+      fullName: (u as any)?.fullName || (u as any)?.name || null,
+      response: isOrganiser ? 'accepted' : 'pending',
+      respondedAt: isOrganiser ? new Date().toISOString() : null,
+    };
+  });
 }
 
 /* ------------------------------------------------------------------
@@ -529,8 +757,12 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
           const toEnd = dhakaStartUtc(next.y, next.m, next.d).getTime();
           if (t >= toEnd) return false;
         }
-        // Visibility: lead must be visible
-        const lead = leadById.get(String(sa.leadId || sa.lead_id));
+        // Visibility: lead rows via the parent lead; lead-less rows
+        // (migration 055 meetings/tasks) via the meeting arms —
+        // organiser / attendee / assignee / organiser-in-scope.
+        const leadRef = sa.leadId || sa.lead_id || null;
+        if (!leadRef) return demoLeadlessVisible(sa, visibility, caller);
+        const lead = leadById.get(String(leadRef));
         if (!lead) return false;
         if (lead.is_deleted === true) return false;
         // THE lead-access predicate — same unified rule as the DB
@@ -570,8 +802,9 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
 
     const pool = getPool();
+    const meetingSchema = await probeMeetingSchema();
     const params: any[] = [];
-    const where: string[] = ['l.is_deleted = FALSE'];
+    const where: string[] = [];
 
     if (leadIdFilter) {
       params.push(leadIdFilter);
@@ -618,12 +851,20 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       params.push(dhakaStartUtc(next.y, next.m, next.d).toISOString());
       where.push(`sa.scheduled_at < $${params.length}::timestamp`);
     }
-    // THE lead-visibility predicate — one shared definition
-    // (buildDashboardVisibilitySql), identical to the leads list.
-    where.push(buildDashboardVisibilitySql(visibility, params));
+    // Visibility — ONE combined predicate over the LEFT JOIN:
+    //   lead rows: not soft-deleted AND the lead-visibility predicate
+    //     (buildDashboardVisibilitySql, identical to the leads list);
+    //   lead-less rows (migration 055): the meeting arms
+    //     (organiser-in-scope / assignee / attendee).
+    // The is_deleted check moved INSIDE the lead arm — on the LEFT
+    // JOIN a lead-less row has l.is_deleted NULL, which the old
+    // top-level `l.is_deleted = FALSE` would have filtered out.
+    const leadVisSql = buildDashboardVisibilitySql(visibility, params);
+    const leadlessVisSql = leadlessVisibilitySql(visibility, params, caller, meetingSchema.attendees);
+    where.push(`((sa.lead_id IS NOT NULL AND l.is_deleted = FALSE AND ${leadVisSql}) OR (sa.lead_id IS NULL AND ${leadlessVisSql}))`);
 
     const whereSql = where.join(' AND ');
-    const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS cnt FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE ${whereSql}`, params);
     const total = Number(countRes.rows[0]?.cnt || 0);
 
     params.push(limit, offset);
@@ -635,12 +876,13 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
               l.created_at AS lead_created_at, l.expected_premium AS lead_expected_premium,
               l.custom_fields->>'interestedAmount' AS lead_interested_amount
        FROM scheduled_activities sa
-       JOIN leads l ON l.id = sa.lead_id
+       LEFT JOIN leads l ON l.id = sa.lead_id
        WHERE ${whereSql}
        ORDER BY sa.scheduled_at ASC
        LIMIT $${pLimit} OFFSET $${pOffset}`,
       params
     );
+    await attachAttendees(listRes.rows, meetingSchema);
     // Parent-lead quality for the page: two bulk signal queries over the
     // distinct parent leads — never per-row.
     const parentIds = Array.from(
@@ -653,7 +895,8 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     const items = listRes.rows.map((row: any) => {
       const mapped: any = mapScheduledActivityRow(row);
       const parentKey = String(row.lead_id || '');
-      mapped.leadQuality = compactScoreLeadRow(
+      // Lead-less rows have no parent lead to score.
+      mapped.leadQuality = row.lead_id ? compactScoreLeadRow(
         {
           id: parentKey,
           current_status: row.lead_current_status,
@@ -665,7 +908,7 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
         },
         schedActivity.get(parentKey),
         schedPlanned.get(parentKey)
-      );
+      ) : null;
       return mapped;
     });
     return sendJson(res, 200, { success: true, data: items, pagination: { limit, offset, total } });
@@ -694,6 +937,10 @@ router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
       const row = (fallbackStore as any).scheduledActivities.find((r: any) => String(r.id) === id);
       if (!row) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      if (!(row.leadId || row.lead_id)) {
+        if (!demoLeadlessVisible(row, visibility, caller)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+        return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...row }) });
+      }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(row.leadId || row.lead_id));
       if (!lead || lead.is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       if (!isLeadAccessible(
@@ -705,16 +952,25 @@ router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     }
 
     const pool = getPool();
+    const meetingSchema = await probeMeetingSchema();
     const r = await pool.query(
       `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status,
               l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
        FROM scheduled_activities sa
-       JOIN leads l ON l.id = sa.lead_id
+       LEFT JOIN leads l ON l.id = sa.lead_id
        WHERE sa.id = $1 LIMIT 1`,
       [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!r.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const row = r.rows[0];
+    await attachAttendees([row], meetingSchema);
+    if (!row.lead_id) {
+      const attendeeIds = (row.attendees || []).map((a: any) => String(a.userId));
+      if (!isLeadlessVisible(row, attendeeIds, visibility, caller)) {
+        return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(row) });
+    }
     if (row.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
       return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
@@ -722,6 +978,80 @@ router.get('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(row) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity fetch failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
+   POST /scheduled-activities/:id/rsvp — attendee responds
+   { response: 'accepted' | 'declined' }. Only an invited attendee
+   may respond — everyone else (including users who cannot even see
+   the event) gets the same 404 as a missing activity, so the
+   endpoint leaks nothing. The organiser never RSVPs to their own
+   meeting (clear 400): their attendee row, when listed at all, is
+   already 'accepted' by construction.
+------------------------------------------------------------------- */
+router.post('/scheduled-activities/:id/rsvp', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const id = String(req.params.id || '').trim();
+    if (!id) return sendJson(res, 400, { success: false, message: 'Scheduled activity id is required.' });
+    const response = String(req.body?.response ?? '').trim().toLowerCase();
+    if (response !== 'accepted' && response !== 'declined') {
+      return sendJson(res, 400, { success: false, message: `response must be 'accepted' or 'declined'.` });
+    }
+
+    if (!useDb()) {
+      if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      const row = (fallbackStore as any).scheduledActivities.find((r: any) => String(r.id) === id);
+      if (!row) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      if (String(row.created_by || row.createdBy || '') === String(caller.id)) {
+        return sendJson(res, 400, { success: false, message: 'The organiser does not RSVP to their own meeting.' });
+      }
+      const mine = (Array.isArray(row.attendees) ? row.attendees : []).find((a: any) => String(a.userId) === String(caller.id));
+      if (!mine) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      mine.response = response;
+      mine.respondedAt = new Date().toISOString();
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...row }) });
+    }
+
+    const pool = getPool();
+    const meetingSchema = await probeMeetingSchema();
+    if (!meetingSchema.attendees) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    const r = await pool.query(
+      `SELECT * FROM scheduled_activities WHERE id = $1 LIMIT 1`,
+      [isCanonicalLowerUuid(id) ? id : null]
+    );
+    if (!r.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    const row = r.rows[0];
+    if (String(row.created_by || '') === String(caller.id)) {
+      return sendJson(res, 400, { success: false, message: 'The organiser does not RSVP to their own meeting.' });
+    }
+    const mine = await pool.query(
+      `SELECT * FROM scheduled_activity_attendees WHERE activity_id = $1 AND user_id = $2 LIMIT 1`,
+      [row.id, caller.id]
+    );
+    if (!mine.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    await pool.query(
+      `UPDATE scheduled_activity_attendees SET response = $1, responded_at = NOW() WHERE activity_id = $2 AND user_id = $3`,
+      [response, row.id, caller.id]
+    );
+    const out = await pool.query(
+      `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
+       FROM scheduled_activities sa
+       LEFT JOIN leads l ON l.id = sa.lead_id
+       WHERE sa.id = $1`,
+      [row.id]
+    );
+    const outRow = out.rows[0] || row;
+    await attachAttendees([outRow], meetingSchema);
+    return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(outRow) });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'RSVP failed.' });
   }
 });
 
@@ -757,6 +1087,8 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     const rawMeetingType = body.meetingType ?? body.meeting_type;
     const rawLocation = body.location;
     const rawAssignedTo = body.assignedTo ?? body.assigned_to;
+    const rawAttendeeIds = body.attendeeIds ?? body.attendee_ids;
+    const rawReminder = body.reminderMinutes ?? body.reminder_minutes;
 
     const leadId = rawLeadId !== undefined && rawLeadId !== null ? String(rawLeadId).trim() : '';
     const activityType = rawType !== undefined && rawType !== null ? String(rawType).trim().toLowerCase() : '';
@@ -766,13 +1098,20 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     const meetingType = rawMeetingType !== undefined && rawMeetingType !== null ? String(rawMeetingType).trim().slice(0, 255) : null;
     const location = rawLocation !== undefined && rawLocation !== null ? String(rawLocation).trim().slice(0, 255) : null;
 
-    if (!leadId) {
-      perf.finish(res);
-      return sendJson(res, 400, { success: false, message: 'leadId is required.' });
-    }
+    // leadId is OPTIONAL since migration 055 — no lead means a team
+    // meeting / standalone task (extra rules enforced below).
+    const isLeadless = !leadId;
     if (!activityType || !SCHEDULED_TYPES.includes(activityType as any)) {
       perf.finish(res);
       return sendJson(res, 400, { success: false, message: `activityType must be one of ${SCHEDULED_TYPES.join(', ')}.` });
+    }
+    if (isLeadless && activityType !== 'meeting' && activityType !== 'task') {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: `activityType must be 'meeting' or 'task' for an event without a lead.` });
+    }
+    if (isLeadless && !title) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: 'title is required for an event without a lead.' });
     }
     if (!SCHEDULED_STATUSES.includes(status as any) || status !== 'scheduled') {
       perf.finish(res);
@@ -800,6 +1139,37 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
         return sendJson(res, 400, { success: false, message: 'durationMinutes must be an integer between 1 and 1440.' });
       }
       durationMinutes = n;
+    }
+
+    // Attendees + reminder (migration 055). Attendee refs resolve to
+    // ACTIVE users only — the PR #106 rule (see resolveAttendees).
+    let attendeeSet: { userId: string; employeeId: string }[] = [];
+    if (rawAttendeeIds !== undefined && rawAttendeeIds !== null) {
+      if (!Array.isArray(rawAttendeeIds)) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: 'attendeeIds must be an array.' });
+      }
+      const resolvedAttendees = await resolveAttendees(rawAttendeeIds);
+      if ('error' in resolvedAttendees) {
+        perf.finish(res);
+        return sendJson(res, 400, { success: false, message: resolvedAttendees.error });
+      }
+      attendeeSet = resolvedAttendees.attendees;
+    }
+    const reminderParsed = parseReminderMinutes(rawReminder);
+    if ('error' in reminderParsed) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: reminderParsed.error });
+    }
+    const reminderMinutes: number | null = reminderParsed.value;
+    const meetingSchema = await probeMeetingSchema();
+    if (useDb() && attendeeSet.length > 0 && !meetingSchema.attendees) {
+      perf.finish(res);
+      return sendJson(res, 503, { success: false, message: 'Attendees are unavailable until migration 055 has run.' });
+    }
+    if (useDb() && reminderMinutes !== null && !meetingSchema.reminder) {
+      perf.finish(res);
+      return sendJson(res, 503, { success: false, message: 'Reminders are unavailable until migration 055 has run.' });
     }
 
     // Validate lead exists and is visible to caller
@@ -832,38 +1202,44 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
     }
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      const lead = fallbackStore.leads.find((l: any) => String(l.id) === leadId || String((l as any).leadCode) === leadId);
-      if (!lead) {
-        perf.finish(res);
-        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      let lead: any = null;
+      if (!isLeadless) {
+        lead = fallbackStore.leads.find((l: any) => String(l.id) === leadId || String((l as any).leadCode) === leadId);
+        if (!lead) {
+          perf.finish(res);
+          return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+        }
+        if ((lead as any).is_deleted === true) {
+          perf.finish(res);
+          return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+        }
+        if (!isLeadAccessible(
+          { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) {
+          perf.finish(res);
+          return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+        }
       }
-      if ((lead as any).is_deleted === true) {
-        perf.finish(res);
-        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-      }
-      if (!isLeadAccessible(
-        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
-        visibility,
-        caller
-      )) {
-        perf.finish(res);
-        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-      }
-      // Determine assigned_to: requested assignee else lead's assigned_to
+      // Determine assigned_to: requested assignee, else the lead's
+      // owner, else (lead-less) the organiser themselves.
       if (requestedAssignee) {
         const u = fallbackStore.users.find(x => x.employeeId.toUpperCase() === requestedAssignee!.employeeId.toUpperCase() || x.id === requestedAssignee!.userId);
         assignedToId = u ? u.id : (requestedAssignee.userId);
-      } else {
+      } else if (lead) {
         const leadAssigneeEmp = String((lead as any).assignedTo || '');
         const u = fallbackStore.users.find(x => x.employeeId.toUpperCase() === leadAssigneeEmp.toUpperCase());
         assignedToId = u ? u.id : null;
+      } else {
+        assignedToId = caller.id;
       }
       const id = createId('sched');
       const nowIso = new Date().toISOString();
       const entry: any = {
         id,
-        leadId: String((lead as any).id),
-        lead_id: String((lead as any).id),
+        leadId: lead ? String((lead as any).id) : null,
+        lead_id: lead ? String((lead as any).id) : null,
         activityType,
         activity_type: activityType,
         title: title || null,
@@ -877,6 +1253,9 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
         meetingType: meetingType || null,
         meeting_type: meetingType || null,
         location: location || null,
+        reminderMinutes,
+        reminder_minutes: reminderMinutes,
+        attendees: demoAttendeeObjects(attendeeSet, caller.id),
         createdBy: caller.id,
         created_by: caller.id,
         assignedTo: assignedToId ? (fallbackStore.users.find(x=>x.id===assignedToId)?.employeeId || assignedToId) : null,
@@ -898,47 +1277,78 @@ router.post('/scheduled-activities', requireAuth, async (req: any, res) => {
       (fallbackStore as any).scheduledActivities.push(entry);
       perf.span('db.insert');
       perf.finish(res);
-      return sendJson(res, 201, { success: true, data: mapScheduledActivityRow({ ...entry, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+      return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(lead ? { ...entry, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus } : { ...entry }) });
     }
 
     const pool = getPool();
     // Resolve lead by id or lead_code, visibility check via isLeadAccessible after fetch
-    leadRow = await findLeadByIdRaw(leadId, false);
-    if (!leadRow) {
-      perf.finish(res);
-      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-    }
-    if (leadRow.is_deleted === true) {
-      perf.finish(res);
-      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
-    }
-    if (!isLeadAccessible(leadRow, visibility, caller)) {
-      perf.finish(res);
-      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    if (!isLeadless) {
+      leadRow = await findLeadByIdRaw(leadId, false);
+      if (!leadRow) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      if (leadRow.is_deleted === true) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
+      if (!isLeadAccessible(leadRow, visibility, caller)) {
+        perf.finish(res);
+        return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+      }
     }
     perf.span('lead.visibility');
 
     if (requestedAssignee) assignedToId = requestedAssignee.userId;
-    else assignedToId = leadRow.assigned_to || null;
+    else if (leadRow) assignedToId = leadRow.assigned_to || null;
+    else assignedToId = caller.id; // lead-less default: the organiser owns their meeting
 
-    const insertRes = await pool.query(
-      `INSERT INTO scheduled_activities (lead_id, activity_type, title, scheduled_at, duration_minutes, remarks, status, priority, meeting_type, location, created_by, assigned_to, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $11)
-       RETURNING *`,
-      [leadRow.id, activityType, title, scheduledAt.toISOString(), durationMinutes, remarks, status, priority, meetingType, location, caller.id, assignedToId]
-    );
-    if (!insertRes.rows[0]) {
-      perf.finish(res);
-      return sendJson(res, 500, { success: false, message: 'Scheduled activity creation failed.' });
+    // Insert + invite rows in ONE transaction (a meeting without its
+    // attendees would be a silent half-write). The reminder column is
+    // included only when migration 055 has run (probe above).
+    const insertColumns = ['lead_id', 'activity_type', 'title', 'scheduled_at', 'duration_minutes', 'remarks', 'status', 'priority', 'meeting_type', 'location', 'created_by', 'assigned_to', 'updated_by'];
+    const insertValues: any[] = [leadRow ? leadRow.id : null, activityType, title, scheduledAt.toISOString(), durationMinutes, remarks, status, priority, meetingType, location, caller.id, assignedToId, caller.id];
+    if (meetingSchema.reminder) {
+      insertColumns.push('reminder_minutes');
+      insertValues.push(reminderMinutes);
+    }
+    const insertPlaceholders = insertValues.map((_, i) => `$${i + 1}`).join(', ');
+    const createClient = await pool.connect();
+    let insertedRow: any = null;
+    try {
+      await createClient.query('BEGIN');
+      const insertRes = await createClient.query(
+        `INSERT INTO scheduled_activities (${insertColumns.join(', ')})
+         VALUES (${insertPlaceholders})
+         RETURNING *`,
+        insertValues
+      );
+      if (!insertRes.rows[0]) {
+        await createClient.query('ROLLBACK');
+        perf.finish(res);
+        return sendJson(res, 500, { success: false, message: 'Scheduled activity creation failed.' });
+      }
+      insertedRow = insertRes.rows[0];
+      if (meetingSchema.attendees && attendeeSet.length > 0) {
+        await insertAttendees(createClient, insertedRow.id, caller.id, attendeeSet);
+      }
+      await createClient.query('COMMIT');
+    } catch (txError) {
+      try { await createClient.query('ROLLBACK'); } catch {}
+      throw txError;
+    } finally {
+      try { createClient.release(); } catch {}
     }
     perf.span('db.insert');
     perf.finish(res);
     const out = await pool.query(
       `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
-      [insertRes.rows[0].id]
+       FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
+      [insertedRow.id]
     );
-    return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(out.rows[0] || insertRes.rows[0]) });
+    const outRow = out.rows[0] || insertedRow;
+    await attachAttendees([outRow], meetingSchema);
+    return sendJson(res, 201, { success: true, data: mapScheduledActivityRow(outRow) });
   } catch (error: any) {
     try { createPerf('scheduled.create').finish(res); } catch {}
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity creation failed.' });
@@ -972,9 +1382,14 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     const rawMeetingType = body.meetingType ?? body.meeting_type;
     const rawLocation = body.location;
     const rawAssignedTo = body.assignedTo ?? body.assigned_to;
+    const rawAttendeeIds = body.attendeeIds !== undefined ? body.attendeeIds : body.attendee_ids;
+    const rawReminder = body.reminderMinutes !== undefined ? body.reminderMinutes : body.reminder_minutes;
 
     let hasAny = false;
     const patch: any = {};
+    // Attendee-set replacement (migration 055): presence of the field
+    // means "this is the new set" — retained users keep their RSVP.
+    let attendeePatch: { userId: string; employeeId: string }[] | null = null;
 
     if (rawType !== undefined) {
       const v = String(rawType).trim().toLowerCase();
@@ -1052,6 +1467,28 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
         hasAny = true;
       }
     }
+    if (rawReminder !== undefined) {
+      const reminderParsed = parseReminderMinutes(rawReminder);
+      if ('error' in reminderParsed) return sendJson(res, 400, { success: false, message: reminderParsed.error });
+      patch.reminder_minutes = reminderParsed.value;
+      hasAny = true;
+    }
+    if (rawAttendeeIds !== undefined) {
+      if (rawAttendeeIds !== null && !Array.isArray(rawAttendeeIds)) {
+        return sendJson(res, 400, { success: false, message: 'attendeeIds must be an array.' });
+      }
+      const resolvedAttendees = await resolveAttendees(rawAttendeeIds || []);
+      if ('error' in resolvedAttendees) return sendJson(res, 400, { success: false, message: resolvedAttendees.error });
+      attendeePatch = resolvedAttendees.attendees;
+      hasAny = true;
+    }
+    const meetingSchema = await probeMeetingSchema();
+    if (useDb() && attendeePatch !== null && !meetingSchema.attendees) {
+      return sendJson(res, 503, { success: false, message: 'Attendees are unavailable until migration 055 has run.' });
+    }
+    if (useDb() && patch.reminder_minutes !== undefined && !meetingSchema.reminder) {
+      return sendJson(res, 503, { success: false, message: 'Reminders are unavailable until migration 055 has run.' });
+    }
 
     if (!hasAny) return sendJson(res, 400, { success: false, message: 'No valid fields to update.' });
 
@@ -1065,13 +1502,26 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       if (String(existing.status).toLowerCase() !== 'scheduled') {
         return sendJson(res, 409, { success: false, message: `Cannot edit a ${existing.status} activity.` });
       }
-      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
-      if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      if (!isLeadAccessible(
-        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
-        visibility,
-        caller
-      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const existingLeadRef = existing.leadId || existing.lead_id || null;
+      let lead: any = null;
+      if (existingLeadRef) {
+        lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existingLeadRef));
+        if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+        if (!isLeadAccessible(
+          { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      } else {
+        // Lead-less edit rule: organiser or current assignee only.
+        const organiserId = String(existing.created_by || existing.createdBy || '');
+        const assigneeUuid = String(existing.assigned_to || '');
+        const assigneeEmp = String(existing.assignedTo || existing.assigned_to || '');
+        const isOrganiser = organiserId === String(caller.id);
+        const isAssignee = assigneeUuid === String(caller.id)
+          || (caller.employee_id && assigneeEmp.toUpperCase() === String(caller.employee_id).toUpperCase());
+        if (!isOrganiser && !isAssignee) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
       const nowIso = new Date().toISOString();
       const updated = { ...existing };
       if (patch.activity_type !== undefined) { updated.activityType = patch.activity_type; updated.activity_type = patch.activity_type; }
@@ -1082,6 +1532,15 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       if (patch.priority !== undefined) updated.priority = patch.priority;
       if (patch.meeting_type !== undefined) { updated.meetingType = patch.meeting_type; updated.meeting_type = patch.meeting_type; }
       if (patch.location !== undefined) updated.location = patch.location;
+      if (patch.reminder_minutes !== undefined) { updated.reminderMinutes = patch.reminder_minutes; updated.reminder_minutes = patch.reminder_minutes; }
+      if (attendeePatch !== null) {
+        const organiserId = String(existing.created_by || existing.createdBy || '');
+        const kept = new Map<string, any>((Array.isArray(existing.attendees) ? existing.attendees : []).map((a: any) => [String(a.userId), a]));
+        updated.attendees = demoAttendeeObjects(attendeePatch, organiserId).map((fresh: any) => {
+          const prev = kept.get(String(fresh.userId));
+          return prev ? { ...fresh, response: prev.response, respondedAt: prev.respondedAt } : fresh;
+        });
+      }
       if (patch.assigned_to !== undefined) {
         const u = fallbackStore.users.find(x => x.id === patch.assigned_to);
         updated.assignedTo = u ? u.employeeId : patch.assigned_to;
@@ -1092,7 +1551,7 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
       updated.updatedAt = nowIso;
       updated.updated_at = nowIso;
       (fallbackStore as any).scheduledActivities[idx] = updated;
-      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...updated, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus }) });
+      return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(lead ? { ...updated, lead_customer_name: (lead as any).prospectName, lead_mobile: (lead as any).mobile, lead_current_status: (lead as any).currentStatus } : { ...updated }) });
     }
 
     // Verify existence and lead visibility before update
@@ -1101,14 +1560,23 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     // comparison could match), so malformed ids still 404 unchanged.
     const existingRes = await getPool().query(
       `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
+       FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
       [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const existingRow = existingRes.rows[0];
-    if (existingRow.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-    if (!isLeadAccessible({ assigned_to: existingRow.lead_assigned_to, custom_fields: existingRow.lead_custom_fields, created_by: existingRow.lead_created_by }, visibility, caller)) {
-      return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    if (existingRow.lead_id) {
+      if (existingRow.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      if (!isLeadAccessible({ assigned_to: existingRow.lead_assigned_to, custom_fields: existingRow.lead_custom_fields, created_by: existingRow.lead_created_by }, visibility, caller)) {
+        return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+    } else {
+      // Lead-less edit rule (migration 055): the organiser
+      // (created_by) or the current assignee may edit — nobody else,
+      // and invisibility stays a plain 404.
+      const isOrganiser = String(existingRow.created_by || '') === String(caller.id);
+      const isAssignee = String(existingRow.assigned_to || '') === String(caller.id);
+      if (!isOrganiser && !isAssignee) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     }
     if (String(existingRow.status).toLowerCase() !== 'scheduled') {
       return sendJson(res, 409, { success: false, message: `Cannot edit a ${existingRow.status} activity.` });
@@ -1125,20 +1593,42 @@ router.put('/scheduled-activities/:id', requireAuth, async (req: any, res) => {
     if (patch.priority !== undefined) { setClauses.push(`priority = $${idx++}`); params.push(patch.priority); }
     if (patch.meeting_type !== undefined) { setClauses.push(`meeting_type = $${idx++}`); params.push(patch.meeting_type); }
     if (patch.location !== undefined) { setClauses.push(`location = $${idx++}`); params.push(patch.location); }
+    if (patch.reminder_minutes !== undefined) { setClauses.push(`reminder_minutes = $${idx++}`); params.push(patch.reminder_minutes); }
     if (patch.assigned_to !== undefined) { setClauses.push(`assigned_to = $${idx++}`); params.push(patch.assigned_to); }
     setClauses.push(`updated_by = $${idx++}`); params.push(caller.id);
     setClauses.push(`updated_at = NOW()`);
     const idParam = idx++;
     params.push(id);
     const sql = `UPDATE scheduled_activities SET ${setClauses.join(', ')} WHERE id::text = $${idParam} RETURNING *`;
-    const upd = await getPool().query(sql, params);
-    if (!upd.rows[0]) return sendJson(res, 500, { success: false, message: 'Scheduled activity update failed.' });
+    // Field update + attendee replacement commit together.
+    const updClient = await getPool().connect();
+    let updRow: any = null;
+    try {
+      await updClient.query('BEGIN');
+      const upd = await updClient.query(sql, params);
+      if (!upd.rows[0]) {
+        await updClient.query('ROLLBACK');
+        return sendJson(res, 500, { success: false, message: 'Scheduled activity update failed.' });
+      }
+      updRow = upd.rows[0];
+      if (attendeePatch !== null && meetingSchema.attendees) {
+        await replaceAttendees(updClient, updRow.id, String(existingRow.created_by || ''), attendeePatch);
+      }
+      await updClient.query('COMMIT');
+    } catch (txError) {
+      try { await updClient.query('ROLLBACK'); } catch {}
+      throw txError;
+    } finally {
+      try { updClient.release(); } catch {}
+    }
     const out = await getPool().query(
       `SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
-      [upd.rows[0].id]
+       FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1`,
+      [updRow.id]
     );
-    return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(out.rows[0] || upd.rows[0]) });
+    const outRow = out.rows[0] || updRow;
+    await attachAttendees([outRow], meetingSchema);
+    return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(outRow) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Scheduled activity update failed.' });
   }
@@ -1170,13 +1660,25 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
       if (String(existing.status).toLowerCase() !== 'scheduled') {
         return sendJson(res, 409, { success: false, message: `Cannot delete a ${existing.status} activity — use cancel for pending work.` });
       }
-      const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(existing.leadId || existing.lead_id));
-      if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-      if (!isLeadAccessible(
-        { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
-        visibility,
-        caller
-      )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      const delLeadRef = existing.leadId || existing.lead_id || null;
+      if (delLeadRef) {
+        const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(delLeadRef));
+        if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+        if (!isLeadAccessible(
+          { assignedTo: (lead as any).assignedTo, createdBy: (lead as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      } else {
+        // Lead-less delete rule: organiser or current assignee.
+        const organiserId = String(existing.created_by || existing.createdBy || '');
+        const assigneeUuid = String(existing.assigned_to || '');
+        const assigneeEmp = String(existing.assignedTo || existing.assigned_to || '');
+        const isOrganiser = organiserId === String(caller.id);
+        const isAssignee = assigneeUuid === String(caller.id)
+          || (caller.employee_id && assigneeEmp.toUpperCase() === String(caller.employee_id).toUpperCase());
+        if (!isOrganiser && !isAssignee) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
       (fallbackStore as any).scheduledActivities.splice(idx, 1);
       return sendJson(res, 200, { success: true, message: 'Scheduled activity deleted.' });
     }
@@ -1184,14 +1686,23 @@ router.delete('/scheduled-activities/:id', requireAuth, async (req: any, res) =>
     // Sargable PK lookup (see the update path) — malformed ids still 404.
     const existingRes = await getPool().query(
       `SELECT sa.*, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.is_deleted AS lead_is_deleted
-       FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
+       FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id = $1 LIMIT 1`,
       [isCanonicalLowerUuid(id) ? id : null]
     );
     if (!existingRes.rows[0]) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     const row = existingRes.rows[0];
-    if (row.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
-    if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
-      return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+    if (row.lead_id) {
+      if (row.lead_is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) {
+        return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+      }
+    } else {
+      // Lead-less delete rule (migration 055): organiser or current
+      // assignee — consistent with the edit rule. Attendee rows are
+      // removed by the FK cascade.
+      const isOrganiser = String(row.created_by || '') === String(caller.id);
+      const isAssignee = String(row.assigned_to || '') === String(caller.id);
+      if (!isOrganiser && !isAssignee) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
     }
     if (String(row.status).toLowerCase() !== 'scheduled') {
       return sendJson(res, 409, { success: false, message: `Cannot delete a ${row.status} activity — use cancel for pending work.` });
@@ -1244,6 +1755,26 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       if (idx < 0) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const sched = (fallbackStore as any).scheduledActivities[idx];
       if (String(sched.status).toLowerCase() !== 'scheduled') { perf.finish(res); return sendJson(res, 409, { success: false, message: `Scheduled activity already ${sched.status}.` }); }
+      if (!(sched.leadId || sched.lead_id)) {
+        // Lead-less completion (migration 055): mark done — there is
+        // no lead history to write and no follow-up side effects.
+        if (!demoLeadlessVisible(sched, visibility, caller)) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+        const nowIsoLL = new Date().toISOString();
+        sched.status = 'completed';
+        sched.completedAt = nowIsoLL;
+        sched.completed_at = nowIsoLL;
+        sched.completedBy = caller.id;
+        sched.completed_by = caller.id;
+        sched.completedActivityId = null;
+        sched.completed_activity_id = null;
+        sched.updatedBy = caller.id;
+        sched.updated_by = caller.id;
+        sched.updatedAt = nowIsoLL;
+        sched.updated_at = nowIsoLL;
+        perf.span('db.complete');
+        perf.finish(res);
+        return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(sched), activity: null } });
+      }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
       if (!lead || (lead as any).is_deleted === true) { perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       if (!isLeadAccessible(
@@ -1356,13 +1887,36 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       await client.query('BEGIN');
       const schedRes = await client.query(
         `SELECT sa.*, l.id AS lead_db_id, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields, l.current_status AS lead_current_status
-         FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
-         WHERE sa.id = $1 FOR UPDATE`,
+         FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id
+         WHERE sa.id = $1 FOR UPDATE OF sa`,
         [isCanonicalLowerUuid(id) ? id : null]
       );
       if (!schedRes.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const schedRow: any = schedRes.rows[0];
       if (String(schedRow.status).toLowerCase() !== 'scheduled') { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 409, { success: false, message: `Scheduled activity already ${schedRow.status}.` }); }
+      if (!schedRow.lead_id) {
+        // Lead-less completion (migration 055): visibility via the
+        // meeting arms, then a plain status flip — NO lead_activities
+        // history row and NO follow-up side effects (there is no lead
+        // to write history against).
+        const completeSchema = await probeMeetingSchema();
+        let completeAttendees: any[] = [];
+        if (completeSchema.attendees) {
+          const attMap = await fetchAttendeesByActivity([String(schedRow.id)]);
+          completeAttendees = attMap.get(String(schedRow.id)) || [];
+        }
+        if (!isLeadlessVisible(schedRow, completeAttendees.map((a: any) => String(a.userId)), visibility, caller)) {
+          await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+        }
+        await client.query(`UPDATE scheduled_activities SET status='completed', completed_at=$1, completed_by=$2, completed_activity_id=NULL, updated_by=$2, updated_at=NOW() WHERE id=$3`, [new Date(), caller.id, schedRow.id]);
+        await client.query('COMMIT');
+        perf.span('db.complete');
+        perf.finish(res);
+        const schedOutLL = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
+        const outRowLL = schedOutLL.rows[0] || schedRow;
+        await attachAttendees([outRowLL], completeSchema);
+        return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(outRowLL), activity: null } });
+      }
       if (schedRow.lead_is_deleted === true) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       if (!isLeadAccessible({ assigned_to: schedRow.lead_assigned_to, custom_fields: schedRow.lead_custom_fields, created_by: schedRow.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const nowForDb = new Date();
@@ -1486,7 +2040,7 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
         await client.query('COMMIT');
         perf.span('db.complete');
         perf.finish(res);
-        const schedOut = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
+        const schedOut = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
         const actOut = await getPool().query(`SELECT * FROM lead_activities WHERE id=$1`, [insertedActId]);
         return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(schedOut.rows[0]), activity: mapActivityRow(actOut.rows[0]) } });
       }
@@ -1507,7 +2061,7 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       await client.query('COMMIT');
       perf.span('db.complete');
       perf.finish(res);
-      const schedOut2 = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
+      const schedOut2 = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [schedRow.id]);
       const actOut2 = await getPool().query(`SELECT * FROM lead_activities WHERE id=$1`, [insertedId2]);
       return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(schedOut2.rows[0]), activity: mapActivityRow(actOut2.rows[0]) } });
     } catch (error: any) {
@@ -1545,6 +2099,17 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
       const sched = (fallbackStore as any).scheduledActivities[idx];
       if (String(sched.status).toLowerCase() === 'completed') return sendJson(res, 409, { success: false, message: 'Cannot cancel a completed activity.' });
       if (String(sched.status).toLowerCase() === 'cancelled') return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' });
+      if (!(sched.leadId || sched.lead_id)) {
+        // Lead-less cancel (migration 055): visibility via the meeting arms.
+        if (!demoLeadlessVisible(sched, visibility, caller)) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
+        const nowIsoLL = new Date().toISOString();
+        sched.status = 'cancelled';
+        sched.updatedBy = caller.id;
+        sched.updated_by = caller.id;
+        sched.updatedAt = nowIsoLL;
+        sched.updated_at = nowIsoLL;
+        return sendJson(res, 200, { success: true, data: mapScheduledActivityRow({ ...sched }) });
+      }
       const lead = fallbackStore.leads.find((l: any) => String(l.id) === String(sched.leadId || sched.lead_id));
       if (!lead || (lead as any).is_deleted === true) return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' });
       if (!isLeadAccessible(
@@ -1565,19 +2130,30 @@ router.post('/scheduled-activities/:id/cancel', requireAuth, async (req: any, re
       await client.query('BEGIN');
       const r = await client.query(
         `SELECT sa.*, l.is_deleted AS lead_is_deleted, l.assigned_to AS lead_assigned_to, l.created_by AS lead_created_by, l.custom_fields AS lead_custom_fields
-         FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id
-         WHERE sa.id = $1 FOR UPDATE`,
+         FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id
+         WHERE sa.id = $1 FOR UPDATE OF sa`,
         [isCanonicalLowerUuid(id) ? id : null]
       );
       if (!r.rows[0]) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
       const row = r.rows[0];
-      if (row.lead_is_deleted === true) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
-      if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      if (row.lead_id) {
+        if (row.lead_is_deleted === true) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+        if (!isLeadAccessible({ assigned_to: row.lead_assigned_to, custom_fields: row.lead_custom_fields, created_by: row.lead_created_by }, visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      } else {
+        // Lead-less cancel (migration 055): visibility via the meeting arms.
+        const cancelSchema = await probeMeetingSchema();
+        let cancelAttendees: any[] = [];
+        if (cancelSchema.attendees) {
+          const attMap = await fetchAttendeesByActivity([String(row.id)]);
+          cancelAttendees = attMap.get(String(row.id)) || [];
+        }
+        if (!isLeadlessVisible(row, cancelAttendees.map((a: any) => String(a.userId)), visibility, caller)) { await client.query('ROLLBACK'); return sendJson(res, 404, { success: false, message: 'Scheduled activity not found.' }); }
+      }
       if (String(row.status).toLowerCase() === 'completed') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Cannot cancel a completed activity.' }); }
       if (String(row.status).toLowerCase() === 'cancelled') { await client.query('ROLLBACK'); return sendJson(res, 409, { success: false, message: 'Scheduled activity already cancelled.' }); }
       await client.query(`UPDATE scheduled_activities SET status='cancelled', updated_by=$1, updated_at=NOW() WHERE id=$2`, [caller.id, row.id]);
       await client.query('COMMIT');
-      const out = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [row.id]);
+      const out = await getPool().query(`SELECT sa.*, l.customer_name AS lead_customer_name, l.mobile AS lead_mobile, l.current_status AS lead_current_status FROM scheduled_activities sa LEFT JOIN leads l ON l.id = sa.lead_id WHERE sa.id=$1`, [row.id]);
       return sendJson(res, 200, { success: true, data: mapScheduledActivityRow(out.rows[0]) });
     } catch (e: any) {
       try { await client.query('ROLLBACK'); } catch {}

@@ -64,6 +64,7 @@ import { up as leadSlaConfig } from "./migrations/051_lead_sla_config.js";
 import { up as visibilityDefaultsRmRo } from "./migrations/052_visibility_defaults_rm_ro.js";
 import { up as deleteChainRepair } from "./migrations/053_delete_chain_repair.js";
 import { up as nextStepCalendarSync } from "./migrations/054_next_step_calendar_sync.js";
+import { up as meetingDataModel } from "./migrations/055_meeting_data_model.js";
 
 import {
   loadLedger,
@@ -174,6 +175,8 @@ const migrations: Migration[] = [
     { id: "053_delete_chain_repair", name: "Delete Chain Repair", run: deleteChainRepair },
 
     { id: "054_next_step_calendar_sync", name: "Next-Step Calendar Sync", run: nextStepCalendarSync },
+
+    { id: "055_meeting_data_model", name: "Meeting Data Model", run: meetingDataModel },
 
 ];
 
