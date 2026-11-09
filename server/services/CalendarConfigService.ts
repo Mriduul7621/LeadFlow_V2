@@ -32,6 +32,7 @@ export interface CalendarHoliday {
   id: string;
   date: string; // YYYY-MM-DD
   name: string;
+  nameBn: string | null;
   category: HolidayCategory;
   moonDependent: boolean;
   regional: boolean;
@@ -190,6 +191,7 @@ export function mapHolidayRow(row: any): CalendarHoliday {
     id: String(row.id),
     date: formatHolidayDate(row.holiday_date),
     name: row.name,
+    nameBn: row.name_bn ?? null,
     category: row.category === 'executive' ? 'executive' : 'general',
     moonDependent: row.moon_dependent === true,
     regional: row.regional === true,
@@ -213,6 +215,7 @@ export async function listCalendarHolidays(
         id: String(h.id),
         date: h.date,
         name: h.name,
+        nameBn: h.nameBn ?? null,
         category: h.category === 'executive' ? 'executive' : 'general',
         moonDependent: h.moonDependent === true,
         regional: h.regional === true,

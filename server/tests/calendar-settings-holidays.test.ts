@@ -226,6 +226,85 @@ process.env.JWT_SECRET = JWT_SECRET;
     assert.deepEqual(names.rows.map((r: any) => r.name), ['Buddha Purnima (Baishakhi Purnima)', 'May Day']);
   });
 
+  it('every seeded holiday carries its verified Bangla name (name_bn pairing, all 57)', async () => {
+    // The pairing comes from the canonical verified list
+    // (bangladesh-govt-holidays-2026-2027.json), matched to the seed
+    // by (date, category) — a few English labels differ slightly
+    // between the sources ("Jumatul Wida" here vs "Jumatul Bida"
+    // there), so this pins EVERY (date, name) -> name_bn pair rather
+    // than a sample. The one shared (date, category) group,
+    // 2026-05-01, pairs by occasion (May Day / Buddha Purnima).
+    const EXPECTED_NAME_BN: Array<[string, string, string]> = [
+    ['2026-02-04', 'Shab-e-Barat', 'শব-ই-বরাত'],
+    ['2026-02-21', 'Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস'],
+    ['2026-03-17', 'Shab-e-Qadr', 'শব-ই-কদর'],
+    ['2026-03-19', 'Eid-ul-Fitr holiday (2 days before Eid)', 'ঈদুল ফিতর'],
+    ['2026-03-20', 'Jumatul Wida', 'জুমাতুল বিদা'],
+    ['2026-03-20', 'Eid-ul-Fitr holiday (day before Eid)', 'ঈদুল ফিতর'],
+    ['2026-03-21', 'Eid-ul-Fitr', 'ঈদুল ফিতর'],
+    ['2026-03-22', 'Eid-ul-Fitr holiday (day after Eid)', 'ঈদুল ফিতর'],
+    ['2026-03-23', 'Eid-ul-Fitr holiday (2 days after Eid)', 'ঈদুল ফিতর'],
+    ['2026-03-26', 'Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস'],
+    ['2026-04-13', 'Chaitra Sankranti (hill districts only)', 'চৈত্র সংক্রান্তি'],
+    ['2026-04-14', 'Bengali New Year', 'পহেলা বৈশাখ'],
+    ['2026-05-01', 'May Day', 'মে দিবস'],
+    ['2026-05-01', 'Buddha Purnima (Baishakhi Purnima)', 'বুদ্ধ পূর্ণিমা'],
+    ['2026-05-26', 'Eid-ul-Azha holiday (2 days before Eid)', 'ঈদুল আজহা'],
+    ['2026-05-27', 'Eid-ul-Azha holiday (day before Eid)', 'ঈদুল আজহা'],
+    ['2026-05-28', 'Eid-ul-Azha', 'ঈদুল আজহা'],
+    ['2026-05-29', 'Eid-ul-Azha holiday (day after Eid)', 'ঈদুল আজহা'],
+    ['2026-05-30', 'Eid-ul-Azha holiday (2 days after Eid)', 'ঈদুল আজহা'],
+    ['2026-05-31', 'Eid-ul-Azha holiday (3 days after Eid)', 'ঈদুল আজহা'],
+    ['2026-06-26', 'Ashura', 'আশুরা'],
+    ['2026-08-05', 'July Mass Uprising Day', 'জুলাই গণঅভ্যুত্থান দিবস'],
+    ['2026-08-26', 'Eid-e-Milad-un-Nabi (SAW)', 'ঈদ-ই-মিলাদুন্নবী'],
+    ['2026-09-04', 'Janmashtami', 'জন্মাষ্টমী'],
+    ['2026-10-20', 'Durga Puja (Mahanabami)', 'দুর্গাপূজা (মহানবমী)'],
+    ['2026-10-21', 'Durga Puja (Vijaya Dashami)', 'দুর্গাপূজা (বিজয়া দশমী)'],
+    ['2026-12-16', 'Victory Day', 'বিজয় দিবস'],
+    ['2026-12-25', 'Christmas Day', 'বড়দিন'],
+    ['2027-01-24', 'Shab-e-Barat', 'শব-ই-বরাত'],
+    ['2027-02-21', 'Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস'],
+    ['2027-03-05', 'Jumatul Wida', 'জুমাতুল বিদা'],
+    ['2027-03-07', 'Shab-e-Qadr', 'শব-ই-কদর'],
+    ['2027-03-08', 'Eid-ul-Fitr holiday (2 days before Eid)', 'ঈদুল ফিতর'],
+    ['2027-03-09', 'Eid-ul-Fitr holiday (day before Eid)', 'ঈদুল ফিতর'],
+    ['2027-03-10', 'Eid-ul-Fitr', 'ঈদুল ফিতর'],
+    ['2027-03-11', 'Eid-ul-Fitr holiday (day after Eid)', 'ঈদুল ফিতর'],
+    ['2027-03-12', 'Eid-ul-Fitr holiday (2 days after Eid)', 'ঈদুল ফিতর'],
+    ['2027-03-26', 'Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস'],
+    ['2027-04-13', 'Chaitra Sankranti (hill districts only)', 'চৈত্র সংক্রান্তি'],
+    ['2027-04-14', 'Bengali New Year (Pahela Baishakh)', 'পহেলা বৈশাখ'],
+    ['2027-05-01', 'May Day', 'মে দিবস'],
+    ['2027-05-15', 'Eid-ul-Azha holiday (2 days before Eid)', 'ঈদুল আজহা'],
+    ['2027-05-16', 'Eid-ul-Azha holiday (day before Eid)', 'ঈদুল আজহা'],
+    ['2027-05-17', 'Eid-ul-Azha', 'ঈদুল আজহা'],
+    ['2027-05-18', 'Eid-ul-Azha holiday (day after Eid)', 'ঈদুল আজহা'],
+    ['2027-05-19', 'Eid-ul-Azha holiday (2 days after Eid)', 'ঈদুল আজহা'],
+    ['2027-05-20', 'Eid-ul-Azha holiday (3 days after Eid)', 'ঈদুল আজহা'],
+    ['2027-05-20', 'Buddha Purnima (Baishakhi Purnima)', 'বুদ্ধ পূর্ণিমা'],
+    ['2027-06-16', 'Ashura', 'আশুরা'],
+    ['2027-08-05', 'July Mass Uprising Day', 'জুলাই গণঅভ্যুত্থান দিবস'],
+    ['2027-08-15', 'Eid-e-Milad-un-Nabi (SAW)', 'ঈদ-ই-মিলাদুন্নবী'],
+    ['2027-08-25', 'Janmashtami', 'জন্মাষ্টমী'],
+    ['2027-10-09', 'Durga Puja (Mahanabami)', 'দুর্গাপূজা (মহানবমী)'],
+    ['2027-10-10', 'Durga Puja (Vijaya Dashami)', 'দুর্গাপূজা (বিজয়া দশমী)'],
+    ['2027-11-07', 'National Revolution and Solidarity Day', 'জাতীয় বিপ্লব ও সংহতি দিবস'],
+    ['2027-12-16', 'Victory Day', 'বিজয় দিবস'],
+    ['2027-12-25', 'Christmas Day', 'বড়দিন'],
+    ];
+    const blank: any = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM calendar_holidays WHERE name_bn IS NULL OR btrim(name_bn) = ''`
+    );
+    assert.equal(blank.rows[0].n, 0, 'no seeded holiday may lack a Bangla name');
+    const rows: any = await pool.query(`SELECT holiday_date::text AS d, name, name_bn FROM calendar_holidays`);
+    const byKey = new Map(rows.rows.map((r: any) => [`${r.d}|${r.name}`, r.name_bn]));
+    assert.equal(byKey.size, 57);
+    for (const [date, name, nameBn] of EXPECTED_NAME_BN) {
+      assert.equal(byKey.get(`${date}|${name}`), nameBn, `${date} ${name} must carry name_bn ${nameBn}`);
+    }
+  });
+
   it('GET /calendar/config answers any signed-in user with the Fri+Sat default weekend and all holidays', async () => {
     const res = await getConfig(plain);
     assert.equal(res.status, 200, JSON.stringify(res.body));
@@ -234,6 +313,11 @@ process.env.JWT_SECRET = JWT_SECRET;
     const victory = res.body.data.holidays.find((h: any) => h.date === '2026-12-16');
     assert.equal(victory.name, 'Victory Day');
     assert.equal(victory.category, 'general');
+    assert.equal(victory.nameBn, 'বিজয় দিবস');
+    assert.ok(
+      res.body.data.holidays.every((h: any) => typeof h.nameBn === 'string' && h.nameBn.length > 0),
+      'config serves a Bangla name for every seeded holiday'
+    );
   });
 
   it('GET /calendar/config range filter returns exactly the requested year', async () => {
@@ -328,6 +412,42 @@ process.env.JWT_SECRET = JWT_SECRET;
     assert.equal(removedAgain.status, 404);
     // Clean up the sibling so the suite leaves the seed counts intact.
     await request(app).delete(`/api/calendar/holidays/${sibling.body.data.id}`)
+      .set('Authorization', `Bearer ${tokenFor(privileged)}`);
+  });
+
+  it('holiday nameBn round-trip: create with a Bangla name -> config serves it -> edit clears it -> edit sets it again', async () => {
+    const created = await request(app).post('/api/calendar/holidays')
+      .set('Authorization', `Bearer ${tokenFor(privileged)}`)
+      .send({ date: '2027-06-05', name: 'Bangla Name Day', nameBn: 'বাংলা নাম দিবস', category: 'general' });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.data.nameBn, 'বাংলা নাম দিবস');
+    const id = created.body.data.id;
+
+    const cfg = await getConfig(plain, '?from=2027-06-05&to=2027-06-05');
+    assert.equal(cfg.body.data.holidays.length, 1);
+    assert.equal(cfg.body.data.holidays[0].nameBn, 'বাংলা নাম দিবস');
+
+    // Omitting nameBn on update clears it; a whitespace-only value
+    // trims to null as well (empty -> null semantics).
+    const cleared = await request(app).put(`/api/calendar/holidays/${id}`)
+      .set('Authorization', `Bearer ${tokenFor(privileged)}`)
+      .send({ date: '2027-06-05', name: 'Bangla Name Day', category: 'general' });
+    assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+    assert.equal(cleared.body.data.nameBn, null);
+    const blanked = await request(app).put(`/api/calendar/holidays/${id}`)
+      .set('Authorization', `Bearer ${tokenFor(privileged)}`)
+      .send({ date: '2027-06-05', name: 'Bangla Name Day', nameBn: '   ', category: 'general' });
+    assert.equal(blanked.status, 200);
+    assert.equal(blanked.body.data.nameBn, null);
+
+    // A padded value is trimmed and stored.
+    const reset = await request(app).put(`/api/calendar/holidays/${id}`)
+      .set('Authorization', `Bearer ${tokenFor(privileged)}`)
+      .send({ date: '2027-06-05', name: 'Bangla Name Day', nameBn: '  বাংলা নাম দিবস  ', category: 'general' });
+    assert.equal(reset.status, 200);
+    assert.equal(reset.body.data.nameBn, 'বাংলা নাম দিবস');
+
+    await request(app).delete(`/api/calendar/holidays/${id}`)
       .set('Authorization', `Bearer ${tokenFor(privileged)}`);
   });
 

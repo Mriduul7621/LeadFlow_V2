@@ -16,6 +16,7 @@ export interface CalendarHoliday {
   id: string;
   date: string; // YYYY-MM-DD
   name: string;
+  nameBn?: string | null;
   category: 'general' | 'executive';
   moonDependent: boolean;
   regional: boolean;
@@ -30,6 +31,7 @@ export interface CalendarConfig {
 export interface HolidayInput {
   date: string;
   name: string;
+  nameBn?: string | null;
   category: 'general' | 'executive';
   moonDependent: boolean;
   regional: boolean;

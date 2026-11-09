@@ -44,6 +44,17 @@ import { query } from "../connection.js";
  * Chaitra Sankranti rows that apply only to Rangamati,
  * Khagrachhari & Bandarban.
  *
+ * NAME_BN AMENDMENT (PR #113, before first ship): every holiday also
+ * carries its Bangla name in `name_bn`, paired from the canonical
+ * verified list
+ * workspace/your_files/leadflow-calendar-holidays/bangladesh-govt-holidays-2026-2027.json
+ * (57 rows: date, name_en, name_bn, type, moon_dependent). Pairing is
+ * by (date, category) — exact within the one shared group
+ * (2026-05-01: May Day / Buddha Purnima) by occasion — because a few
+ * English labels differ slightly between the two sources ("Jumatul
+ * Wida" here vs "Jumatul Bida" there). The seed test asserts all 57
+ * pairings against the database.
+ *
  * Idempotent throughout. down() is a deliberate non-destructive
  * no-op: the holidays and the admin's weekend choice are real
  * configuration data the moment this ships.
@@ -85,6 +96,7 @@ export async function up(): Promise<void> {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       holiday_date DATE NOT NULL,
       name VARCHAR(255) NOT NULL,
+      name_bn VARCHAR(255),
       category VARCHAR(20) NOT NULL DEFAULT 'general'
         CHECK (category IN ('general', 'executive')),
       moon_dependent BOOLEAN NOT NULL DEFAULT FALSE,
@@ -96,6 +108,12 @@ export async function up(): Promise<void> {
       updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
       UNIQUE (holiday_date, name)
     )
+  `);
+
+  // The Bangla name column (added to this migration before it first
+  // shipped): adopt it onto a table created by the earlier shape.
+  await query(`
+    ALTER TABLE calendar_holidays ADD COLUMN IF NOT EXISTS name_bn VARCHAR(255)
   `);
 
   // For a table adopted from an earlier shape, make sure the unique
@@ -112,65 +130,65 @@ export async function up(): Promise<void> {
 
   // ---- 3. Seed: MoPA gazette 2026 (28) + 2027 (29) = 57 rows.
   await query(`
-    INSERT INTO calendar_holidays (holiday_date, name, category, moon_dependent, regional, note)
+    INSERT INTO calendar_holidays (holiday_date, name, name_bn, category, moon_dependent, regional, note)
     VALUES
-    ('2026-02-04', 'Shab-e-Barat', 'executive', TRUE, FALSE, NULL),
-    ('2026-02-21', 'Shaheed Day and International Mother Language Day', 'general', FALSE, FALSE, NULL),
-    ('2026-03-17', 'Shab-e-Qadr', 'executive', TRUE, FALSE, NULL),
-    ('2026-03-19', 'Eid-ul-Fitr holiday (2 days before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-03-20', 'Jumatul Wida', 'general', TRUE, FALSE, NULL),
-    ('2026-03-20', 'Eid-ul-Fitr holiday (day before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-03-21', 'Eid-ul-Fitr', 'general', TRUE, FALSE, NULL),
-    ('2026-03-22', 'Eid-ul-Fitr holiday (day after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-03-23', 'Eid-ul-Fitr holiday (2 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-03-26', 'Independence and National Day', 'general', FALSE, FALSE, NULL),
-    ('2026-04-13', 'Chaitra Sankranti (hill districts only)', 'general', FALSE, TRUE, 'Hill districts only: Rangamati, Khagrachhari & Bandarban'),
-    ('2026-04-14', 'Bengali New Year', 'executive', FALSE, FALSE, NULL),
-    ('2026-05-01', 'May Day', 'general', FALSE, FALSE, NULL),
-    ('2026-05-01', 'Buddha Purnima (Baishakhi Purnima)', 'general', TRUE, FALSE, NULL),
-    ('2026-05-26', 'Eid-ul-Azha holiday (2 days before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-05-27', 'Eid-ul-Azha holiday (day before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-05-28', 'Eid-ul-Azha', 'general', TRUE, FALSE, NULL),
-    ('2026-05-29', 'Eid-ul-Azha holiday (day after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-05-30', 'Eid-ul-Azha holiday (2 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-05-31', 'Eid-ul-Azha holiday (3 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2026-06-26', 'Ashura', 'executive', TRUE, FALSE, NULL),
-    ('2026-08-05', 'July Mass Uprising Day', 'general', FALSE, FALSE, NULL),
-    ('2026-08-26', 'Eid-e-Milad-un-Nabi (SAW)', 'general', TRUE, FALSE, NULL),
-    ('2026-09-04', 'Janmashtami', 'general', FALSE, FALSE, NULL),
-    ('2026-10-20', 'Durga Puja (Mahanabami)', 'executive', FALSE, FALSE, NULL),
-    ('2026-10-21', 'Durga Puja (Vijaya Dashami)', 'general', FALSE, FALSE, NULL),
-    ('2026-12-16', 'Victory Day', 'general', FALSE, FALSE, NULL),
-    ('2026-12-25', 'Christmas Day', 'general', FALSE, FALSE, NULL),
-    ('2027-01-24', 'Shab-e-Barat', 'executive', TRUE, FALSE, NULL),
-    ('2027-02-21', 'Shaheed Day and International Mother Language Day', 'general', FALSE, FALSE, NULL),
-    ('2027-03-05', 'Jumatul Wida', 'general', TRUE, FALSE, NULL),
-    ('2027-03-07', 'Shab-e-Qadr', 'executive', TRUE, FALSE, NULL),
-    ('2027-03-08', 'Eid-ul-Fitr holiday (2 days before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-03-09', 'Eid-ul-Fitr holiday (day before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-03-10', 'Eid-ul-Fitr', 'general', TRUE, FALSE, NULL),
-    ('2027-03-11', 'Eid-ul-Fitr holiday (day after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-03-12', 'Eid-ul-Fitr holiday (2 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-03-26', 'Independence and National Day', 'general', FALSE, FALSE, NULL),
-    ('2027-04-13', 'Chaitra Sankranti (hill districts only)', 'general', FALSE, TRUE, 'Hill districts only: Rangamati, Khagrachhari & Bandarban'),
-    ('2027-04-14', 'Bengali New Year (Pahela Baishakh)', 'executive', FALSE, FALSE, NULL),
-    ('2027-05-01', 'May Day', 'general', FALSE, FALSE, NULL),
-    ('2027-05-15', 'Eid-ul-Azha holiday (2 days before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-05-16', 'Eid-ul-Azha holiday (day before Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-05-17', 'Eid-ul-Azha', 'general', TRUE, FALSE, NULL),
-    ('2027-05-18', 'Eid-ul-Azha holiday (day after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-05-19', 'Eid-ul-Azha holiday (2 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-05-20', 'Eid-ul-Azha holiday (3 days after Eid)', 'executive', TRUE, FALSE, NULL),
-    ('2027-05-20', 'Buddha Purnima (Baishakhi Purnima)', 'general', TRUE, FALSE, NULL),
-    ('2027-06-16', 'Ashura', 'executive', TRUE, FALSE, NULL),
-    ('2027-08-05', 'July Mass Uprising Day', 'general', FALSE, FALSE, NULL),
-    ('2027-08-15', 'Eid-e-Milad-un-Nabi (SAW)', 'general', TRUE, FALSE, NULL),
-    ('2027-08-25', 'Janmashtami', 'general', FALSE, FALSE, NULL),
-    ('2027-10-09', 'Durga Puja (Mahanabami)', 'executive', FALSE, FALSE, NULL),
-    ('2027-10-10', 'Durga Puja (Vijaya Dashami)', 'general', FALSE, FALSE, NULL),
-    ('2027-11-07', 'National Revolution and Solidarity Day', 'general', FALSE, FALSE, NULL),
-    ('2027-12-16', 'Victory Day', 'general', FALSE, FALSE, NULL),
-    ('2027-12-25', 'Christmas Day', 'general', FALSE, FALSE, NULL)
+    ('2026-02-04', 'Shab-e-Barat', 'শব-ই-বরাত', 'executive', TRUE, FALSE, NULL),
+    ('2026-02-21', 'Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', 'general', FALSE, FALSE, NULL),
+    ('2026-03-17', 'Shab-e-Qadr', 'শব-ই-কদর', 'executive', TRUE, FALSE, NULL),
+    ('2026-03-19', 'Eid-ul-Fitr holiday (2 days before Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2026-03-20', 'Jumatul Wida', 'জুমাতুল বিদা', 'general', TRUE, FALSE, NULL),
+    ('2026-03-20', 'Eid-ul-Fitr holiday (day before Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2026-03-21', 'Eid-ul-Fitr', 'ঈদুল ফিতর', 'general', TRUE, FALSE, NULL),
+    ('2026-03-22', 'Eid-ul-Fitr holiday (day after Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2026-03-23', 'Eid-ul-Fitr holiday (2 days after Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2026-03-26', 'Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', 'general', FALSE, FALSE, NULL),
+    ('2026-04-13', 'Chaitra Sankranti (hill districts only)', 'চৈত্র সংক্রান্তি', 'general', FALSE, TRUE, 'Hill districts only: Rangamati, Khagrachhari & Bandarban'),
+    ('2026-04-14', 'Bengali New Year', 'পহেলা বৈশাখ', 'executive', FALSE, FALSE, NULL),
+    ('2026-05-01', 'May Day', 'মে দিবস', 'general', FALSE, FALSE, NULL),
+    ('2026-05-01', 'Buddha Purnima (Baishakhi Purnima)', 'বুদ্ধ পূর্ণিমা', 'general', TRUE, FALSE, NULL),
+    ('2026-05-26', 'Eid-ul-Azha holiday (2 days before Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2026-05-27', 'Eid-ul-Azha holiday (day before Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2026-05-28', 'Eid-ul-Azha', 'ঈদুল আজহা', 'general', TRUE, FALSE, NULL),
+    ('2026-05-29', 'Eid-ul-Azha holiday (day after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2026-05-30', 'Eid-ul-Azha holiday (2 days after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2026-05-31', 'Eid-ul-Azha holiday (3 days after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2026-06-26', 'Ashura', 'আশুরা', 'executive', TRUE, FALSE, NULL),
+    ('2026-08-05', 'July Mass Uprising Day', 'জুলাই গণঅভ্যুত্থান দিবস', 'general', FALSE, FALSE, NULL),
+    ('2026-08-26', 'Eid-e-Milad-un-Nabi (SAW)', 'ঈদ-ই-মিলাদুন্নবী', 'general', TRUE, FALSE, NULL),
+    ('2026-09-04', 'Janmashtami', 'জন্মাষ্টমী', 'general', FALSE, FALSE, NULL),
+    ('2026-10-20', 'Durga Puja (Mahanabami)', 'দুর্গাপূজা (মহানবমী)', 'executive', FALSE, FALSE, NULL),
+    ('2026-10-21', 'Durga Puja (Vijaya Dashami)', 'দুর্গাপূজা (বিজয়া দশমী)', 'general', FALSE, FALSE, NULL),
+    ('2026-12-16', 'Victory Day', 'বিজয় দিবস', 'general', FALSE, FALSE, NULL),
+    ('2026-12-25', 'Christmas Day', 'বড়দিন', 'general', FALSE, FALSE, NULL),
+    ('2027-01-24', 'Shab-e-Barat', 'শব-ই-বরাত', 'executive', TRUE, FALSE, NULL),
+    ('2027-02-21', 'Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-03-05', 'Jumatul Wida', 'জুমাতুল বিদা', 'general', TRUE, FALSE, NULL),
+    ('2027-03-07', 'Shab-e-Qadr', 'শব-ই-কদর', 'executive', TRUE, FALSE, NULL),
+    ('2027-03-08', 'Eid-ul-Fitr holiday (2 days before Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2027-03-09', 'Eid-ul-Fitr holiday (day before Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2027-03-10', 'Eid-ul-Fitr', 'ঈদুল ফিতর', 'general', TRUE, FALSE, NULL),
+    ('2027-03-11', 'Eid-ul-Fitr holiday (day after Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2027-03-12', 'Eid-ul-Fitr holiday (2 days after Eid)', 'ঈদুল ফিতর', 'executive', TRUE, FALSE, NULL),
+    ('2027-03-26', 'Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-04-13', 'Chaitra Sankranti (hill districts only)', 'চৈত্র সংক্রান্তি', 'general', FALSE, TRUE, 'Hill districts only: Rangamati, Khagrachhari & Bandarban'),
+    ('2027-04-14', 'Bengali New Year (Pahela Baishakh)', 'পহেলা বৈশাখ', 'executive', FALSE, FALSE, NULL),
+    ('2027-05-01', 'May Day', 'মে দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-05-15', 'Eid-ul-Azha holiday (2 days before Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2027-05-16', 'Eid-ul-Azha holiday (day before Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2027-05-17', 'Eid-ul-Azha', 'ঈদুল আজহা', 'general', TRUE, FALSE, NULL),
+    ('2027-05-18', 'Eid-ul-Azha holiday (day after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2027-05-19', 'Eid-ul-Azha holiday (2 days after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2027-05-20', 'Eid-ul-Azha holiday (3 days after Eid)', 'ঈদুল আজহা', 'executive', TRUE, FALSE, NULL),
+    ('2027-05-20', 'Buddha Purnima (Baishakhi Purnima)', 'বুদ্ধ পূর্ণিমা', 'general', TRUE, FALSE, NULL),
+    ('2027-06-16', 'Ashura', 'আশুরা', 'executive', TRUE, FALSE, NULL),
+    ('2027-08-05', 'July Mass Uprising Day', 'জুলাই গণঅভ্যুত্থান দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-08-15', 'Eid-e-Milad-un-Nabi (SAW)', 'ঈদ-ই-মিলাদুন্নবী', 'general', TRUE, FALSE, NULL),
+    ('2027-08-25', 'Janmashtami', 'জন্মাষ্টমী', 'general', FALSE, FALSE, NULL),
+    ('2027-10-09', 'Durga Puja (Mahanabami)', 'দুর্গাপূজা (মহানবমী)', 'executive', FALSE, FALSE, NULL),
+    ('2027-10-10', 'Durga Puja (Vijaya Dashami)', 'দুর্গাপূজা (বিজয়া দশমী)', 'general', FALSE, FALSE, NULL),
+    ('2027-11-07', 'National Revolution and Solidarity Day', 'জাতীয় বিপ্লব ও সংহতি দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-12-16', 'Victory Day', 'বিজয় দিবস', 'general', FALSE, FALSE, NULL),
+    ('2027-12-25', 'Christmas Day', 'বড়দিন', 'general', FALSE, FALSE, NULL)
     ON CONFLICT (holiday_date, name) DO NOTHING
   `);
 

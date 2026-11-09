@@ -242,8 +242,8 @@ export default function Settings() {
   const [weekendSaving, setWeekendSaving] = useState(false);
   const [holidays, setHolidays] = useState<CalendarHoliday[]>([]);
   const [holidayYear, setHolidayYear] = useState<string>('all');
-  const [holidayForm, setHolidayForm] = useState<{ date: string; name: string; category: 'general' | 'executive'; moonDependent: boolean; regional: boolean }>({
-    date: '', name: '', category: 'general', moonDependent: false, regional: false,
+  const [holidayForm, setHolidayForm] = useState<{ date: string; name: string; nameBn: string; category: 'general' | 'executive'; moonDependent: boolean; regional: boolean }>({
+    date: '', name: '', nameBn: '', category: 'general', moonDependent: false, regional: false,
   });
   const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null);
   const [holidaySaving, setHolidaySaving] = useState(false);
@@ -286,7 +286,7 @@ export default function Settings() {
   };
 
   const resetHolidayForm = () => {
-    setHolidayForm({ date: '', name: '', category: 'general', moonDependent: false, regional: false });
+    setHolidayForm({ date: '', name: '', nameBn: '', category: 'general', moonDependent: false, regional: false });
     setEditingHolidayId(null);
   };
 
@@ -298,7 +298,7 @@ export default function Settings() {
     }
     setHolidaySaving(true);
     try {
-      const input = { ...holidayForm, name: holidayForm.name.trim() };
+      const input = { ...holidayForm, name: holidayForm.name.trim(), nameBn: holidayForm.nameBn.trim() || null };
       if (editingHolidayId) {
         const saved = await calendarService.updateHoliday(editingHolidayId, input);
         setHolidays(prev => prev.map(h => h.id === saved.id ? saved : h).sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name)));
@@ -319,7 +319,7 @@ export default function Settings() {
   const handleHolidayEdit = (h: CalendarHoliday) => {
     setEditingHolidayId(h.id);
     setDeleteConfirmId(null);
-    setHolidayForm({ date: h.date, name: h.name, category: h.category, moonDependent: h.moonDependent, regional: h.regional });
+    setHolidayForm({ date: h.date, name: h.name, nameBn: h.nameBn ?? '', category: h.category, moonDependent: h.moonDependent, regional: h.regional });
   };
 
   const handleHolidayDelete = async (id: string) => {
@@ -1444,6 +1444,16 @@ export default function Settings() {
                           />
                         </div>
                         <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Bangla Name (Optional)</label>
+                          <input
+                            type="text"
+                            value={holidayForm.nameBn}
+                            onChange={e => setHolidayForm(f => ({ ...f, nameBn: e.target.value }))}
+                            placeholder="e.g. বিজয় দিবস"
+                            className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black tracking-widest outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
                           <label className="text-[10px] font-black text-slate-400 uppercase">Category</label>
                           <select
                             value={holidayForm.category}
@@ -1512,7 +1522,10 @@ export default function Settings() {
                                       <span className="text-[11px] font-black text-slate-700 uppercase whitespace-nowrap">
                                         {new Date(`${h.date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                                       </span>
-                                      <span className="text-[11px] font-bold text-slate-600">{h.name}</span>
+                                      <span className="min-w-0">
+                                        <span className="block text-[11px] font-bold text-slate-600">{h.name}</span>
+                                        {h.nameBn && <span className="block text-[10px] font-bold text-slate-400">{h.nameBn}</span>}
+                                      </span>
                                       <span className={cn(
                                         "px-2 py-0.5 text-[9px] font-black uppercase tracking-widest rounded border",
                                         h.category === 'general'

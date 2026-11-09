@@ -59,6 +59,7 @@ function isUniqueViolation(error: any): boolean {
 interface HolidayPayload {
   date: string;
   name: string;
+  nameBn: string | null;
   category: 'general' | 'executive';
   moonDependent: boolean;
   regional: boolean;
@@ -72,6 +73,8 @@ function parseHolidayPayload(body: any): { payload: HolidayPayload } | { error: 
   const name = clean(body?.name);
   if (!name) return { error: 'A holiday name is required.' };
   if (name.length > 255) return { error: 'The holiday name is too long (max 255 characters).' };
+  const nameBnRaw = clean(body?.nameBn ?? body?.name_bn);
+  if (nameBnRaw.length > 255) return { error: 'The Bangla holiday name is too long (max 255 characters).' };
   const category = normalizeHolidayCategory(body?.category ?? 'general');
   if (!category) return { error: "Category must be 'general' or 'executive'." };
   const noteRaw = body?.note == null ? null : clean(body.note);
@@ -79,6 +82,7 @@ function parseHolidayPayload(body: any): { payload: HolidayPayload } | { error: 
     payload: {
       date,
       name,
+      nameBn: nameBnRaw ? nameBnRaw : null,
       category,
       moonDependent: body?.moonDependent === true || body?.moon_dependent === true,
       regional: body?.regional === true,
@@ -170,10 +174,10 @@ router.post('/calendar/holidays', requireAuth, requirePermissionCode('settings.m
   }
   try {
     const result = await getPool().query(
-      `INSERT INTO calendar_holidays (holiday_date, name, category, moon_dependent, regional, note, created_by, updated_by)
-       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $7)
+      `INSERT INTO calendar_holidays (holiday_date, name, name_bn, category, moon_dependent, regional, note, created_by, updated_by)
+       VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $8)
        RETURNING *`,
-      [p.date, p.name, p.category, p.moonDependent, p.regional, p.note, actorId]
+      [p.date, p.name, p.nameBn, p.category, p.moonDependent, p.regional, p.note, actorId]
     );
     const saved = mapHolidayRow(result.rows[0]);
     await logAccessChange({
@@ -213,12 +217,12 @@ router.put('/calendar/holidays/:id', requireAuth, requirePermissionCode('setting
   try {
     const result = await getPool().query(
       `UPDATE calendar_holidays
-          SET holiday_date = $1::date, name = $2, category = $3,
-              moon_dependent = $4, regional = $5, note = $6,
-              updated_by = $7, updated_at = NOW()
-        WHERE id = $8
+          SET holiday_date = $1::date, name = $2, name_bn = $3, category = $4,
+              moon_dependent = $5, regional = $6, note = $7,
+              updated_by = $8, updated_at = NOW()
+        WHERE id = $9
         RETURNING *`,
-      [p.date, p.name, p.category, p.moonDependent, p.regional, p.note, actorId, asUuid(id) ? id : null]
+      [p.date, p.name, p.nameBn, p.category, p.moonDependent, p.regional, p.note, actorId, asUuid(id) ? id : null]
     );
     if (result.rows.length === 0) {
       return sendJson(res, 404, { success: false, message: 'Holiday not found.' });
