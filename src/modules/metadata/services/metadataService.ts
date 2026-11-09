@@ -139,6 +139,25 @@ export const metadataService = {
     return saved;
   },
 
+  /**
+   * Add Lead form "+" — append ONE option to a lead-form dropdown list.
+   * Deliberately narrower than addValue(): the server gates it on
+   * `leads.create` (not settings.manage), allowlists the extendable
+   * lists, and dedupes case-insensitively. Resolves with the canonical
+   * stored option; `existing: true` means the value was already on the
+   * list (select it, store nothing new). Throws ApiError on refusal
+   * (not allowlisted, blank/overlong, or an inactive namesake).
+   */
+  async quickAddOption(type: string, value: string): Promise<DropdownOption & { existing: boolean }> {
+    const saved = await apiRequest<DropdownOption & { existing: boolean }>(
+      '/api/options/quick-add',
+      jsonBody({ type, value })
+    );
+    delete valuesCache[`__all__${type}`];
+    invalidateOptionsReferenceCache();
+    return saved;
+  },
+
   async updateValue(option: DropdownOption): Promise<DropdownOption> {
     const saved = await apiRequest<DropdownOption>('/api/options', jsonBody(option));
     delete valuesCache[`__all__${option.type}`];

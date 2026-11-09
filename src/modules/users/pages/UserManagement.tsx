@@ -407,19 +407,25 @@ export default function UserManagement() {
 
   const openEditUser = (u: User) => {
     setEditingUser(u);
+    const editRole = u.role || (roles.length > 0 ? roles[0].roleId : 'ADMIN');
+    // Level-1 (CEO) reports to nobody — BY DEFINITION. A stale manager link
+    // stored on a CEO record (legacy data) must not enter the form: the
+    // picker is replaced by static text for Level 1, so the value could
+    // never be cleared and it deadlocked every save of that account.
+    const editRoleLevel = (roles.find(r => r.roleId === editRole) as any)?.hierarchyLevel ?? 0;
     setUserForm({
       name: u.name || '',
       employeeId: u.employeeId || '',
       contact: (u as any).contact || '',
       email: u.email || '',
       designation: u.designation || '',
-      role: u.role || (roles.length > 0 ? roles[0].roleId : 'ADMIN'),
+      role: editRole,
       departmentId: (u as any).departmentId || '',
       // Only the EXTRA seats are edited here; the primary department is the
       // dropdown above.
       departmentIds: (((u as any).departmentIds || []) as string[])
         .filter(id => id !== (u as any).departmentId),
-      managerId: (u as any).managerId || (u as any).reportingManagerId || '',
+      managerId: editRoleLevel === 1 ? '' : ((u as any).managerId || (u as any).reportingManagerId || ''),
       password: '',
       status: u.status || 'Active',
     });
@@ -473,10 +479,10 @@ export default function UserManagement() {
       toast.error('Please select a reporting manager (one or two levels up, same department).');
       return;
     }
-    if (formRoleLevel === 1 && userForm.managerId) {
-      toast.error('A Level-1 (CEO) employee cannot have a reporting manager.');
-      return;
-    }
+    // Level-1 (CEO) means "no manager" — enforced by NORMALISING the value
+    // (edit-open, role change and this payload all force ''), never by
+    // blocking the save: the form shows no picker for Level 1, so a
+    // leftover value would be something the user cannot fix here.
 
     const cleanEmpId = userForm.employeeId.trim().toUpperCase();
     const isDuplicate = users.some(u =>
@@ -520,7 +526,8 @@ export default function UserManagement() {
         mustChangePassword: editingUser
           ? (userForm.password ? true : (editingUser.mustChangePassword ?? false))
           : true,
-        managerId: userForm.managerId,
+        // Level-1 (CEO) always saves with NO manager (see above).
+        managerId: formRoleLevel === 1 ? '' : userForm.managerId,
       };
 
       if (editingUser) {
@@ -2174,7 +2181,14 @@ export default function UserManagement() {
                     <label className="text-sm font-medium text-slate-600 mb-1 block">Role</label>
                     <select
                       value={userForm.role}
-                      onChange={e => setUserForm({ ...userForm, role: e.target.value })}
+                      onChange={e => {
+                        const nextRole = e.target.value;
+                        const nextLevel = (roles.find(r => r.roleId === nextRole) as any)?.hierarchyLevel ?? 0;
+                        // Switching to a Level-1 (CEO) role clears the
+                        // manager selection: the CEO reports to no one, and
+                        // the picker is about to be replaced by static text.
+                        setUserForm({ ...userForm, role: nextRole, ...(nextLevel === 1 ? { managerId: '' } : {}) });
+                      }}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
                     >
                       {roles.map(r => (
