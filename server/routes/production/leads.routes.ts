@@ -85,6 +85,13 @@ import {
   getLeadSlaConfig,
 } from '../../services/LeadSlaService.js';
 import {
+  reconcileLeadNextStepCalendar,
+  reconcileLeadNextStepCalendarDemo,
+  resolveNextStep,
+  syncNextStepAfterFollowUp,
+  syncNextStepAfterFollowUpDemo,
+} from '../../services/NextStepCalendarSync.js';
+import {
   AUDIT_CHANGE_CAP,
   LEAD_SELECT,
   asUuid,
@@ -1054,6 +1061,15 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       const existingIndex = fallbackStore.leads.findIndex((item: any) => item.id === lead.id || String(item.mobile || '').toUpperCase() === String(lead.mobile || '').toUpperCase());
       if (existingIndex >= 0) fallbackStore.leads[existingIndex] = { ...fallbackStore.leads[existingIndex], ...lead };
       else fallbackStore.leads.push(lead);
+      // Next-step calendar sync (demo mirror of the DB reconcile in
+      // POST /leads; the demo lead object itself does not carry the
+      // follow-up date, so the record's value wins when supplied).
+      const storedLead: any = existingIndex >= 0 ? fallbackStore.leads[existingIndex] : lead;
+      reconcileLeadNextStepCalendarDemo(fallbackStore as any, {
+        lead: { ...storedLead, nextFollowUpDate: record.nextFollowUpDate ?? storedLead.nextFollowUpDate ?? null },
+        actorId: caller.id,
+        sourceKind: 'lead_save',
+      });
       lead.leadQuality = scoreFallbackLead(
         lead,
         (fallbackStore as any).leadActivities || [],
@@ -1152,6 +1168,16 @@ router.post('/leads', requireAuth, async (req: any, res) => {
           excludeNotifyUserId: undefined,
         });
       }
+
+      // Next-step calendar sync (PR A): the upsert may have set, moved
+      // or cleared this lead's next_follow_up_at — mirror it onto the
+      // Task Calendar inside the same transaction (see
+      // services/NextStepCalendarSync.ts for the rules).
+      await reconcileLeadNextStepCalendar(client, {
+        leadId: String(row.id),
+        actorId: caller.id,
+        sourceKind: 'lead_save',
+      });
 
       await client.query('COMMIT');
       perf.span('db.commit');
@@ -1965,9 +1991,11 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
             }
           }
 
+          let writtenLeadId: string | null = action.action === 'update' ? String(action.existing.id) : null;
           if (action.action === 'insert') {
             const ins = await client.query(LEAD_UPSERT_SQL, leadParams(record, action.leadCode));
             if (!ins.rows[0]) throw new Error('Insert did not return a row');
+            writtenLeadId = String(ins.rows[0].id);
             // xmax=0 means the row was truly inserted; a conflict-triggered
             // update (e.g. soft-deleted lead resurrected) counts as updated.
             if (ins.rows[0]._inserted === false) updated++;
@@ -1979,8 +2007,22 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
           } else { // upsertByCode - duplicate within the same upload
             const ups = await client.query(LEAD_UPSERT_SQL, leadParams(record, action.leadCode));
             if (!ups.rows[0]) throw new Error('Upsert did not return a row');
+            writtenLeadId = String(ups.rows[0].id);
             if (ups.rows[0]._inserted === false) updated++;
             else inserted++;
+          }
+          // Next-step calendar sync (PR A): only a row whose sheet
+          // actually supplied a follow-up date can change the lead's
+          // next-step commitment (the bulk UPDATE preserves blanks via
+          // COALESCE; the upsert writes the record's value), so only
+          // those rows reconcile the lead's calendar entry — inside
+          // this row's savepoint, like every other row effect.
+          if (writtenLeadId && record.nextFollowUpDate) {
+            await reconcileLeadNextStepCalendar(client, {
+              leadId: writtenLeadId,
+              actorId: caller.id,
+              sourceKind: 'bulk_import',
+            });
           }
           if (rowAutoPick) {
             autoAssignedCount++;
@@ -3011,6 +3053,26 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (!Array.isArray((fallbackStore as any).leadActivities)) (fallbackStore as any).leadActivities = [];
       (fallbackStore as any).leadActivities.push(activity);
 
+      // Next-step calendar sync (demo mirror of the DB sync below).
+      const demoStep = resolveNextStep({
+        meetingAt: meetingDateInput ?? null,
+        nextCallAt: nextCallDateInput ?? null,
+        nextFollowUpAt: nextFollowUpDateInput ?? null,
+      });
+      syncNextStepAfterFollowUpDemo(fallbackStore as any, {
+        leadId: String((lead as any).id),
+        sourceActivityId: String(activity.id),
+        sourceKind: 'follow_up',
+        actorId: caller.id,
+        assignedTo: (lead as any).assignedTo ?? null,
+        customerName: (lead as any).prospectName || (lead as any).customerName || null,
+        nextStepAt: demoStep?.at ?? null,
+        kind: demoStep?.kind ?? 'follow_up',
+        meetingType: meetingTypeInput ?? null,
+        remarks: remarksInput !== undefined ? remarksInput : null,
+        leadStatusAfter: newStatus,
+      });
+
       const mappedActivity = mapActivityRow(activity);
       // Return lead (authoritative) + activity, with fresh quality so the
       // UI in-place patch never carries a stale score after a status move.
@@ -3243,6 +3305,29 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         await client.query('ROLLBACK');
         return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' });
       }
+
+      // Next-step calendar sync (PR A): mirror this follow-up's next
+      // step onto the Task Calendar inside the same transaction — a
+      // status update that sets a next-step date/time now lands on
+      // the calendar date-wise (services/NextStepCalendarSync.ts).
+      const step = resolveNextStep({
+        meetingAt: meetingDateInput ?? null,
+        nextCallAt: nextCallDateInput ?? null,
+        nextFollowUpAt: nextFollowUpDateInput ?? null,
+      });
+      await syncNextStepAfterFollowUp(client, {
+        leadId: String(updatedRow.id),
+        sourceActivityId: String(activityInsert.rows[0].id),
+        sourceKind: 'follow_up',
+        actorId: caller.id,
+        assignedTo: updatedRow.assigned_to ?? null,
+        customerName: updatedRow.customer_name ?? null,
+        nextStepAt: step?.at ?? null,
+        kind: step?.kind ?? 'follow_up',
+        meetingType: meetingTypeInput ?? null,
+        remarks: remarksInput !== undefined ? remarksInput : null,
+        leadStatusAfter: newStatus,
+      });
 
       perf.span('db.updateAndActivity');
       await client.query('COMMIT');

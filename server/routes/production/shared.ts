@@ -1029,6 +1029,12 @@ export function mapScheduledActivityRow(row: any) {
     completed_by: completedByRaw || null,
     completedActivityId: completedActRaw || null,
     completed_activity_id: completedActRaw || null,
+    // Next-step sync provenance (migration 054): non-null only for
+    // entries the server keeps in sync with a follow-up's next step.
+    sourceActivityId: row.source_activity_id || row.sourceActivityId || null,
+    source_activity_id: row.source_activity_id || row.sourceActivityId || null,
+    sourceKind: row.source_kind || row.sourceKind || null,
+    source_kind: row.source_kind || row.sourceKind || null,
     leadCustomerName: row.lead_customer_name || row.customer_name || row.leadCustomerName || null,
     leadMobile: row.lead_mobile || row.leadMobile || null,
     leadStatus: row.lead_current_status || row.leadStatus || null,

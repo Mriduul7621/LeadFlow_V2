@@ -29,6 +29,11 @@ import {
   fetchScheduledQualitySignals,
 } from '../../utils/leadQualitySignals.js';
 import {
+  resolveNextStep,
+  syncNextStepAfterFollowUp,
+  syncNextStepAfterFollowUpDemo,
+} from '../../services/NextStepCalendarSync.js';
+import {
   buildDashboardVisibilitySql,
   callerIsAdmin,
   clean,
@@ -570,7 +575,12 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
 
     if (leadIdFilter) {
       params.push(leadIdFilter);
-      where.push(`sa.lead_id::text = $${params.length} OR sa.lead_id IN (SELECT id FROM leads WHERE lead_code = $${params.length})`);
+      // Parenthesised: the clauses are AND-joined below, and an
+      // unparenthesised OR would bind looser than AND — the first
+      // disjunct (lead UUID form) would then escape EVERY other
+      // condition, including the visibility predicate and the date
+      // range (pre-existing leak, caught by the PR A sync tests).
+      where.push(`(sa.lead_id::text = $${params.length} OR sa.lead_id IN (SELECT id FROM leads WHERE lead_code = $${params.length}))`);
     }
     if (typeFilter) {
       params.push(typeFilter);
@@ -1314,6 +1324,28 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
       sched.updated_by = caller.id;
       sched.updatedAt = nowIso;
       sched.updated_at = nowIso;
+      // Next-step calendar sync (demo mirror of the DB sync below).
+      if (isFollowUp) {
+        const demoStep = resolveNextStep({
+          meetingAt: activity.meetingAt ?? null,
+          nextCallAt: activity.nextCallAt ?? null,
+          nextFollowUpAt: activity.nextFollowUpAt ?? null,
+        });
+        syncNextStepAfterFollowUpDemo(fallbackStore as any, {
+          leadId: String(lead.id),
+          sourceActivityId: String(historyId),
+          sourceKind: 'scheduled_complete',
+          actorId: caller.id,
+          assignedTo: (lead as any).assignedTo ?? null,
+          customerName: (lead as any).prospectName || (lead as any).customerName || null,
+          nextStepAt: demoStep?.at ?? null,
+          kind: demoStep?.kind ?? 'follow_up',
+          meetingType: activity.meetingType ?? null,
+          remarks: remarksForHistory,
+          leadStatusAfter: statusForHistory,
+          excludeScheduledId: String(sched.id),
+        });
+      }
       perf.span('db.complete');
       perf.finish(res);
       return sendJson(res, 200, { success: true, data: { scheduled: mapScheduledActivityRow(sched), activity: mapActivityRow(activity) } });
@@ -1427,6 +1459,30 @@ router.post('/scheduled-activities/:id/complete', requireAuth, async (req: any, 
         if (!actInsert.rows[0]) { await client.query('ROLLBACK'); perf.finish(res); return sendJson(res, 500, { success: false, message: 'Activity insertion failed.' }); }
         const insertedActId = actInsert.rows[0].id;
         await client.query(`UPDATE scheduled_activities SET status='completed', completed_at=$1, completed_by=$2, completed_activity_id=$3, updated_by=$2, updated_at=NOW() WHERE id=$4`, [nowForDb, caller.id, insertedActId, schedRow.id]);
+        // Next-step calendar sync (PR A): completing a follow-up with
+        // a NEW next step mirrors that step onto the calendar in the
+        // same transaction (the row completed above is excluded — the
+        // handler already closed it; the sync closes any OTHER open
+        // managed entry and upserts the new activity's entry).
+        const step = resolveNextStep({
+          meetingAt: meetingDateInput ?? null,
+          nextCallAt: nextCallDateInput ?? null,
+          nextFollowUpAt: nextFollowUpDateInput ?? null,
+        });
+        await syncNextStepAfterFollowUp(client, {
+          leadId: String(leadId),
+          sourceActivityId: String(insertedActId),
+          sourceKind: 'scheduled_complete',
+          actorId: caller.id,
+          assignedTo: leadRow.assigned_to ?? null,
+          customerName: leadRow.customer_name ?? null,
+          nextStepAt: step?.at ?? null,
+          kind: step?.kind ?? 'follow_up',
+          meetingType: meetingTypeInput ?? null,
+          remarks: remarksForHistory,
+          leadStatusAfter: newStatus,
+          excludeScheduledId: String(schedRow.id),
+        });
         await client.query('COMMIT');
         perf.span('db.complete');
         perf.finish(res);
