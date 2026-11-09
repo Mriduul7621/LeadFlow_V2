@@ -30,6 +30,12 @@ export interface HierarchyUserRow {
   full_name: string;
   manager_id: string | null;
   department_id: string | null;
+  /**
+   * The person's active department memberships (primary + additional
+   * seats), when the caller loaded them. A manager's set decides the
+   * same-department judgement, exactly as on the write path.
+   */
+  department_ids?: string[] | null;
   is_active?: boolean | null;
   role_code: string | null;
   hierarchy_level?: number | null;
@@ -130,6 +136,7 @@ export function computeHierarchyHealth(
       managerLevel,
       employeeDepartmentId: u.department_id || null,
       managerDepartmentId: manager.department_id || null,
+      managerDepartmentIds: manager.department_ids || null,
     });
     if (candidateError) {
       invalidLinks.push({

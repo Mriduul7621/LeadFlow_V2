@@ -44,6 +44,7 @@ import {
 import {
   closeUserMemberships,
   getMembershipDepartmentMap,
+  getUserDepartmentIds,
   hasDepartmentMirrorLayer,
   setDepartmentHeads,
   setUserExtraMemberships,
@@ -217,11 +218,19 @@ export async function validateReportingLink(
   if (inLadder) {
     // Shared authority rule: strictly higher authority, one or two levels
     // up, within the same department unless the manager is Level 1 (CEO).
+    // "Same department" includes the manager's ADDITIONAL seats: a Head
+    // who heads several departments (primary + extra memberships) can be
+    // reported to from any of them. getUserDepartmentIds returns every
+    // active membership (primary included); on a database without the
+    // membership layer it returns [], and the primary column stands alone
+    // exactly as before.
+    const managerDepartmentIds = await getUserDepartmentIds(exec as any, managerId);
     const candidateError = validateReportingManagerCandidate({
       employeeLevel: level,
       managerLevel,
       employeeDepartmentId: departmentId,
       managerDepartmentId: manager.department_id || null,
+      managerDepartmentIds,
     });
     if (candidateError) return candidateError;
   }
@@ -298,8 +307,16 @@ async function buildHierarchyConfig() {
   // are counted, so the Level-1 (CEO) org root is never reported as missing
   // a manager. Invalid links are recomputed from the CURRENT role levels, so
   // a hierarchy/role-level change is reflected here without mutating any
-  // stored manager_id values.
-  const health = computeHierarchyHealth(usersResult.rows as any, levelMap);
+  // stored manager_id values. Each row carries the person's active
+  // department memberships so a link via a manager's ADDITIONAL department
+  // seat is judged by the same rule the write path enforces (never flagged
+  // as a wrong-department problem).
+  const membershipMap = await getMembershipDepartmentMap(pool);
+  const healthUsers = (usersResult.rows as any[]).map((row: any) => ({
+    ...row,
+    department_ids: membershipMap.get(String(row.id)) || [],
+  }));
+  const health = computeHierarchyHealth(healthUsers as any, levelMap);
 
   // F16 Phase D — department health. One department = one mirror team, a
   // roster that equals its memberships and a leader that equals its primary
@@ -516,6 +533,15 @@ router.get('/users/reporting-options', requireAuth, async (req, res) => {
 
     const placeholders = managerRoleCodes.map((_, i) => `$${i + 1}`).join(', ');
     const params: any[] = [...managerRoleCodes];
+    // A candidate also belongs to the employee's department via an
+    // ADDITIONAL seat (active department_members row) — a Head who heads
+    // several departments must be pickable from each of them. The clause
+    // is only added when the membership layer (migration 046) exists.
+    const hasMirror = await hasDepartmentMirrorLayer(pool);
+    const membershipClause = (paramIdx: number) =>
+      hasMirror
+        ? ` OR EXISTS (SELECT 1 FROM department_members dm WHERE dm.user_id = u.id AND dm.is_active AND dm.department_id = $${paramIdx})`
+        : '';
     let sql = `
       SELECT u.id, u.employee_id, u.full_name, u.designation, d.department_name, r.role_code AS role_code, r.role_name AS role_name
         FROM users u
@@ -526,7 +552,7 @@ router.get('/users/reporting-options', requireAuth, async (req, res) => {
       // Level 1 (CEO) candidates cross departments; every other allowed
       // level must still share the employee's department.
       if (departmentId) {
-        sql += ` AND (r.hierarchy_level = 1 OR u.department_id = $${params.length + 1})`;
+        sql += ` AND (r.hierarchy_level = 1 OR u.department_id = $${params.length + 1}${membershipClause(params.length + 1)})`;
         params.push(departmentId);
       } else {
         // Without a department, only Level-1 cross-department candidates
@@ -535,7 +561,7 @@ router.get('/users/reporting-options', requireAuth, async (req, res) => {
       }
     } else {
       if (!departmentId) return sendJson(res, 200, []);
-      sql += ` AND u.department_id = $${params.length + 1}`;
+      sql += ` AND (u.department_id = $${params.length + 1}${membershipClause(params.length + 1)})`;
       params.push(departmentId);
     }
     sql += ` ORDER BY u.full_name ASC`;
@@ -683,7 +709,14 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
       await client.query('ROLLBACK');
       return sendJson(res, 400, { success: false, message: `Unknown team "${teamRef}". Please select a valid team.` });
     }
-    const managerId = await resolveUserId(payload.managerId || payload.reportingManagerId || null);
+    let managerId = await resolveUserId(payload.managerId || payload.reportingManagerId || null);
+
+    // Level-1 (CEO) is the org root: a stray manager value sent for a CEO
+    // create is normalised away instead of rejected — the form offers no
+    // manager picker for Level 1, so there is nothing for the caller to
+    // fix. (Bulk import deliberately keeps its explicit per-row error:
+    // a spreadsheet CAN be corrected by a human.)
+    if ((await roleLevelOf(client, roleId)) === 1) managerId = null;
 
     // Reporting ladder: the manager must hold a strictly higher-authority
     // role, one or two levels up, in the same department (Level-1 CEO is the
@@ -929,6 +962,14 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     // behavior because validateReportingLink only requires a manager for
     // in-ladder Level 2+ roles.
     const nextRoleId = roleId || existing.role_id;
+    // Level-1 self-heal: a CEO row can carry a STALE manager_id (set before
+    // a promotion, or by legacy data — migration 053 deliberately never
+    // rewrote source links). Echoing it into validateReportingLink would
+    // reject EVERY edit of that account forever, and the form offers no
+    // picker to clear it (Level 1 shows static "reports to no one" text):
+    // a permanent deadlock. A Level-1 save therefore clears the link here,
+    // and the recompute below removes the ghost from every derived chain.
+    if ((await roleLevelOf(client, nextRoleId)) === 1) managerId = null;
     const reportingError = await validateReportingLink(client, {
       selfId: existing.id,
       roleId: nextRoleId,
@@ -1301,6 +1342,14 @@ async function loadUserBulkReferenceData(pool: any, batchEmployeeIds: string[], 
       [allLookupIds.length ? allLookupIds : ['__none__'], emailLowerList.length ? emailLowerList : ['__none__']]
     );
     existingUsers = existingRes.rows;
+    // Attach each existing user's active department memberships so the
+    // import validator can honour a manager's ADDITIONAL department seats
+    // with the same rule as manual create/edit. Without the membership
+    // layer the map is empty and the primary department stands alone.
+    const membershipMap = await getMembershipDepartmentMap(pool);
+    for (const u of existingUsers) {
+      u.department_ids = membershipMap.get(String(u.id)) || [];
+    }
   }
 
   // All users for cycle detection (id, employee_id, manager_id)

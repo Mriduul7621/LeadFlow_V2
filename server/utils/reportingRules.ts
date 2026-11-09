@@ -18,7 +18,9 @@
  *     holds STRICTLY higher authority, one OR two levels up. Same level,
  *     lower level, and gaps greater than two levels are all rejected.
  *   - Department rule: only a Level-1 (CEO) manager may sit across
- *     departments; every other manager must share the employee's department.
+ *     departments; every other manager must belong to the employee's
+ *     department — via their primary department OR an additional seat
+ *     (one Head can head several departments).
  */
 
 export const UNASSIGNED_LEVEL = 99;
@@ -55,6 +57,15 @@ export interface ReportingManagerCandidate {
   managerLevel: number;
   employeeDepartmentId: string | null;
   managerDepartmentId: string | null;
+  /**
+   * Every department the manager belongs to — their primary department plus
+   * any ADDITIONAL seats (active `department_members` rows). A Head can head
+   * several departments, so "same department" means the employee's
+   * department is ANY of the manager's departments, not only the primary
+   * one. When omitted/null the single `managerDepartmentId` stands alone
+   * (the historical behaviour for callers that cannot load memberships).
+   */
+  managerDepartmentIds?: Array<string | null | undefined> | null;
 }
 
 /**
@@ -68,7 +79,7 @@ export interface ReportingManagerCandidate {
 export function validateReportingManagerCandidate(
   c: ReportingManagerCandidate
 ): string | null {
-  const { employeeLevel, managerLevel, employeeDepartmentId, managerDepartmentId } = c;
+  const { employeeLevel, managerLevel, employeeDepartmentId, managerDepartmentId, managerDepartmentIds } = c;
 
   // Level 1 (CEO) is the org root — it reports to nobody.
   if (employeeLevel === 1) {
@@ -94,12 +105,18 @@ export function validateReportingManagerCandidate(
   }
 
   // Department rule: Level 1 (CEO) is the only cross-department link.
+  // "Same department" = the employee's department is the manager's primary
+  // department OR one of their additional department seats — a Head who
+  // heads several departments can be reported to from any of them.
   if (managerLevel !== 1) {
-    if (
-      !employeeDepartmentId ||
-      !managerDepartmentId ||
-      String(managerDepartmentId) !== String(employeeDepartmentId)
-    ) {
+    const managerDepartments = new Set<string>();
+    if (managerDepartmentId) managerDepartments.add(String(managerDepartmentId));
+    if (Array.isArray(managerDepartmentIds)) {
+      for (const id of managerDepartmentIds) {
+        if (id) managerDepartments.add(String(id));
+      }
+    }
+    if (!employeeDepartmentId || !managerDepartments.has(String(employeeDepartmentId))) {
       return 'Invalid reporting manager: the manager must belong to the same department.';
     }
   }
