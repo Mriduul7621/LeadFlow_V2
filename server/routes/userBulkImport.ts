@@ -66,7 +66,7 @@ export interface ReferenceMaps {
   deptByName: Map<string, { id: string; department_code: string; department_name: string; is_active: boolean }>;
   teamByCode: Map<string, { id: string; team_code: string; team_name: string; is_active: boolean }>;
   teamByName: Map<string, { id: string; team_code: string; team_name: string; is_active: boolean }>;
-  existingByEmpId: Map<string, { id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; team_id: string | null; manager_id: string | null; is_active: boolean; role_code: string | null; hierarchy_level: number; department_code?: string | null }>;
+  existingByEmpId: Map<string, { id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; department_ids?: string[]; team_id: string | null; manager_id: string | null; is_active: boolean; role_code: string | null; hierarchy_level: number; department_code?: string | null }>;
   existingByEmail: Map<string, { id: string; employee_id: string; email: string }>;
   allUsersManagerMap: Map<string, string | null>; // employee_id uppercase -> manager employee_id uppercase or null
   allUsersById: Map<string, string>; // user id -> employee_id uppercase
@@ -210,7 +210,7 @@ export function buildReferenceMaps(opts: {
   roles: Array<{ id: string; role_code: string; role_name: string; hierarchy_level: number; is_active?: boolean; status?: string }>;
   departments: Array<{ id: string; department_code: string; department_name: string; is_active?: boolean; status?: string }>;
   teams: Array<{ id: string; team_code: string; team_name: string; is_active?: boolean; status?: string }>;
-  existingUsers: Array<{ id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; team_id: string | null; manager_id: string | null; is_active?: boolean; account_status?: string; role_code?: string | null; hierarchy_level?: number | null }>;
+  existingUsers: Array<{ id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; department_ids?: string[]; team_id: string | null; manager_id: string | null; is_active?: boolean; account_status?: string; role_code?: string | null; hierarchy_level?: number | null }>;
   allUsers: Array<{ id: string; employee_id: string; manager_id: string | null }>;
 }): ReferenceMaps {
   const roleByCode = new Map<string, any>();
@@ -270,6 +270,10 @@ export function buildReferenceMaps(opts: {
       email: String(u.email || '').toLowerCase(),
       role_id: u.role_id,
       department_id: u.department_id,
+      // Active department memberships (primary + additional seats), when
+      // the loader attached them — the manager department rule honours
+      // additional seats exactly like manual create/edit.
+      department_ids: Array.isArray((u as any).department_ids) ? (u as any).department_ids.map(String) : [],
       team_id: u.team_id,
       manager_id: u.manager_id,
       is_active: active,
@@ -542,11 +546,17 @@ export function validateBulkRows(opts: {
             if (roleLevel === 1) {
               errors.push('A Level-1 (CEO) employee cannot have a reporting manager');
             } else if (mgrRoleLevel !== undefined) {
+              // A same-batch manager may ALSO be an existing user whose
+              // stored ADDITIONAL department seats count toward "same
+              // department" (the commit path re-validates every link via
+              // validateReportingLink against the final state anyway).
+              const mgrStored = maps.existingByEmpId.get(managerInput);
               const candidateError = validateReportingManagerCandidate({
                 employeeLevel: roleLevel,
                 managerLevel: mgrRoleLevel,
                 employeeDepartmentId: deptId ?? null,
                 managerDepartmentId: mgrDeptId ?? null,
+                managerDepartmentIds: mgrStored?.department_ids || [],
               });
               if (candidateError) errors.push(candidateError);
             }
@@ -577,6 +587,9 @@ export function validateBulkRows(opts: {
                   managerLevel: existingMgr.hierarchy_level,
                   employeeDepartmentId: deptId ?? null,
                   managerDepartmentId: existingMgr.department_id ?? null,
+                  // The manager's ADDITIONAL department seats count too —
+                  // same rule as manual create/edit.
+                  managerDepartmentIds: existingMgr.department_ids || [],
                 });
                 if (candidateError) errors.push(candidateError);
               }
