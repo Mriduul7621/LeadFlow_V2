@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Users, 
   Settings as SettingsIcon, 
@@ -21,7 +21,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   Timer,
-  CalendarDays
+  CalendarDays,
+  Upload,
+  Download,
+  FileJson
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -34,7 +37,7 @@ import { workflowService } from '../../workflow/services/workflowService';
 import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
 import { databaseStatusService } from '../../../services/syncService';
-import { calendarService, type CalendarHoliday } from '../../calendar/services/calendarService';
+import { calendarService, type CalendarHoliday, type HolidayImportResult } from '../../calendar/services/calendarService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -333,6 +336,89 @@ export default function Settings() {
       toast.error('Could not delete the holiday');
     }
   };
+
+  // Holiday JSON import (PR F): an admin uploads the canonical
+  // holiday file for a future year; the server validates every row,
+  // adds the new ones and skips (date + name) duplicates — no code
+  // help needed when a new gazette list arrives.
+  const holidayImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [holidayImportPreview, setHolidayImportPreview] = useState<{ fileName: string; rows: any[] } | null>(null);
+  const [holidayImporting, setHolidayImporting] = useState(false);
+  const [holidayImportResult, setHolidayImportResult] = useState<HolidayImportResult | null>(null);
+
+  const handleHolidayImportFile = async (file: File | null) => {
+    if (!file) return;
+    setHolidayImportResult(null);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      toast.error(`"${file.name}" is not valid JSON — nothing was sent.`);
+      setHolidayImportPreview(null);
+      return;
+    }
+    const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.holidays) ? parsed.holidays : null;
+    if (!rows) {
+      toast.error('This file has no "holidays" list — nothing was sent. Use the sample format.');
+      setHolidayImportPreview(null);
+      return;
+    }
+    if (rows.length === 0) {
+      toast.error('This file contains no holiday rows.');
+      setHolidayImportPreview(null);
+      return;
+    }
+    setHolidayImportPreview({ fileName: file.name, rows });
+  };
+
+  const handleHolidayImportConfirm = async () => {
+    if (!holidayImportPreview || holidayImporting) return;
+    setHolidayImporting(true);
+    try {
+      const result = await calendarService.importHolidays(holidayImportPreview.rows);
+      setHolidayImportResult(result);
+      setHolidayImportPreview(null);
+      const cfg = await calendarService.getConfig();
+      setHolidays(cfg.holidays);
+      if (result.added > 0) {
+        toast.success(`Imported ${result.added} new holiday${result.added === 1 ? '' : 's'}`);
+      } else {
+        toast.success('Import finished — no new holidays were added');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Holiday import failed');
+    } finally {
+      setHolidayImporting(false);
+    }
+  };
+
+  const handleHolidaySampleDownload = () => {
+    const sample = {
+      holidays: [
+        { date: '2028-02-21', name_en: 'Shaheed Day and International Mother Language Day', name_bn: 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', type: 'general', moon_dependent: false },
+        { date: '2028-03-20', name_en: 'Eid-ul-Fitr', name_bn: 'ঈদুল ফিতর', type: 'general', moon_dependent: true },
+        { date: '2028-04-13', name_en: 'Chaitra Sankranti', name_bn: 'চৈত্র সংক্রান্তি', type: 'general', moon_dependent: false, scope: 'Rangamati, Khagrachhari and Bandarban hill districts only' },
+      ],
+    };
+    const blob = new Blob([JSON.stringify(sample, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'holiday-import-sample.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const holidayImportYears: [string, number][] = [];
+  if (holidayImportPreview) {
+    const yearCounts = new Map<string, number>();
+    for (const r of holidayImportPreview.rows) {
+      const year = typeof r?.date === 'string' && /^\d{4}-/.test(r.date) ? r.date.slice(0, 4) : '—';
+      yearCounts.set(year, (yearCounts.get(year) ?? 0) + 1);
+    }
+    for (const entry of yearCounts) holidayImportYears.push(entry);
+    holidayImportYears.sort((a, b) => a[0].localeCompare(b[0]));
+  }
 
   const holidayYears = Array.from(new Set(holidays.map(h => h.date.slice(0, 4)))).sort();
   const visibleHolidays = holidayYear === 'all' ? holidays : holidays.filter(h => h.date.slice(0, 4) === holidayYear);
@@ -1501,6 +1587,106 @@ export default function Settings() {
                             </button>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {canEditCalendar && (
+                      <div className="p-4 bg-white border border-slate-100 rounded-sm space-y-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h5 className="text-[11px] font-black uppercase tracking-widest text-slate-600 flex items-center gap-2">
+                              <FileJson className="w-4 h-4 text-[#978C21]" /> Import Holidays (JSON)
+                            </h5>
+                            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed mt-1">
+                              Upload next year's government holiday file — new holidays are added to the database automatically. Entries whose date + name already exist are skipped, never duplicated.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleHolidaySampleDownload}
+                            className="px-3 py-2 bg-white border border-slate-200 text-slate-500 hover:border-[#978C21]/50 rounded-[10px] text-[11px] font-bold flex items-center gap-2"
+                          >
+                            <Download className="w-4 h-4" /> Download sample format
+                          </button>
+                        </div>
+
+                        <input
+                          ref={holidayImportInputRef}
+                          type="file"
+                          accept=".json,application/json"
+                          className="hidden"
+                          onChange={e => {
+                            void handleHolidayImportFile(e.target.files?.[0] ?? null);
+                            e.target.value = '';
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => holidayImportInputRef.current?.click()}
+                          className="px-4 py-2.5 bg-[#978C21] hover:bg-[#8a7f1e] text-white rounded-[10px] text-xs font-bold flex items-center gap-2"
+                        >
+                          <Upload className="w-4 h-4" /> Choose JSON file
+                        </button>
+
+                        {holidayImportPreview && (
+                          <div className="border border-slate-100 bg-[#FBFAF8] rounded-sm p-4 space-y-3">
+                            <p className="text-[11px] font-bold text-slate-600">
+                              {holidayImportPreview.fileName} — {holidayImportPreview.rows.length} holiday{holidayImportPreview.rows.length === 1 ? '' : 's'}
+                              {holidayImportYears.length > 0 && (
+                                <span className="text-slate-400"> ({holidayImportYears.map(([y, n]) => `${y}: ${n}`).join(' · ')})</span>
+                              )}
+                            </p>
+                            <div className="space-y-1 max-h-56 overflow-y-auto">
+                              {holidayImportPreview.rows.slice(0, 15).map((r: any, i: number) => (
+                                <p key={i} className="text-[11px] font-bold text-slate-500">
+                                  {String(r?.date ?? '—')} — {String(r?.name_en ?? r?.name ?? '(no name)')}
+                                  <span className="text-slate-400"> · {String(r?.type ?? r?.category ?? 'general')}</span>
+                                </p>
+                              ))}
+                              {holidayImportPreview.rows.length > 15 && (
+                                <p className="text-[11px] font-bold text-slate-400">+{holidayImportPreview.rows.length - 15} more…</p>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-400 font-bold leading-relaxed">
+                              Holidays already in the list with the same date and name will be skipped.
+                            </p>
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={handleHolidayImportConfirm}
+                                disabled={holidayImporting}
+                                className="px-4 py-2.5 bg-stone-700 hover:bg-stone-800 text-white rounded-[10px] text-xs font-bold disabled:opacity-40"
+                              >
+                                {holidayImporting ? 'Importing...' : 'Confirm import'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setHolidayImportPreview(null)}
+                                disabled={holidayImporting}
+                                className="px-4 py-2.5 bg-white border border-slate-200 text-slate-500 rounded-[10px] text-xs font-bold disabled:opacity-40"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {holidayImportResult && (
+                          <div className="border border-emerald-100 bg-emerald-50/50 rounded-sm p-4 space-y-2">
+                            <p className="text-[11px] font-black uppercase tracking-widest text-emerald-700">
+                              Added {holidayImportResult.added} · Skipped (already existed) {holidayImportResult.skippedDuplicates} · Rejected {holidayImportResult.rejected.length}
+                            </p>
+                            {holidayImportResult.rejected.length > 0 && (
+                              <div className="space-y-1">
+                                {holidayImportResult.rejected.map((rej, i) => (
+                                  <p key={i} className="text-[11px] font-bold text-red-500">
+                                    Row {rej.index + 1}{rej.date ? ` (${rej.date})` : ''}: {rej.reason}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 

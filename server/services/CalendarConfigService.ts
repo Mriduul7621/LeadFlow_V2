@@ -201,6 +201,134 @@ export function mapHolidayRow(row: any): CalendarHoliday {
   };
 }
 
+/* ====================================================================
+   Holiday JSON import (PR F)
+   ------------------------------------------------------------------
+   Settings → Calendar accepts a JSON file of holidays so a future
+   year's government list can be loaded by an admin with NO code
+   help. Two row shapes are accepted and normalised to one:
+
+   CANONICAL (the shape of bangladesh-govt-holidays-*.json and of
+   the sample download the Settings page offers):
+     { date: "YYYY-MM-DD", name_en, name_bn?, type: "general" |
+       "executive" | "executive_order", moon_dependent?: bool,
+       scope?: "national" | "<region text>" }
+     - type maps to the DB category ("executive*" -> executive).
+     - No scope / "national" = nationwide; any other scope text
+       marks the row regional and becomes the note — the hill-
+       districts scope resolves to migration 056's exact note
+       ('Hill districts only: Rangamati, Khagrachhari & Bandarban').
+
+   DB SHAPE (a row as GET /calendar/config serves it / the table
+   stores it), so an exported list re-imports unchanged:
+     { date, name, name_bn? | nameBn?, category: "general" |
+       "executive", moonDependent?: bool, regional?: bool, note? }
+
+   The (date, name) pair stays the identity — duplicates (against
+   the database or within the file) are skipped by the route via
+   ON CONFLICT DO NOTHING, never duplicated.
+==================================================================== */
+
+export const MAX_HOLIDAY_IMPORT_ROWS = 500;
+
+/** Migration 056's note for the hill-districts (Chaitra Sankranti) rows. */
+export const REGIONAL_HILL_DISTRICTS_NOTE =
+  'Hill districts only: Rangamati, Khagrachhari & Bandarban';
+
+export interface ImportHolidayRow {
+  date: string; // YYYY-MM-DD
+  name: string;
+  nameBn: string | null;
+  category: HolidayCategory;
+  moonDependent: boolean;
+  regional: boolean;
+  note: string | null;
+}
+
+function importBool(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
+  }
+  return false;
+}
+
+/**
+ * Validate + normalise ONE import row (either accepted shape).
+ * Returns the row, or a human-readable rejection reason.
+ */
+export function normalizeImportHolidayRow(
+  raw: unknown
+): { row: ImportHolidayRow } | { reason: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { reason: 'Row is not an object.' };
+  }
+  const r = raw as Record<string, any>;
+
+  const dateRaw = typeof r.date === 'string' ? r.date.trim() : r.date;
+  const date = typeof r.holiday_date === 'string' && dateRaw == null
+    ? r.holiday_date.trim()
+    : dateRaw;
+  if (!isValidHolidayDate(date)) {
+    return { reason: 'Missing or invalid date (expected a real date as YYYY-MM-DD).' };
+  }
+
+  const nameRaw = r.name_en ?? r.name;
+  const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
+  if (!name) return { reason: 'Missing holiday name (name_en).' };
+  if (name.length > 255) return { reason: 'Holiday name is too long (max 255 characters).' };
+
+  const nameBnRaw = r.name_bn ?? r.nameBn;
+  const nameBn = typeof nameBnRaw === 'string' ? nameBnRaw.trim() : '';
+  if (nameBn.length > 255) return { reason: 'Bangla name is too long (max 255 characters).' };
+
+  // Category: canonical `type` wins; DB-shape `category` otherwise.
+  // An absent value defaults to 'general' (same default as the
+  // single-holiday form); a present-but-unknown value is rejected.
+  let category: HolidayCategory = 'general';
+  const typeRaw = r.type ?? r.category;
+  if (typeRaw != null && String(typeRaw).trim() !== '') {
+    const t = String(typeRaw).trim().toLowerCase().replace(/_/g, ' ');
+    if (t === 'general') category = 'general';
+    else if (t === 'executive' || t === 'executive order') category = 'executive';
+    else return { reason: `Unknown type/category "${String(typeRaw)}" (expected "general" or "executive").` };
+  }
+
+  const moonDependent = importBool(r.moon_dependent ?? r.moonDependent);
+
+  // Regional + note. A canonical `scope` string wins when present;
+  // otherwise the DB-shape regional flag + note ride through.
+  let regional = importBool(r.regional);
+  let note: string | null = null;
+  if (typeof r.note === 'string' && r.note.trim()) note = r.note.trim();
+  if (typeof r.scope === 'string' && r.scope.trim()) {
+    const scope = r.scope.trim();
+    if (scope.toLowerCase() === 'national') {
+      regional = false;
+    } else {
+      regional = true;
+      note = /hill|rangamati|khagrachhari|bandarban/i.test(scope)
+        ? REGIONAL_HILL_DISTRICTS_NOTE
+        : scope;
+    }
+  } else if (typeof r.scope === 'string') {
+    regional = false; // scope present but blank -> nationwide
+  }
+
+  return {
+    row: {
+      date: date as string,
+      name,
+      nameBn: nameBn ? nameBn : null,
+      category,
+      moonDependent,
+      regional,
+      note,
+    },
+  };
+}
+
 /** Holidays in [from, to] (either bound optional), date-ordered. */
 export async function listCalendarHolidays(
   from?: string,

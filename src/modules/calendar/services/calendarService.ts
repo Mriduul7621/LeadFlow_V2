@@ -38,6 +38,19 @@ export interface HolidayInput {
   note?: string | null;
 }
 
+export interface HolidayImportRejection {
+  index: number;
+  date?: string;
+  reason: string;
+}
+
+export interface HolidayImportResult {
+  received: number;
+  added: number;
+  skippedDuplicates: number;
+  rejected: HolidayImportRejection[];
+}
+
 export const DEFAULT_WEEKEND_DAYS: number[] = [5, 6];
 
 export const calendarService = {
@@ -72,6 +85,18 @@ export const calendarService = {
     return apiRequest<CalendarHoliday>(`/api/calendar/holidays/${encodeURIComponent(id)}`, {
       method: 'PUT',
       ...jsonBody(input),
+    });
+  },
+
+  /**
+   * Bulk-import holiday rows (canonical JSON shape or DB shape) —
+   * the server validates every row, skips (date, name) duplicates
+   * and reports honest counts back (PR F).
+   */
+  async importHolidays(rows: unknown[]): Promise<HolidayImportResult> {
+    return apiRequest<HolidayImportResult>('/api/calendar/holidays/import', {
+      method: 'POST',
+      ...jsonBody({ holidays: rows }),
     });
   },
 
