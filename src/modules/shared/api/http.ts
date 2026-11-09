@@ -45,9 +45,21 @@ async function fetchAndHandle(path: string, init: RequestInit): Promise<any> {
   // is being asked about.
   const sentWithToken = useAuthStore.getState().token;
 
+  // A request carrying a body but NO explicit method must go out as POST.
+  // fetch() defaults to GET, and a GET with a body throws a TypeError
+  // before any network I/O - which the catch below then surfaces as the
+  // status-0 "Unable to reach the server" error, making a client-side
+  // construction bug look like a connectivity failure (the request never
+  // reaches the server at all). jsonBody() deliberately returns only
+  // { headers, body }, so every bare jsonBody() call site depends on this
+  // default. An explicit method is NEVER overridden: callers passing
+  // { method: 'PUT' | 'PATCH' | 'DELETE', ... } keep theirs.
+  const effectiveInit: RequestInit =
+    init.body != null && !init.method ? { ...init, method: 'POST' } : init;
+
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await fetch(path, effectiveInit);
   } catch (err) {
     throw new ApiError(
       0,
@@ -132,7 +144,12 @@ export async function apiRequestEnvelope<T>(
   return body as any;
 }
 
-/** JSON helper for POST/PUT/PATCH bodies. */
+/**
+ * JSON helper for request bodies. Returns { headers, body } with no
+ * method on purpose: fetchAndHandle defaults a body-carrying request
+ * with no explicit method to POST, and callers that need PUT/PATCH/
+ * DELETE pass their method alongside (it is never overridden).
+ */
 export function jsonBody(data: unknown): RequestInit {
   return {
     headers: { 'Content-Type': 'application/json' },
