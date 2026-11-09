@@ -149,13 +149,35 @@ export const metadataService = {
    * (not allowlisted, blank/overlong, or an inactive namesake).
    */
   async quickAddOption(type: string, value: string): Promise<DropdownOption & { existing: boolean }> {
-    const saved = await apiRequest<DropdownOption & { existing: boolean }>(
-      '/api/options/quick-add',
-      jsonBody({ type, value })
-    );
-    delete valuesCache[`__all__${type}`];
-    invalidateOptionsReferenceCache();
-    return saved;
+    // Retry NETWORK failures only (ApiError status 0 = fetch never got a
+    // response: a dropped connection / momentary hiccup, exactly what a
+    // field agent on mobile data hits). HTTP responses are real answers
+    // from the server (400 not-allowlisted, 403 no permission, ...) and
+    // are NEVER retried. Retrying is safe here because the endpoint
+    // dedupes case-insensitively: if the first attempt actually landed
+    // before the connection dropped, the retry resolves with the stored
+    // option and `existing: true` instead of creating a duplicate.
+    const RETRY_BACKOFF_MS = [600, 1500];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= RETRY_BACKOFF_MS.length; attempt++) {
+      try {
+        const saved = await apiRequest<DropdownOption & { existing: boolean }>(
+          '/api/options/quick-add',
+          jsonBody({ type, value })
+        );
+        delete valuesCache[`__all__${type}`];
+        invalidateOptionsReferenceCache();
+        return saved;
+      } catch (err) {
+        lastError = err;
+        const isNetworkFailure = err instanceof ApiError && err.status === 0;
+        if (!isNetworkFailure || attempt === RETRY_BACKOFF_MS.length) throw err;
+        await new Promise(resolve => setTimeout(resolve, RETRY_BACKOFF_MS[attempt]));
+      }
+    }
+    // Unreachable (the loop always returns or throws), but keeps the
+    // type checker honest about the fall-through path.
+    throw lastError;
   },
 
   async updateValue(option: DropdownOption): Promise<DropdownOption> {
