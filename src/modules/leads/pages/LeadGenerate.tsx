@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { 
@@ -16,6 +16,7 @@ import { useTranslation } from '../../shared/utils/translations';
 import { cn } from '../../../lib/utils';
 import { motion } from 'framer-motion';
 import { leadService } from '../services/leadService';
+import CreatableSelect from '../components/CreatableSelect';
 import { metadataService } from '../../metadata/services/metadataService';
 import { formBuilderService } from '../../forms/services/formBuilderService';
 import { FormField } from '../../shared/types';
@@ -116,7 +117,7 @@ export default function LeadGenerate() {
   };
   const leadSchema = useMemo(() => buildLeadSchema(fieldConfigMap), [fieldConfigMap]);
 
-  const { register, handleSubmit, watch, reset, setValue, formState: { errors, isSubmitting } } = useForm({
+  const { register, handleSubmit, watch, reset, setValue, control, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(leadSchema),
     defaultValues: {
       prospectName: '',
@@ -204,6 +205,36 @@ export default function LeadGenerate() {
   const divisions = Object.keys(BANGLADESH_GEOGRAPHY);
   const districts = selectedDivision ? Object.keys(BANGLADESH_GEOGRAPHY[selectedDivision] || {}) : [];
   const thanas = (selectedDivision && selectedDistrict) ? (BANGLADESH_GEOGRAPHY[selectedDivision]?.[selectedDistrict] || []) : [];
+
+  /**
+   * The "+" on every metadata dropdown: persist the typed option via
+   * the server's narrow quick-add path (shared — it lands in everyone's
+   * dropdown), mirror it into this form's option list, and resolve with
+   * the canonical value so CreatableSelect selects it for this lead.
+   * A case-insensitive namesake resolves with the STORED spelling
+   * (`existing`) — no duplicate is created. Errors toast here and
+   * rethrow so the component keeps the typed text for retry/cancel.
+   */
+  const handleAddOption = async (type: string, rawValue: string): Promise<string> => {
+    try {
+      const saved = await metadataService.quickAddOption(type, rawValue);
+      const canonical = saved.label || saved.value;
+      setOptions((prev: any) => {
+        const list: string[] = prev[type] || [];
+        if (list.some(v => v.toLowerCase() === canonical.toLowerCase())) return prev;
+        return { ...prev, [type]: [...list, canonical] };
+      });
+      if ((saved as any).existing) {
+        toast.info(`"${canonical}" is already on the list — selected it for you.`);
+      } else {
+        toast.success(`"${canonical}" added — it is now available for everyone.`);
+      }
+      return canonical;
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not add the option. Please try again.');
+      throw err;
+    }
+  };
 
   const onSubmit = async (data: any) => {
     if (!user) return;
@@ -306,13 +337,20 @@ export default function LeadGenerate() {
             {isFieldVisible('profession') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("profession")}{fieldConfigMap.profession?.isMandatory !== false && ' *'}</label>
-                <select 
-                  {...register('profession')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectProfession")}</option>
-                  {options.Profession?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="profession"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Profession || []}
+                      placeholder={t("selectProfession")}
+                      onCreateOption={raw => handleAddOption('Profession', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.profession && <p className="text-xs text-red-500">{errors.profession.message as string}</p>}
               </div>
             )}
@@ -320,13 +358,20 @@ export default function LeadGenerate() {
             {isFieldVisible('occupation') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("subProfession")}{fieldConfigMap.occupation?.isMandatory && ' *'}</label>
-                <select 
-                  {...register('occupation')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectSubProfession")} (Select Occupation)</option>
-                  {options.Occupation?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="occupation"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Occupation || []}
+                      placeholder={`${t("selectSubProfession")} (Select Occupation)`}
+                      onCreateOption={raw => handleAddOption('Occupation', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.occupation && <p className="text-xs text-red-500">{errors.occupation.message as string}</p>}
               </div>
             )}
@@ -334,13 +379,20 @@ export default function LeadGenerate() {
             {isFieldVisible('priority') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">Priority{fieldConfigMap.priority?.isMandatory && ' *'}</label>
-                <select 
-                  {...register('priority')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">Select Priority</option>
-                  {options.Priority?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="priority"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Priority || []}
+                      placeholder="Select Priority"
+                      onCreateOption={raw => handleAddOption('Priority', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.priority && <p className="text-xs text-red-500">{errors.priority.message as string}</p>}
               </div>
             )}
@@ -348,13 +400,20 @@ export default function LeadGenerate() {
             {isFieldVisible('maritalStatus') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("maritalStatus")}{fieldConfigMap.maritalStatus?.isMandatory !== false && ' *'}</label>
-                <select 
-                  {...register('maritalStatus')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectMaritalStatus")}</option>
-                  {options.MaritalStatus?.map((m: string) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="maritalStatus"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.MaritalStatus || []}
+                      placeholder={t("selectMaritalStatus")}
+                      onCreateOption={raw => handleAddOption('MaritalStatus', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.maritalStatus && <p className="text-xs text-red-500">{errors.maritalStatus.message as string}</p>}
               </div>
             )}
@@ -471,13 +530,20 @@ export default function LeadGenerate() {
             {isFieldVisible('productName') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("product")}{fieldConfigMap.productName?.isMandatory !== false && ' *'}</label>
-                <select 
-                  {...register('productName')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectProduct")}</option>
-                  {options.Product?.map((p: string) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="productName"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Product || []}
+                      placeholder={t("selectProduct")}
+                      onCreateOption={raw => handleAddOption('Product', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.productName && <p className="text-xs text-red-500">{errors.productName.message as string}</p>}
               </div>
             )}
@@ -485,13 +551,20 @@ export default function LeadGenerate() {
             {isFieldVisible('source') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("source")}{fieldConfigMap.source?.isMandatory !== false && ' *'}</label>
-                <select 
-                  {...register('source')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectSource")}</option>
-                  {options.Source?.map((s: string) => <option key={s} value={s}>{s}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="source"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Source || []}
+                      placeholder={t("selectSource")}
+                      onCreateOption={raw => handleAddOption('Source', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.source && <p className="text-xs text-red-500">{errors.source.message as string}</p>}
               </div>
             )}
@@ -499,13 +572,20 @@ export default function LeadGenerate() {
             {isFieldVisible('campaignName') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("campaign")}{fieldConfigMap.campaignName?.isMandatory !== false && ' *'}</label>
-                <select 
-                  {...register('campaignName')}
-                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                >
-                  <option value="">{t("selectCampaign")}</option>
-                  {options.Campaign?.map((c: string) => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <Controller
+                  control={control}
+                  name="campaignName"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Campaign || []}
+                      placeholder={t("selectCampaign")}
+                      onCreateOption={raw => handleAddOption('Campaign', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
                 {errors.campaignName && <p className="text-xs text-red-500">{errors.campaignName.message as string}</p>}
               </div>
             )}
@@ -545,13 +625,20 @@ export default function LeadGenerate() {
                     {field.label}{field.isMandatory && ' *'}
                   </label>
                   {field.fieldType === 'dropdown' ? (
-                    <select
-                      {...register(`customFields.${field.fieldKey}` as any)}
-                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                    >
-                      <option value="">Select</option>
-                      {(options[field.metadataTypeKey || ''] || []).map((v: string) => <option key={v} value={v}>{v}</option>)}
-                    </select>
+                    <Controller
+                      control={control}
+                      name={`customFields.${field.fieldKey}` as any}
+                      render={({ field: rhfField }) => (
+                        <CreatableSelect
+                          value={rhfField.value || ''}
+                          onChange={rhfField.onChange}
+                          options={options[field.metadataTypeKey || ''] || []}
+                          placeholder="Select"
+                          onCreateOption={raw => handleAddOption(field.metadataTypeKey || '', raw)}
+                          selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                        />
+                      )}
+                    />
                   ) : field.fieldType === 'textarea' ? (
                     <textarea
                       {...register(`customFields.${field.fieldKey}` as any)}

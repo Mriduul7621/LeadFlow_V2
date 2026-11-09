@@ -21,7 +21,9 @@ import {
   clean,
   dbErrorStatus,
   demoModeAllowed,
+  getCallerDbInfo,
   jsonbOr,
+  logAccessChange,
   requireAdmin,
   requireAuth,
   requirePermissionCode,
@@ -196,6 +198,162 @@ router.post('/options', requireAuth, requirePermissionCode('settings.manage'), a
     return sendJson(res, 200, mapOptionRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Option save failed' });
+  }
+});
+
+/* ====================================================================
+   OPTIONS — QUICK ADD (Add Lead form "+")
+   --------------------------------------------------------------------
+   Mahadi's rule: when the option a salesperson needs is not in an
+   Add Lead dropdown, they add it on the spot and it appears in
+   EVERYONE's dropdown. The full POST /options above stays admin-only
+   (settings.manage); this is the deliberately narrow path around it:
+
+   - Gate: any authenticated user holding `leads.create` — the same
+     capability that opens the Add Lead form — NOT settings.manage.
+   - Allowlist: only the lists the Add Lead form actually renders as
+     dropdowns (LEAD_FORM_OPTION_TYPES below, in the exact case the
+     form queries them) plus any metadata type an admin has wired to
+     a Form Builder dropdown field. Workflow-bound lists
+     (FollowUpStatus) and every other type are refused.
+   - The value is normalised (trim + collapsed whitespace, max 255 —
+     the options.option_value column width) and deduplicated
+     CASE-INSENSITIVELY: the table's UNIQUE(field_key, option_value)
+     is case-sensitive, so the check is explicit, and a hit returns
+     the stored canonical option with `existing: true` instead of
+     creating a case-variant twin. A hit on an INACTIVE row is a 400 —
+     an admin deactivated that value on purpose; quick-add must not
+     quietly resurrect it.
+   - Concurrency: the check + insert run in one transaction under a
+     per-list advisory lock, so two users adding at the same moment
+     can neither lose an option nor race a duplicate in.
+   - Provenance: the row's meta records { addedVia: 'lead-form',
+     addedBy } and a best-effort audit_logs entry is written
+     (logAccessChange — it can never fail the add).
+==================================================================== */
+
+const LEAD_FORM_OPTION_TYPES = [
+  'Profession',
+  'Occupation',
+  'MaritalStatus',
+  'Priority',
+  'Product',
+  'Source',
+  'Campaign',
+] as const;
+
+function normalizeOptionValue(raw: any): string {
+  return String(raw == null ? '' : raw).trim().replace(/\s+/g, ' ');
+}
+
+/** Canonical (allowlisted) spelling of a lead-form-extendable type, or null. */
+async function resolveLeadFormOptionType(rawType: string): Promise<string | null> {
+  const wanted = rawType.trim().toLowerCase();
+  if (!wanted) return null;
+  const core = LEAD_FORM_OPTION_TYPES.find(t => t.toLowerCase() === wanted);
+  if (core) return core;
+  if (useDb()) {
+    try {
+      const result = await getPool().query(
+        `SELECT DISTINCT metadata_type_key AS key FROM form_fields
+          WHERE field_type = 'dropdown'
+            AND metadata_type_key IS NOT NULL AND metadata_type_key <> ''
+            AND is_visible IS DISTINCT FROM FALSE`
+      );
+      const hit = result.rows.find((r: any) => String(r.key).trim().toLowerCase() === wanted);
+      if (hit) return String(hit.key).trim();
+    } catch {
+      /* fall through to rejection — an unreadable form_fields table
+         must not widen the allowlist */
+    }
+  }
+  return null;
+}
+
+router.post('/options/quick-add', requireAuth, requirePermissionCode('leads.create'), async (req: any, res) => {
+  const payload = req.body || {};
+  const rawType = clean(payload.type || payload.fieldKey);
+  const value = normalizeOptionValue(payload.value ?? payload.optionValue);
+  if (!value) {
+    return sendJson(res, 400, { error: 'Option value is required' });
+  }
+  if (value.length > 255) {
+    return sendJson(res, 400, { error: 'Option value is too long (max 255 characters)' });
+  }
+  const type = await resolveLeadFormOptionType(rawType);
+  if (!type) {
+    return sendJson(res, 400, { error: 'This list cannot be extended from the lead form' });
+  }
+
+  if (!useDb()) {
+    if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+    const existing = fallbackStore.options.find(
+      item => item.type === type && item.value.toLowerCase() === value.toLowerCase()
+    );
+    if (existing) {
+      if (existing.status === 'Inactive') {
+        return sendJson(res, 400, { error: `"${existing.value}" already exists but is inactive. Please ask an admin to reactivate it.` });
+      }
+      return sendJson(res, 200, { ...existing, existing: true });
+    }
+    const item = {
+      id: createId('option'),
+      type,
+      value,
+      label: value,
+      status: 'Active',
+      sortOrder: fallbackStore.options.filter(o => o.type === type).length + 1,
+      meta: { addedVia: 'lead-form' },
+      createdDate: new Date().toISOString(),
+    };
+    fallbackStore.options.push(item as any);
+    return sendJson(res, 201, { ...item, existing: false });
+  }
+
+  const caller = await getCallerDbInfo(req);
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`lead-form-option-add:${type}`]);
+    const found = await client.query(
+      `SELECT * FROM options
+        WHERE field_key = $1 AND LOWER(option_value) = LOWER($2)
+        ORDER BY sort_order ASC, option_value ASC
+        LIMIT 1`,
+      [type, value]
+    );
+    const existingRow = found.rows[0];
+    if (existingRow) {
+      await client.query('COMMIT');
+      if (existingRow.is_active === false) {
+        return sendJson(res, 400, { error: `"${existingRow.option_value}" already exists but is inactive. Please ask an admin to reactivate it.` });
+      }
+      return sendJson(res, 200, { ...mapOptionRow(existingRow), existing: true });
+    }
+    const inserted = await client.query(
+      `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
+       VALUES ($1, $2, $2,
+               (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM options WHERE field_key = $1::varchar),
+               FALSE, TRUE, $3, NOW(), NOW())
+       RETURNING *`,
+      [type, value, JSON.stringify({ addedVia: 'lead-form', addedBy: caller?.employee_id || null })]
+    );
+    await client.query('COMMIT');
+    const row = inserted.rows[0];
+    await logAccessChange({
+      actorId: caller?.id || null,
+      actionCode: 'options.quick_add',
+      entityType: 'metadata_option',
+      entityId: row.id,
+      metadata: { type, value },
+    });
+    return sendJson(res, 201, { ...mapOptionRow(row), existing: false });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Option add failed' });
+  } finally {
+    client.release();
   }
 });
 
