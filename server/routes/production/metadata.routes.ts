@@ -24,7 +24,6 @@ import {
   getCallerDbInfo,
   jsonbOr,
   logAccessChange,
-  requireAdmin,
   requireAuth,
   requirePermissionCode,
   sendDbUnavailable,
@@ -565,7 +564,14 @@ router.get('/form-fields', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
+// FIX-1 (audit item I1): the Form Builder mutations are gated by the
+// canonical `settings.manage` permission — the SAME gate that makes
+// the tab visible — instead of the token-claim requireAdmin check,
+// which 403'd every settings-permission holder who was not an
+// ADMIN/SUPERADMIN token (the "Required toggle does nothing" report:
+// the save silently failed). ADMIN/SUPERADMIN still pass through the
+// bypass inside hasPermissionCode.
+router.post('/form-fields', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const payload = req.body || {};
   const fieldKey = clean(payload.fieldKey || payload.field_key || payload.label);
   const label = clean(payload.label || payload.fieldKey || payload.field_key);
@@ -618,7 +624,7 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/form-fields/:id', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     return sendJson(res, 200, { success: true });
@@ -641,7 +647,7 @@ router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
-router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) => {
+router.post('/form-fields/reorder', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : [];
   if (orderedIds.length === 0) return sendJson(res, 400, { error: 'No field order supplied' });
   if (!useDb()) {
