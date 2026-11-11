@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
-import { UserRole, Lead } from '../../shared/types';
+import { Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { toast } from 'sonner';
 import { downloadWorkbook } from '../../shared/utils/excel';
@@ -66,9 +66,11 @@ export default function NcpProgress() {
         return leadDate >= startDate && leadDate <= endDate;
       });
 
-      if (user.role === UserRole.RO) {
-        filteredLeads = filteredLeads.filter(l => l.assignedTo === user.employeeId);
-      }
+      // UM-1: no role-name re-filter here. leadService.getLeads already
+      // applied the caller's EFFECTIVE scope (dataScope, incl. the
+      // tree-derived team-lead floor), so an RO with people under them
+      // correctly sees own + team leads, and a pure Own user already
+      // received own leads only.
 
       setLeads(filteredLeads);
 

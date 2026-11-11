@@ -88,7 +88,14 @@ export function getVisibleEmployeeIds(
   allUsers: User[],
   roles: RolePermission[]
 ): string[] {
-  const scope = resolveUserScope(currentUser, roles);
+  let scope = resolveUserScope(currentUser, roles);
+
+  // UM-1 floor (mirrors server/authz.ts): 'Own' rises to the caller's
+  // own subtree when they actually HAVE people under them — a team
+  // lead is a fact about the tree, not a role label.
+  if (scope === 'Own' && getDownlineEmployeeIds(currentUser.employeeId, allUsers).length > 1) {
+    scope = 'DownTeam';
+  }
 
   if (scope === 'Organization') {
     return allUsers.map(u => u.employeeId);

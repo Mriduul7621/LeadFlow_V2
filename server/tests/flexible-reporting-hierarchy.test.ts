@@ -11,6 +11,7 @@ import {
   resolveRoleLevel,
   allowedManagerLevels,
   validateReportingManagerCandidate,
+  reportingLinkWarnings,
 } from '../utils/reportingRules.js';
 import { validateReportingLink, recomputeReportingChains } from '../routes/production.routes.js';
 import { resolveVisibility, getDownlineIds } from '../authz.js';
@@ -280,10 +281,12 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.equal(validateReportingManagerCandidate({ employeeLevel: 4, managerLevel: 2, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' }), null);
   });
 
-  it('Level 4 → Level 1 rejected (gap 3 > 2)', () => {
-    const err = validateReportingManagerCandidate({ employeeLevel: 4, managerLevel: 1, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' });
-    assert.ok(err);
-    assert.match(err!, /Level 3 or 2/);
+  it('Level 4 → Level 1 allowed (gap 3 > 2) — UM-1 warning only', () => {
+    const candidate = { employeeLevel: 4, managerLevel: 1, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' };
+    assert.equal(validateReportingManagerCandidate(candidate), null);
+    const warnings = reportingLinkWarnings(candidate);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /3 levels above/);
   });
 
   it('Level 3 → Level 2 allowed', () => {
@@ -298,14 +301,16 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.equal(validateReportingManagerCandidate({ employeeLevel: 2, managerLevel: 1, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' }), null);
   });
 
-  it('same-level manager rejected (gap 0)', () => {
-    const err = validateReportingManagerCandidate({ employeeLevel: 4, managerLevel: 4, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' });
-    assert.ok(err);
+  it('same-level manager allowed (gap 0) — UM-1 warning only', () => {
+    const candidate = { employeeLevel: 4, managerLevel: 4, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' };
+    assert.equal(validateReportingManagerCandidate(candidate), null);
+    assert.match(reportingLinkWarnings(candidate)[0], /not above/);
   });
 
-  it('lower-level manager rejected (negative gap)', () => {
-    const err = validateReportingManagerCandidate({ employeeLevel: 2, managerLevel: 3, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' });
-    assert.ok(err);
+  it('lower-level manager allowed (negative gap) — UM-1 warning only', () => {
+    const candidate = { employeeLevel: 2, managerLevel: 3, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' };
+    assert.equal(validateReportingManagerCandidate(candidate), null);
+    assert.match(reportingLinkWarnings(candidate)[0], /not above/);
   });
 
   it('Level 1 employee cannot have any manager', () => {
@@ -318,15 +323,16 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.equal(validateReportingManagerCandidate({ employeeLevel: UNASSIGNED_LEVEL, managerLevel: 3, employeeDepartmentId: 'd1', managerDepartmentId: 'd2' }), null);
   });
 
-  it('off-ladder (level 99) manager cannot manage an in-ladder employee', () => {
-    const err = validateReportingManagerCandidate({ employeeLevel: 4, managerLevel: UNASSIGNED_LEVEL, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' });
-    assert.ok(err);
+  it('off-ladder (level 99) manager may manage an in-ladder employee — UM-1 warning only', () => {
+    const candidate = { employeeLevel: 4, managerLevel: UNASSIGNED_LEVEL, employeeDepartmentId: 'd1', managerDepartmentId: 'd1' };
+    assert.equal(validateReportingManagerCandidate(candidate), null);
+    assert.match(reportingLinkWarnings(candidate)[0], /not placed in the reporting ladder/);
   });
 
-  it('same-department enforced for non-Level-1 managers', () => {
-    const err = validateReportingManagerCandidate({ employeeLevel: 4, managerLevel: 2, employeeDepartmentId: 'd1', managerDepartmentId: 'd2' });
-    assert.ok(err);
-    assert.match(err!, /same department/);
+  it('cross-department non-Level-1 manager allowed — UM-1 warning only', () => {
+    const candidate = { employeeLevel: 4, managerLevel: 2, employeeDepartmentId: 'd1', managerDepartmentId: 'd2' };
+    assert.equal(validateReportingManagerCandidate(candidate), null);
+    assert.match(reportingLinkWarnings(candidate)[0], /different department/);
   });
 
   it('Level-1 manager crosses departments', () => {
@@ -360,12 +366,11 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.equal(err, null);
   });
 
-  it('manual link validation rejects a three-level-up manager', async () => {
+  it('manual link validation accepts a three-level-up manager (UM-1)', async () => {
     const err = await validateReportingLink(pool, {
       selfId: sbeSalesId, roleId: sbeRoleId, departmentId: salesDeptId, managerId: ceoSalesId, managerIsRequired: true,
     });
-    assert.ok(err);
-    assert.match(err!, /Level 3 or 2/);
+    assert.equal(err, null);
   });
 
   it('Level 1 employee cannot have a manager', async () => {
@@ -457,12 +462,11 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.match(err!, /active employee/);
   });
 
-  it('cross-department non-Level-1 manager rejected', async () => {
+  it('cross-department non-Level-1 manager accepted (UM-1)', async () => {
     const err = await validateReportingLink(pool, {
       selfId: sbeSalesId, roleId: sbeRoleId, departmentId: salesDeptId, managerId: mgrHrId, managerIsRequired: true,
     });
-    assert.ok(err);
-    assert.match(err!, /same department/);
+    assert.equal(err, null);
   });
 
   it('Level-1 cross-department manager preserved', async () => {
@@ -554,19 +558,20 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     assert.equal(dbRes.rows[0].mgr_emp, 'MGR001');
   });
 
-  it('manual user create rejects a >2-level manager', async () => {
+  it('manual user create accepts a >2-level manager (UM-1)', async () => {
     const res = await request(app)
       .post('/api/users')
       .set('Authorization', `Bearer ${adminToken()}`)
       .send({
-        fullName: 'Too Far', employeeId: 'FAR001', email: 'far001@test.com',
+        fullName: 'Far Up', employeeId: 'FAR001', email: 'far001@test.com',
         role: 'SBE', departmentId: salesDeptId, managerId: 'CEO001', status: 'Active',
       });
-    assert.equal(res.status, 400, JSON.stringify(res.body));
-    assert.match(res.body.message, /Level 3 or 2/);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const dbRes: any = await pool.query(`SELECT m.employee_id AS mgr_emp FROM users u LEFT JOIN users m ON m.id = u.manager_id WHERE u.employee_id = 'FAR001'`);
+    assert.equal(dbRes.rows[0].mgr_emp, 'CEO001');
   });
 
-  it('reporting-options include +2-level managers and exclude same/lower/>2', async () => {
+  it('reporting-options offer EVERY active user (UM-1)', async () => {
     const res = await request(app)
       .get(`/api/users/reporting-options?role=SBE&departmentId=${salesDeptId}`)
       .set('Authorization', `Bearer ${adminToken()}`);
@@ -574,12 +579,13 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     const employeeIds = res.body.map((o: any) => o.employeeId);
     assert.ok(employeeIds.includes('MGR001'), 'level 2 manager must be offered');
     assert.ok(employeeIds.includes('TL001'), 'level 3 manager must be offered');
-    assert.ok(!employeeIds.includes('CEO001'), 'level 1 is >2 levels up for SBE');
-    assert.ok(!employeeIds.includes('SBE001'), 'same level must be excluded');
-    assert.ok(!employeeIds.includes('BE001'), 'lower level must be excluded');
+    assert.ok(employeeIds.includes('CEO001'), 'UM-1: a >2-levels-up manager is offered');
+    assert.ok(employeeIds.includes('SBE001'), 'UM-1: a same-level colleague is offered');
+    assert.ok(employeeIds.includes('BE001'), 'UM-1: a lower-level colleague is offered');
+    assert.ok(employeeIds.includes('MGR002'), 'UM-1: a cross-department manager is offered');
   });
 
-  it('reporting-options for Level 3 include Level 1 candidates across departments', async () => {
+  it('reporting-options for Level 3 include candidates across departments (UM-1)', async () => {
     const res = await request(app)
       .get(`/api/users/reporting-options?role=TEAM_LEAD&departmentId=${salesDeptId}`)
       .set('Authorization', `Bearer ${adminToken()}`);
@@ -587,11 +593,11 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
     const employeeIds = res.body.map((o: any) => o.employeeId);
     assert.ok(employeeIds.includes('MGR001'), 'level 2 same-dept manager');
     assert.ok(employeeIds.includes('CEO001'), 'level 1 same-dept CEO');
-    assert.ok(employeeIds.includes('CEO002'), 'level 1 cross-dept CEO is allowed');
-    assert.ok(!employeeIds.includes('MGR002'), 'level 2 cross-dept manager must be excluded');
+    assert.ok(employeeIds.includes('CEO002'), 'level 1 cross-dept CEO');
+    assert.ok(employeeIds.includes('MGR002'), 'UM-1: level 2 cross-dept manager is offered');
   });
 
-  it('reporting-options are empty for Level 1 and off-ladder roles', async () => {
+  it('reporting-options are empty for Level 1 only; off-ladder roles get everyone (UM-1)', async () => {
     const ceoRes = await request(app)
       .get(`/api/users/reporting-options?role=CEO&departmentId=${salesDeptId}`)
       .set('Authorization', `Bearer ${adminToken()}`);
@@ -602,7 +608,8 @@ describe('Flexible Skip-Level Reporting Hierarchy', () => {
       .get(`/api/users/reporting-options?role=OFFICER&departmentId=${salesDeptId}`)
       .set('Authorization', `Bearer ${adminToken()}`);
     assert.equal(officerRes.status, 200);
-    assert.deepEqual(officerRes.body, []);
+    const officerIds = officerRes.body.map((o: any) => o.employeeId);
+    assert.ok(officerIds.includes('MGR001'), 'UM-1: off-ladder roles may pick any active manager');
   });
 
   /* ------------------------------------------------------------------ */

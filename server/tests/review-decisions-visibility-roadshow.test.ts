@@ -353,13 +353,17 @@ describe('Decisions 2+3 — peer lead visibility & roadshow creator/assist', () 
 
   /* ---------------- D2: roster counts ---------------- */
 
-  it('D2 roster: an Own-scope employee sees ONLY their own open-lead count', async () => {
+  it('D2 roster: an Own-scope employee sees own count + their subtree (UM-1 floor); peers stay hidden', async () => {
     const res = await request(app).get('/api/users').set(as(subA1));
     assert.equal(res.status, 200, JSON.stringify(res.body).slice(0, 300));
     // The roster itself (names/structure) still arrives — pickers and the
     // org chart depend on it. Only the lead COUNTS are peer-hidden.
     assert.equal(rosterRow(res.body, 'SUBA1').openLeadCount, 2);
-    for (const other of ['MGRA', 'SUBA2', 'MGRB', 'SUBB1', 'CEO1', 'INACTA', 'ADMIN1']) {
+    // UM-1: SUBA2 reports to SUBA1, so SUBA1 is a team lead by tree and
+    // their visibility floor (DownTeam over the subtree) legitimately
+    // includes SUBA2's count — the same set their lead list shows.
+    assert.equal(rosterRow(res.body, 'SUBA2').openLeadCount, 1);
+    for (const other of ['MGRA', 'MGRB', 'SUBB1', 'CEO1', 'INACTA', 'ADMIN1']) {
       assert.equal(rosterRow(res.body, other).openLeadCount, null, `${other}'s count must be hidden from an Own-scope peer`);
     }
   });

@@ -563,15 +563,17 @@ describe('Bulk User Import - Security & Provisioning', () => {
     assert.match(res.body.data.rows[0].errors.join(' '), /reporting manager is required/);
   });
 
-  // Test 23: Skip-level (gap 2) allowed; same level rejected
-  it('23. Skip-level manager (gap 2) allowed; same-level rejected', async () => {
+  // Test 23: Skip-level (gap 2) allowed; same level allowed since UM-1 (warning only)
+  it('23. Skip-level manager (gap 2) allowed; same-level is a warning since UM-1', async () => {
     // BE is level 3, manager is CEO level 1 -> gap 2, now ALLOWED (skip-level)
     const rows = [makeUserRow({ employeeId: 'NEW001', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'CEO001' })];
     const res = await validateRows(rows);
     assert.equal(res.status, 200);
     assert.equal(res.body.data.errorRows, 0, JSON.stringify(res.body.data.rows[0].errors));
 
-    // Same level mismatch: BE (3) reporting to BE (3) must fail
+    // Same level: BE (3) reporting to BE (3). Before UM-1 this failed the
+    // row; the owner's role-model fix makes ANY active user a valid
+    // manager — the unusual shape is a warning, not an error.
     const beMgrRes: any = await pool.query(
       `INSERT INTO users (employee_id, full_name, email, password, role_id, department_id, manager_id, is_active) VALUES ('BE_MGR', 'BE Mgr', 'bemgr@test.com', 'hashed', $1, $2, $3, TRUE) RETURNING id`,
       [beRoleId, salesDeptId, managerUserId]
@@ -579,19 +581,20 @@ describe('Bulk User Import - Security & Provisioning', () => {
     const rows2 = [makeUserRow({ employeeId: 'NEW002', role: 'BE', department: 'Sales', reportingManagerEmployeeId: 'BE_MGR' })];
     const res2 = await validateRows(rows2);
     assert.equal(res2.status, 200);
-    assert.equal(res2.body.data.errorRows, 1);
-    assert.match(res2.body.data.rows[0].errors.join(' '), /strictly higher|Level 2 or 1/);
+    assert.equal(res2.body.data.errorRows, 0, JSON.stringify(res2.body.data.rows[0].errors));
+    assert.match(res2.body.data.rows[0].warnings.join(' '), /not above/);
     await pool.query(`DELETE FROM users WHERE employee_id = 'BE_MGR'`);
   });
 
-  // Test 23b: Manager gap > 2 rejected
-  it('23b. Manager more than two levels up is rejected', async () => {
-    // SBE is level 4, manager CEO is level 1 -> gap 3, must fail
+  // Test 23b: Manager gap > 2 is a warning since UM-1 (was: rejected)
+  it('23b. Manager more than two levels up imports with a warning since UM-1', async () => {
+    // SBE is level 4, manager CEO is level 1 -> gap 3. UM-1: valid row,
+    // flagged as a warning for the hierarchy health report.
     const rows = [makeUserRow({ employeeId: 'NEW003', role: 'SBE', department: 'Sales', reportingManagerEmployeeId: 'CEO001' })];
     const res = await validateRows(rows);
     assert.equal(res.status, 200);
-    assert.equal(res.body.data.errorRows, 1);
-    assert.match(res.body.data.rows[0].errors.join(' '), /strictly higher|Level 3 or 2/);
+    assert.equal(res.body.data.errorRows, 0, JSON.stringify(res.body.data.rows[0].errors));
+    assert.match(res.body.data.rows[0].warnings.join(' '), /3 levels above/);
   });
 
   // Test 23c: Bulk commit accepts a two-level-up (skip-level) manager
