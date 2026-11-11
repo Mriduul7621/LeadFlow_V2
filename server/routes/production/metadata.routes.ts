@@ -24,7 +24,6 @@ import {
   getCallerDbInfo,
   jsonbOr,
   logAccessChange,
-  requireAdmin,
   requireAuth,
   requirePermissionCode,
   sendDbUnavailable,
@@ -552,6 +551,12 @@ router.delete('/workflow-rules/:id', requireAuth, requirePermissionCode('workflo
 
 /* ====================================================================
    FORM FIELDS
+   DZ-1 (audit item I1): mutations are gated by the settings.manage
+   permission code (DB-resolved), exactly like the rest of the
+   Settings surface — they used to require the ADMIN role claim
+   (requireAdmin), which both over- and under-granted: a settings
+   manager without the ADMIN role was refused, and the gate trusted
+   the token's role claim instead of the database.
 ==================================================================== */
 
 router.get('/form-fields', requireAuth, async (_req, res) => {
@@ -565,7 +570,7 @@ router.get('/form-fields', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
+router.post('/form-fields', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const payload = req.body || {};
   const fieldKey = clean(payload.fieldKey || payload.field_key || payload.label);
   const label = clean(payload.label || payload.fieldKey || payload.field_key);
@@ -618,7 +623,7 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/form-fields/:id', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     return sendJson(res, 200, { success: true });
@@ -641,7 +646,7 @@ router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
-router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) => {
+router.post('/form-fields/reorder', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : [];
   if (orderedIds.length === 0) return sendJson(res, 400, { error: 'No field order supplied' });
   if (!useDb()) {

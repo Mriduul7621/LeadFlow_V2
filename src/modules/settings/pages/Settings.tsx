@@ -40,6 +40,7 @@ import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
 import { databaseStatusService } from '../../../services/syncService';
 import { calendarService, type CalendarHoliday, type HolidayImportResult } from '../../calendar/services/calendarService';
+import { notificationSettingsService, type NotificationSettings } from '../services/notificationSettingsService';
 import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZoneService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
@@ -242,6 +243,18 @@ export default function Settings() {
   // gated server-side by settings.manage. Weekend default is
   // Fri + Sat ([5, 6]) — seeded by migration 056.
   const canEditCalendar = isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata');
+
+  // Notification toggles (Admin Control programme, DZ-1 — Honest
+  // Settings): these are REAL persisted settings served by
+  // GET /notifications/settings. The switches in Push Intelligence
+  // write through immediately, and the server gates the actual
+  // behaviour — assignment notifications and the daily push summary
+  // genuinely stop when their switch is off. Nothing on that card is
+  // display-only any more.
+  const canEditNotifications = canEditCalendar;
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings>({ assignmentAlerts: true, dailyPushSummary: true });
+  const [notifLoaded, setNotifLoaded] = useState(false);
+  const [notifSavingKey, setNotifSavingKey] = useState<string | null>(null);
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [weekendDraft, setWeekendDraft] = useState<number[]>([5, 6]);
   const [weekendSaved, setWeekendSaved] = useState<number[]>([5, 6]);
@@ -367,6 +380,34 @@ export default function Settings() {
       .catch(() => { if (!cancelled) setCalendarLoaded(true); });
     return () => { cancelled = true; };
   }, [activeSection, calendarLoaded]);
+
+  useEffect(() => {
+    if (activeSection !== 'notifications' || notifLoaded) return;
+    let cancelled = false;
+    notificationSettingsService.getSettings()
+      .then(s => {
+        if (cancelled) return;
+        setNotifSettings(s);
+        setNotifLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setNotifLoaded(true); });
+    return () => { cancelled = true; };
+  }, [activeSection, notifLoaded]);
+
+  const handleToggleNotification = async (key: keyof NotificationSettings) => {
+    if (!canEditNotifications || notifSavingKey) return;
+    const next = !notifSettings[key];
+    setNotifSavingKey(key);
+    try {
+      const saved = await notificationSettingsService.saveSettings({ [key]: next });
+      setNotifSettings(saved);
+      toast.success(next ? 'Turned on — it applies right away.' : 'Turned off — it applies right away.');
+    } catch {
+      toast.error('Could not save that setting. Nothing was changed.');
+    } finally {
+      setNotifSavingKey(null);
+    }
+  };
 
   const weekendDirty = JSON.stringify([...weekendDraft].sort()) !== JSON.stringify([...weekendSaved].sort());
 
@@ -883,7 +924,6 @@ export default function Settings() {
 
   const sections = [
     { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
-    { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Configure dashboard and system behavior', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, desc: 'Weekend days and government holidays', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
     { id: 'danger-zone', label: 'Danger Zone', icon: ShieldAlert, desc: 'System rules — super admin only, password required', allowed: isSystemAdmin },
@@ -1477,66 +1517,39 @@ export default function Settings() {
                   <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
                     <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Custom System Alerts Configuration</h4>
                     <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-                      Configure lead assign routing, next follow-up call, and team supervisor notifications thresholds:
+                      Real switches — each one takes effect immediately and is recorded in the audit log:
                     </p>
 
                     <div className="space-y-4 pt-4 border-t border-slate-150">
-                      {[
-                        { label: 'In-App Assignment Alerts', desc: 'Assignee and upline managers are notified in the app immediately', enabled: true },
-                        { label: 'Daily Push Summary', desc: 'Opt-in browser push each morning with due and overdue follow-ups', enabled: true },
-                        { label: 'Tomorrow Call Reminders', desc: 'Display alerts for calls scheduled next calendar day', enabled: true },
-                      ].map((n, i) => (
-                        <div key={i} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-sm">
-                          <div>
-                            <p className="text-[11px] font-black text-slate-700 uppercase">{n.label}</p>
-                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">{n.desc}</p>
+                      {([
+                        { key: 'assignmentAlerts', label: 'In-App Assignment Alerts', desc: 'Assignee and upline managers are notified in the app immediately' },
+                        { key: 'dailyPushSummary', label: 'Daily Push Summary', desc: 'Opt-in browser push each morning with due and overdue follow-ups' },
+                      ] as const).map((n) => {
+                        const enabled = notifSettings[n.key];
+                        return (
+                          <div key={n.key} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-sm">
+                            <div>
+                              <p className="text-[11px] font-black text-slate-700 uppercase">{n.label}</p>
+                              <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">{n.desc}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleNotification(n.key)}
+                              disabled={!canEditNotifications || !notifLoaded || notifSavingKey === n.key}
+                              aria-pressed={enabled}
+                              title={canEditNotifications ? (enabled ? 'Turn off' : 'Turn on') : 'Only settings managers can change this'}
+                              className={enabled
+                                ? "px-3 py-1 bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-150 disabled:opacity-50"
+                                : "px-3 py-1 bg-slate-50 text-slate-500 text-[9px] font-black uppercase tracking-widest rounded border border-slate-200 disabled:opacity-50"}
+                            >
+                              {notifSavingKey === n.key ? 'Saving…' : enabled ? 'Active' : 'Off'}
+                            </button>
                           </div>
-                          <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[9px] font-black uppercase tracking-widest rounded border border-emerald-150">Active</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </motion.div>
-              ) : activeSection === 'system' ? (
-                <motion.div 
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="bg-white p-10 rounded-sm border border-slate-100 shadow-sm space-y-8 italic text-left"
-                >
-                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
-                    <div className="flex items-center gap-4">
-                      <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
-                        <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
-                      </button>
-                      <h3 className="font-bold text-xl text-slate-800">System Configuration</h3>
-                    </div>
-                  </div>
-
-                  <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
-                    <div>
-                      <h4 className="text-[11px] font-black uppercase tracking-widest text-[#978C21]">Interface & Dashboard Customization</h4>
-                      <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed mt-2">
-                        Customize visual layouts and telemetry parameters:
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-150">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-400 uppercase">Default Visualization Period</label>
-                        <select className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none" defaultValue="TODAY">
-                          <option value="TODAY">Today Only</option>
-                          <option value="THIS MONTH">Current Month</option>
-                          <option value="LAST MONTH">Last Month</option>
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-400 uppercase">Interactive Animations Rate</label>
-                        <select className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest outline-none" defaultValue="NORMAL">
-                          <option value="NORMAL">Standard Dynamic (300ms)</option>
-                          <option value="FAST">High Performance (100ms)</option>
-                          <option value="REDUCED">None / Static Mode</option>
-                        </select>
-                      </div>
+                        );
+                      })}
+                      {!canEditNotifications && (
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">You can see these settings, but only a settings manager can change them.</p>
+                      )}
                     </div>
                   </div>
                 </motion.div>
