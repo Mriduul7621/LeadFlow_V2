@@ -625,13 +625,22 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
   /* 5. DATA VISIBILITY MATRIX (server-side, leads list)                 */
   /* ================================================================== */
 
-  it('E1. Own visibility: only own leads (no grants beyond leads.view)', async () => {
+  it('E1. Own visibility: only own leads (no grants beyond leads.view) — UM-1 floor for team leads', async () => {
     await grant('EMP', [{ code: 'leads.view', allowed: true }]);
-    // GINA sees her own lead only (she has none) — plus nothing else.
+    // UM-1 (owner's role-model fix): GINA's role scope is Own, but BOB
+    // and CAROL report to her — she is a team lead BY TREE, so her
+    // effective visibility is her subtree. She sees exactly her two
+    // reports' leads (she owns none herself) and nothing else: the
+    // action grants still cannot widen her past the tree.
     const gina = await request(app).get('/api/leads').set('Authorization', `Bearer ${ginaT()}`);
     assert.equal(gina.status, 200);
-    assert.deepEqual(gina.body.map((l: any) => l.id), [], 'Own user with no leads sees none');
+    assert.deepEqual(
+      gina.body.map((l: any) => l.id).sort(),
+      ['lead_bob1', 'lead_car1'],
+      'Own-role team lead sees exactly her subtree leads (UM-1 floor)'
+    );
 
+    // IVAN is Own with NO reports: the floor does not fire — unchanged.
     const ivan = await request(app).get('/api/leads').set('Authorization', `Bearer ${ivanT()}`);
     assert.equal(ivan.status, 200);
     assert.deepEqual(ivan.body.map((l: any) => l.id), [], 'Other-department Own user sees none of Sales leads');
@@ -704,10 +713,17 @@ describe('RBAC / fallback-safety audit — server enforcement', () => {
     const ginaDash = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${ginaT()}`);
     assert.equal(ginaDash.status, 200, 'Gina (leads.view via EMP role? no — EMP has only leads.view from E1) dashboard');
     const total = ginaDash.body.data.totalLeads;
-    assert.equal(total, 0, `Own dashboard must count only own leads, got ${total}`);
+    // UM-1: GINA's effective scope is her subtree (BOB + CAROL report
+    // to her) — the dashboard counts exactly that scope: lead_bob1,
+    // lead_car1 and lead_bob2 (created in F1), never the wider tree.
+    assert.equal(total, 3, `dashboard must count exactly the caller's (floored) scope, got ${total}`);
     const quality = ginaDash.body.data.quality || {};
-    const bandTotal = Object.values(quality.bands || {}).reduce((a: number, b: any) => a + Number(b || 0), 0);
-    assert.equal(bandTotal, 0, `quality bands must stay within the visible scope, got ${JSON.stringify(quality)}`);
+    // The aggregate's band counts live flat on the quality object
+    // (hot/warm/developing/cold); older payloads nested them in .bands.
+    const bandSource = quality.bands || quality;
+    const bandTotal = ['hot', 'warm', 'developing', 'cold']
+      .reduce((a: number, k: string) => a + Number(bandSource[k] || 0), 0);
+    assert.equal(bandTotal, 3, `quality bands must stay within the visible scope, got ${JSON.stringify(quality)}`);
   });
 
   /* ================================================================== */

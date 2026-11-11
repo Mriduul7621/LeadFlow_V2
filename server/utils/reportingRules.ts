@@ -3,24 +3,33 @@
  * ------------------------------------------------------------------
  * Centralises the "may employee X report directly to manager Y" rule so that
  * manual user create, manual user edit, bulk user import and the hierarchy
- * health screen all enforce the SAME business rule instead of drifting
+ * health screen all apply the SAME business rule instead of drifting
  * apart. This module is pure and database-free: identity, active-status and
  * cycle checks are DB-aware and remain with the callers (which already own
- * them correctly); this module owns the level + department authority rule.
+ * them correctly); this module owns the level + department judgement.
  *
- * BUSINESS RULE (Level 1 = CEO, highest authority):
+ * BUSINESS RULE — UM-1 (owner's role-model fix, 2026-11-11).
+ * Before UM-1 the level gap (1–2 up) and the same-department rule were
+ * HARD BLOCKS on every write path, and the create form's manager picker
+ * only listed candidates passing both — so the real line manager often
+ * could not be selected or saved at all whenever the org did not match
+ * the textbook ladder. The owner replaced that model:
  *   - users.manager_id stays the DIRECT reporting relationship.
- *   - Level 1 (CEO) is the org root: it reports to nobody.
+ *   - A manager may be ANY active user. The only hard rules left are
+ *     the ones callers enforce with the DB: not self, no cycle, the
+ *     manager must exist and be active, and Level 1 (CEO) gets none.
+ *   - The gap and department shape of a link are ADVISORY: unusual
+ *     links (gap > 2, same-or-lower level, off-ladder manager,
+ *     cross-department) are accepted and reported as WARNINGS by the
+ *     hierarchy-health screen (`reportingLinkWarnings`), never blocked.
+ *   - Level 1 (CEO) is the org root: it reports to nobody — the one
+ *     hard rule this pure module still owns.
  *   - Roles not placed in the ladder (hierarchy_level >= 99, incl. the
  *     ADMIN/SUPERADMIN system roles and custom roles) keep the existing
  *     optional-manager behavior — they are NOT silently reinterpreted.
- *   - A normal (in-ladder) Level 2+ employee requires a manager whose role
- *     holds STRICTLY higher authority, one OR two levels up. Same level,
- *     lower level, and gaps greater than two levels are all rejected.
- *   - Department rule: only a Level-1 (CEO) manager may sit across
- *     departments; every other manager must belong to the employee's
- *     department — via their primary department OR an additional seat
- *     (one Head can head several departments).
+ *   - A normal (in-ladder) Level 2+ employee still REQUIRES a manager
+ *     (`reportingManagerRequiredError`) — UM-1 unblocks WHO the manager
+ *     may be, not WHETHER one is needed.
  */
 
 export const UNASSIGNED_LEVEL = 99;
@@ -72,42 +81,56 @@ export interface ReportingManagerCandidate {
  * Validate the level + department parts of a direct-reporting link.
  * Returns a human-readable error message, or null when the link is valid.
  *
- * Identity ("not self"), active-status, "manager exists" and cycle checks
- * are intentionally NOT performed here — callers handle those with the
- * DB. This function is the single authority for the gap/department rule.
+ * UM-1: the ONLY hard error left here is the Level-1 rule — a CEO
+ * reports to nobody. Gap shape and department shape no longer block;
+ * they are reported by `reportingLinkWarnings` instead. Identity
+ * ("not self"), active-status, "manager exists" and cycle checks are
+ * intentionally NOT performed here — callers handle those with the DB.
  */
 export function validateReportingManagerCandidate(
   c: ReportingManagerCandidate
 ): string | null {
-  const { employeeLevel, managerLevel, employeeDepartmentId, managerDepartmentId, managerDepartmentIds } = c;
-
   // Level 1 (CEO) is the org root — it reports to nobody.
-  if (employeeLevel === 1) {
+  if (c.employeeLevel === 1) {
     return 'A Level-1 (CEO) employee cannot report to anyone. Leave the reporting manager empty.';
   }
+  return null;
+}
 
-  // Roles outside the ladder keep their existing optional-manager behavior.
-  if (!isLadderLevel(employeeLevel)) return null;
+/**
+ * Advisory warnings for a direct-reporting link (UM-1). A link that
+ * produces warnings is VALID and saves normally — the hierarchy-health
+ * screen lists these so an admin can spot unusual shapes (a gap of
+ * more than two levels, a manager at the same or a lower level, an
+ * off-ladder manager, a cross-department link) without the write path
+ * ever refusing the real line manager again.
+ */
+export function reportingLinkWarnings(
+  c: ReportingManagerCandidate
+): string[] {
+  const { employeeLevel, managerLevel, employeeDepartmentId, managerDepartmentId, managerDepartmentIds } = c;
+  const warnings: string[] = [];
 
-  // The manager's role must be placed in the ladder and hold strictly higher
-  // authority: one or two levels up.
+  // Level 1 (CEO) has no manager at all; off-ladder employees keep
+  // their optional-manager behaviour — neither produces shape warnings.
+  if (employeeLevel === 1 || !isLadderLevel(employeeLevel)) return warnings;
+
   if (!isLadderLevel(managerLevel)) {
-    return 'Invalid reporting manager: the manager\'s role is not placed in the reporting ladder.';
+    warnings.push('The reporting manager\'s role is not placed in the reporting ladder.');
+    return warnings;
   }
 
   const gap = employeeLevel - managerLevel;
-  if (gap < 1 || gap > MAX_REPORTING_GAP) {
-    const allowed = allowedManagerLevels(employeeLevel);
-    const allowedDesc = allowed.length === 1
-      ? `Level ${allowed[0]}`
-      : `Level ${allowed[0]} or ${allowed[1]}`;
-    return `Invalid reporting manager: this role sits at Level ${employeeLevel}, so the manager must hold a ${allowedDesc} role (current manager level: ${managerLevel}).`;
+  if (gap < 1) {
+    warnings.push(`The reporting manager sits at Level ${managerLevel}, which is not above this employee's Level ${employeeLevel}.`);
+  } else if (gap > MAX_REPORTING_GAP) {
+    warnings.push(`The reporting manager is ${gap} levels above this employee — more than the usual ${MAX_REPORTING_GAP}.`);
   }
 
-  // Department rule: Level 1 (CEO) is the only cross-department link.
-  // "Same department" = the employee's department is the manager's primary
-  // department OR one of their additional department seats — a Head who
-  // heads several departments can be reported to from any of them.
+  // Department shape: a Level-1 (CEO) manager legitimately sits above
+  // every department. Anyone else whose departments (primary +
+  // additional seats) do not include the employee's department makes
+  // the link cross-department — accepted, but flagged.
   if (managerLevel !== 1) {
     const managerDepartments = new Set<string>();
     if (managerDepartmentId) managerDepartments.add(String(managerDepartmentId));
@@ -117,11 +140,11 @@ export function validateReportingManagerCandidate(
       }
     }
     if (!employeeDepartmentId || !managerDepartments.has(String(employeeDepartmentId))) {
-      return 'Invalid reporting manager: the manager must belong to the same department.';
+      warnings.push('The reporting manager belongs to a different department.');
     }
   }
 
-  return null;
+  return warnings;
 }
 
 export interface ReportingManagerRequiredContext {
@@ -142,7 +165,7 @@ export function reportingManagerRequiredError(
   if (ctx.employeeLevel === 1) return null;
   if (!isLadderLevel(ctx.employeeLevel)) return null;
   if (ctx.managerIsRequired) {
-    return 'A reporting manager is required: select the employee this person reports to (one or two levels up, same department).';
+    return 'A reporting manager is required: select the employee this person reports to.';
   }
   return null;
 }

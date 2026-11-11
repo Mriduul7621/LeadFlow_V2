@@ -15,7 +15,7 @@ import crypto from 'crypto';
 
 import {
   UNASSIGNED_LEVEL,
-  validateReportingManagerCandidate,
+  reportingLinkWarnings,
   reportingManagerRequiredError,
 } from '../utils/reportingRules.js';
 
@@ -541,24 +541,26 @@ export function validateBulkRows(opts: {
             if (!mgrDeptRes.error) mgrDeptId = mgrDeptRes.dept.id;
           }
 
-          // Hierarchy validation for same-batch manager (shared authority rule)
+          // Hierarchy validation for same-batch manager (shared rule)
           if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL) {
             if (roleLevel === 1) {
               errors.push('A Level-1 (CEO) employee cannot have a reporting manager');
             } else if (mgrRoleLevel !== undefined) {
-              // A same-batch manager may ALSO be an existing user whose
-              // stored ADDITIONAL department seats count toward "same
-              // department" (the commit path re-validates every link via
-              // validateReportingLink against the final state anyway).
+              // UM-1: link SHAPE (gap / department) is a warning, never
+              // a row error — the manager may be any active user. A
+              // same-batch manager may ALSO be an existing user whose
+              // stored ADDITIONAL department seats count toward the
+              // department judgement (the commit path re-validates every
+              // link via validateReportingLink against the final state
+              // anyway).
               const mgrStored = maps.existingByEmpId.get(managerInput);
-              const candidateError = validateReportingManagerCandidate({
+              warnings.push(...reportingLinkWarnings({
                 employeeLevel: roleLevel,
                 managerLevel: mgrRoleLevel,
                 employeeDepartmentId: deptId ?? null,
                 managerDepartmentId: mgrDeptId ?? null,
                 managerDepartmentIds: mgrStored?.department_ids || [],
-              });
-              if (candidateError) errors.push(candidateError);
+              }));
             }
           }
 
@@ -577,21 +579,21 @@ export function validateBulkRows(opts: {
             managerResolved = existingMgr.employee_id.toUpperCase();
             managerId = existingMgr.id;
 
-            // Hierarchy validation for existing manager (shared authority rule)
+            // Hierarchy validation for existing manager (shared rule)
             if (roleLevel !== undefined && roleLevel !== UNASSIGNED_LEVEL) {
               if (roleLevel === 1) {
                 errors.push('A Level-1 (CEO) employee cannot have a reporting manager');
               } else {
-                const candidateError = validateReportingManagerCandidate({
+                // UM-1: shape warnings only (see the same-batch branch).
+                // The manager's ADDITIONAL department seats count toward
+                // the department judgement — same as manual create/edit.
+                warnings.push(...reportingLinkWarnings({
                   employeeLevel: roleLevel,
                   managerLevel: existingMgr.hierarchy_level,
                   employeeDepartmentId: deptId ?? null,
                   managerDepartmentId: existingMgr.department_id ?? null,
-                  // The manager's ADDITIONAL department seats count too —
-                  // same rule as manual create/edit.
                   managerDepartmentIds: existingMgr.department_ids || [],
-                });
-                if (candidateError) errors.push(candidateError);
+                }));
               }
             }
           }

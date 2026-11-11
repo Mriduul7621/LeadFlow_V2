@@ -8,7 +8,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
-import { UserRole, Lead } from '../../shared/types';
+import { Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
@@ -47,13 +47,15 @@ export default function ExecutionIntelligence() {
       });
       setLeads(allLeads);
       
+      // UM-1: the user list is loaded for EVERY role — a team lead with
+      // an individual-contributor role label (e.g. RO) still has a team
+      // table to fill. The roster endpoint serves names/structure to any
+      // signed-in user; failure still degrades to an empty list.
       let allUsers: any[] = [];
-      if (user.role !== UserRole.RO) {
-        try {
-          allUsers = await userService.getAllUsers();
-        } catch (e) {
-          console.warn("Restricted user list");
-        }
+      try {
+        allUsers = await userService.getAllUsers();
+      } catch (e) {
+        console.warn("Restricted user list");
       }
 
       // Determine date ranges
@@ -82,9 +84,11 @@ export default function ExecutionIntelligence() {
         return leadDate >= startDate && leadDate <= endDate;
       });
 
-      if (user.role === UserRole.RO) {
-        filteredLeads = filteredLeads.filter(l => l.assignedTo === user.employeeId);
-      }
+      // UM-1: no role-name re-filter here. leadService.getLeads already
+      // applied the caller's EFFECTIVE scope (dataScope, incl. the
+      // tree-derived team-lead floor), so an RO with people under them
+      // correctly sees own + team leads, and a pure Own user already
+      // received own leads only.
 
       const collectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
       const projectedTotal = filteredLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0);
@@ -167,9 +171,8 @@ export default function ExecutionIntelligence() {
       return leadDate >= startDate && leadDate <= endDate;
     });
 
-    if (user?.role === UserRole.RO) {
-      result = result.filter(l => l.assignedTo === user.employeeId);
-    }
+    // UM-1: no role-name re-filter (see loadData) — the popup lists the
+    // same effective scope the headline numbers were computed from.
 
     if (activePopup === 'contacted') {
       result = result.filter(l => ['Contacted', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted'].includes(l.currentStatus));

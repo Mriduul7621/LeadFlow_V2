@@ -9,18 +9,21 @@
  * BUSINESS RULE (single company-wide ladder, Level 1 = CEO):
  *   - Level 1 (CEO) is the organization ROOT. It MUST NOT require a
  *     reporting manager and must never be counted as "missing" one.
- *   - Every Level 2+ employee must have exactly one manager one or two
- *     levels up, in the same department (the Level-1 CEO is the only
- *     cross-department link).
+ *   - Every Level 2+ employee must have exactly one manager.
  *   - "Missing reporting manager" counts ONLY Level 2+ employees.
  *
- * The level + department authority rule is delegated to the shared pure
- * helper `validateReportingManagerCandidate` (server/utils/reportingRules)
- * so the health screen reports the exact same rule the write path enforces.
+ * UM-1 split: links that are BROKEN (CEO holding a manager, a Level 2+
+ * employee with none, a manager that no longer exists) stay in
+ * `invalidLinks`. Links that merely have an unusual SHAPE (gap > 2,
+ * same/lower level, off-ladder manager, cross-department) are accepted
+ * by the write path since UM-1 and are reported separately in
+ * `warnings`, via the shared pure helper `reportingLinkWarnings`
+ * (server/utils/reportingRules) so the health screen and the write
+ * paths can never drift apart.
  * The function never mutates the input and never touches the database.
  */
 
-import { UNASSIGNED_LEVEL, validateReportingManagerCandidate } from './reportingRules.js';
+import { UNASSIGNED_LEVEL, reportingLinkWarnings } from './reportingRules.js';
 
 export { UNASSIGNED_LEVEL };
 
@@ -54,8 +57,14 @@ export interface HierarchyHealth {
   usersWithManager: number;
   /** Level 2+ employees that have NO valid reporting manager. */
   usersWithoutManager: number;
-  /** Reporting relationships that violate the current ladder rules. */
+  /** Reporting relationships that are broken (must be corrected). */
   invalidLinks: InvalidLink[];
+  /**
+   * Reporting relationships that are VALID but unusually shaped
+   * (UM-1): gap > 2, same/lower level, off-ladder manager, or
+   * cross-department. Accepted by design — listed for admin awareness.
+   */
+  warnings: InvalidLink[];
 }
 
 /** Resolve a role code to its ladder level (99 = not placed in the ladder). */
@@ -85,6 +94,7 @@ export function computeHierarchyHealth(
   let managerRequired = 0; // Level 2+ users: MUST have a reporting manager
   let managerRequiredWithManager = 0;
   const invalidLinks: InvalidLink[] = [];
+  const warnings: InvalidLink[] = [];
 
   for (const u of users) {
     if (u.is_active === false) continue;
@@ -131,18 +141,19 @@ export function computeHierarchyHealth(
     }
 
     const managerLevel = levelForRole(levelByRoleCode, manager.role_code);
-    const candidateError = validateReportingManagerCandidate({
+    // UM-1: an unusual link SHAPE is a warning, not an invalid link —
+    // the write path accepts these links since UM-1.
+    for (const warning of reportingLinkWarnings({
       employeeLevel: level,
       managerLevel,
       employeeDepartmentId: u.department_id || null,
       managerDepartmentId: manager.department_id || null,
       managerDepartmentIds: manager.department_ids || null,
-    });
-    if (candidateError) {
-      invalidLinks.push({
+    })) {
+      warnings.push({
         employeeId: u.employee_id,
         employeeName: u.full_name,
-        reason: candidateError,
+        reason: warning,
       });
     }
   }
@@ -159,6 +170,7 @@ export function computeHierarchyHealth(
     usersWithManager,
     usersWithoutManager,
     invalidLinks,
+    warnings,
   };
 }
 

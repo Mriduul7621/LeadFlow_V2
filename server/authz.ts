@@ -22,6 +22,15 @@ import { getUserDepartmentIds, hasDepartmentMirrorLayer } from './utils/departme
  *                             (self + direct and indirect reports)
  *   'Own' (default)        -> only the caller
  *
+ * UM-1 FLOOR (owner's role-model fix, 2026-11-11): "Team Lead" is not
+ * a role — it is a fact about the tree. When a caller's role scope is
+ * 'Own' but the caller HAS at least one person in their reporting
+ * subtree, their effective scope rises to 'DownTeam' (their subtree):
+ * a team lead who also works leads personally sees their own work AND
+ * their team's in one combined view. Role scopes DownTeam / FullTeam /
+ * Organization are role business and stay exactly as configured; the
+ * floor only ever lifts 'Own', and only by the caller's real subtree.
+ *
  * IMPORTANT: this module is the security boundary. The client-side
  * copy (src/modules/users/utils/dataScope.ts) only drives UX and must
  * never be trusted on its own.
@@ -127,12 +136,20 @@ export async function resolveVisibility(
   roleCode: string,
   departmentId?: string | null
 ): Promise<VisibilityResult> {
-  const scope = await resolveDataVisibility(roleCode);
+  let scope = await resolveDataVisibility(roleCode);
 
   if (scope === 'Organization') return { all: true, userIds: [], employeeIds: [] };
 
   const pool = getPool();
   try {
+    if (scope === 'Own') {
+      // UM-1 floor: an 'Own'-scoped caller with at least one person in
+      // their reporting subtree is a team lead in fact — lift them to
+      // their subtree (DownTeam). getDownlineIds includes the caller,
+      // so length > 1 means at least one report exists.
+      const downline = await getDownlineIds(userId);
+      if (downline.length > 1) scope = 'DownTeam';
+    }
     if (scope === 'FullTeam') {
       const caller = await resolveCallerDepartments(pool, userId, departmentId ?? null);
       const deptIds = caller.ids;

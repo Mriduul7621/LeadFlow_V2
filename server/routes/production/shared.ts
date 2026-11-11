@@ -668,14 +668,17 @@ export async function resolveCallerVisibility(caller: CallerDbInfo): Promise<Cal
 
 async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
   if (!useDb()) {
-    // Demo mode: compute downline from fallbackStore for MANAGER-like roles
-    // to allow realistic integration tests without PostgreSQL
+    // Demo mode: compute the downline from fallbackStore. MANAGER-like
+    // roles get their subtree (as before); UM-1 adds the same floor the
+    // DB path applies in authz.resolveVisibility — ANY caller with at
+    // least one person in their subtree gets that subtree, whatever
+    // their role is called. A caller with no reports keeps self-only.
     try {
       const allUsers = fallbackStore.users;
       const callerUser = allUsers.find(u => u.id === caller.id || u.employeeId === caller.employee_id);
       const roleUpper = normalizeRole(caller.role_code);
       const isManagerLike = ['MANAGER','TEAM_LEAD','SM','BDM','CEO'].includes(roleUpper);
-      if (isManagerLike && callerUser) {
+      if (callerUser) {
         // BFS downline via managerId
         const visited = new Set<string>();
         const queue: string[] = [callerUser.employeeId];
@@ -694,7 +697,9 @@ async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
             }
           }
         }
-        return { all: false, userIds, employeeIds };
+        if (isManagerLike || userIds.length > 1) {
+          return { all: false, userIds, employeeIds };
+        }
       }
     } catch {}
     return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
