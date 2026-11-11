@@ -109,15 +109,46 @@ export function getNotificationSettingsSyncFallback(): NotificationSettings {
 }
 
 /**
+ * True when the Metadata Engine's `options` table exists with the
+ * columns the toggle read needs. The probe queries information_schema
+ * only, so it can never fail on a schema that predates the Metadata
+ * Engine tables (legacy/minimal test fixtures, mid-rollout deploys) —
+ * the migration-053/054 pattern from NextStepCalendarSync.
+ */
+async function hasOptionsColumns(exec: { query: Function }): Promise<boolean> {
+  const res = await exec.query(
+    `SELECT (
+       EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'options' AND column_name = 'field_key')
+       AND EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'options' AND column_name = 'option_value')
+       AND EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'options' AND column_name = 'meta')
+     ) AS ok`
+  );
+  return Boolean(res?.rows?.[0]?.ok);
+}
+
+/**
  * Read ONE toggle from inside a caller's transaction (used by
  * createAssignmentNotifications so the check commits atomically with
  * the lead mutation and costs no extra connection). Fails ON.
+ *
+ * The `options` table is PROBED (information_schema) before it is
+ * touched — deciding first, never catching after. A try/catch around
+ * the SELECT is NOT enough inside a transaction: when the statement
+ * errors (e.g. `options` missing on a minimal schema), PostgreSQL
+ * aborts the caller's whole transaction, so every later statement
+ * fails with "current transaction is aborted" and the lead write
+ * itself is lost. Probing keeps the transaction healthy: table or
+ * columns absent → the toggle simply reads as its default (ON).
  */
 export async function readToggleWithExec(
   exec: { query: Function },
   optionValue: string
 ): Promise<boolean> {
   try {
+    if (!(await hasOptionsColumns(exec))) return true;
     const result = await exec.query(
       `SELECT meta FROM options WHERE field_key = $1 AND option_value = $2`,
       [NOTIFICATIONS_OPTION_TYPE, optionValue]

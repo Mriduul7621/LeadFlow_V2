@@ -291,7 +291,10 @@ export async function createAssignmentNotifications(
   // "In-App Assignment Alerts" is a real switch now. When an admin has
   // turned it OFF, no assignment notifications are created (the read
   // rides the caller's transaction and fails ON, so a missing or
-  // malformed settings row keeps today's behaviour).
+  // malformed settings row keeps today's behaviour). The read PROBES
+  // information_schema before touching `options` — see
+  // readToggleWithExec: a failed SELECT here would abort the whole
+  // lead transaction, not just skip the notifications.
   if (!(await readToggleWithExec(exec, ASSIGNMENT_ALERTS_OPTION_VALUE))) {
     return { created, skipped, failed };
   }
