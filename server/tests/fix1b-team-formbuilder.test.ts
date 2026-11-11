@@ -147,7 +147,7 @@ async function setupCommonSchema(pool: any) {
     CREATE TABLE IF NOT EXISTS leads (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       customer_name VARCHAR(255),
-      status VARCHAR(100),
+      current_status VARCHAR(100),
       assigned_to VARCHAR(30),
       created_by VARCHAR(30),
       next_follow_up_at TIMESTAMP,
@@ -227,7 +227,7 @@ describe('FIX-1 item 5 — GET /api/team/overview', () => {
     const dueTomorrow = new Date(new Date(bounds.tomorrowStartIso).getTime() + 3600_000).toISOString();
     const mkLead = async (assignedTo: string, status: string, nextFollowUpAt: string | null, deleted = false) => {
       await pool.query(
-        `INSERT INTO leads (customer_name, status, assigned_to, created_by, next_follow_up_at, is_deleted) VALUES ('C', $1, $2, $2, $3, $4)`,
+        `INSERT INTO leads (customer_name, current_status, assigned_to, created_by, next_follow_up_at, is_deleted) VALUES ('C', $1, $2, $2, $3, $4)`,
         [status, assignedTo, nextFollowUpAt, deleted]
       );
     };

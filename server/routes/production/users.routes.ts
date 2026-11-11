@@ -630,8 +630,8 @@ router.get('/team/overview', requireAuth, async (req, res) => {
     const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(new Date());
     const countsRes = await pool.query(
       `SELECT assigned_to,
-              COUNT(*) FILTER (WHERE status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
-              COUNT(*) FILTER (WHERE status = 'Converted')::int AS converted_count,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
+              COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
               COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count
        FROM leads
        WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
