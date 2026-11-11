@@ -364,10 +364,19 @@ describe('Follow-up outbox core (pure queue logic)', () => {
     const main = readFileSync('src/main.tsx', 'utf8');
     assert.ok(main.includes('installFollowUpOutboxSync'), 'sync triggers must be installed at boot');
 
-    for (const page of ['src/modules/leads/pages/LeadUpdate.tsx', 'src/modules/leads/pages/LeadList.tsx']) {
+    // FIX-1c: LeadUpdate is now the ONLY follow-up writer (the LeadList
+    // modal was removed; the list routes into Lead 360 / LeadUpdate), so
+    // the offline-queue handling is pinned there alone.
+    {
+      const page = 'src/modules/leads/pages/LeadUpdate.tsx';
       const src = readFileSync(page, 'utf8');
       assert.ok(src.includes('FollowUpQueuedOfflineError'), `${page} must handle the queued-offline case`);
       assert.ok(src.includes('Saved offline'), `${page} must tell the agent the follow-up was saved offline`);
+    }
+    {
+      const list = readFileSync('src/modules/leads/pages/LeadList.tsx', 'utf8');
+      assert.ok(list.includes('/update`'), 'the Leads list must route status updates into the LeadUpdate page');
+      assert.ok(!list.includes('FollowUpQueuedOfflineError'), 'LeadList must not grow a second follow-up writer');
     }
 
     const sw = readFileSync('public/sw.js', 'utf8');

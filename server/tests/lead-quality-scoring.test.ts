@@ -710,8 +710,12 @@ describe('Lead Quality — frontend never scores (source guards)', () => {
   });
 
   it('lead workspace lazily loads single-lead explanations through the reader', () => {
-    const src = stripComments(read('src/modules/leads/pages/LeadList.tsx'));
-    assert.ok(src.includes('getLeadQuality'), 'workspace modal must use the getLeadQuality reader');
+    // FIX-1c: the workspace is Lead 360 (the LeadList modal is gone).
+    // The single-lead GET embeds the full explanation in leadQuality,
+    // and Lead 360 renders it through LeadQualityPanel.
+    const src = stripComments(read('src/modules/leads/pages/Lead360.tsx'));
+    assert.ok(src.includes('leadService.getLead('), 'workspace must load the single lead through the reader');
+    assert.ok(src.includes('LeadQualityPanel'), 'workspace must render the quality explanation panel');
   });
 });
 

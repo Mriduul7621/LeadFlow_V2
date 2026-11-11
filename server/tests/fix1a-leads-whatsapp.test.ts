@@ -17,115 +17,69 @@ import {
   resolveWhatsAppTemplates,
 } from '../../src/modules/leads/utils/whatsappTemplates.js';
 import {
-  effectiveLeadListStatus,
-  leadListStatusRulePayload,
-  validateLeadListStatusForm,
-  buildLeadListFollowUpArgs,
-  type LeadListStatusFormState,
-} from '../../src/modules/leads/utils/leadListStatusForm.js';
-import { leadStatusViolationMessage } from '../../src/modules/leads/utils/leadStatusRules.js';
+  validateLeadStatusFields,
+  leadStatusViolationMessage,
+} from '../../src/modules/leads/utils/leadStatusRules.js';
 
 /**
- * FIX-1a — Leads-page status modal parity (item 1), WhatsApp on the
+ * FIX-1a — Leads-page status parity (item 1), WhatsApp on the
  * Leads-page surfaces (item 2), the two WhatsApp options (item 3) and
  * admin-managed templates (item 4).
+ *
+ * FIX-1c note: the LeadList in-page status modal that item 1 originally
+ * served has been REMOVED — editing a lead from the Leads page now
+ * opens the Lead 360 workspace, and the status write runs through
+ * LeadUpdate.tsx, which derives from the SAME shared rule table
+ * (leadStatusRules.ts). The item-1 tests below therefore pin the rule
+ * table itself (the single source both the server and LeadUpdate
+ * consume) plus LeadUpdate's wiring, instead of the deleted modal
+ * helper (leadListStatusForm.ts, removed with the modal).
  */
 
 // ---------------------------------------------------------------------------
-// Item 1 — the LeadList status form walks the shared F6 rule table.
+// Item 1 — the surviving update path (Lead 360 -> LeadUpdate) walks the
+// shared F6 rule table.
 // ---------------------------------------------------------------------------
 
-const BASE: LeadListStatusFormState = {
-  formStatus: '',
-  formSubStatus: '',
-  formNextFollowUpDate: '',
-  formNextCallDate: '',
-  formMeetingDate: '',
-  formProductName: '',
-  formSumAssured: 0,
-  formProjectedNCP: 0,
-  formCollectedNCP: 0,
-  formLossReason: '',
-};
-
-describe('FIX-1 item 1 — LeadList status form vs the shared rule table', () => {
+describe('FIX-1 item 1 — shared rule table behind the LeadUpdate path', () => {
   it('Not Interested without a loss reason violates lossReason — the production bug', () => {
-    const violations = validateLeadListStatusForm({ ...BASE, formStatus: 'Not Interested' });
+    const violations = validateLeadStatusFields('Not Interested', {});
     assert.ok(violations.some(v => v.field === 'lossReason'));
     assert.match(leadStatusViolationMessage(violations), /loss reason/i);
   });
 
-  it('Not Interested with a loss reason passes, and the save args carry it (arg 12)', () => {
-    const state = { ...BASE, formStatus: 'Not Interested', formLossReason: 'Price' };
-    assert.deepEqual(validateLeadListStatusForm(state), []);
-    const args = buildLeadListFollowUpArgs(state, 'customer declined');
-    assert.equal(args.status, 'Not Interested');
-    assert.equal(args.lossReason, 'Price');
+  it('Not Interested with a loss reason passes', () => {
+    assert.deepEqual(validateLeadStatusFields('Not Interested', { lossReason: 'Price' }), []);
   });
 
-  it('Meeting Completed -> Not Interested also requires the loss reason', () => {
-    const state = { ...BASE, formStatus: 'Meeting Completed', formSubStatus: 'Not Interested' };
-    assert.equal(effectiveLeadListStatus(state), 'Not Interested');
-    assert.ok(validateLeadListStatusForm(state).some(v => v.field === 'lossReason'));
-    const ok = { ...state, formLossReason: 'Not interested in product' };
-    assert.deepEqual(validateLeadListStatusForm(ok), []);
-    assert.equal(buildLeadListFollowUpArgs(ok, '').lossReason, 'Not interested in product');
-  });
-
-  it('Meeting Completed -> Pipeline Locked: no table row (the modal manual checks guard it); args carry product/sum/projected', () => {
-    // LEAD_STAGE_RULES deliberately has no 'Pipeline Locked' row — the
-    // modal's own manual checks are the guard for that status, exactly
-    // as before FIX-1. The helper must still pass the three money
-    // fields through to the follow-up call.
-    const state = { ...BASE, formStatus: 'Meeting Completed', formSubStatus: 'Pipeline Locked' };
-    assert.deepEqual(validateLeadListStatusForm(state), []);
-    const filled = { ...state, formProductName: 'Endowment', formSumAssured: 500000, formProjectedNCP: 25000 };
-    const args = buildLeadListFollowUpArgs(filled, 'locked');
-    assert.equal(args.status, 'Pipeline Locked');
-    assert.equal(args.productName, 'Endowment');
-    assert.equal(args.sumAssured, 500000);
-    assert.equal(args.projectedNCP, 25000);
-  });
-
-  it('Proposal Sent requires product, sum and projected; args carry all three', () => {
-    const state = { ...BASE, formStatus: 'Proposal Sent' };
-    const fields = validateLeadListStatusForm(state).map(v => v.field).sort();
+  it('Proposal Sent requires product, sum and projected', () => {
+    const fields = validateLeadStatusFields('Proposal Sent', {}).map(v => v.field).sort();
     assert.deepEqual(fields, ['productName', 'projectedNCP', 'sumAssured']);
-    const ok = { ...state, formProductName: 'S3PP', formSumAssured: 300000, formProjectedNCP: 15000 };
-    const args = buildLeadListFollowUpArgs(ok, 'proposal shared');
-    assert.equal(args.productName, 'S3PP');
-    assert.equal(args.sumAssured, 300000);
-    assert.equal(args.projectedNCP, 15000);
+    assert.deepEqual(
+      validateLeadStatusFields('Proposal Sent', { productName: 'S3PP', sumAssured: 300000, projectedNCP: 15000 }),
+      [],
+    );
   });
 
-  it('Converted requires product, sum and collected; args carry them', () => {
-    const state = { ...BASE, formStatus: 'Converted' };
-    const fields = validateLeadListStatusForm(state).map(v => v.field).sort();
+  it('Converted requires product, sum and collected', () => {
+    const fields = validateLeadStatusFields('Converted', {}).map(v => v.field).sort();
     assert.deepEqual(fields, ['collectedNCP', 'productName', 'sumAssured']);
-    const ok = { ...state, formProductName: 'S4PP', formSumAssured: 200000, formCollectedNCP: 12000 };
-    const args = buildLeadListFollowUpArgs(ok, 'done');
-    assert.equal(args.ncp, 12000);
-    assert.equal(args.productName, 'S4PP');
+    assert.deepEqual(
+      validateLeadStatusFields('Converted', { productName: 'S4PP', sumAssured: 200000, collectedNCP: 12000 }),
+      [],
+    );
   });
 
   it('Meeting Fixed requires the meeting date; Follow-up Set requires the follow-up date', () => {
-    assert.ok(validateLeadListStatusForm({ ...BASE, formStatus: 'Meeting Fixed' }).some(v => v.field === 'meetingDate'));
-    assert.deepEqual(validateLeadListStatusForm({ ...BASE, formStatus: 'Meeting Fixed', formMeetingDate: '2026-11-20' }), []);
-    assert.ok(validateLeadListStatusForm({ ...BASE, formStatus: 'Follow-up Set' }).some(v => v.field === 'nextFollowUpDate'));
-    assert.deepEqual(validateLeadListStatusForm({ ...BASE, formStatus: 'Follow-up Set', formNextFollowUpDate: '2026-11-15' }), []);
+    assert.ok(validateLeadStatusFields('Meeting Fixed', {}).some(v => v.field === 'meetingDate'));
+    assert.deepEqual(validateLeadStatusFields('Meeting Fixed', { meetingDate: '2026-11-20' }), []);
+    assert.ok(validateLeadStatusFields('Follow-up Set', {}).some(v => v.field === 'nextFollowUpDate'));
+    assert.deepEqual(validateLeadStatusFields('Follow-up Set', { nextFollowUpDate: '2026-11-15' }), []);
   });
 
-  it('No Response passes the call date through; plain statuses need nothing extra', () => {
-    const state = { ...BASE, formStatus: 'No Response', formNextCallDate: '2026-11-14' };
-    assert.deepEqual(validateLeadListStatusForm(state), []);
-    assert.equal(buildLeadListFollowUpArgs(state, 'no answer').nextCallDate, '2026-11-14');
-    assert.deepEqual(validateLeadListStatusForm({ ...BASE, formStatus: 'Interested' }), []);
-  });
-
-  it('rule payload mirrors LeadUpdate: loss reason comes from the form field, not remarks', () => {
-    const payload = leadListStatusRulePayload({ ...BASE, formStatus: 'Not Interested', formLossReason: 'Competitor' }, 'some remarks');
-    assert.equal(payload.lossReason, 'Competitor');
-    assert.equal(payload.note, 'some remarks');
+  it('plain statuses need nothing extra', () => {
+    assert.deepEqual(validateLeadStatusFields('Interested', {}), []);
+    assert.deepEqual(validateLeadStatusFields('Contacted', {}), []);
   });
 });
 
@@ -181,18 +135,40 @@ describe('FIX-1 items 3/4 — WhatsApp hrefs and template resolution', () => {
 describe('FIX-1 — source guards', () => {
   const leadList = readFileSync(new URL('../../src/modules/leads/pages/LeadList.tsx', import.meta.url), 'utf8');
   const leadUpdate = readFileSync(new URL('../../src/modules/leads/pages/LeadUpdate.tsx', import.meta.url), 'utf8');
+  const lead360 = readFileSync(new URL('../../src/modules/leads/pages/Lead360.tsx', import.meta.url), 'utf8');
   const whatsAppAction = readFileSync(new URL('../../src/modules/leads/components/WhatsAppAction.tsx', import.meta.url), 'utf8');
   const settings = readFileSync(new URL('../../src/modules/settings/pages/Settings.tsx', import.meta.url), 'utf8');
 
-  it('LeadList modal renders WhatsApp and collects the loss reason', () => {
-    assert.match(leadList, /WhatsAppAction/);
-    assert.match(leadList, /formLossReason/);
-    assert.match(leadList, /validateLeadListStatusForm/);
+  // FIX-1c replaced the two guards that pinned the old LeadList modal
+  // (WhatsApp + loss-reason collection, server-message toast): the modal
+  // no longer exists, so the same protections are pinned on the path
+  // that replaced it — Leads page -> Lead 360 -> LeadUpdate.
+  it('FIX-1c: Leads-page Edit opens the Lead 360 workspace; the in-list modal is gone', () => {
+    assert.ok(leadList.includes('navigate(`/leads/${lead.id}`)'), 'row click / Edit must navigate to Lead 360');
+    assert.ok(leadList.includes("params.get('leadId')"), 'the ?leadId= deep link must still be honoured');
+    assert.ok(leadList.includes('replace: true'), 'the deep link must redirect into Lead 360');
+    assert.ok(!leadList.includes('selectedLead'), 'the modal state must be gone');
+    assert.ok(!leadList.includes('Lead Detail Modal'), 'the modal markup must be gone');
+    assert.ok(!leadList.includes('leadListStatusForm'), 'the modal-only helper must be gone');
   });
 
-  it('LeadList failures surface the server message, not the bare generic toast', () => {
+  it('FIX-1c: the Lead 360 workspace offers the status update page', () => {
+    assert.ok(lead360.includes('/update`'), 'Lead 360 must link into the update page');
+    assert.match(lead360, /WhatsAppAction/);
+  });
+
+  it('FIX-1c: LeadUpdate sends the loss reason for Not Interested (updateLeadStatus arg 12)', () => {
+    assert.ok(leadUpdate.includes('needsLossReason'), 'LeadUpdate must derive the loss-reason requirement');
+    assert.ok(
+      leadUpdate.includes('needsLossReason ? lossReason : undefined'),
+      'the follow-up call must carry the loss reason when the status is Not Interested',
+    );
+    assert.match(leadUpdate, /validateLeadStatusFields/);
+  });
+
+  it('update-path failures surface the server message, not a bare generic toast', () => {
+    assert.match(leadUpdate, /toast\.error\(err\?\.message \|\| t\('updError'\)\)/);
     assert.ok(!leadList.includes("toast.error('Failed to update lead status')"));
-    assert.match(leadList, /\(err as any\)\?\.message \|\| 'Failed to update lead status'/);
   });
 
   it('LeadUpdate (Leads-page follow-up flow) renders WhatsApp', () => {
