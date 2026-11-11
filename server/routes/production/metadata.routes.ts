@@ -34,6 +34,33 @@ import {
 
 const router = Router();
 
+/**
+ * Settings audit coverage (Admin Control programme, DZ-0).
+ * ------------------------------------------------------------------
+ * Mahadi's rule: EVERY Settings change is audit-logged with old→new
+ * values. Before DZ-0 the only writer in this domain was quick-add;
+ * the type/option/workflow/form-field mutations below wrote nothing.
+ * This helper is the one place they now record through — best-effort
+ * by design (logAccessChange never throws and no-ops without a DB),
+ * so an audit hiccup can never fail the mutation it describes.
+ */
+async function auditSettingsChange(
+  req: any,
+  actionCode: string,
+  entityType: string,
+  entityId: string | null,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  const caller = await getCallerDbInfo(req).catch(() => null);
+  await logAccessChange({
+    actorId: caller?.id || req.currentUser?.id || null,
+    actionCode,
+    entityType,
+    entityId,
+    metadata,
+  });
+}
+
 function mapMetadataTypeRow(row: any) {
   return {
     key: row.key,
@@ -118,6 +145,7 @@ router.post('/metadata-types', requireAuth, requirePermissionCode('settings.mana
     return sendJson(res, 201, item);
   }
   try {
+    const prior = await getPool().query('SELECT label, description FROM metadata_types WHERE key = $1', [normalizedKey]);
     const result = await getPool().query(
       `INSERT INTO metadata_types (key, label, description, is_system, sort_order, created_at)
        VALUES ($1, $2, $3, FALSE, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM metadata_types), NOW())
@@ -125,6 +153,11 @@ router.post('/metadata-types', requireAuth, requirePermissionCode('settings.mana
        RETURNING *`,
       [normalizedKey, String(label), String(description || '')]
     );
+    await auditSettingsChange(req, 'metadata_type.save', 'metadata_type', null, {
+      key: normalizedKey,
+      oldValue: prior.rows[0] ? { label: prior.rows[0].label, description: prior.rows[0].description || '' } : null,
+      newValue: { label: String(label), description: String(description || '') },
+    });
     return sendJson(res, 200, mapMetadataTypeRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Metadata type save failed' });
@@ -140,8 +173,13 @@ router.delete('/metadata-types/:key', requireAuth, requirePermissionCode('settin
     return sendJson(res, 200, { success: true });
   }
   try {
-    const result = await getPool().query('DELETE FROM metadata_types WHERE key = $1 RETURNING key', [req.params.key]);
+    const result = await getPool().query('DELETE FROM metadata_types WHERE key = $1 RETURNING key, label, description', [req.params.key]);
     if (!result.rows[0]) return sendJson(res, 404, { error: 'Metadata type not found' });
+    await auditSettingsChange(req, 'metadata_type.delete', 'metadata_type', null, {
+      key: req.params.key,
+      oldValue: { label: result.rows[0].label, description: result.rows[0].description || '' },
+      newValue: null,
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Metadata type delete failed' });
@@ -184,6 +222,10 @@ router.post('/options', requireAuth, requirePermissionCode('settings.manage'), a
   }
 
   try {
+    const prior = await getPool().query(
+      'SELECT option_label, is_active FROM options WHERE field_key = $1 AND option_value = $2',
+      [type, value]
+    );
     const result = await getPool().query(
       `INSERT INTO options (field_key, option_value, option_label, sort_order, is_default, is_active, meta, created_at, updated_at)
        VALUES ($1, $2, $3, COALESCE($4, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM options o WHERE o.field_key = $1::varchar)), FALSE, $5, $6, NOW(), NOW())
@@ -195,6 +237,12 @@ router.post('/options', requireAuth, requirePermissionCode('settings.manage'), a
        RETURNING *`,
       [type, value, label, payload.sortOrder != null ? Number(payload.sortOrder) : null, isActive, JSON.stringify(meta)]
     );
+    await auditSettingsChange(req, 'options.save', 'metadata_option', result.rows[0].id, {
+      type,
+      value,
+      oldValue: prior.rows[0] ? { label: prior.rows[0].option_label || value, isActive: prior.rows[0].is_active !== false } : null,
+      newValue: { label, isActive },
+    });
     return sendJson(res, 200, mapOptionRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Option save failed' });
@@ -365,10 +413,16 @@ router.delete('/options/:type/:value', requireAuth, requirePermissionCode('setti
   }
   try {
     const result = await getPool().query(
-      'DELETE FROM options WHERE field_key = $1 AND option_value = $2 RETURNING id',
+      'DELETE FROM options WHERE field_key = $1 AND option_value = $2 RETURNING id, option_label, is_active',
       [req.params.type, req.params.value]
     );
     if (!result.rows[0]) return sendJson(res, 404, { error: 'Option not found' });
+    await auditSettingsChange(req, 'options.delete', 'metadata_option', result.rows[0].id, {
+      type: req.params.type,
+      value: req.params.value,
+      oldValue: { label: result.rows[0].option_label || req.params.value, isActive: result.rows[0].is_active !== false },
+      newValue: null,
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Option delete failed' });
@@ -394,6 +448,10 @@ router.post('/options/reorder', requireAuth, requirePermissionCode('settings.man
       await client.query('UPDATE options SET sort_order = $1, updated_at = NOW() WHERE id = $2', [i + 1, id]);
     }
     await client.query('COMMIT');
+    await auditSettingsChange(req, 'options.reorder', 'metadata_option', null, {
+      count: orderedIds.length,
+      newValue: { orderedIds: orderedIds.slice(0, 50) },
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -443,6 +501,7 @@ router.post('/workflow-rules', requireAuth, requirePermissionCode('workflow.mana
   }
 
   try {
+    const prior = await getPool().query('SELECT * FROM workflow_rules WHERE status = $1', [status]);
     const result = await getPool().query(
       `INSERT INTO workflow_rules (status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
                                    requires_followup_type, requires_note, is_system, created_at, updated_at)
@@ -458,6 +517,11 @@ router.post('/workflow-rules', requireAuth, requirePermissionCode('workflow.mana
       [status, allowed ? JSON.stringify(allowed) : null, item.requiresLossReason, item.requiresMeetingType,
         item.requiresFollowUpType, item.requiresNote, item.isSystem]
     );
+    await auditSettingsChange(req, 'workflow_rule.save', 'workflow_rule', result.rows[0].id, {
+      status,
+      oldValue: prior.rows[0] ? mapWorkflowRuleRow(prior.rows[0]) : null,
+      newValue: mapWorkflowRuleRow(result.rows[0]),
+    });
     return sendJson(res, 200, mapWorkflowRuleRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Workflow rule save failed' });
@@ -473,8 +537,13 @@ router.delete('/workflow-rules/:id', requireAuth, requirePermissionCode('workflo
     return sendJson(res, 200, { success: true });
   }
   try {
-    const result = await getPool().query('DELETE FROM workflow_rules WHERE id::text = $1 OR status = $1 RETURNING id', [req.params.id]);
+    const result = await getPool().query('DELETE FROM workflow_rules WHERE id::text = $1 OR status = $1 RETURNING *', [req.params.id]);
     if (!result.rows[0]) return sendJson(res, 404, { error: 'Workflow rule not found' });
+    await auditSettingsChange(req, 'workflow_rule.delete', 'workflow_rule', result.rows[0].id, {
+      status: result.rows[0].status,
+      oldValue: mapWorkflowRuleRow(result.rows[0]),
+      newValue: null,
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Workflow rule delete failed' });
@@ -519,6 +588,7 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
   }
 
   try {
+    const prior = await getPool().query('SELECT * FROM form_fields WHERE field_key = $1', [fieldKey]);
     const result = await getPool().query(
       `INSERT INTO form_fields (field_key, label, field_type, section, is_mandatory, is_visible, sort_order,
                                 metadata_type_key, placeholder, is_system, created_at, updated_at)
@@ -537,6 +607,11 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
       [fieldKey, label, fieldType, clean(payload.section), isMandatory, isVisible, sortOrder,
         clean(payload.metadataTypeKey) || null, clean(payload.placeholder) || null, isSystem]
     );
+    await auditSettingsChange(req, 'form_field.save', 'form_field', result.rows[0].id, {
+      fieldKey,
+      oldValue: prior.rows[0] ? mapFormFieldRow(prior.rows[0]) : null,
+      newValue: mapFormFieldRow(result.rows[0]),
+    });
     return sendJson(res, 200, mapFormFieldRow(result.rows[0]));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Form field save failed' });
@@ -549,12 +624,17 @@ router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) =>
     return sendJson(res, 200, { success: true });
   }
   try {
-    const found = await getPool().query('SELECT is_system FROM form_fields WHERE id::text = $1 OR field_key = $1', [req.params.id]);
+    const found = await getPool().query('SELECT * FROM form_fields WHERE id::text = $1 OR field_key = $1', [req.params.id]);
     if (!found.rows[0]) return sendJson(res, 404, { error: 'Form field not found' });
     if (found.rows[0].is_system) {
       return sendJson(res, 400, { error: 'System fields cannot be deleted.' });
     }
     await getPool().query('DELETE FROM form_fields WHERE id = $1', [found.rows[0].id]);
+    await auditSettingsChange(req, 'form_field.delete', 'form_field', found.rows[0].id, {
+      fieldKey: found.rows[0].field_key,
+      oldValue: mapFormFieldRow(found.rows[0]),
+      newValue: null,
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Form field delete failed' });
@@ -578,6 +658,10 @@ router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) 
       await client.query('UPDATE form_fields SET sort_order = $1, updated_at = NOW() WHERE id = $2', [i + 1, id]);
     }
     await client.query('COMMIT');
+    await auditSettingsChange(req, 'form_field.reorder', 'form_field', null, {
+      count: orderedIds.length,
+      newValue: { orderedIds: orderedIds.slice(0, 50) },
+    });
     return sendJson(res, 200, { success: true });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
