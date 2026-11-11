@@ -223,7 +223,7 @@ router.post('/options', requireAuth, requirePermissionCode('settings.manage'), a
 
   try {
     const prior = await getPool().query(
-      'SELECT option_label, is_active FROM options WHERE field_key = $1 AND option_value = $2',
+      'SELECT option_label, is_active, meta FROM options WHERE field_key = $1 AND option_value = $2',
       [type, value]
     );
     const result = await getPool().query(
@@ -237,11 +237,15 @@ router.post('/options', requireAuth, requirePermissionCode('settings.manage'), a
        RETURNING *`,
       [type, value, label, payload.sortOrder != null ? Number(payload.sortOrder) : null, isActive, JSON.stringify(meta)]
     );
+    // FIX-1: for WhatsApp templates the message BODY lives in meta —
+    // a template change is only auditable if the audit carries the
+    // body old→new too (DZ-0 pattern), not just label/active.
+    const auditMeta = type === 'WhatsAppTemplates' ? meta : undefined;
     await auditSettingsChange(req, 'options.save', 'metadata_option', result.rows[0].id, {
       type,
       value,
-      oldValue: prior.rows[0] ? { label: prior.rows[0].option_label || value, isActive: prior.rows[0].is_active !== false } : null,
-      newValue: { label, isActive },
+      oldValue: prior.rows[0] ? { label: prior.rows[0].option_label || value, isActive: prior.rows[0].is_active !== false, ...(auditMeta !== undefined ? { meta: prior.rows[0].meta ?? {} } : {}) } : null,
+      newValue: { label, isActive, ...(auditMeta !== undefined ? { meta: auditMeta } : {}) },
     });
     return sendJson(res, 200, mapOptionRow(result.rows[0]));
   } catch (error: any) {
@@ -413,14 +417,14 @@ router.delete('/options/:type/:value', requireAuth, requirePermissionCode('setti
   }
   try {
     const result = await getPool().query(
-      'DELETE FROM options WHERE field_key = $1 AND option_value = $2 RETURNING id, option_label, is_active',
+      'DELETE FROM options WHERE field_key = $1 AND option_value = $2 RETURNING id, option_label, is_active, meta',
       [req.params.type, req.params.value]
     );
     if (!result.rows[0]) return sendJson(res, 404, { error: 'Option not found' });
     await auditSettingsChange(req, 'options.delete', 'metadata_option', result.rows[0].id, {
       type: req.params.type,
       value: req.params.value,
-      oldValue: { label: result.rows[0].option_label || req.params.value, isActive: result.rows[0].is_active !== false },
+      oldValue: { label: result.rows[0].option_label || req.params.value, isActive: result.rows[0].is_active !== false, ...(req.params.type === 'WhatsAppTemplates' ? { meta: result.rows[0].meta ?? {} } : {}) },
       newValue: null,
     });
     return sendJson(res, 200, { success: true });
