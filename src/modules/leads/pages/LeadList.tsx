@@ -23,7 +23,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, LeadQuality, LeadStatus } from '../../shared/types';
 import { toast } from 'sonner';
-import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
+import { leadService, FollowUpQueuedOfflineError, type LeadExportScope, type LeadExportBasis } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { usePermissions } from '../../shared/hooks/usePermissions';
@@ -74,6 +74,15 @@ export default function LeadList() {
   // list rows carry the compact score/band; factors load on demand).
   const [qualityDetail, setQualityDetail] = useState<LeadQuality | null>(null);
   const [qualityDetailLoading, setQualityDetailLoading] = useState(false);
+  // FIX-2 scoped export dialog (server-built Excel workbook, leads.export).
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportScopes, setExportScopes] = useState<LeadExportScope[]>(['own']);
+  const [exportMaxRows, setExportMaxRows] = useState(10000);
+  const [exportScope, setExportScope] = useState<LeadExportScope>('own');
+  const [exportBasis, setExportBasis] = useState<LeadExportBasis>('updated');
+  const [exportFrom, setExportFrom] = useState('');
+  const [exportTo, setExportTo] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -424,98 +433,56 @@ export default function LeadList() {
     return result;
   })();
 
-  const handleExport = () => {
+  // FIX-2: the Export button opens the scoped-export dialog. The
+  // workbook is built on the server (POST /api/leads/export) under
+  // the caller's own visibility scope — this replaces the old
+  // client-side CSV dump of whichever leads happened to be loaded.
+  const openExportDialog = async () => {
     if (!canExportLeads) {
       toast.error('You do not have permission to export leads.');
       return;
     }
-    if (leads.length === 0) {
-      toast.error("No lead data available to export.");
+    setExportOpen(true);
+    try {
+      const options = await leadService.getLeadExportOptions();
+      setExportScopes(options.scopes);
+      setExportMaxRows(options.maxRows);
+      if (!options.scopes.includes(exportScope)) setExportScope('own');
+      if (!exportFrom) setExportFrom(options.defaults.from);
+      if (!exportTo) setExportTo(options.defaults.to);
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not load export options.');
+    }
+  };
+
+  const runExport = async () => {
+    if (exportFrom && exportTo && exportFrom > exportTo) {
+      toast.error('The From date must not be after the To date.');
       return;
     }
-
-    // Define CSV Headers
-    const headers = [
-      "Prospect Name",
-      "Mobile",
-      "Area",
-      "Source",
-      "Campaign Name",
-      "Product Name",
-      "Profession",
-      "Marital Status",
-      "Family Members",
-      "Has Child",
-      "Assigned To Agent",
-      "Projected NCP",
-      "Collected NCP",
-      "Current Status",
-      "Creation Date",
-      "Last Follow Up Date",
-      "Next Follow Up Date",
-      "Change Audit History (Date | Status | Remarks | UpdatedBy)"
-    ];
-
-    // Escape CSV values
-    const escapeCSV = (val: any) => {
-      if (val === undefined || val === null) return "";
-      let str = typeof val === 'string' ? val : String(val);
-      // Double quote escape
-      str = str.replace(/"/g, '""');
-      return `"${str}"`;
-    };
-
-    // Construct spreadsheet rows
-    const rows = leads.map(lead => {
-      // Format history entries
-      const historyStr = (lead.statusHistory || [])
-        .map(h => {
-          const formattedDate = h.date ? new Date(h.date).toLocaleString().replace(/"/g, '""') : '';
-          const statusVal = h.status || '';
-          const remarksVal = h.remarks || '';
-          const userVal = h.updatedBy || 'N/A';
-          return `[${formattedDate}] Status: ${statusVal} -> Remarks: ${remarksVal} (By: ${userVal})`;
-        })
-        .join("; ");
-
-      return [
-        escapeCSV(lead.prospectName),
-        escapeCSV(lead.mobile),
-        escapeCSV(lead.area),
-        escapeCSV(lead.source),
-        escapeCSV(lead.campaignName),
-        escapeCSV(lead.productName),
-        escapeCSV(lead.profession),
-        escapeCSV(lead.maritalStatus),
-        escapeCSV(lead.familyMember),
-        escapeCSV(lead.hasChild ? "Yes" : "No"),
-        escapeCSV(lead.assignedTo),
-        escapeCSV(lead.projectedNCP),
-        escapeCSV(lead.collectedNCP),
-        escapeCSV(lead.currentStatus),
-        escapeCSV(lead.creationDate ? new Date(lead.creationDate).toLocaleString() : ""),
-        escapeCSV(lead.lastFollowUpDate ? new Date(lead.lastFollowUpDate).toLocaleString() : ""),
-        escapeCSV(lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate).toLocaleDateString() : ""),
-        escapeCSV(historyStr)
-      ];
-    });
-
-    const csvContent = [
-      headers.join(","),
-      ...rows.map(row => row.join(","))
-    ].join("\n");
-
-    // Create a Blob and download it with UTF-8 BOM
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Shanta_Life_Lead_Intelligence_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    toast.success("Intelligence CSV Report downloaded successfully with historical change audits!");
+    setExportBusy(true);
+    try {
+      const { blob, filename, leadCount, historyCount } = await leadService.exportLeads({
+        scope: exportScope,
+        basis: exportBasis,
+        from: exportFrom || undefined,
+        to: exportTo || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setExportOpen(false);
+      toast.success(`Exported ${leadCount} lead${leadCount === 1 ? '' : 's'} with ${historyCount} history events (Excel).`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Export failed.');
+    } finally {
+      setExportBusy(false);
+    }
   };
 
   const handleCall = (name: string) => {
@@ -591,11 +558,11 @@ export default function LeadList() {
           </button>
           {canExportLeads && (
             <button
-              onClick={handleExport}
+              onClick={openExportDialog}
               className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-md"
             >
               <Download className="w-3.5 h-3.5 text-[#978C21]" />
-              Export Intelligence
+              Export
             </button>
           )}
         </div>
@@ -926,6 +893,142 @@ export default function LeadList() {
           </button>
         </div>
       </div>
+
+      {/* FIX-2 Export Dialog */}
+      <AnimatePresence>
+        {exportOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !exportBusy && setExportOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
+            >
+              <div className="bg-[#3C3C3C] px-6 py-5 flex items-center justify-between">
+                <div>
+                  <h3 className="text-white text-lg font-black uppercase tracking-tight">Export Leads</h3>
+                  <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Excel workbook — lead details + history</p>
+                </div>
+                <button
+                  onClick={() => !exportBusy && setExportOpen(false)}
+                  className="p-2 hover:bg-white/5 rounded-sm text-slate-400 hover:text-white transition-all"
+                >
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6 overflow-y-auto">
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Whose leads</p>
+                  <div className="space-y-2">
+                    {([
+                      { value: 'own', label: 'My leads', desc: 'Leads assigned to me.' },
+                      { value: 'team', label: 'My team', desc: "My leads plus my team members' leads." },
+                      { value: 'teamwise', label: 'My team, grouped by member', desc: 'Same team leads, grouped per person with subtotals.' },
+                    ] as Array<{ value: LeadExportScope; label: string; desc: string }>)
+                      .filter(option => exportScopes.includes(option.value))
+                      .map(option => (
+                        <label
+                          key={option.value}
+                          className={cn(
+                            'flex items-start gap-3 border rounded-sm px-4 py-3 cursor-pointer transition-all',
+                            exportScope === option.value ? 'border-[#978C21] bg-[#978C21]/5' : 'border-slate-200 hover:bg-slate-50'
+                          )}
+                        >
+                          <input
+                            type="radio"
+                            name="export-scope"
+                            checked={exportScope === option.value}
+                            onChange={() => setExportScope(option.value)}
+                            className="mt-1 accent-[#978C21]"
+                          />
+                          <span>
+                            <span className="block text-sm font-bold text-slate-800">{option.label}</span>
+                            <span className="block text-xs text-slate-500 mt-0.5">{option.desc}</span>
+                          </span>
+                        </label>
+                      ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Date based on</p>
+                  <div className="flex gap-2">
+                    {([
+                      { value: 'updated', label: 'Updated date' },
+                      { value: 'added', label: 'Added date' },
+                    ] as Array<{ value: LeadExportBasis; label: string }>).map(option => (
+                      <button
+                        key={option.value}
+                        onClick={() => setExportBasis(option.value)}
+                        className={cn(
+                          'flex-1 px-4 py-2 border text-[11px] font-black uppercase tracking-widest rounded-sm transition-all',
+                          exportBasis === option.value
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">From</p>
+                    <input
+                      type="date"
+                      value={exportFrom}
+                      onChange={e => setExportFrom(e.target.value)}
+                      className="w-full border border-slate-200 rounded-sm px-3 py-2 text-sm text-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">To</p>
+                    <input
+                      type="date"
+                      value={exportTo}
+                      onChange={e => setExportTo(e.target.value)}
+                      className="w-full border border-slate-200 rounded-sm px-3 py-2 text-sm text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Dates are Asia/Dhaka calendar days. The file has two sheets — Leads and Lead History —
+                  and is limited to {exportMaxRows.toLocaleString()} leads per export.
+                </p>
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setExportOpen(false)}
+                  disabled={exportBusy}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={runExport}
+                  disabled={exportBusy}
+                  className="flex items-center gap-2 px-5 py-2 bg-slate-900 hover:bg-black text-white text-[11px] font-black uppercase tracking-widest rounded-sm shadow-md transition-all disabled:opacity-60"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#978C21]" />
+                  {exportBusy ? 'Preparing…' : 'Download Excel'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Lead Detail Modal */}
       <AnimatePresence>

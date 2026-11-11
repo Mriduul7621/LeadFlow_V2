@@ -53,6 +53,7 @@ import {
   getDhakaBusinessDayBounds,
   overdueDays,
   parseYmd,
+  dhakaYmd,
   dhakaStartUtc,
   addCalendarDays,
 } from '../../utils/businessTime.js';
@@ -92,6 +93,26 @@ import {
   syncNextStepAfterFollowUpDemo,
 } from '../../services/NextStepCalendarSync.js';
 import {
+  EXPORT_BASES,
+  EXPORT_SCOPES,
+  HISTORY_EXPORT_HEADERS,
+  HISTORY_EXPORT_WIDTHS,
+  LEAD_EXPORT_HEADERS,
+  LEAD_EXPORT_WIDTHS,
+  buildLeadHistoryEvents,
+  buildTeamwiseLeadRows,
+  orderUsersByTree,
+  resolveExportMaxRows,
+  shapeHistoryExportRow,
+  shapeLeadExportRow,
+  type ExportActivity,
+  type ExportBasis,
+  type ExportLead,
+  type ExportScope,
+  type ExportUserRef,
+} from '../../services/LeadExportService.js';
+import { buildWorkbookBuffer } from '../../../src/modules/shared/utils/excel.js';
+import {
   AUDIT_CHANGE_CAP,
   LEAD_SELECT,
   asUuid,
@@ -117,6 +138,7 @@ import {
   parseNumeric,
   requireAdmin,
   requireAuth,
+  requirePermissionCode,
   resolveAssignedTo,
   resolveCallerVisibility,
   resolveUserId,
@@ -703,6 +725,446 @@ router.get('/leads', requireAuth, async (req: any, res) => {
   } catch (error: any) {
     perf.finish(res);
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead fetch failed' });
+  }
+});
+
+/* ====================================================================
+   FIX-2 — SCOPED LEAD EXPORT (gated by the canonical leads.export
+   permission, enforced server-side by requirePermissionCode).
+
+   POST /leads/export downloads an .xlsx workbook:
+     Sheet "Leads"   — full lead detail for the chosen scope + basis
+                       (team-wise scope groups rows per team member
+                       in reporting-tree order, with subtotals).
+     Sheet "Lead History" — one row per timeline event for those leads,
+                       built from the Lead360 data path
+                       (lead_activities + status_history +
+                       assignment_history — see LeadExportService).
+   Scopes ride the ONE visibility predicate (PR #104 + UM-1 floor):
+   "own" is the caller's assigned leads; "team"/"teamwise" are the
+   caller's visible set and are only offered when that set reaches
+   beyond the caller (or is org-wide). Basis is Added (created_at)
+   or Updated (updated_at) over INCLUSIVE Asia/Dhaka calendar days.
+   Every successful export writes an audit_logs row.
+==================================================================== */
+
+const EXPORT_TOO_LARGE_MESSAGE = (count: number, max: number) =>
+  `Export is limited to ${max.toLocaleString('en-US')} leads per file — your selection has ${count.toLocaleString('en-US')}. Please narrow the date range or scope.`;
+
+/** Stored-timestamp wall-clock text (no zone) for naive TIMESTAMP params. */
+function storedWallTime(d: Date): string {
+  return d.toISOString().replace('T', ' ').replace('Z', '');
+}
+
+interface ParsedExportRequest {
+  scope: ExportScope;
+  basis: ExportBasis;
+  from: { y: number; m: number; d: number };
+  to: { y: number; m: number; d: number };
+  fromStr: string;
+  toStr: string;
+}
+
+function parseExportRequest(body: any): { parsed: ParsedExportRequest } | { error: string } {
+  const scopeRaw = String(body?.scope || 'own').toLowerCase();
+  if (!(EXPORT_SCOPES as string[]).includes(scopeRaw)) {
+    return { error: `Unknown export scope "${scopeRaw}". Use own, team or teamwise.` };
+  }
+  const basisRaw = String(body?.basis || 'updated').toLowerCase();
+  if (!(EXPORT_BASES as string[]).includes(basisRaw)) {
+    return { error: `Unknown export basis "${basisRaw}". Use added or updated.` };
+  }
+  // Defaults: Updated basis, last 30 Dhaka calendar days (inclusive).
+  const today = dhakaYmd(new Date());
+  const defaultFrom = addCalendarDays(today.y, today.m, today.d, -29);
+  const from = body?.from ? parseYmd(String(body.from)) : defaultFrom;
+  const to = body?.to ? parseYmd(String(body.to)) : today;
+  if (!from) return { error: 'The "from" date must be a valid YYYY-MM-DD date.' };
+  if (!to) return { error: 'The "to" date must be a valid YYYY-MM-DD date.' };
+  const fromKey = from.y * 10000 + from.m * 100 + from.d;
+  const toKey = to.y * 10000 + to.m * 100 + to.d;
+  if (fromKey > toKey) return { error: 'The "from" date must not be after the "to" date.' };
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    parsed: {
+      scope: scopeRaw as ExportScope,
+      basis: basisRaw as ExportBasis,
+      from,
+      to,
+      fromStr: `${from.y}-${pad(from.m)}-${pad(from.d)}`,
+      toStr: `${to.y}-${pad(to.m)}-${pad(to.d)}`,
+    },
+  };
+}
+
+/** Team scopes exist only when the caller's visible set reaches beyond themself. */
+function exportCanTeam(visibility: { all: boolean; userIds: string[] }): boolean {
+  return visibility.all || (visibility.userIds || []).length > 1;
+}
+
+async function writeExportAudit(entry: {
+  actorUserId: string;
+  scope: ExportScope;
+  basis: ExportBasis;
+  from: string;
+  to: string;
+  leadCount: number;
+  historyCount: number;
+}): Promise<void> {
+  if (!useDb()) return;
+  // Best-effort, mirroring the auth audit pattern: a missing/readonly
+  // audit table must never fail a completed export.
+  try {
+    await getPool().query(
+      `INSERT INTO audit_logs (actor_user_id, target_user_id, action_code, entity_type, entity_id, metadata)
+       VALUES ($1, $1, 'leads.export', 'lead', NULL, $2::jsonb)`,
+      [
+        entry.actorUserId,
+        JSON.stringify({
+          scope: entry.scope,
+          basis: entry.basis,
+          from: entry.from,
+          to: entry.to,
+          leadCount: entry.leadCount,
+          historyCount: entry.historyCount,
+        }),
+      ]
+    );
+  } catch (err: any) {
+    console.error('leads.export audit write failed:', err?.message || err);
+  }
+}
+
+router.get('/leads/export/options', requireAuth, requirePermissionCode('leads.export'), async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const visibility = await resolveCallerVisibility(caller);
+    const scopes: ExportScope[] = exportCanTeam(visibility) ? ['own', 'team', 'teamwise'] : ['own'];
+    const today = dhakaYmd(new Date());
+    const from = addCalendarDays(today.y, today.m, today.d, -29);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        scopes,
+        maxRows: resolveExportMaxRows(),
+        defaults: {
+          scope: 'own',
+          basis: 'updated',
+          from: `${from.y}-${pad(from.m)}-${pad(from.d)}`,
+          to: `${today.y}-${pad(today.m)}-${pad(today.d)}`,
+        },
+      },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Export options failed' });
+  }
+});
+
+router.post('/leads/export', requireAuth, requirePermissionCode('leads.export'), async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  const perf = createPerf('leads.export');
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      perf.finish(res);
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const parsedOrError = parseExportRequest(req.body || {});
+    if ('error' in parsedOrError) {
+      perf.finish(res);
+      return sendJson(res, 400, { success: false, message: parsedOrError.error });
+    }
+    const { scope, basis, from, to, fromStr, toStr } = parsedOrError.parsed;
+    const visibility = await resolveCallerVisibility(caller);
+    if (scope !== 'own' && !exportCanTeam(visibility)) {
+      perf.finish(res);
+      return sendJson(res, 400, {
+        success: false,
+        message: 'Team export is available only when you have a team under you. Your account can export its own leads.',
+      });
+    }
+    const maxRows = resolveExportMaxRows();
+    const basisColumn = basis === 'added' ? 'created_at' : 'updated_at';
+    const fromBound = dhakaStartUtc(from.y, from.m, from.d);
+    const toNext = addCalendarDays(to.y, to.m, to.d, 1);
+    const toBound = dhakaStartUtc(toNext.y, toNext.m, toNext.d);
+
+    let leads: ExportLead[] = [];
+    let activitiesByLead = new Map<string, ExportActivity[]>();
+    let userDirectory: ExportUserRef[] = [];
+    let nameByEmployeeId = new Map<string, string>();
+
+    if (useDb()) {
+      const pool = getPool();
+      const params: any[] = [];
+      const where: string[] = ['l.is_deleted = FALSE'];
+      if (scope === 'own') {
+        params.push(caller.id);
+        where.push(`l.assigned_to = $${params.length}::uuid`);
+      } else {
+        where.push(buildDashboardVisibilitySql(visibility, params));
+      }
+      params.push(storedWallTime(fromBound), storedWallTime(toBound));
+      where.push(`l.${basisColumn} >= $${params.length - 1} AND l.${basisColumn} < $${params.length}`);
+      const whereSql = where.join(' AND ');
+
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS n FROM leads l WHERE ${whereSql}`, params);
+      const total = Number(countResult.rows[0]?.n || 0);
+      if (total > maxRows) {
+        perf.finish(res);
+        return sendJson(res, 422, { success: false, code: 'EXPORT_TOO_LARGE', message: EXPORT_TOO_LARGE_MESSAGE(total, maxRows) });
+      }
+
+      const [leadResult, userResult] = await Promise.all([
+        pool.query(
+          `SELECT l.*,
+                  au.full_name AS assignee_name, au.employee_id AS assignee_employee_id,
+                  cu.full_name AS creator_name, cu.employee_id AS creator_employee_id
+           FROM leads l
+           LEFT JOIN users au ON au.id = l.assigned_to
+           LEFT JOIN users cu ON cu.id = l.created_by
+           WHERE ${whereSql}
+           ORDER BY l.${basisColumn} DESC, l.id`,
+          params
+        ),
+        pool.query(`SELECT id, full_name, employee_id, manager_id FROM users`),
+      ]);
+      userDirectory = (userResult.rows || []).map((u: any) => ({
+        id: String(u.id),
+        fullName: u.full_name || '',
+        employeeId: u.employee_id || '',
+        managerId: u.manager_id ? String(u.manager_id) : null,
+      }));
+      nameByEmployeeId = new Map(userDirectory.map(u => [u.employeeId.toUpperCase(), u.fullName]));
+      perf.span('db.leads');
+
+      const leadIds = (leadResult.rows || []).map((r: any) => String(r.id));
+      let activityRows: any[] = [];
+      if (leadIds.length > 0) {
+        const actResult = await pool.query(
+          `SELECT a.*, u.full_name AS actor_name, u.employee_id AS actor_employee_id
+           FROM lead_activities a
+           LEFT JOIN users u ON u.id = a.created_by
+           WHERE a.lead_id = ANY($1::uuid[])
+           ORDER BY a.lead_id, a.created_at ASC, a.id ASC`,
+          [leadIds]
+        );
+        activityRows = actResult.rows || [];
+      }
+      perf.span('db.activities');
+      for (const a of activityRows) {
+        const act: ExportActivity = {
+          leadDbId: String(a.lead_id),
+          activityType: a.activity_type || 'follow_up',
+          status: a.status || '',
+          remarks: a.remarks || '',
+          lossReason: a.loss_reason || '',
+          meetingType: a.meeting_type || '',
+          nextFollowUpAt: a.next_follow_up_at || null,
+          nextCallAt: a.next_call_at || null,
+          meetingAt: a.meeting_at || null,
+          productName: a.product_name || '',
+          sumAssured: a.sum_assured != null ? Number(a.sum_assured) : null,
+          projectedNcp: a.projected_ncp != null ? Number(a.projected_ncp) : null,
+          collectedNcp: a.collected_ncp != null ? Number(a.collected_ncp) : null,
+          actorName: a.actor_name || '',
+          actorEmployeeId: a.actor_employee_id || '',
+          createdAt: a.created_at,
+        };
+        const list = activitiesByLead.get(act.leadDbId) || [];
+        list.push(act);
+        activitiesByLead.set(act.leadDbId, list);
+      }
+
+      leads = (leadResult.rows || []).map((row: any) => {
+        const custom = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
+        const dbId = String(row.id);
+        const acts = activitiesByLead.get(dbId) || [];
+        const latestProduct = [...acts].reverse().find(a => a.productName)?.productName || '';
+        const quality = custom.leadQuality && typeof custom.leadQuality === 'object'
+          ? (custom.leadQuality.score ?? '')
+          : (custom.leadQualityScore ?? '');
+        return {
+          id: row.lead_code || dbId,
+          dbId,
+          customerName: row.customer_name || '',
+          mobile: row.mobile || '',
+          alternateMobile: row.alternate_mobile || '',
+          email: row.email || '',
+          profession: row.occupation || custom.profession || '',
+          maritalStatus: row.marital_status || '',
+          address: row.address || '',
+          area: row.area || '',
+          district: row.district || '',
+          division: row.division || '',
+          source: row.source || '',
+          campaign: custom.campaignName || '',
+          product: custom.productName || custom.product || latestProduct || '',
+          priority: row.priority || custom.priority || 'NORMAL',
+          status: row.current_status || custom.currentStatus || 'New',
+          assigneeKey: row.assigned_to ? String(row.assigned_to) : '',
+          assigneeName: row.assignee_name || '',
+          assigneeEmployeeId: row.assignee_employee_id || '',
+          assignedAt: row.assigned_at || null,
+          creatorName: row.creator_name || '',
+          creatorEmployeeId: row.creator_employee_id || '',
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          lastContactedAt: row.last_contacted_at || null,
+          nextFollowUpAt: row.next_follow_up_at || null,
+          projectedNcp: row.expected_premium != null ? Number(row.expected_premium) : (custom.projectedNCP != null ? Number(custom.projectedNCP) : null),
+          sumAssured: row.expected_value != null ? Number(row.expected_value) : (custom.sumAssured != null ? Number(custom.sumAssured) : null),
+          followUpCount: row.follow_up_count != null ? Number(row.follow_up_count) : null,
+          qualityScore: quality,
+          statusHistory: Array.isArray(row.status_history) ? row.status_history : [],
+          assignmentHistory: Array.isArray(row.assignment_history) ? row.assignment_history : [],
+        } as ExportLead;
+      });
+    } else {
+      // Dev-demo mode: the same shaping pipeline over fallbackStore.
+      if (!demoModeAllowed()) {
+        perf.finish(res);
+        return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
+      }
+      const users = fallbackStore.users || [];
+      const byEmployee = new Map(users.map(u => [String(u.employeeId || '').toUpperCase(), u]));
+      const byId = new Map(users.map(u => [String(u.id), u]));
+      userDirectory = users.map(u => ({
+        id: String(u.id),
+        fullName: u.fullName || u.name || '',
+        employeeId: u.employeeId || '',
+        managerId: (u.managerId && byEmployee.get(String(u.managerId).toUpperCase())?.id) || (u.managerId ? String(u.managerId) : null),
+      }));
+      nameByEmployeeId = new Map(userDirectory.map(u => [u.employeeId.toUpperCase(), u.fullName]));
+      const inRange = (value: any) => {
+        const iso = value ? new Date(value).getTime() : Number.NaN;
+        return Number.isFinite(iso) && iso >= fromBound.getTime() && iso < toBound.getTime();
+      };
+      const demoActs = (fallbackStore.leadActivities || []) as any[];
+      const scoped = (fallbackStore.leads || []).filter((l: any) => {
+        if ((l as any).is_deleted === true || (l as any).isDeleted === true) return false;
+        if (!inRange(basis === 'added' ? l.creationDate : (l.timestamp || l.creationDate))) return false;
+        if (scope === 'own') {
+          return String(l.assignedTo || '').toUpperCase() === String(caller.employee_id).toUpperCase();
+        }
+        return isLeadAccessible(
+          { assignedTo: l.assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        );
+      });
+      if (scoped.length > maxRows) {
+        perf.finish(res);
+        return sendJson(res, 422, { success: false, code: 'EXPORT_TOO_LARGE', message: EXPORT_TOO_LARGE_MESSAGE(scoped.length, maxRows) });
+      }
+      for (const a of demoActs) {
+        const leadDbId = String(a.leadId || a.lead_id || '');
+        if (!leadDbId) continue;
+        const actorUser = byId.get(String(a.createdBy || '')) || byEmployee.get(String(a.createdBy || '').toUpperCase());
+        const act: ExportActivity = {
+          leadDbId,
+          activityType: a.activityType || a.activity_type || 'follow_up',
+          status: a.status || '',
+          remarks: a.remarks || '',
+          lossReason: a.lossReason || a.loss_reason || '',
+          meetingType: a.meetingType || a.meeting_type || '',
+          nextFollowUpAt: a.nextFollowUpAt || a.next_follow_up_at || a.nextFollowUpDate || null,
+          nextCallAt: a.nextCallAt || a.next_call_at || a.nextCallDate || null,
+          meetingAt: a.meetingAt || a.meeting_at || a.meetingDate || null,
+          productName: a.productName || a.product_name || '',
+          sumAssured: a.sumAssured ?? a.sum_assured ?? null,
+          projectedNcp: a.projectedNcp ?? a.projectedNCP ?? a.projected_ncp ?? null,
+          collectedNcp: a.collectedNcp ?? a.collectedNCP ?? a.collected_ncp ?? null,
+          actorName: actorUser ? (actorUser.fullName || actorUser.name || '') : '',
+          actorEmployeeId: actorUser?.employeeId || '',
+          createdAt: a.createdAt || a.created_at,
+        };
+        const list = activitiesByLead.get(leadDbId) || [];
+        list.push(act);
+        activitiesByLead.set(leadDbId, list);
+      }
+      leads = scoped.map((l: any) => {
+        const assignee = byEmployee.get(String(l.assignedTo || '').toUpperCase());
+        const creator = byId.get(String(l.createdBy || '')) || byEmployee.get(String(l.createdBy || '').toUpperCase());
+        const acts = activitiesByLead.get(String(l.id)) || [];
+        const latestProduct = [...acts].reverse().find(a => a.productName)?.productName || '';
+        return {
+          id: String(l.leadCode || l.id),
+          dbId: String(l.id),
+          customerName: l.prospectName || l.customerName || '',
+          mobile: l.mobile || '',
+          alternateMobile: l.alternateMobile || '',
+          email: l.email || '',
+          profession: l.profession || l.occupation || '',
+          maritalStatus: l.maritalStatus || '',
+          address: l.address || '',
+          area: l.area || '',
+          district: l.district || '',
+          division: l.division || '',
+          source: l.source || '',
+          campaign: l.campaignName || '',
+          product: l.productName || latestProduct || '',
+          priority: l.priority || 'NORMAL',
+          status: l.currentStatus || 'New',
+          assigneeKey: assignee ? String(assignee.id) : String(l.assignedTo || ''),
+          assigneeName: assignee ? (assignee.fullName || assignee.name || '') : '',
+          assigneeEmployeeId: assignee?.employeeId || String(l.assignedTo || ''),
+          assignedAt: l.assignedDate || null,
+          creatorName: creator ? (creator.fullName || creator.name || '') : '',
+          creatorEmployeeId: creator?.employeeId || '',
+          createdAt: l.creationDate,
+          updatedAt: l.timestamp || l.creationDate,
+          lastContactedAt: l.lastFollowUpDate || null,
+          nextFollowUpAt: l.nextFollowUpDate || null,
+          projectedNcp: l.projectedNCP != null ? Number(l.projectedNCP) : null,
+          sumAssured: l.sumAssured != null ? Number(l.sumAssured) : null,
+          followUpCount: null,
+          qualityScore: '',
+          statusHistory: Array.isArray(l.statusHistory) ? l.statusHistory : [],
+          assignmentHistory: Array.isArray(l.assignmentHistory) ? l.assignmentHistory : [],
+        } as ExportLead;
+      });
+    }
+
+    // Workbook ------------------------------------------------------------
+    const leadRows = scope === 'teamwise'
+      ? buildTeamwiseLeadRows(leads, orderUsersByTree(userDirectory, caller.id))
+      : leads.map(shapeLeadExportRow);
+    const historyEvents = leads.flatMap(lead =>
+      buildLeadHistoryEvents(lead, activitiesByLead.get(lead.dbId) || [], nameByEmployeeId)
+    );
+    const buffer = await buildWorkbookBuffer([
+      { name: 'Leads', rows: leadRows, headers: LEAD_EXPORT_HEADERS, columnWidths: LEAD_EXPORT_WIDTHS },
+      { name: 'Lead History', rows: historyEvents.map(shapeHistoryExportRow), headers: HISTORY_EXPORT_HEADERS, columnWidths: HISTORY_EXPORT_WIDTHS },
+    ]);
+    perf.span('workbook');
+
+    await writeExportAudit({
+      actorUserId: caller.id,
+      scope,
+      basis,
+      from: fromStr,
+      to: toStr,
+      leadCount: leads.length,
+      historyCount: historyEvents.length,
+    });
+
+    const filename = `leadflow-leads-${scope}-${fromStr}-to-${toStr}.xlsx`;
+    perf.finish(res);
+    res.status(200);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Lead-Count', String(leads.length));
+    res.setHeader('X-History-Count', String(historyEvents.length));
+    return res.send(Buffer.from(buffer as ArrayBuffer));
+  } catch (error: any) {
+    perf.finish(res);
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead export failed' });
   }
 });
 
