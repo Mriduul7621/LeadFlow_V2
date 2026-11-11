@@ -65,6 +65,18 @@ export const useAuthStore = create<AuthState>()(
         // Capture the signing-out user FIRST: their browser caches must
         // be deleted while their identity is still resolvable.
         const signingOutUser = useAuthStore.getState().user;
+        // Danger Zone re-lock trigger (DZ-0): signing out ends any
+        // Danger Zone unlock server-side. Best-effort fire-and-forget
+        // with the token that is about to be discarded — the unlock
+        // also expires on its own within 10 minutes regardless.
+        const signingOutToken = useAuthStore.getState().token;
+        if (signingOutToken) {
+          void fetch('/api/danger-zone/lock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signingOutToken}` },
+            body: '{}',
+          }).catch(() => undefined);
+        }
         localStorage.removeItem('leadflow-auth');
         localStorage.removeItem('leadflow_last_activity');
         // Session-scoped data (roles, notifications, permission sheet)

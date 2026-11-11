@@ -5,6 +5,7 @@ import authRouter from './production/auth.routes.js';
 import notificationsRouter from './production/notifications.routes.js';
 import metadataRouter from './production/metadata.routes.js';
 import calendarRouter from './production/calendar.routes.js';
+import dangerZoneRouter from './production/dangerZone.routes.js';
 import roadshowsRouter from './production/roadshows.routes.js';
 import usersRouter from './production/users.routes.js';
 import leadsRouter from './production/leads.routes.js';
@@ -119,6 +120,15 @@ router.use(metadataRouter);
 ==================================================================== */
 
 router.use(calendarRouter);
+
+/* ====================================================================
+   DANGER ZONE — ./production/dangerZone.routes.ts (Admin Control
+   programme, slice DZ-0): super-admin gate + password step-up +
+   read-only rule shell. New paths (/danger-zone/*) — no overlap
+   with the domains above.
+==================================================================== */
+
+router.use(dangerZoneRouter);
 
 /* ====================================================================
    NOTIFICATIONS — extracted to ./production/notifications.routes.ts
