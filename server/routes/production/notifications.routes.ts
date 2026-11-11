@@ -26,6 +26,11 @@ import {
 } from '../../services/PushReminderService.js';
 import { runMeetingReminders } from '../../services/MeetingNotificationService.js';
 import {
+  getNotificationSettings,
+  setNotificationSettings,
+  type NotificationSettings,
+} from '../../services/NotificationSettingsService.js';
+import {
   asUuid,
   callerIsAdmin,
   clean,
@@ -37,7 +42,9 @@ import {
   isCanonicalLowerUuid,
   isLeadAccessible,
   isSelfRef,
+  logAccessChange,
   requireAuth,
+  requirePermissionCode,
   requireSelfOrAdmin,
   resolveCallerVisibility,
   resolveUserId,
@@ -358,6 +365,52 @@ router.post('/notifications/push/unsubscribe', requireAuth, async (req, res) => 
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Push unsubscribe failed' });
   }
+});
+
+/**
+ * DZ-1 (Honest Settings): the Settings → Push Intelligence toggles are
+ * real settings now (NotificationSettingsService). Reads are open to
+ * any signed-in user (the values are not sensitive and the Settings
+ * page needs them); writes require the settings.manage permission
+ * code (DB-resolved) and are audit-logged with old→new values,
+ * following the DZ-0 settings audit pattern.
+ */
+router.get('/notifications/settings', requireAuth, async (_req, res) => {
+  const settings = await getNotificationSettings();
+  return sendJson(res, 200, { success: true, data: settings });
+});
+
+router.put('/notifications/settings', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const patch: Partial<NotificationSettings> = {};
+  for (const key of ['assignmentAlerts', 'dailyPushSummary'] as const) {
+    if (body[key] !== undefined) {
+      if (typeof body[key] !== 'boolean') {
+        return sendJson(res, 400, { success: false, message: `${key} must be true or false.` });
+      }
+      patch[key] = body[key] as boolean;
+    }
+  }
+  if (Object.keys(patch).length === 0) {
+    return sendJson(res, 400, { success: false, message: 'Nothing to update: send assignmentAlerts and/or dailyPushSummary.' });
+  }
+  const before = await getNotificationSettings();
+  const after = await setNotificationSettings(patch);
+  const changes: Record<string, { oldValue: boolean; newValue: boolean }> = {};
+  for (const key of Object.keys(patch) as Array<keyof NotificationSettings>) {
+    if (before[key] !== after[key]) changes[key] = { oldValue: before[key], newValue: after[key] };
+  }
+  if (Object.keys(changes).length > 0) {
+    const caller = await getCallerDbInfo(req).catch(() => null);
+    await logAccessChange({
+      actorId: caller?.id || (req as any).currentUser?.id || null,
+      actionCode: 'notification_settings.save',
+      entityType: 'notification_settings',
+      entityId: null,
+      metadata: { changes },
+    });
+  }
+  return sendJson(res, 200, { success: true, data: after });
 });
 
 /**
