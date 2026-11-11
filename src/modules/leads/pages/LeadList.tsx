@@ -11,51 +11,24 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
-  CheckCircle,
-  XCircle,
   Calendar,
   RefreshCw,
   Edit2,
   Target,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead, LeadQuality, LeadStatus } from '../../shared/types';
 import { toast } from 'sonner';
-import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
+import { leadService } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
-import LeadQualityPanel from '../components/LeadQualityPanel';
-import WhatsAppAction from '../components/WhatsAppAction';
-import {
-  buildLeadListFollowUpArgs,
-  validateLeadListStatusForm,
-  type LeadListStatusFormState,
-} from '../utils/leadListStatusForm';
-import { leadStatusViolationMessage } from '../utils/leadStatusRules';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
-
-const formatToDateTimeLocal = (dateStr?: string) => {
-  if (!dateStr) return '';
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dateStr)) return dateStr;
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return '';
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const date = String(d.getDate()).padStart(2, '0');
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${date}T${hours}:${minutes}`;
-  } catch (e) {
-    return '';
-  }
-};
 
 export default function LeadList() {
   const { user } = useAuthStore();
@@ -69,7 +42,6 @@ export default function LeadList() {
   const [sortLogic, setSortLogic] = useState<'Recency' | 'Economic Potential' | 'Priority Status' | 'Quality: High to Low' | 'Quality: Low to High'>('Recency');
   // Lead Quality band filter — compares the SERVER-computed band only.
   const [qualityBand, setQualityBand] = useState<string>('All');
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [search, setSearch] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -77,104 +49,23 @@ export default function LeadList() {
   const mobileSearchRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
-  // Full server-side quality explanation for the open details modal (the
-  // list rows carry the compact score/band; factors load on demand).
-  const [qualityDetail, setQualityDetail] = useState<LeadQuality | null>(null);
-  const [qualityDetailLoading, setQualityDetailLoading] = useState(false);
 
+  // FIX-1c — deep links (?leadId=, used by notifications and the Task
+  // Calendar) land on the Lead 360 workspace, the same full-page format
+  // every other lead entry point opens. The old in-list detail modal is
+  // gone: opening or editing a lead from this page navigates to
+  // /leads/:id, and status updates run through Lead 360's Update page.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const leadId = params.get('leadId');
-    if (leadId && leads.length > 0) {
-      const matched = leads.find(l => l.id === leadId);
-      if (matched) {
-        setSelectedLead(matched);
-        setSearch(''); // clear quick search
-        setAdvancedFilteredLeads([]); // clear advanced filters
-      }
+    if (leadId) {
+      navigate(`/leads/${encodeURIComponent(leadId)}`, { replace: true });
     }
-  }, [location.search, leads]);
+  }, [location.search, navigate]);
 
   // Lead Workspace intentionally has no assignment-management data load.
   // Ownership changes belong to Lead Pool; this page stays focused on
   // operational execution against the server-visible lead set.
-
-  // Load the full quality explanation when the details modal opens (one
-  // single-lead read; the list itself never fetches explanations per row).
-  useEffect(() => {
-    if (!selectedLead) {
-      setQualityDetail(null);
-      setQualityDetailLoading(false);
-      return;
-    }
-    // Single-lead GET responses already embed the full explanation.
-    const embedded = (selectedLead as Lead).leadQuality;
-    if (embedded && (embedded.positiveFactors || embedded.negativeFactors)) {
-      setQualityDetail(embedded);
-      setQualityDetailLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setQualityDetailLoading(true);
-    leadService
-      .getLeadQuality(selectedLead.id)
-      .then(detail => {
-        if (!cancelled) setQualityDetail(detail);
-      })
-      .catch(() => {
-        if (!cancelled) setQualityDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setQualityDetailLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedLead?.id]);
-
-  // Editing state fields for granular updates
-  const [formStatus, setFormStatus] = useState<LeadStatus | ''>('');
-  const [formRemarks, setFormRemarks] = useState('');
-  const [formNextFollowUpDate, setFormNextFollowUpDate] = useState('');
-  const [formCollectedNCP, setFormCollectedNCP] = useState<number>(0);
-  const [formNextCallDate, setFormNextCallDate] = useState('');
-  const [formMeetingDate, setFormMeetingDate] = useState('');
-  const [formSubStatus, setFormSubStatus] = useState<'Pipeline Locked' | 'Not Interested' | ''>('');
-  const [formSumAssured, setFormSumAssured] = useState<number>(0);
-  const [formProductName, setFormProductName] = useState('');
-  const [formProjectedNCP, setFormProjectedNCP] = useState<number>(0);
-  const [formLossReason, setFormLossReason] = useState('');
-  const [productOptions, setProductOptions] = useState<string[]>([]);
-  const [lossReasonOptions, setLossReasonOptions] = useState<string[]>([]);
-
-  // Sync form states with selected lead
-  useEffect(() => {
-    if (selectedLead) {
-      setFormStatus(selectedLead.currentStatus);
-      setFormRemarks('');
-      setFormNextFollowUpDate(selectedLead.nextFollowUpDate || '');
-      setFormCollectedNCP(selectedLead.collectedNCP || 0);
-      setFormNextCallDate(selectedLead.nextCallDate || '');
-      setFormMeetingDate(selectedLead.meetingDate || '');
-      setFormSubStatus('');
-      setFormSumAssured(selectedLead.sumAssured || 0);
-      setFormProductName(selectedLead.productName || '');
-      setFormProjectedNCP(selectedLead.projectedNCP || 0);
-      setFormLossReason('');
-    } else {
-      setFormStatus('');
-      setFormRemarks('');
-      setFormNextFollowUpDate('');
-      setFormCollectedNCP(0);
-      setFormNextCallDate('');
-      setFormMeetingDate('');
-      setFormSubStatus('');
-      setFormSumAssured(0);
-      setFormProductName('');
-      setFormProjectedNCP(0);
-      setFormLossReason('');
-    }
-  }, [selectedLead]);
 
   useEffect(() => {
     loadLeads();
@@ -198,18 +89,6 @@ export default function LeadList() {
     } finally {
       setLoading(false);
     }
-  };
-
-  /**
-   * Apply a server-confirmed lead mutation in place instead of refetching
-   * the full lead list (which would also re-fetch the users list just for
-   * the visibility filter). The mutation response carries the
-   * authoritative row, so the local list is patched with it.
-   */
-  const applyLeadUpdate = (updated: Lead) => {
-    const patch = (list: Lead[]) => list.map(l => (l.id === updated.id ? updated : l));
-    setLeads(prev => patch(prev));
-    setAdvancedFilteredLeads(prev => (prev.some(l => l.id === updated.id) ? patch(prev) : prev));
   };
 
   const DEFAULT_STATUS_LIST: LeadStatus[] = [
@@ -237,165 +116,9 @@ export default function LeadList() {
     try {
       const res = await settingsService.getOptionsByType('FollowUpStatus');
       setStatusOptions(res && res.length > 0 ? res : DEFAULT_STATUS_LIST);
-      
-      const prodRes = await settingsService.getOptionsByType('Product');
-      setProductOptions(prodRes || []);
-
-      const lossRes = await settingsService.getOptionsByType('LossReason');
-      setLossReasonOptions(lossRes || []);
     } catch (err) {
       console.error(err);
       setStatusOptions(DEFAULT_STATUS_LIST);
-    }
-  };
-
-  const handleSaveLeadUpdate = async () => {
-    if (!selectedLead) return;
-    if (!canEditLead) {
-      toast.error('You do not have permission to update lead progress.');
-      return;
-    }
-    if (!formStatus) {
-      toast.error('Please select a target status');
-      return;
-    }
-    if (!formRemarks.trim()) {
-      toast.error('Remarks are mandatory to fill when editing status!');
-      return;
-    }
-
-    if (formStatus === 'No Response' && !formNextCallDate) {
-      toast.error('Next Call Date is mandatory for No Response status!');
-      return;
-    }
-    if (formStatus === 'Meeting Fixed' && !formMeetingDate) {
-      toast.error('Meeting Date is mandatory for Meeting Fixed status!');
-      return;
-    }
-    if ((formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && !formNextFollowUpDate) {
-      toast.error(`Next Follow-up Date is mandatory for ${formStatus} status!`);
-      return;
-    }
-    if (formStatus === 'Meeting Completed' && !formSubStatus) {
-      toast.error('Please select a sub-status (Pipeline Locked or Not Interested) for Meeting Completed!');
-      return;
-    }
-
-    const isPipelineLocked = formStatus === 'Pipeline Locked' || (formStatus === 'Meeting Completed' && formSubStatus === 'Pipeline Locked');
-    const isConverted = formStatus === 'Converted';
-
-    if (isPipelineLocked) {
-      if (!formProductName) {
-        toast.error('Product Name is mandatory for Pipeline Locked status!');
-        return;
-      }
-      if (!formSumAssured || formSumAssured <= 0) {
-        toast.error('Sum Assured is mandatory and must be greater than zero for Pipeline Locked!');
-        return;
-      }
-      if (!formProjectedNCP || formProjectedNCP <= 0) {
-        toast.error('Projected NCP is mandatory and must be greater than zero for Pipeline Locked!');
-        return;
-      }
-    }
-
-    if (isConverted) {
-      if (!formProductName) {
-        toast.error('Product Name is mandatory for Converted status!');
-        return;
-      }
-      if (!formSumAssured || formSumAssured <= 0) {
-        toast.error('Sum Assured is mandatory and must be greater than zero for Converted!');
-        return;
-      }
-      if (!formCollectedNCP || formCollectedNCP <= 0) {
-        toast.error('Collected NCP is mandatory and must be greater than zero for Converted!');
-        return;
-      }
-    }
-
-    // FIX-1 (F6 parity): validate against the SAME rule table the
-    // server enforces, so a status whose conditional fields are
-    // missing (loss reason for Not Interested, product/sum/projected
-    // for Proposal Sent, ...) is stopped here with the server's own
-    // sentence instead of failing remotely behind a generic toast.
-    const formState: LeadListStatusFormState = {
-      formStatus,
-      formSubStatus,
-      formNextFollowUpDate,
-      formNextCallDate,
-      formMeetingDate,
-      formProductName,
-      formSumAssured,
-      formProjectedNCP,
-      formCollectedNCP,
-      formLossReason,
-    };
-    const violations = validateLeadListStatusForm(formState);
-    if (violations.length > 0) {
-      toast.error(leadStatusViolationMessage(violations));
-      return;
-    }
-
-    try {
-      const updaterName = user ? `${user.name} (${user.employeeId})` : 'System';
-      const args = buildLeadListFollowUpArgs(formState, formRemarks);
-
-      const updated = await leadService.updateLeadStatus(
-        selectedLead.id,
-        args.status as LeadStatus,
-        args.ncp,
-        args.remarks,
-        args.nextFollowUpDate,
-        updaterName,
-        args.nextCallDate,
-        args.meetingDate,
-        args.sumAssured,
-        args.productName,
-        args.projectedNCP,
-        args.lossReason
-      );
-      toast.success('Lead status and remarks logged successfully!');
-
-      // The follow-up response carries the authoritative updated lead —
-      // patch the list in place instead of refetching the full lead list.
-      if (updated) applyLeadUpdate(updated);
-      else loadLeads();
-
-      // Close the tracking details popup/modal automatically
-      setSelectedLead(null);
-      setFormRemarks(''); // clear comments textarea
-    } catch (err) {
-      if (err instanceof FollowUpQueuedOfflineError) {
-        toast.success('Saved offline — this follow-up will sync automatically when you are back online.');
-        setSelectedLead(null);
-        setFormRemarks('');
-        return;
-      }
-      // Show the SERVER's reason (e.g. the F6 field sentence), never a
-      // bare generic failure the agent cannot act on.
-      toast.error((err as any)?.message || 'Failed to update lead status');
-    }
-  };
-
-  const handleUpdateStatus = async (leadId: string, status: LeadStatus, ncp?: number) => {
-    if (!canEditLead) {
-      toast.error('You do not have permission to update lead progress.');
-      return;
-    }
-    try {
-      const updated = await leadService.updateLeadStatus(leadId, status, ncp, 'Initial assignment tracking');
-      toast.success('Lead intelligence updated');
-      if (updated) applyLeadUpdate(updated);
-      else loadLeads();
-      setSelectedLead(null);
-    } catch (err) {
-      if (err instanceof FollowUpQueuedOfflineError) {
-        toast.success('Saved offline — this follow-up will sync automatically when you are back online.');
-        setSelectedLead(null);
-        return;
-      }
-      toast.error((err as any)?.message || 'Failed to update lead status');
     }
   };
 
@@ -834,7 +557,7 @@ export default function LeadList() {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.05 }}
                   className="group hover:bg-[#FBFAF8] transition-colors cursor-pointer relative"
-                  onClick={() => setSelectedLead(lead)}
+                  onClick={() => navigate(`/leads/${lead.id}`)}
                 >
                   <td className="px-8 py-6">
                     <div className="flex items-center gap-4">
@@ -909,9 +632,10 @@ export default function LeadList() {
                   <td className="px-6 py-6 text-right">
                     <div className="flex items-center justify-end gap-1.5 opacity-100 transition-opacity">
                        <button 
-                         onClick={(e) => { e.stopPropagation(); setSelectedLead(lead); }}
+                         onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
                          className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Edit Status & Logs"
+                         title="Edit — open lead workspace"
+                         aria-label={'Edit lead in workspace for ' + (lead.prospectName || 'lead')}
                        >
                         <Edit2 className="w-3.5 h-3.5" />
                        </button>
@@ -967,459 +691,7 @@ export default function LeadList() {
         </div>
       </div>
 
-      {/* Lead Detail Modal */}
-      <AnimatePresence>
-        {selectedLead && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSelectedLead(null)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden border border-slate-100 italic flex flex-col max-h-[90vh]"
-            >
-              <div className="bg-[#3C3C3C] px-8 py-6 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                   <div className="w-12 h-12 rounded-sm bg-[#978C21] border border-white/10 flex items-center justify-center text-white font-black text-lg italic uppercase">
-                     {String(selectedLead.prospectName || 'U').charAt(0)}
-                   </div>
-                   <div>
-                     <h3 className="text-white text-xl font-black italic uppercase tracking-tight">{selectedLead.prospectName || 'Unknown Prospect'}</h3>
-                     <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Lead Identity Matrix • {selectedLead.id}</p>
-                   </div>
-                </div>
-                <button 
-                  onClick={() => setSelectedLead(null)}
-                  className="p-2 hover:bg-white/5 rounded-sm text-slate-400 hover:text-white transition-all"
-                >
-                  <XCircle className="w-6 h-6" />
-                </button>
-              </div>
 
-              <div className="p-8 md:p-10 space-y-8 overflow-y-auto flex-1">
-                <div className="grid grid-cols-2 gap-10">
-                  <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Contact Primary</p>
-                    <div className="flex items-center gap-2">
-                       <p className="text-lg font-black text-brand-text italic underline decoration-brand-blue decoration-2 underline-offset-4 mr-1">{selectedLead.mobile || 'N/A'}</p>
-                       {selectedLead.mobile && (
-                          <button
-                            onClick={() => handleCall(selectedLead.prospectName || 'Prospect')}
-                            title="Call Now"
-                            className="p-1.5 bg-[#978C21] text-white hover:bg-opacity-90 rounded-full transition-all flex items-center justify-center cursor-pointer shadow-sm active:scale-95"
-                          >
-                             <Phone className="w-3.5 h-3.5" />
-                          </button>
-                       )}
-                       {/* WhatsApp (FIX-1): same action as Home / Lead 360 —
-                           suggested templates or open the chat directly. */}
-                       <WhatsAppAction variant="icon" mobile={selectedLead.mobile} name={selectedLead.prospectName} />
-                    </div>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">{selectedLead.area || 'N/A'}</p>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Status</p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={cn(
-                        "px-4 py-1.5 rounded-sm text-[10px] font-black uppercase tracking-widest border",
-                        getStatusColor(selectedLead.currentStatus)
-                      )}>
-                        {selectedLead.currentStatus}
-                      </span>
-                      <LeadQualityBadge quality={selectedLead.leadQuality} />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-8 p-8 bg-[#FBFAF8] rounded-sm border border-slate-100">
-                   <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Collected NCP</p>
-                      <p className="text-lg font-black text-[#10B981] italic tracking-tighter leading-none">৳ {(selectedLead.collectedNCP || 0).toLocaleString()}</p>
-                   </div>
-                   <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Family Profile</p>
-                      <p className="text-[11px] font-black text-slate-600 uppercase italic leading-none">{selectedLead.maritalStatus || 'N/A'} • {selectedLead.familyMember || '0'} Person</p>
-                   </div>
-                   <div>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 italic">Institutional Lead</p>
-                      <p className="text-[11px] font-black text-[#978C21] uppercase italic leading-none">{selectedLead.assignedTo || 'N/A'}</p>
-                   </div>
-                </div>
-
-                <div className="space-y-4">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Lead Quality</p>
-                   {qualityDetailLoading ? (
-                     <p className="text-[11px] text-slate-300 uppercase tracking-widest italic">Loading quality explanation...</p>
-                   ) : (
-                     <LeadQualityPanel quality={qualityDetail || selectedLead.leadQuality} />
-                   )}
-                </div>
-
-                <div className="space-y-4">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Operational Pipeline Update</p>
-
-                   {/* Last Logged follow up status & remarks (Requirement 3) */}
-                   {selectedLead.statusHistory && selectedLead.statusHistory.length > 0 ? (
-                      (() => {
-                         const last = selectedLead.statusHistory[selectedLead.statusHistory.length - 1];
-                         return (
-                            <div className="p-4 bg-amber-50/75 border border-amber-100 rounded-lg space-y-2 text-[12px]">
-                               <p className="text-[9px] font-black uppercase tracking-widest text-[#978C21] italic">Last Engaged Activity:</p>
-                               <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                     <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Status</p>
-                                     <span className="px-2 py-0.5 bg-amber-100 text-[#6B5D00] rounded text-[10px] uppercase tracking-wider font-extrabold">{last.status}</span>
-                                  </div>
-                                  {last.nextFollowUpDate && (
-                                     <div>
-                                        <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Next Follow-up</p>
-                                        <span className="font-extrabold text-slate-700">{new Date(last.nextFollowUpDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                                     </div>
-                                  )}
-                               </div>
-                               <div>
-                                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider">Remarks</p>
-                                  <p className="font-semibold text-slate-800 italic bg-white/60 p-2 rounded border border-slate-100">"{last.remarks}"</p>
-                               </div>
-                               <div className="flex justify-between items-center text-[9px] text-slate-400 pt-1.5 border-t border-amber-100/50">
-                                  <span>Log Creator: {last.updatedBy || 'N/A'}</span>
-                                  <span>{new Date(last.date).toLocaleString()}</span>
-                               </div>
-                            </div>
-                         );
-                      })()
-                   ) : (
-                      <div className="p-4 bg-slate-50 border border-slate-100 rounded-lg text-[11px] text-slate-400 italic">
-                         No previous operational engagement history has been logged yet.
-                      </div>
-                   )}
-
-                   {/* Editable Form Inputs. Fieldset keeps the page read-only when
-                       the canonical leads.edit action is missing. */}
-                   <fieldset disabled={!canEditLead} className="contents">
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                      <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Status <span className="text-red-500">*</span></p>
-                         <select 
-                           value={formStatus}
-                           onChange={(e) => {
-                             const newStatus = e.target.value as LeadStatus;
-                             setFormStatus(newStatus);
-                             if (newStatus !== 'No Response') setFormNextCallDate('');
-                             if (newStatus !== 'Meeting Fixed') setFormMeetingDate('');
-                             if (newStatus !== 'Follow-up Set' && newStatus !== 'Interested' && newStatus !== 'Busy') setFormNextFollowUpDate('');
-                             if (newStatus !== 'Meeting Completed') setFormSubStatus('');
-                             if (newStatus !== 'Not Interested' && newStatus !== 'Meeting Completed') setFormLossReason('');
-                           }}
-                           className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
-                         >
-                            <option value="">-- SELECT STATUS --</option>
-                            {statusOptions.map(opt => (
-                              <option key={opt} value={opt}>{opt}</option>
-                            ))}
-                         </select>
-                      </div>
-
-                      {/* Conditional Field: No Response -> Next Call Date */}
-                      {formStatus === 'No Response' && (
-                         <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Next Call Date & Time <span className="text-red-500">*</span></p>
-                            <input 
-                              type="datetime-local"
-                              value={formNextCallDate ? formatToDateTimeLocal(formNextCallDate) : ''}
-                              onChange={(e) => setFormNextCallDate(e.target.value)}
-                              className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase focus:ring-1 focus:ring-[#978C21] outline-none"
-                            />
-                         </div>
-                      )}
-
-                      {/* Conditional Field: Meeting Fixed -> Meeting Date */}
-                      {formStatus === 'Meeting Fixed' && (
-                         <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Date & Time <span className="text-red-500">*</span></p>
-                            <input 
-                              type="datetime-local"
-                              value={formMeetingDate ? formatToDateTimeLocal(formMeetingDate) : ''}
-                              onChange={(e) => setFormMeetingDate(e.target.value)}
-                              className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase focus:ring-1 focus:ring-[#978C21] outline-none"
-                            />
-                         </div>
-                      )}
-
-                      {/* Conditional Field: Follow-up Set, Interested or Busy -> Next Follow-up Date */}
-                      {(formStatus === 'Follow-up Set' || formStatus === 'Interested' || formStatus === 'Busy') && (
-                         <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Target Follow-Up Date & Time <span className="text-red-500">*</span></p>
-                            <input 
-                              type="datetime-local"
-                              value={formNextFollowUpDate ? formatToDateTimeLocal(formNextFollowUpDate) : ''}
-                              onChange={(e) => setFormNextFollowUpDate(e.target.value)}
-                              className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase focus:ring-1 focus:ring-[#978C21] outline-none"
-                            />
-                         </div>
-                      )}
-
-                      {/* Conditional Field: Meeting Completed -> sub-status dropdown */}
-                      {formStatus === 'Meeting Completed' && (
-                         <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Result (Sub-Status) <span className="text-red-500">*</span></p>
-                            <select 
-                              value={formSubStatus}
-                              onChange={(e) => {
-                                const next = e.target.value as 'Pipeline Locked' | 'Not Interested' | '';
-                                setFormSubStatus(next);
-                                if (next !== 'Not Interested') setFormLossReason('');
-                              }}
-                              className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] outline-none"
-                            >
-                               <option value="">-- SELECT RESULT --</option>
-                               <option value="Pipeline Locked">Pipeline Locked</option>
-                               <option value="Not Interested">Not Interested</option>
-                            </select>
-                         </div>
-                      )}
-
-                      {/* Conditional Field: Not Interested (direct, or as the
-                          Meeting Completed result) -> Loss Reason. The F6
-                          rule table requires it; without this field the
-                          server refused every Not Interested save (FIX-1). */}
-                      {(formStatus === 'Not Interested' || (formStatus === 'Meeting Completed' && formSubStatus === 'Not Interested')) && (
-                         <div className="space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Loss Reason <span className="text-red-500">*</span></p>
-                            {lossReasonOptions.length > 0 ? (
-                              <select
-                                value={formLossReason}
-                                onChange={(e) => setFormLossReason(e.target.value)}
-                                className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] outline-none"
-                              >
-                                 <option value="">-- SELECT LOSS REASON --</option>
-                                 {lossReasonOptions.map(r => (
-                                    <option key={r} value={r}>{r}</option>
-                                 ))}
-                              </select>
-                            ) : (
-                              <input
-                                type="text"
-                                value={formLossReason}
-                                onChange={(e) => setFormLossReason(e.target.value)}
-                                placeholder="Why was this lead lost?"
-                                className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                              />
-                            )}
-                         </div>
-                      )}
-
-                      {/* Conditional Fields block: Proposal Sent (F6 requires
-                          product, sum assured and projected FYCP) */}
-                      {formStatus === 'Proposal Sent' && (
-                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-cyan-200 p-3 bg-slate-50/50 rounded-md">
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
-                               <select
-                                 value={formProductName}
-                                 onChange={(e) => setFormProductName(e.target.value)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
-                               >
-                                  <option value="">-- SELECT PRODUCT --</option>
-                                  {productOptions.map(p => (
-                                     <option key={p} value={p}>{p}</option>
-                                  ))}
-                               </select>
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
-                               <input
-                                 type="number"
-                                 placeholder="Sum Assured..."
-                                 value={formSumAssured || ''}
-                                 onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
-                               <input
-                                 type="number"
-                                 placeholder="Projected NCP..."
-                                 value={formProjectedNCP || ''}
-                                 onChange={(e) => setFormProjectedNCP(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                         </div>
-                      )}
-
-                      {/* Conditional Fields block: Pipeline Locked */}
-                      {(formStatus === 'Pipeline Locked' || (formStatus === 'Meeting Completed' && formSubStatus === 'Pipeline Locked')) && (
-                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-[#978C21]/25 p-3 bg-slate-50/50 rounded-md">
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
-                               <select 
-                                 value={formProductName}
-                                 onChange={(e) => setFormProductName(e.target.value)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
-                               >
-                                  <option value="">-- SELECT PRODUCT --</option>
-                                  {productOptions.map(p => (
-                                     <option key={p} value={p}>{p}</option>
-                                  ))}
-                               </select>
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
-                               <input 
-                                 type="number"
-                                 placeholder="Sum Assured..."
-                                 value={formSumAssured || ''}
-                                 onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
-                               <input 
-                                 type="number"
-                                 placeholder="Projected NCP..."
-                                 value={formProjectedNCP || ''}
-                                 onChange={(e) => setFormProjectedNCP(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                         </div>
-                      )}
-
-                      {/* Conditional Fields block: Converted */}
-                      {formStatus === 'Converted' && (
-                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-emerald-200 p-3 bg-slate-50/50 rounded-md">
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
-                               <select 
-                                 value={formProductName}
-                                 onChange={(e) => setFormProductName(e.target.value)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
-                               >
-                                  <option value="">-- SELECT PRODUCT --</option>
-                                  {productOptions.map(p => (
-                                     <option key={p} value={p}>{p}</option>
-                                  ))}
-                               </select>
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
-                               <input 
-                                 type="number"
-                                 placeholder="Sum Assured..."
-                                 value={formSumAssured || ''}
-                                 onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                            <div className="space-y-1">
-                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Collected NCP (৳) <span className="text-red-400">*</span></p>
-                               <input 
-                                 type="number"
-                                 placeholder="Collected NCP..."
-                                 value={formCollectedNCP || ''}
-                                 onChange={(e) => setFormCollectedNCP(parseFloat(e.target.value) || 0)}
-                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
-                               />
-                            </div>
-                         </div>
-                      )}
-
-                      {/* Operational Remarks */}
-                      <div className="col-span-2 space-y-1">
-                         <p className="text-[9px] font-black text-slate-400 uppercase italic">Operational Remarks <span className="text-red-500">*</span></p>
-                         <textarea
-                           placeholder="Describe client response, expectations, or next steps in detail (Mandatory)..."
-                           value={formRemarks}
-                           onChange={(e) => setFormRemarks(e.target.value)}
-                           rows={3}
-                           className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm p-3 text-[11px] font-medium focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-40"
-                         />
-                      </div>
-                   </div>
-                   </fieldset>
-
-                   {!canEditLead && (
-                     <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded-sm p-3">
-                       View only: the canonical <code>leads.edit</code> permission is required to record operational progress.
-                     </p>
-                   )}
-
-                   <p className="text-[10px] text-slate-400 italic mt-4">
-                     Ownership changes are managed in Lead Pool. Use this workspace for operational progress and the next action.
-                   </p>
-                </div>
-
-                {/* Historical Timeline Audit Log */}
-                {selectedLead.statusHistory && selectedLead.statusHistory.length > 0 && (
-                   <div className="space-y-4 pt-4 border-t border-slate-100">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Full Change & Interaction Audit Log</p>
-                      <div className="space-y-3 max-h-40 overflow-y-auto pr-2 scrollbar-thin">
-                         {selectedLead.statusHistory.slice().reverse().map((hist, hIdx) => (
-                            <div key={hIdx} className="p-3.5 bg-slate-50 border border-slate-100 rounded-lg text-[11px] space-y-1">
-                               <div className="flex justify-between items-start">
-                                  <span className="font-extrabold text-[#978C21] uppercase tracking-wider">{hist.status}</span>
-                                  <span className="text-[9px] text-slate-400">{new Date(hist.date).toLocaleString()}</span>
-                               </div>
-                               <p className="text-slate-700 italic font-medium">"{hist.remarks}"</p>
-                               {hist.nextFollowUpDate && (
-                                  <p className="text-[9px] text-indigo-600 font-bold">Planned Callback: {new Date(hist.nextFollowUpDate).toLocaleDateString()}</p>
-                                )}
-                               <p className="text-[9px] text-slate-400 text-right">Modified By: {hist.updatedBy || 'N/A'}</p>
-                            </div>
-                         ))}
-                      </div>
-                   </div>
-                )}
-
-                <div className="space-y-4 pt-4">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] italic border-b border-slate-50 pb-2">Engagement Intelligence</p>
-                   <div className="grid grid-cols-2 gap-6 pt-2">
-                      <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Source Entity</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.source || 'N/A'}</p>
-                      </div>
-                      <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Active Campaign</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.campaignName || 'N/A'}</p>
-                      </div>
-                      <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Target Product</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.productName || 'N/A'}</p>
-                      </div>
-                      <div className="space-y-1">
-                         <p className="text-[9px] font-black text-slate-300 uppercase italic">Profession Matrix</p>
-                         <p className="text-[11px] font-black text-brand-text uppercase italic">{selectedLead.profession || 'N/A'}</p>
-                      </div>
-                   </div>
-                </div>
-              </div>
-
-              <div className="p-8 bg-slate-50 border-t border-slate-100 flex items-center justify-center">
-                {canEditLead ? (
-                  <button
-                    onClick={handleSaveLeadUpdate}
-                    className="w-full bg-slate-900 hover:bg-black text-white px-6 py-4 text-[11px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl flex items-center justify-center gap-3 cursor-pointer"
-                  >
-                    <CheckCircle className="w-4 h-4 text-[#978C21]" />
-                    Save & Update Status
-                  </button>
-                ) : (
-                  <p className="text-[11px] font-semibold text-slate-500">Status updates require the <code>leads.edit</code> permission.</p>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
