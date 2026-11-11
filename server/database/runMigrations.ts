@@ -66,6 +66,7 @@ import { up as deleteChainRepair } from "./migrations/053_delete_chain_repair.js
 import { up as nextStepCalendarSync } from "./migrations/054_next_step_calendar_sync.js";
 import { up as meetingDataModel } from "./migrations/055_meeting_data_model.js";
 import { up as calendarSettingsHolidays } from "./migrations/056_calendar_settings_holidays.js";
+import { up as userDesignationBackfill } from "./migrations/058_user_designation_backfill.js";
 
 import {
   loadLedger,
@@ -180,6 +181,8 @@ const migrations: Migration[] = [
     { id: "055_meeting_data_model", name: "Meeting Data Model", run: meetingDataModel },
 
     { id: "056_calendar_settings_holidays", name: "Calendar Settings + BD Govt Holidays", run: calendarSettingsHolidays },
+
+    { id: "058_user_designation_backfill", name: "UM-1 Designation Backfill", run: userDesignationBackfill },
 
 ];
 

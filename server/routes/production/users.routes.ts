@@ -36,15 +36,11 @@ import {
 import {
   UNASSIGNED_LEVEL,
   resolveRoleLevel,
-  isLadderLevel,
-  allowedManagerLevels,
-  validateReportingManagerCandidate,
   reportingManagerRequiredError,
 } from '../../utils/reportingRules.js';
 import {
   closeUserMemberships,
   getMembershipDepartmentMap,
-  getUserDepartmentIds,
   hasDepartmentMirrorLayer,
   setDepartmentHeads,
   setUserExtraMemberships,
@@ -142,6 +138,17 @@ async function getRoleRows(exec: { query: Function }): Promise<RoleRow[]> {
   return result.rows as RoleRow[];
 }
 
+/** Role display-name lookup (UM-1): the default job title for a new user. */
+async function roleDisplayNameOf(exec: { query: Function }, roleId: string | null): Promise<string> {
+  if (!roleId) return '';
+  const result = await exec.query(
+    'SELECT role_name, role_code FROM roles WHERE id = $1 LIMIT 1',
+    [roleId]
+  );
+  const row = result.rows[0];
+  return clean(row?.role_name) || clean(row?.role_code) || '';
+}
+
 /** Role level lookup: role code -> ladder level (99 = not in ladder). */
 async function roleLevelOf(exec: { query: Function }, roleId: string | null): Promise<number> {
   if (!roleId) return UNASSIGNED_LEVEL;
@@ -154,24 +161,20 @@ async function roleLevelOf(exec: { query: Function }, roleId: string | null): Pr
 }
 
 /**
- * Validates a reporting link against the company ladder:
- *   - The manager's role must sit one OR two levels above the employee's
- *     (skip-level reporting). Same level, lower level and gaps > 2 reject.
- *   - Both must be in the same department, EXCEPT when the manager is at
- *     Level 1 (CEO) — the CEO sits above every department.
+ * Validates a reporting link (UM-1 — owner's role-model fix, 2026-11-11).
+ * The manager may be ANY active user; the hard rules are only:
  *   - Level-1 (CEO) employees report to nobody.
- *   - Roles not placed in the ladder (level 99) may omit the manager.
+ *   - The manager must exist and be active, and must not be the
+ *     employee themself.
  *   - Cycles are rejected (an employee can never manage their own ancestor).
- * Returns an error message, or null when the link is valid.
+ *   - Roles not placed in the ladder (level 99) may omit the manager;
+ *     in-ladder Level 2+ employees still REQUIRE one
+ *     (`managerIsRequired` MUST be true on create and update).
  *
- * The level + department rule is delegated to the shared pure helper
- * `validateReportingManagerCandidate` so manual create, manual edit, bulk
- * import and the hierarchy health screen all enforce the same authority
- * rule. This function adds the DB-aware checks (self, existence, active,
- * cycle) on top of that shared rule.
- *
- * `managerIsRequired` MUST be true on both user create and user update:
- * Level 2+ ladder employees always need exactly one reporting manager.
+ * The level-gap and same-department rules that used to reject here
+ * (PR #107) are ADVISORY since UM-1: unusual shapes are accepted and
+ * surfaced as warnings by the hierarchy-health screen via the shared
+ * pure helper `reportingLinkWarnings` (server/utils/reportingRules).
  * (Exported for regression tests; the HTTP routes remain the only callers
  * in production code.)
  */
@@ -181,7 +184,6 @@ export async function validateReportingLink(
 ): Promise<string | null> {
   const { selfId, roleId, departmentId, managerId, managerIsRequired } = opts;
   const level = await roleLevelOf(exec, roleId);
-  const inLadder = isLadderLevel(level);
 
   if (level === 1) {
     if (managerId) {
@@ -214,27 +216,9 @@ export async function validateReportingLink(
   if (!manager) return 'The selected reporting manager was not found.';
   if (manager.is_active === false) return 'The reporting manager must be an active employee.';
 
-  const managerLevel = resolveRoleLevel(manager.hierarchy_level);
-
-  if (inLadder) {
-    // Shared authority rule: strictly higher authority, one or two levels
-    // up, within the same department unless the manager is Level 1 (CEO).
-    // "Same department" includes the manager's ADDITIONAL seats: a Head
-    // who heads several departments (primary + extra memberships) can be
-    // reported to from any of them. getUserDepartmentIds returns every
-    // active membership (primary included); on a database without the
-    // membership layer it returns [], and the primary column stands alone
-    // exactly as before.
-    const managerDepartmentIds = await getUserDepartmentIds(exec as any, managerId);
-    const candidateError = validateReportingManagerCandidate({
-      employeeLevel: level,
-      managerLevel,
-      employeeDepartmentId: departmentId,
-      managerDepartmentId: manager.department_id || null,
-      managerDepartmentIds,
-    });
-    if (candidateError) return candidateError;
-  }
+  // UM-1: no level-gap / same-department rejection here any more. Any
+  // active user may be the manager; unusual link shapes are warnings
+  // on the hierarchy-health screen, not write-path blocks.
 
   // Cycle guard: walk up from the proposed manager; the employee must not
   // appear in their own management chain.
@@ -402,12 +386,13 @@ async function buildHierarchyConfig(
       usersWithManager: health.usersWithManager,
       usersWithoutManager: health.usersWithoutManager,
       invalidLinks: health.invalidLinks,
+      warnings: health.warnings,
     },
     rules: {
       levelGap: 2,
-      sameDepartmentRequired: true,
+      sameDepartmentRequired: false,
       level1CrossesDepartments: true,
-      description: 'Level 1 = CEO (company-wide). Every other employee reports to a specific manager one or two levels up, within the same department (the CEO is the only cross-department link).',
+      description: 'Level 1 = CEO (company-wide) and reports to no one. Every other employee needs exactly one reporting manager, who may be any active employee (UM-1). Links more than two levels up, or across departments, are allowed and flagged below as warnings.',
     },
   };
 }
@@ -549,74 +534,74 @@ router.get('/users', requireAuth, async (req, res) => {
   }
 });
 
-/* Reporting-manager candidates for an employee form: the employees whose
-   role sits one or two levels above the given role, in the same department
-   (Level 1 / CEO candidates are department-agnostic).
+/* Reporting-manager candidates for an employee form (UM-1): EVERY
+   active user — the manager may be any active employee; the level-gap
+   and same-department filters that used to shrink this list (PR #107)
+   are gone, because they hid the real line manager whenever the org
+   did not match the textbook ladder. Only two exclusions remain, both
+   enforced again at save time: the employee themself
+   (`excludeEmployeeId`, when editing) and — for a Level-1 (CEO) role —
+   everybody (the CEO reports to no one, so the list is empty).
+   Rows carry department + ladder level so the form can group and
+   search them.
    NOTE: registered BEFORE /users/:id so "reporting-options" is not
    captured as an :id path parameter. */
 router.get('/users/reporting-options', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
-  if (!useDb()) return sendJson(res, 200, []);
+  const roleCode = clean(req.query?.role).toUpperCase();
+  if (!roleCode) return sendJson(res, 400, { success: false, message: 'role query parameter is required.' });
+  const excludeEmployeeId = clean(req.query?.excludeEmployeeId).toUpperCase();
+  if (!useDb()) {
+    // Demo mode: the same rule over the in-memory roster (before UM-1
+    // this returned [] and the picker was unusable without a database).
+    // The store carries no role-level table, so the Level-1 empty list
+    // is the client's job here (its form already replaces the picker
+    // with "reports to no one" for Level-1 roles); the DB path above
+    // enforces it server-side.
+    const options = (fallbackStore.users as any[])
+      .filter(u => u.isActive !== false && u.status !== 'Inactive'
+        && String(u.employeeId || '').toUpperCase() !== excludeEmployeeId)
+      .map(u => ({
+        id: u.id,
+        employeeId: u.employeeId,
+        fullName: u.fullName || u.name || '',
+        designation: u.designation || '',
+        departmentId: u.departmentId || null,
+        departmentName: u.departmentName || '',
+        hierarchyLevel: UNASSIGNED_LEVEL,
+        roleCode: u.roleCode || u.role || '',
+        roleName: u.roleName || u.roleCode || u.role || '',
+      }))
+      .sort((a, b) => String(a.fullName).localeCompare(String(b.fullName)));
+    return sendJson(res, 200, options);
+  }
   try {
     const pool = getPool();
-    const roleCode = clean(req.query?.role).toUpperCase();
-    const departmentId = await resolveDepartmentId(req.query?.departmentId);
-    if (!roleCode) return sendJson(res, 400, { success: false, message: 'role query parameter is required.' });
-
     const roles = await getRoleRows(pool);
     const role = roles.find(r => String(r.role_code).toUpperCase() === roleCode);
     const level = role ? resolveRoleLevel(role.hierarchy_level) : UNASSIGNED_LEVEL;
-    if (!isLadderLevel(level)) return sendJson(res, 200, []);
     if (level === 1) return sendJson(res, 200, []); // CEO reports to nobody
 
-    // Skip-level reporting: the manager may sit one OR two levels up.
-    const allowedLevels = allowedManagerLevels(level);
-    const managerRoleCodes = roles
-      .filter(r => allowedLevels.includes(Number(r.hierarchy_level)))
-      .map(r => String(r.role_code).toUpperCase());
-    if (managerRoleCodes.length === 0) return sendJson(res, 200, []);
-
-    const placeholders = managerRoleCodes.map((_, i) => `$${i + 1}`).join(', ');
-    const params: any[] = [...managerRoleCodes];
-    // A candidate also belongs to the employee's department via an
-    // ADDITIONAL seat (active department_members row) — a Head who heads
-    // several departments must be pickable from each of them. The clause
-    // is only added when the membership layer (migration 046) exists.
-    const hasMirror = await hasDepartmentMirrorLayer(pool);
-    const membershipClause = (paramIdx: number) =>
-      hasMirror
-        ? ` OR EXISTS (SELECT 1 FROM department_members dm WHERE dm.user_id = u.id AND dm.is_active AND dm.department_id = $${paramIdx})`
-        : '';
-    let sql = `
-      SELECT u.id, u.employee_id, u.full_name, u.designation, d.department_name, r.role_code AS role_code, r.role_name AS role_name
-        FROM users u
-        LEFT JOIN roles r ON r.id = u.role_id
-        LEFT JOIN departments d ON d.id = u.department_id
-       WHERE u.is_active = TRUE AND UPPER(r.role_code) IN (${placeholders})`;
-    if (allowedLevels.includes(1)) {
-      // Level 1 (CEO) candidates cross departments; every other allowed
-      // level must still share the employee's department.
-      if (departmentId) {
-        sql += ` AND (r.hierarchy_level = 1 OR u.department_id = $${params.length + 1}${membershipClause(params.length + 1)})`;
-        params.push(departmentId);
-      } else {
-        // Without a department, only Level-1 cross-department candidates
-        // remain valid.
-        sql += ` AND r.hierarchy_level = 1`;
-      }
-    } else {
-      if (!departmentId) return sendJson(res, 200, []);
-      sql += ` AND (u.department_id = $${params.length + 1}${membershipClause(params.length + 1)})`;
-      params.push(departmentId);
-    }
-    sql += ` ORDER BY u.full_name ASC`;
-    const result = await pool.query(sql, params);
+    const result = await pool.query(
+      `SELECT u.id, u.employee_id, u.full_name, u.designation,
+              u.department_id, d.department_name,
+              r.role_code AS role_code, r.role_name AS role_name, r.hierarchy_level
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+         LEFT JOIN departments d ON d.id = u.department_id
+        WHERE u.is_active = TRUE
+          AND ($1 = '' OR UPPER(u.employee_id) <> $1)
+        ORDER BY d.department_name ASC NULLS LAST, u.full_name ASC`,
+      [excludeEmployeeId]
+    );
     return sendJson(res, 200, result.rows.map((row: any) => ({
       id: row.id,
       employeeId: row.employee_id,
       fullName: row.full_name,
       designation: row.designation || '',
+      departmentId: row.department_id || null,
       departmentName: row.department_name || '',
+      hierarchyLevel: resolveRoleLevel(row.hierarchy_level),
       roleCode: row.role_code,
       roleName: row.role_name,
     })));
@@ -706,7 +691,9 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
       status: (payload.status === 'Inactive' ? 'Inactive' : 'Active') as 'Active' | 'Inactive',
       accountStatus: payload.status === 'Inactive' ? 'INACTIVE' : 'ACTIVE',
       isActive: payload.status !== 'Inactive',
-      designation: clean(payload.designation) || 'Officer',
+      // UM-1: title defaults to the role's display name when the caller
+      // sent one, else the role code — never the old 'Officer' blanket.
+      designation: clean(payload.designation) || clean(payload.roleName) || role,
       departmentId: clean(payload.departmentId),
       teamId: clean(payload.teamId),
       managerId: clean(payload.managerId || payload.reportingManagerId),
@@ -744,6 +731,10 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
       return sendJson(res, 400, { success: false, message: 'Unknown role code.' });
     }
     const hash = payload.password ? await bcrypt.hash(String(payload.password), 10) : null;
+    // UM-1: designation is the job title, separate from the access role.
+    // A new user with no title typed gets the role's display name until
+    // an admin edits it (before UM-1 everyone silently became 'Officer').
+    const roleDisplayName = await roleDisplayNameOf(client, roleId);
     const departmentId = await resolveDepartmentId(payload.departmentId);
     const extraDepartments = await normalizeExtraDepartmentIds(payload.departmentIds);
     if (extraDepartments.error) {
@@ -768,9 +759,9 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
     // a spreadsheet CAN be corrected by a human.)
     if ((await roleLevelOf(client, roleId)) === 1) managerId = null;
 
-    // Reporting ladder: the manager must hold a strictly higher-authority
-    // role, one or two levels up, in the same department (Level-1 CEO is the
-    // only cross-department link).
+    // Reporting link (UM-1): the manager may be any active user; only
+    // self / cycle / inactive / Level-1-with-manager reject, and an
+    // in-ladder Level 2+ employee must have one.
     // Validated on the transaction client so the check and the insert below
     // see the same snapshot.
     const reportingError = await validateReportingLink(client, {
@@ -803,7 +794,7 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
         departmentId,
         teamId,
         managerId,
-        clean(payload.designation) || 'Officer',
+        clean(payload.designation) || roleDisplayName,
         clean(payload.avatarUrl) || null,
         payload.status !== 'Inactive',
         payload.mustChangePassword === true,
@@ -1671,7 +1662,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
               roleId,
               deptId,
               teamId,
-              row.normalized.designation || 'Officer',
+              row.normalized.designation || (await roleDisplayNameOf(client, roleId)),
               isActive,
               mustChange,
             ]
@@ -3390,7 +3381,7 @@ router.get('/hierarchy-config', requireAuth, async (req, res) => {
     return sendJson(res, 200, {
       levels: [],
       unassignedRoles: [],
-      setup: { totalUsers: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [] },
+      setup: { totalUsers: 0, usersWithManager: 0, usersWithoutManager: 0, invalidLinks: [], warnings: [] },
       rules: { levelGap: 1, sameDepartmentRequired: true, level1CrossesDepartments: true, description: 'Ladder configuration requires a database connection.' },
     });
   }

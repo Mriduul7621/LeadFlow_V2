@@ -120,6 +120,8 @@ export interface HierarchyConfig {
     usersWithManager: number;
     usersWithoutManager: number;
     invalidLinks: Array<{ employeeId: string; employeeName: string; reason: string }>;
+    /** UM-1: valid but unusually shaped links (gap / cross-department). */
+    warnings?: Array<{ employeeId: string; employeeName: string; reason: string }>;
   };
   rules: {
     levelGap: number;
@@ -129,13 +131,16 @@ export interface HierarchyConfig {
   };
 }
 
-/** Reporting-manager candidate for the employee form dropdown. */
+/** Reporting-manager candidate for the employee form dropdown (UM-1:
+ *  every active user; grouped by department in the form). */
 export interface ReportingOption {
   id: string;
   employeeId: string;
   fullName: string;
   designation: string;
+  departmentId?: string | null;
   departmentName: string;
+  hierarchyLevel?: number;
   roleCode: string;
   roleName: string;
 }
@@ -189,11 +194,13 @@ export const orgService = {
     return body.data;
   },
 
-  /** Reporting-manager candidates: one or two levels up, same department
-   *  (Level 1 / CEO candidates are department-agnostic). */
-  async getReportingOptions(role: string, departmentId?: string): Promise<ReportingOption[]> {
+  /** Reporting-manager candidates (UM-1): every active user — any of
+   *  them may be the line manager. `excludeEmployeeId` removes the
+   *  person being edited (nobody reports to themself). */
+  async getReportingOptions(role: string, departmentId?: string, excludeEmployeeId?: string): Promise<ReportingOption[]> {
     const query = new URLSearchParams({ role });
     if (departmentId) query.set('departmentId', departmentId);
+    if (excludeEmployeeId) query.set('excludeEmployeeId', excludeEmployeeId);
     return apiRequest<ReportingOption[]>(`/api/users/reporting-options?${query.toString()}`);
   },
 

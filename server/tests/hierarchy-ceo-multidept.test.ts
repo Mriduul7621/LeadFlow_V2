@@ -277,8 +277,10 @@ describe('Hierarchy: CEO edit deadlock + additional-department managers', () => 
     assert.ok(ids.includes(head.employeeId ?? 'HEAD1'));
   });
 
-  it('B3. a department the Head holds NO seat in still rejects him (same-department rule intact)', async () => {
+  it('B3. a department the Head holds NO seat in is accepted since UM-1 (warning, not a block)', async () => {
     const { head } = await buildMultiDeptHead();
+    // Before UM-1 this was a 400 ("same department"). The cross-
+    // department link now saves; hierarchy health flags it as a warning.
     const res = await addUserRaw({
       employeeId: 'TLC1',
       fullName: 'Person TLC1',
@@ -288,16 +290,17 @@ describe('Hierarchy: CEO edit deadlock + additional-department managers', () => 
       managerId: head.id,
       status: 'Active',
     });
-    assert.equal(res.status, 400, JSON.stringify(res.body));
-    assert.match(String(res.body.message || ''), /same department/i);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const row = await userRow(res.body.data.id);
+    assert.equal(row.manager_id, head.id);
   });
 
-  it('B4. the 1–2 level window still applies to additional-department links', async () => {
+  it('B4. a DOWN-the-ladder manager is accepted since UM-1 (warning, not a block)', async () => {
     const { head } = await buildMultiDeptHead();
     const tl = await addUser('TLB1', 'TEAM_LEAD', { departmentId: deptB, managerId: head.id });
     const be = await addUser('BE1', 'BE', { departmentId: deptB, managerId: tl.id });
-    // EMPLOYEE (L4) -> BE (L5) is DOWN the ladder, not 1–2 up: rejected
-    // even though both sit in the same (additional) department.
+    // EMPLOYEE (L4) -> BE (L5) is DOWN the ladder. Before UM-1: rejected
+    // by the 1–2 level window. Now: accepted (health warning only).
     const res = await addUserRaw({
       employeeId: 'EMPB1',
       fullName: 'Person EMPB1',
@@ -307,11 +310,10 @@ describe('Hierarchy: CEO edit deadlock + additional-department managers', () => 
       managerId: be.id,
       status: 'Active',
     });
-    assert.equal(res.status, 400, JSON.stringify(res.body));
-    assert.match(String(res.body.message || ''), /Level/i);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
   });
 
-  it('B5. bulk import: a row naming an additional-department manager validates; a no-seat department still errors', () => {
+  it('B5. bulk import: additional-department manager validates; a no-seat department is a warning since UM-1', () => {
     const maps = buildReferenceMaps({
       roles: [
         { id: 'r-ceo', role_code: 'CEO', role_name: 'Chief Executive Officer', hierarchy_level: 1 },
@@ -368,8 +370,10 @@ describe('Hierarchy: CEO edit deadlock + additional-department managers', () => 
       status: 'Active',
     });
     const badRes = validateBulkRows({ rows: [rowInC], maps, mode: 'createOnly', permissions: { canCreate: true, canEdit: true } });
-    assert.equal(badRes.rows[0].isValid, false);
-    assert.match(badRes.rows[0].errors.join(' '), /same department/i);
+    // UM-1: the cross-department link no longer fails the row — it
+    // imports with a warning the admin sees in the validate report.
+    assert.equal(badRes.rows[0].isValid, true, JSON.stringify(badRes.rows[0].errors));
+    assert.match(badRes.rows[0].warnings.join(' '), /different department/i);
   });
 
   it('B6. hierarchy health: an additional-department link is NOT flagged as a wrong-department problem', () => {
@@ -411,6 +415,10 @@ describe('Hierarchy: CEO edit deadlock + additional-department managers', () => 
       ])
     );
     assert.deepEqual(health.invalidLinks, [], JSON.stringify(health.invalidLinks));
+    // A seat-backed link is not even a warning: the manager's additional
+    // department seat makes it a same-department link (UM-1 warnings
+    // respect seats exactly like the old hard rule did).
+    assert.deepEqual(health.warnings, [], JSON.stringify(health.warnings));
     assert.equal(health.usersWithoutManager, 0);
   });
 });

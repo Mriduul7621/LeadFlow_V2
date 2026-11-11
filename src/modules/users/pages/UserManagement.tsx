@@ -358,6 +358,7 @@ export default function UserManagement() {
   const [savingLadder, setSavingLadder] = useState(false);
   const [managerOptions, setManagerOptions] = useState<ReportingOption[]>([]);
   const [loadingManagers, setLoadingManagers] = useState(false);
+  const [managerSearch, setManagerSearch] = useState('');
 
   // ---- Bulk import ----
   const [showBulkImport, setShowBulkImport] = useState(false);
@@ -402,6 +403,7 @@ export default function UserManagement() {
       password: '', status: 'Active',
     });
     setManagerOptions([]);
+    setManagerSearch('');
     setIsUserModalOpen(true);
   };
 
@@ -430,6 +432,7 @@ export default function UserManagement() {
       status: u.status || 'Active',
     });
     setManagerOptions([]);
+    setManagerSearch('');
     setIsUserModalOpen(true);
   };
 
@@ -476,7 +479,7 @@ export default function UserManagement() {
     }
     const formRoleLevel = (roles.find(r => r.roleId === userForm.role) as any)?.hierarchyLevel ?? 0;
     if (formRoleLevel > 1 && formRoleLevel < 99 && !userForm.managerId) {
-      toast.error('Please select a reporting manager (one or two levels up, same department).');
+      toast.error('Please select a reporting manager.');
       return;
     }
     // Level-1 (CEO) means "no manager" — enforced by NORMALISING the value
@@ -512,7 +515,10 @@ export default function UserManagement() {
         employeeId: cleanEmpId,
         email: userForm.email.trim().toLowerCase(),
         contact: userForm.contact.trim() as any,
-        designation: userForm.designation.trim() || 'Officer',
+        // UM-1: the job title defaults to the access role's display
+        // name when the admin left it blank (server does the same).
+        designation: userForm.designation.trim()
+          || (roles.find(r => r.roleId === userForm.role)?.roleName || ''),
         role: userForm.role,
         departmentId: userForm.departmentId as any,
         // Primary + extra seats, deduped: the server ignores the primary when
@@ -614,7 +620,7 @@ export default function UserManagement() {
     let cancelled = false;
     setLoadingManagers(true);
     orgService
-      .getReportingOptions(userForm.role, userForm.departmentId || undefined)
+      .getReportingOptions(userForm.role, userForm.departmentId || undefined, editingUser?.employeeId || undefined)
       .then(options => { if (!cancelled) setManagerOptions(options); })
       .catch(() => { if (!cancelled) setManagerOptions([]); })
       .finally(() => { if (!cancelled) setLoadingManagers(false); });
@@ -1794,7 +1800,7 @@ export default function UserManagement() {
             <div>
               <h3 className="text-base font-semibold text-slate-800">Company Hierarchy Ladder</h3>
               <p className="text-sm text-slate-500">
-                One company-wide ladder — Level 1 is the CEO. Every other employee reports to a specific manager one or two levels up, within the same department.
+                One company-wide ladder — Level 1 is the CEO. Every other employee reports to one specific manager, who may be any active employee (UM-1); unusual shapes are flagged as warnings below, never blocked.
               </p>
             </div>
             <button
@@ -1814,6 +1820,7 @@ export default function UserManagement() {
               hierConfig.setup.usersWithManager + hierConfig.setup.usersWithoutManager;
             const pct = managerBase > 0 ? Math.round((hierConfig.setup.usersWithManager / managerBase) * 100) : 0;
             const invalid = hierConfig.setup.invalidLinks;
+            const healthWarnings = hierConfig.setup.warnings || [];
             return (
             <div className="space-y-3">
               {/* Admin warning: a hierarchy / role-level change can invalidate
@@ -1830,12 +1837,33 @@ export default function UserManagement() {
                       <p className="text-xs text-amber-700 mt-1">
                         {invalid.length} reporting relationship{invalid.length === 1 ? '' : 's'} need correction. Your existing
                         manager assignments were <span className="font-semibold">not changed automatically</span> — open each
-                        employee in the <span className="font-semibold">Employees</span> tab and set a valid reporting manager
-                        (one or two levels up, same department).
+                        employee in the <span className="font-semibold">Employees</span> tab and set a reporting manager.
                       </p>
                       <ul className="mt-2 space-y-1 max-h-48 overflow-auto pr-1">
                         {invalid.map(link => (
                           <li key={link.employeeId} className="text-xs text-amber-800">
+                            <span className="font-medium">{link.employeeName}</span> ({link.employeeId}): {link.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* UM-1: unusual-but-valid links (gap > 2, cross-department…)
+                  are warnings, not errors — the write path accepts them. */}
+              {healthWarnings.length > 0 && (
+                <div className="bg-sky-50 border border-sky-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-sky-600 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-sky-800">
+                        {healthWarnings.length} reporting relationship{healthWarnings.length === 1 ? '' : 's'} look unusual — allowed, but worth a look.
+                      </p>
+                      <ul className="mt-2 space-y-1 max-h-48 overflow-auto pr-1">
+                        {healthWarnings.map((link, i) => (
+                          <li key={`${link.employeeId}-${i}`} className="text-xs text-sky-800">
                             <span className="font-medium">{link.employeeName}</span> ({link.employeeId}): {link.reason}
                           </li>
                         ))}
@@ -2168,26 +2196,44 @@ export default function UserManagement() {
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Designation</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">Designation <span className="text-xs font-normal text-slate-400">(job title — separate from the access role)</span></label>
                     <input
                       type="text"
                       value={userForm.designation}
                       onChange={e => setUserForm({ ...userForm, designation: e.target.value })}
-                      placeholder="e.g. Senior Manager"
+                      placeholder="e.g. Relationship Officer"
+                      list="um-designation-suggestions"
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
                     />
+                    <datalist id="um-designation-suggestions">
+                      {Array.from(new Set([
+                        ...roles.map(r => r.roleName),
+                        ...users.map(u => (u.designation || '').trim()).filter(Boolean),
+                      ])).map(title => (
+                        <option key={title} value={title} />
+                      ))}
+                    </datalist>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-1 block">Role</label>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">Access role <span className="text-xs font-normal text-slate-400">(what this person can do)</span></label>
                     <select
                       value={userForm.role}
                       onChange={e => {
                         const nextRole = e.target.value;
-                        const nextLevel = (roles.find(r => r.roleId === nextRole) as any)?.hierarchyLevel ?? 0;
+                        const nextRoleObj = roles.find(r => r.roleId === nextRole) as any;
+                        const nextLevel = nextRoleObj?.hierarchyLevel ?? 0;
                         // Switching to a Level-1 (CEO) role clears the
                         // manager selection: the CEO reports to no one, and
                         // the picker is about to be replaced by static text.
-                        setUserForm({ ...userForm, role: nextRole, ...(nextLevel === 1 ? { managerId: '' } : {}) });
+                        // UM-1: an untouched designation follows the role —
+                        // the title defaults to the role's display name
+                        // until the admin types a real job title.
+                        setUserForm({
+                          ...userForm,
+                          role: nextRole,
+                          ...(nextLevel === 1 ? { managerId: '' } : {}),
+                          ...(userForm.designation.trim() ? {} : { designation: nextRoleObj?.roleName || '' }),
+                        });
                       }}
                       className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
                     >
@@ -2250,22 +2296,47 @@ export default function UserManagement() {
                         Level 1 (CEO) — reports to no one
                       </div>
                     ) : (
-                      <select
-                        value={userForm.managerId}
-                        onChange={e => setUserForm({ ...userForm, managerId: e.target.value })}
-                        disabled={loadingManagers}
-                        className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
-                      >
-                        <option value="">{loadingManagers ? 'Loading managers…' : 'Select manager (one or two levels up, same department)'}</option>
-                        {managerOptions.map(o => (
-                          <option key={o.employeeId} value={o.employeeId}>
-                            {o.fullName} — {o.employeeId} — {o.roleName}{o.departmentName ? ` — ${o.departmentName}` : ''}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={managerSearch}
+                          onChange={e => setManagerSearch(e.target.value)}
+                          placeholder="Search managers by name, ID or role…"
+                          className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                        />
+                        <select
+                          value={userForm.managerId}
+                          onChange={e => setUserForm({ ...userForm, managerId: e.target.value })}
+                          disabled={loadingManagers}
+                          className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
+                        >
+                          <option value="">{loadingManagers ? 'Loading managers…' : 'Select the line manager (any active employee)'}</option>
+                          {(() => {
+                            const q = managerSearch.trim().toLowerCase();
+                            const visible = managerOptions.filter(o => !q
+                              || `${o.fullName} ${o.employeeId} ${o.roleName} ${o.departmentName} ${o.designation || ''}`.toLowerCase().includes(q));
+                            const groups = new Map<string, ReportingOption[]>();
+                            for (const o of visible) {
+                              const key = o.departmentName || 'No Department';
+                              const list = groups.get(key) || [];
+                              list.push(o);
+                              groups.set(key, list);
+                            }
+                            return Array.from(groups.entries()).map(([dept, opts]) => (
+                              <optgroup key={dept} label={dept}>
+                                {opts.map(o => (
+                                  <option key={o.employeeId} value={o.employeeId}>
+                                    {o.fullName} — {o.employeeId} — {o.roleName}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ));
+                          })()}
+                        </select>
+                      </div>
                     )}
                     <p className="text-xs text-slate-400 mt-1">
-                      The dropdown lists employees whose role is one or two levels above this role, in the same department (Level 1 crosses departments).
+                      Any active employee can be the line manager (UM-1). Unusual shapes — far above in the ladder, or another department — are allowed; they appear as warnings in the hierarchy health check.
                     </p>
                   </div>
                   <div>
