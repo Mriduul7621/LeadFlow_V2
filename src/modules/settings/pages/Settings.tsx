@@ -22,6 +22,8 @@ import {
   AlertTriangle,
   Timer,
   CalendarDays,
+  ShieldAlert,
+  Lock,
   Upload,
   Download,
   FileJson
@@ -38,6 +40,7 @@ import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
 import { databaseStatusService } from '../../../services/syncService';
 import { calendarService, type CalendarHoliday, type HolidayImportResult } from '../../calendar/services/calendarService';
+import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZoneService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -251,6 +254,104 @@ export default function Settings() {
   const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null);
   const [holidaySaving, setHolidaySaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Danger Zone (Admin Control programme, DZ-0): super-admin only.
+  // The section renders only for ADMIN/SUPERADMIN sessions, but the
+  // server is the real gate — it re-resolves the role from the
+  // database, so a stale session lands on 'forbidden' here. The
+  // client keeps NO unlock state: status is asked fresh on entry,
+  // and a `danger_zone_locked` answer drops straight back to the
+  // password prompt. The unlock lasts 10 minutes and never extends.
+  type DzState = 'idle' | 'loading' | 'locked' | 'unlocked' | 'forbidden' | 'unavailable';
+  const [dzState, setDzState] = useState<DzState>('idle');
+  const [dzPassword, setDzPassword] = useState('');
+  const [dzError, setDzError] = useState('');
+  const [dzBusy, setDzBusy] = useState(false);
+  const [dzSecondsLeft, setDzSecondsLeft] = useState(0);
+  const [dzOverview, setDzOverview] = useState<DangerZoneOverview | null>(null);
+
+  const loadDangerZone = async () => {
+    setDzState('loading');
+    setDzError('');
+    try {
+      const status = await dangerZoneService.getStatus();
+      if (!status.unlocked) {
+        setDzOverview(null);
+        setDzSecondsLeft(0);
+        setDzState('locked');
+        return;
+      }
+      const overview = await dangerZoneService.getOverview();
+      setDzOverview(overview);
+      setDzSecondsLeft(overview.unlock.secondsRemaining);
+      setDzState('unlocked');
+    } catch (err: any) {
+      if (err?.data?.error === 'danger_zone_locked') {
+        setDzOverview(null);
+        setDzState('locked');
+      } else if (err?.status === 403) {
+        setDzState('forbidden');
+      } else {
+        setDzState('unavailable');
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection !== 'danger-zone') return;
+    setDzPassword('');
+    void loadDangerZone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (dzState !== 'unlocked') return;
+    const timer = setInterval(() => {
+      setDzSecondsLeft(prev => {
+        if (prev <= 1) {
+          setDzOverview(null);
+          setDzState('locked');
+          toast.error('Danger Zone locked — the 10 minutes are up. Re-enter your password to continue.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [dzState]);
+
+  const handleDzUnlock = async () => {
+    if (!dzPassword) {
+      setDzError('Enter your login password.');
+      return;
+    }
+    setDzBusy(true);
+    setDzError('');
+    try {
+      await dangerZoneService.unlock(dzPassword);
+      setDzPassword('');
+      await loadDangerZone();
+    } catch (err: any) {
+      setDzError(err?.message || 'Unlock failed. Check your password and try again.');
+    } finally {
+      setDzBusy(false);
+    }
+  };
+
+  const handleDzLock = async () => {
+    setDzBusy(true);
+    try {
+      await dangerZoneService.lock();
+    } catch {
+      // Even if the call fails, drop the local view — the server-side
+      // unlock expires on its own within the 10 minutes regardless.
+    } finally {
+      setDzBusy(false);
+      setDzOverview(null);
+      setDzSecondsLeft(0);
+      setDzState('locked');
+    }
+  };
 
   useEffect(() => {
     if (activeSection !== 'calendar' || calendarLoaded) return;
@@ -785,6 +886,7 @@ export default function Settings() {
     { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Configure dashboard and system behavior', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, desc: 'Weekend days and government holidays', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
+    { id: 'danger-zone', label: 'Danger Zone', icon: ShieldAlert, desc: 'System rules — super admin only, password required', allowed: isSystemAdmin },
   ].filter(section => section.allowed);
 
   return (
@@ -1753,6 +1855,130 @@ export default function Settings() {
                       ))}
                     </div>
                   </div>
+                </motion.div>
+              ) : activeSection === 'danger-zone' ? (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-white p-10 rounded-sm border border-red-100 shadow-sm space-y-8 italic text-left"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
+                        <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
+                      </button>
+                      <h3 className="font-bold text-xl text-red-700 flex items-center gap-2">
+                        <ShieldAlert className="w-5 h-5" /> Danger Zone
+                      </h3>
+                    </div>
+                    {dzState === 'unlocked' && (
+                      <div className="flex items-center gap-3">
+                        <span className="px-3 py-1.5 bg-red-50 border border-red-100 text-red-600 text-[10px] font-black uppercase tracking-widest rounded">
+                          Unlocked — {Math.floor(dzSecondsLeft / 60)}:{String(dzSecondsLeft % 60).padStart(2, '0')} left
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleDzLock}
+                          disabled={dzBusy}
+                          className="px-4 py-2 bg-stone-700 hover:bg-stone-800 text-white rounded-[10px] text-xs font-bold disabled:opacity-40 flex items-center gap-2"
+                        >
+                          <Lock className="w-3.5 h-3.5" /> Lock now
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {dzState === 'loading' || dzState === 'idle' ? (
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Checking access...</p>
+                  ) : dzState === 'forbidden' ? (
+                    <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100">
+                      <p className="text-sm font-bold text-slate-600 leading-relaxed">
+                        This area is not available for your account. The Danger Zone opens only for the super admin,
+                        and the server checks that against the database — not against this screen.
+                      </p>
+                    </div>
+                  ) : dzState === 'unavailable' ? (
+                    <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-4">
+                      <p className="text-sm font-bold text-slate-600 leading-relaxed">
+                        The Danger Zone could not be reached just now. Nothing was changed.
+                      </p>
+                      <button type="button" onClick={() => void loadDangerZone()} className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-[10px] text-xs font-bold">
+                        Try again
+                      </button>
+                    </div>
+                  ) : dzState === 'locked' ? (
+                    <div className="p-8 bg-red-50/50 rounded-sm border border-red-100 space-y-6">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-[11px] font-black uppercase tracking-widest text-red-600">Super admin only — password required</h4>
+                          <p className="text-[11px] text-slate-500 font-bold uppercase tracking-wider leading-relaxed mt-2">
+                            This area holds the rules the whole app runs on. To enter, type your own login password
+                            again. The unlock lasts 10 minutes and then locks itself — it never extends.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          type="password"
+                          value={dzPassword}
+                          onChange={e => setDzPassword(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') void handleDzUnlock(); }}
+                          placeholder="Your login password"
+                          autoComplete="current-password"
+                          className="px-4 py-2.5 bg-white border border-red-200 rounded-[10px] text-sm font-bold text-slate-700 w-72"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleDzUnlock()}
+                          disabled={dzBusy}
+                          className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-[10px] text-xs font-bold disabled:opacity-40"
+                        >
+                          {dzBusy ? 'Checking...' : 'Unlock'}
+                        </button>
+                      </div>
+                      {dzError && <p className="text-[11px] font-bold text-red-500">{dzError}</p>}
+                    </div>
+                  ) : dzOverview ? (
+                    <div className="space-y-8">
+                      <div className="p-8 bg-[#3C3C3C] rounded-sm space-y-4">
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-red-300">These never change — not even here</h4>
+                        <ul className="space-y-2">
+                          {dzOverview.invariants.map((line, i) => (
+                            <li key={i} className="text-[12px] font-bold text-stone-200 leading-relaxed flex gap-2">
+                              <span className="text-red-300">•</span>
+                              <span>{line}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="space-y-4">
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Rules you can see (read-only)</h4>
+                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
+                          These rules run the app today. They are shown so the super admin can see them in one place —
+                          changing them is not a setting; where a rule ever becomes adjustable, it will appear here as
+                          its own control in a later step.
+                        </p>
+                        <div className="grid grid-cols-1 gap-4">
+                          {dzOverview.cards.map(card => (
+                            <div key={card.id} className="p-6 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <h5 className="text-sm font-black text-slate-700">{card.title}</h5>
+                                <span className="px-2 py-0.5 bg-slate-100 text-slate-400 text-[9px] font-black uppercase tracking-widest rounded border border-slate-200">{card.id}</span>
+                              </div>
+                              <p className="text-[12px] font-bold text-slate-500 leading-relaxed">{card.rule}</p>
+                              <p className="text-[12px] font-bold text-slate-700 leading-relaxed">
+                                <span className="text-[10px] font-black uppercase tracking-widest text-[#978C21]">Now: </span>
+                                {card.currentValue}
+                              </p>
+                              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">{card.source}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </motion.div>
               ) : (
                 <motion.div

@@ -76,6 +76,7 @@ import {
   type ImportMode,
 } from '../userBulkImport.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
+import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
   AUDIT_CHANGE_CAP,
   EMPLOYEE_ID_RE,
@@ -1098,6 +1099,13 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     const freshWithMemberships = await withMembershipDepartments(getPool(), freshRow);
     const [freshWithCount] = await withOpenLeadCounts(getPool(), [freshWithMemberships]);
     const mapped = mapUserRow({ ...(freshWithCount || freshWithMemberships), role_code: roleCode, role_name: roleCode });
+    // Danger Zone re-lock triggers (DZ-0): a role change, an active-
+    // status change or a password set through this route ends any
+    // Danger Zone unlock the edited user holds. Best-effort, after
+    // the commit, like the ledger entry below.
+    if (roleId !== existing.role_id || status !== (existing.is_active !== false) || hash !== existing.password) {
+      try { await revokeDangerZoneUnlocks(existing.id); } catch { /* best-effort re-lock */ }
+    }
     // The ledger entry lands AFTER the commit (best-effort, like the other
     // access changes): a deactivation is an access event, and the number of
     // leads that moved with it belongs in the record.
@@ -1335,6 +1343,9 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
       'UPDATE users SET password = $1, must_change_password = TRUE, updated_at = NOW() WHERE id = $2',
       [hash, found.rows[0].id]
     );
+    // Danger Zone re-lock trigger (DZ-0): an admin reset ends any
+    // Danger Zone unlock the target holds. Best-effort.
+    try { await revokeDangerZoneUnlocks(found.rows[0].id); } catch { /* best-effort re-lock */ }
     logAuthAdminPasswordReset({ actorUserId: req.currentUser?.id, targetUserId: found.rows[0].id });
     return sendJson(res, 200, { success: true, message: 'Password reset successfully' });
   } catch (error: any) {

@@ -14,6 +14,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getPool } from '../../database/connection.js';
+import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import { createPerf } from '../../utils/perf.js';
 import {
@@ -483,6 +484,10 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
       `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
       [hashed, user.id]
     );
+    // Danger Zone re-lock trigger (DZ-0): a password change ends any
+    // Danger Zone unlock the user holds. Best-effort — it must never
+    // fail the password change it rides along with.
+    try { await revokeDangerZoneUnlocks(user.id); } catch { /* best-effort re-lock */ }
     return sendJson(res, 200, { success: true, message: 'Password updated successfully' });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Password update failed' });
@@ -569,6 +574,9 @@ router.post('/auth/change-required-password', requireAuth, async (req: any, res)
       `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
       [hashed, user.id]
     );
+
+    // Danger Zone re-lock trigger (DZ-0): see /auth/change-password.
+    try { await revokeDangerZoneUnlocks(user.id); } catch { /* best-effort re-lock */ }
 
     logAuthForcedPasswordChangeCompleted({ userId: user.id });
 
