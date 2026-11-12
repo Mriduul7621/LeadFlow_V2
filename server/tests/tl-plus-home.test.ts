@@ -381,16 +381,19 @@ const person = (over: Partial<TeamOverviewPerson>): TeamOverviewPerson => ({
   convertedLeads: 0,
   dueToday: 0,
   overdue: 0,
+  totalLeads: 0,
+  todayLeads: 0,
+  noActionLeads: 0,
   isSelf: false,
   ...over,
 });
 
 const fixturePeople: TeamOverviewPerson[] = [
-  person({ userId: 'u-self', employeeId: 'EMP-001', name: 'Lena Lead', isSelf: true, directReports: 2, tier: 'teamLead', openLeads: 3, dueToday: 1, overdue: 1, convertedLeads: 2 }),
-  person({ userId: 'u-a', employeeId: 'EMP-002', name: 'Arif Member', openLeads: 9, dueToday: 2, overdue: 5, convertedLeads: 4 }),
-  person({ userId: 'u-b', employeeId: 'EMP-003', name: 'Bina Member', openLeads: 4, dueToday: 0, overdue: 5, convertedLeads: 1 }),
-  person({ userId: 'u-c', employeeId: 'EMP-004', name: 'Chad Member', openLeads: 2, dueToday: 3, overdue: 0, convertedLeads: 0 }),
-  person({ userId: 'u-d', employeeId: 'EMP-005', name: 'Dina Member', openLeads: 1, dueToday: 0, overdue: 0, convertedLeads: 6 }),
+  person({ userId: 'u-self', employeeId: 'EMP-001', name: 'Lena Lead', isSelf: true, directReports: 2, tier: 'teamLead', openLeads: 3, dueToday: 1, overdue: 1, convertedLeads: 2, totalLeads: 8, todayLeads: 1, noActionLeads: 0 }),
+  person({ userId: 'u-a', employeeId: 'EMP-002', name: 'Arif Member', openLeads: 9, dueToday: 2, overdue: 5, convertedLeads: 4, totalLeads: 15, todayLeads: 2, noActionLeads: 2 }),
+  person({ userId: 'u-b', employeeId: 'EMP-003', name: 'Bina Member', openLeads: 4, dueToday: 0, overdue: 5, convertedLeads: 1, totalLeads: 9, todayLeads: 0, noActionLeads: 1 }),
+  person({ userId: 'u-c', employeeId: 'EMP-004', name: 'Chad Member', openLeads: 2, dueToday: 3, overdue: 0, convertedLeads: 0, totalLeads: 5, todayLeads: 1, noActionLeads: 0 }),
+  person({ userId: 'u-d', employeeId: 'EMP-005', name: 'Dina Member', openLeads: 1, dueToday: 0, overdue: 0, convertedLeads: 6, totalLeads: 7, todayLeads: 0, noActionLeads: 0 }),
 ];
 
 describe('teamOverviewService — team facts and shaping', () => {
@@ -404,8 +407,8 @@ describe('teamOverviewService — team facts and shaping', () => {
   });
 
   it('summarizeTeamTotals sums the whole team', () => {
-    assert.deepEqual(summarizeTeamTotals(fixturePeople), { open: 19, dueToday: 6, overdue: 11, converted: 13 });
-    assert.deepEqual(summarizeTeamTotals([]), { open: 0, dueToday: 0, overdue: 0, converted: 0 });
+    assert.deepEqual(summarizeTeamTotals(fixturePeople), { open: 19, dueToday: 6, overdue: 11, converted: 13, totalLeads: 44, todayCollection: 4, noAction: 3 });
+    assert.deepEqual(summarizeTeamTotals([]), { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 });
   });
 
   it('teamFollowUpsToday lists only members with due/overdue work, worst first', () => {
@@ -437,8 +440,9 @@ describe('TeamHome — rendering from the overview payload', () => {
       )
     );
     assert.ok(html.includes('Team Home'), 'team-first heading');
-    assert.ok(html.includes('Open leads') && html.includes('Due today') && html.includes('Overdue') && html.includes('Converted'),
-      'the four team totals are labelled');
+    assert.ok(html.includes('Open leads') && html.includes('Due today') && html.includes('Overdue') && html.includes('Converted')
+      && html.includes('Total Lead') && html.includes('Today Lead Collection') && html.includes('No Action Alert'),
+      'the seven team totals are labelled');
     assert.ok(html.includes('>19<') && html.includes('>11<'), 'totals are summed over the whole team (19 open, 11 overdue)');
     assert.ok(html.includes('Team follow-ups today'), 'follow-ups section present');
     assert.ok(html.includes('Arif Member') && html.includes('EMP-002'), 'member rows carry name + employee ID');

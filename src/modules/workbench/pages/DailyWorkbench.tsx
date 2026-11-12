@@ -2,12 +2,15 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
+  BellRing,
   Calendar as CalendarIcon,
   CalendarClock,
+  CalendarPlus,
   CheckCircle2,
   Clock,
   FolderOpen,
   History,
+  Layers,
   Phone,
   TrendingUp,
   Video,
@@ -262,12 +265,13 @@ function SummaryCard({
 
 /**
  * KpiStripCard — one number of the "My numbers" strip (KPI drill-down,
- * 2026-11-13): the caller's OWN four KPIs from their overview row,
+ * 2026-11-13): the caller's OWN seven KPIs from their overview row,
  * each linking to /team/kpi/:kpi?person=self — their own leads for
  * that KPI. The Daily Summary cards above are NOT linked: their
  * counts mix scheduled activities with leads, so they would not match
  * the KPI page's numbers; this strip's numbers are exactly the KPI
- * numbers, so the card and the page always agree.
+ * numbers, so the card and the page always agree. All seven cards
+ * always render — a 0 is shown, never hidden (never-empty rule).
  */
 function KpiStripCard({
   label,
@@ -680,7 +684,7 @@ export default function DailyWorkbench() {
         </div>
       </div>
 
-      {/* My numbers — the caller's OWN four KPIs (KPI drill-down,
+      {/* My numbers — the caller's OWN seven KPIs (KPI drill-down,
           2026-11-13). From the already-loaded overview self row, so no
           extra request; hidden until the overview loads (a failed
           overview must never break My Day). Each card opens the
@@ -695,9 +699,12 @@ export default function DailyWorkbench() {
               <span className="text-[11px] font-semibold text-stone-400">Your own leads</span>
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiStripCard label="Total Lead" value={self.totalLeads} icon={Layers} variant="default" to="/team/kpi/totalLeads?person=self" />
+              <KpiStripCard label="Today Collection" value={self.todayLeads} icon={CalendarPlus} variant="blue" to="/team/kpi/todayCollection?person=self" />
               <KpiStripCard label="Open leads" value={self.openLeads} icon={FolderOpen} variant="default" to="/team/kpi/open?person=self" />
               <KpiStripCard label="Due today" value={self.dueToday} icon={CalendarClock} variant="orange" to="/team/kpi/dueToday?person=self" />
               <KpiStripCard label="Overdue" value={self.overdue} icon={AlertTriangle} variant="red" to="/team/kpi/overdue?person=self" />
+              <KpiStripCard label="No Action Alert" value={self.noActionLeads} icon={BellRing} variant="red" to="/team/kpi/noAction?person=self" />
               <KpiStripCard label="Converted" value={self.convertedLeads} icon={TrendingUp} variant="emerald" to="/team/kpi/converted?person=self" />
             </div>
           </section>

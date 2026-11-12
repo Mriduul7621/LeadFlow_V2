@@ -5,12 +5,16 @@ import { getSelfPerson } from '../services/teamOverviewService';
  * kpiDrilldown.ts — pure helpers for the TL+ KPI drill-down
  * (owner-approved 2026-11-13)
  * ------------------------------------------------------------------
- * The team home's four KPI cards drill down the reporting tree. Every
+ * The team home's seven KPI cards drill down the reporting tree. Every
  * level is computed CLIENT-side from the ONE scoped overview payload
  * (GET /api/team/overview via teamOverviewService) — no parallel
  * queries, no new server shape for the people levels. Only the leaf
  * lead list comes from the server (GET /team/kpi/leads), and only the
  * export (GET /team/kpi/export) builds a file.
+ *
+ * Never-empty rule (owner, 2026-11-13): NO level here ever filters
+ * out zero-count people — sortKpiRows sorts, it never drops a row,
+ * so an all-zero KPI still lists every in-scope person with 0s.
  *
  * Level rules (resolveKpiLevel):
  *   - `person=self` (or a member with no reports and no person) ->
@@ -25,7 +29,7 @@ import { getSelfPerson } from '../services/teamOverviewService';
  *     hand-crafted URL cannot widen the scope.
  */
 
-export const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted'] as const;
+export const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction'] as const;
 export type KpiKey = (typeof KPI_KEYS)[number];
 
 export const KPI_META: Record<KpiKey, { label: string; shortLabel: string }> = {
@@ -33,13 +37,16 @@ export const KPI_META: Record<KpiKey, { label: string; shortLabel: string }> = {
   dueToday: { label: 'Due today', shortLabel: 'Due today' },
   overdue: { label: 'Overdue', shortLabel: 'Overdue' },
   converted: { label: 'Converted', shortLabel: 'Converted' },
+  totalLeads: { label: 'Total Lead', shortLabel: 'Total lead' },
+  todayCollection: { label: 'Today Lead Collection', shortLabel: 'Today collection' },
+  noAction: { label: 'No Action Alert', shortLabel: 'No action' },
 };
 
 /** `person=self` = the caller's own leads, even if they have reports. */
 export const SELF_PERSON_PARAM = 'self';
 
 export function isKpiKey(value: string | null | undefined): value is KpiKey {
-  return value === 'open' || value === 'dueToday' || value === 'overdue' || value === 'converted';
+  return (KPI_KEYS as readonly string[]).includes(value as string);
 }
 
 /** One person's KPI number, straight from their overview row. */
@@ -49,6 +56,9 @@ export function kpiValueFor(person: TeamOverviewPerson, kpi: KpiKey): number {
     case 'dueToday': return person.dueToday;
     case 'overdue': return person.overdue;
     case 'converted': return person.convertedLeads;
+    case 'totalLeads': return person.totalLeads;
+    case 'todayCollection': return person.todayLeads;
+    case 'noAction': return person.noActionLeads;
   }
 }
 

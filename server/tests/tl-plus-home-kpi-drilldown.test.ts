@@ -15,8 +15,11 @@
  *   3. GET /team/kpi/leads — the leaf lead list against the
  *      PRODUCTION leads shape (current_status, is_deleted,
  *      next_follow_up_at; assigned_to holds the EMPLOYEE ID):
- *      all four KPI definitions, scope 404s, leads.view 403, and
- *      totals matching the overview counts exactly.
+ *      the four original KPI definitions, scope 404s, leads.view
+ *      403, and totals matching the overview counts exactly. (The
+ *      three 2026-11-13 additions — Total Lead, Today Lead
+ *      Collection, No Action Alert — are covered in
+ *      tl-plus-home-kpi-new-cards.test.ts.)
  *   4. GET /team/kpi/export — .xlsx of exactly the viewed level
  *      (people rows vs lead rows), `leads.export` grant -> 200 ->
  *      revoke -> 403, out-of-scope 404, audit row.
@@ -98,6 +101,9 @@ const person = (over: Partial<TeamOverviewPerson>): TeamOverviewPerson => ({
   convertedLeads: 0,
   dueToday: 0,
   overdue: 0,
+  totalLeads: 0,
+  todayLeads: 0,
+  noActionLeads: 0,
   isSelf: false,
   ...over,
 });
@@ -742,7 +748,7 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
   const noop = () => {};
   const renderContent = (props: {
     level: KpiLevel;
-    kpi: 'open' | 'dueToday' | 'overdue' | 'converted' | null;
+    kpi: 'open' | 'dueToday' | 'overdue' | 'converted' | 'totalLeads' | 'todayCollection' | 'noAction' | null;
     leads?: KpiLeadsResponse | null;
     leadsLoading?: boolean;
     leadsError?: string | null;
@@ -803,8 +809,8 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
       employeeId: 'EMP-M2',
       total: 2,
       items: [
-        { id: 'lead-1', leadCode: 'LC-1', customerName: 'Karim Uddin', mobile: '01700000001', currentStatus: 'Interested', nextFollowUpAt: '2026-11-10T00:00:00.000Z' },
-        { id: 'lead-2', leadCode: null, customerName: 'Rina Akter', mobile: '', currentStatus: 'Follow-up Set', nextFollowUpAt: null },
+        { id: 'lead-1', leadCode: 'LC-1', customerName: 'Karim Uddin', mobile: '01700000001', currentStatus: 'Interested', nextFollowUpAt: '2026-11-10T00:00:00.000Z', createdAt: '2026-11-08T00:00:00.000Z' },
+        { id: 'lead-2', leadCode: null, customerName: 'Rina Akter', mobile: '', currentStatus: 'Follow-up Set', nextFollowUpAt: null, createdAt: null },
       ],
     };
     const html = renderContent({ level, kpi: 'overdue', leads });
@@ -823,7 +829,7 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
       kpi: 'open',
       employeeId: 'EMP-M1',
       total: 250,
-      items: [{ id: 'lead-1', leadCode: null, customerName: 'Only Shown', mobile: '', currentStatus: 'New', nextFollowUpAt: null }],
+      items: [{ id: 'lead-1', leadCode: null, customerName: 'Only Shown', mobile: '', currentStatus: 'New', nextFollowUpAt: null, createdAt: null }],
     };
     const html = renderContent({ level, kpi: 'open', leads });
     assert.ok(html.includes('Showing 1 of 250 leads'), 'the cap is stated, not silently applied');
@@ -854,7 +860,7 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
         React.createElement(TeamHomeContent, { people: treePeople, scope: 'Team' })
       )
     );
-    for (const kpi of ['open', 'dueToday', 'overdue', 'converted']) {
+    for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
       assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
     }
   });
@@ -883,10 +889,10 @@ describe('KPI drill-down — source guards', () => {
       'the route is in the access table as a Team sub-page, open to everyone (scoping is server-side)');
   });
 
-  it('the Workbench strip links the caller\'s own leads for all four KPIs', () => {
+  it('the Workbench strip links the caller\'s own leads for all seven KPIs', () => {
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
     assert.ok(workbench.includes('My numbers'), 'the strip is headed My numbers');
-    for (const kpi of ['open', 'dueToday', 'overdue', 'converted']) {
+    for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
       assert.ok(workbench.includes(`to="/team/kpi/${kpi}?person=self"`),
         `the ${kpi} strip card opens the caller's own leads`);
     }

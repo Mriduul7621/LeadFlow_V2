@@ -1,9 +1,12 @@
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  BellRing,
   CalendarClock,
+  CalendarPlus,
   CheckCircle2,
   FolderOpen,
+  Layers,
   Radar,
   RefreshCcw,
   TrendingUp,
@@ -31,8 +34,11 @@ import {
  * or the caller has >= 1 direct report. Everything renders from the
  * ONE scoped payload (GET /api/team/overview via teamOverviewService),
  * the same data the My Team page shows; rows link through to /team
- * for the full view, and the four KPI cards drill down the tree at
- * /team/kpi/:kpi (KPI drill-down, 2026-11-13).
+ * for the full view, and the seven KPI cards drill down the tree at
+ * /team/kpi/:kpi (KPI drill-down, 2026-11-13). All seven cards always
+ * render — a 0 is shown, never hidden (never-empty rule, 2026-11-13).
+ * No Action Alert is styled as an alert (red, like Overdue): leads
+ * with no first action within 48 hours of entry.
  */
 
 function StatCard({
@@ -145,9 +151,12 @@ export function TeamHomeContent({
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatCard label="Total Lead" value={totals.totalLeads} icon={Layers} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/totalLeads" />
+        <StatCard label="Today Lead Collection" value={totals.todayCollection} icon={CalendarPlus} tone="bg-sky-50" iconTone="text-sky-500" to="/team/kpi/todayCollection" />
         <StatCard label="Open leads" value={totals.open} icon={FolderOpen} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/open" />
         <StatCard label="Due today" value={totals.dueToday} icon={CalendarClock} tone="bg-amber-50" iconTone="text-amber-500" to="/team/kpi/dueToday" />
         <StatCard label="Overdue" value={totals.overdue} icon={AlertTriangle} tone="bg-red-50" iconTone="text-red-500" to="/team/kpi/overdue" />
+        <StatCard label="No Action Alert" value={totals.noAction} icon={BellRing} tone="bg-red-50" iconTone="text-red-500" to="/team/kpi/noAction" />
         <StatCard label="Converted" value={totals.converted} icon={TrendingUp} tone="bg-emerald-50" iconTone="text-emerald-500" to="/team/kpi/converted" />
       </div>
 

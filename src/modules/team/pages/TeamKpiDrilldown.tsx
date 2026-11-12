@@ -46,6 +46,13 @@ import {
  * (GET /team/kpi/export, `leads.export`-gated). A person outside the
  * caller's visible set renders the not-found panel — and the server
  * answers 404 for the same URL, so the scope is enforced twice.
+ *
+ * Never-empty rule (owner, 2026-11-13): a people level NEVER hides
+ * zero-count people — everyone in scope is listed with their 0s,
+ * and when EVERYONE is 0 a short line says so above the list. A
+ * leaf level with no matching leads still shows the person's header
+ * (name + employee ID), the 0 count, and a clear message — the page
+ * is never blank.
  */
 
 export interface KpiLeadItem {
@@ -55,6 +62,7 @@ export interface KpiLeadItem {
   mobile: string;
   currentStatus: string;
   nextFollowUpAt: string | null;
+  createdAt: string | null;
 }
 
 export interface KpiLeadsResponse {
@@ -69,6 +77,14 @@ function dhakaDate(iso: string | null): string {
   if (!iso) return 'No next action set';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return 'No next action set';
+  return d.toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Entry date for a lead row ('' when unknown) — shown for the KPIs where entry age matters. */
+function enteredDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -144,7 +160,7 @@ export function TeamKpiDrilldownContent({
     return (
       <NotFoundPanel
         title="Unknown KPI"
-        body="This KPI does not exist. Open, Due today, Overdue and Converted are the four team KPIs."
+        body="This KPI does not exist. Total Lead, Today Lead Collection, Open, Due today, Overdue, No Action Alert and Converted are the seven team KPIs."
       />
     );
   }
@@ -212,7 +228,7 @@ export function TeamKpiDrilldownContent({
             <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400">
               {isPeople
                 ? `${level.rows.length} ${level.rows.length === 1 ? 'person' : 'people'} · ${levelTotal} total`
-                : `${levelTotal} ${levelTotal === 1 ? 'lead' : 'leads'}`}
+                : `${levelTotal} ${levelTotal === 1 ? 'lead' : 'leads'} · ${current.employeeId}`}
             </p>
           </div>
         </div>
@@ -261,6 +277,11 @@ export function TeamKpiDrilldownContent({
               </Link>
             ))
           )}
+          {level.rows.length > 0 && levelTotal === 0 && (
+            <p className="text-[11px] font-bold text-stone-400 pt-1">
+              No leads for this KPI yet — everyone is at 0.
+            </p>
+          )}
           <p className="text-[11px] font-bold text-stone-400 pt-1">
             Tap a name to see their team — down to team-member level, where the actual leads appear.
           </p>
@@ -287,7 +308,7 @@ export function TeamKpiDrilldownContent({
           ) : !leads || leads.items.length === 0 ? (
             <div className="bg-white border border-stone-200/80 rounded-2xl p-6">
               <p className="text-sm font-bold text-stone-600">
-                No {meta.label.toLowerCase()} leads for {current.isSelf ? 'you' : current.name} right now.
+                No leads for this KPI — {current.isSelf ? 'you have' : `${current.name} has`} none right now.
               </p>
             </div>
           ) : (
@@ -313,6 +334,11 @@ export function TeamKpiDrilldownContent({
                     <span className="text-[10px] font-black uppercase tracking-widest bg-stone-100 text-stone-600 px-2 py-1 rounded-full">
                       {lead.currentStatus}
                     </span>
+                    {(kpi === 'noAction' || kpi === 'todayCollection') && enteredDate(lead.createdAt) && (
+                      <span className="text-[10px] font-bold text-stone-400 hidden sm:inline">
+                        Entered {enteredDate(lead.createdAt)}
+                      </span>
+                    )}
                     <span className="text-[10px] font-bold text-stone-400 hidden sm:inline">
                       {dhakaDate(lead.nextFollowUpAt)}
                     </span>

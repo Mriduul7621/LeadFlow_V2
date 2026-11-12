@@ -35,6 +35,9 @@ export interface TeamOverviewPerson {
   convertedLeads: number;
   dueToday: number;
   overdue: number;
+  totalLeads: number;
+  todayLeads: number;
+  noActionLeads: number;
   isSelf: boolean;
 }
 
@@ -138,6 +141,9 @@ export interface TeamTotals {
   dueToday: number;
   overdue: number;
   converted: number;
+  totalLeads: number;
+  todayCollection: number;
+  noAction: number;
 }
 
 /** Whole-team totals — the same sums the My Team page header shows. */
@@ -148,8 +154,11 @@ export function summarizeTeamTotals(people: TeamOverviewPerson[]): TeamTotals {
       dueToday: acc.dueToday + p.dueToday,
       overdue: acc.overdue + p.overdue,
       converted: acc.converted + p.convertedLeads,
+      totalLeads: acc.totalLeads + p.totalLeads,
+      todayCollection: acc.todayCollection + p.todayLeads,
+      noAction: acc.noAction + p.noActionLeads,
     }),
-    { open: 0, dueToday: 0, overdue: 0, converted: 0 }
+    { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 }
   );
 }
 

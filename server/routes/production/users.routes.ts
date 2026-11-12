@@ -78,6 +78,15 @@ import {
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
 import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES, storedTimestampIso } from '../../utils/businessTime.js';
 import { buildKpiExportWorkbook, dhakaDateText } from '../../services/TeamKpiExportService.js';
+import {
+  KPI_LABELS,
+  isKpiKey,
+  kpiKeysMessage,
+  kpiLeadPredicate,
+  noActionCutoffIso,
+  probeNoActionSupport,
+  type KpiKey,
+} from '../../services/teamKpiDefinitions.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
   AUDIT_CHANGE_CAP,
@@ -569,6 +578,9 @@ export interface TeamOverviewPersonPayload {
   convertedLeads: number;
   dueToday: number;
   overdue: number;
+  totalLeads: number;
+  todayLeads: number;
+  noActionLeads: number;
   isSelf: boolean;
 }
 
@@ -606,6 +618,12 @@ async function loadTeamOverviewForCaller(
       return m && (String(m.id) === String(u.id));
     });
     const todayBounds = getDhakaBusinessDayBounds(new Date());
+    const noActionCutoff = new Date(noActionCutoffIso()).getTime();
+    const demoCreatedAt = (l: any): number => {
+      const v = l.created_at || l.creationDate;
+      const t = v ? new Date(v).getTime() : NaN;
+      return t;
+    };
     const people: TeamOverviewPersonPayload[] = scoped.map(u => {
       const reports = reportsOf(u);
       const tier = reports.length > 0 && reports.some((r: any) => reportsOf(r).length > 0)
@@ -621,6 +639,22 @@ async function loadTeamOverviewForCaller(
         if (!l.nextFollowUpDate) return false;
         if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
         return new Date(l.nextFollowUpDate).getTime() < new Date(todayBounds.todayStartIso).getTime();
+      }).length;
+      // Demo-mode no-action: no activity ledger exists in the
+      // fallback store, so "never touched" is proxied by status
+      // still 'New' — any status move means someone acted on the
+      // lead. (DB path: real lead_activities + status_history.)
+      const noActionLeads = mine.filter(l => {
+        if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
+        if (String(l.currentStatus || '') !== 'New') return false;
+        const created = demoCreatedAt(l);
+        return Number.isFinite(created) && created < noActionCutoff;
+      }).length;
+      const todayLeads = mine.filter(l => {
+        const created = demoCreatedAt(l);
+        return Number.isFinite(created)
+          && created >= new Date(todayBounds.todayStartIso).getTime()
+          && created < new Date(todayBounds.tomorrowStartIso).getTime();
       }).length;
       const mgr = managerOf(u);
       return {
@@ -638,6 +672,9 @@ async function loadTeamOverviewForCaller(
         convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
         dueToday,
         overdue,
+        totalLeads: mine.length,
+        todayLeads,
+        noActionLeads,
         isSelf: String(u.id) === String(caller.id),
       };
     });
@@ -665,17 +702,40 @@ async function loadTeamOverviewForCaller(
       childrenCount.set(String(row.manager_id), (childrenCount.get(String(row.manager_id)) || 0) + 1);
     }
   }
-  const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(new Date());
+  const bounds = getDhakaBusinessDayBounds(new Date());
+  // The no-action predicate needs the activity/history probe BEFORE
+  // the counts query (DZ-1 precedent: never touch a table that may
+  // not exist without probing first — minimal schemas lack both).
+  const support = await probeNoActionSupport(pool);
+  const countParams: any[] = [];
+  const pushCountParam = (value: unknown): string => {
+    countParams.push(value);
+    return `$${countParams.length}`;
+  };
+  const predCtx = {
+    pushParam: pushCountParam,
+    alias: 'leads',
+    support,
+    todayStartIso: bounds.todayStartIso,
+    tomorrowStartIso: bounds.tomorrowStartIso,
+    noActionCutoffIso: noActionCutoffIso(new Date()),
+  };
+  // Every count comes from the ONE shared predicate module
+  // (teamKpiDefinitions) — the same definition the leaf list uses,
+  // so a card's number always equals its drill-down's rows.
   const countsRes = await pool.query(
     `SELECT assigned_to,
-            COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
-            COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
-            COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count,
-            COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at < $1)::int AS overdue_count
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('open', predCtx)})::int AS open_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('converted', predCtx)})::int AS converted_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('dueToday', predCtx)})::int AS due_today_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('overdue', predCtx)})::int AS overdue_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('totalLeads', predCtx)})::int AS total_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('todayCollection', predCtx)})::int AS today_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('noAction', predCtx)})::int AS no_action_count
      FROM leads
      WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
      GROUP BY assigned_to`,
-    [startIso, endIso]
+    countParams
   );
   const counts = new Map((countsRes.rows as any[]).map(r => [String(r.assigned_to).toUpperCase(), r]));
   const people: TeamOverviewPersonPayload[] = scoped.map(row => {
@@ -705,6 +765,9 @@ async function loadTeamOverviewForCaller(
       convertedLeads: c.converted_count || 0,
       dueToday: c.due_today_count || 0,
       overdue: c.overdue_count || 0,
+      totalLeads: c.total_count || 0,
+      todayLeads: c.today_count || 0,
+      noActionLeads: c.no_action_count || 0,
       isSelf: String(row.id) === String(caller.id),
     };
   });
@@ -714,34 +777,32 @@ async function loadTeamOverviewForCaller(
 /* ================================================================== */
 /* KPI drill-down (TL+ Home, owner-approved 2026-11-13)                */
 /*                                                                     */
-/* The team home's four KPI cards (Open / Due Today / Overdue /       */
-/* Converted) drill down the reporting tree: a people level lists the  */
-/* current person's direct reports with their KPI numbers; a leaf      */
-/* level lists that person's actual leads for the KPI. The drill-down  */
-/* levels are computed CLIENT-side from the ONE overview payload;      */
-/* only the leaf lead list (GET /team/kpi/leads) and the export        */
-/* (GET /team/kpi/export) come from the server — both scoped by the    */
-/* same loadTeamOverviewForCaller visible set, so the server enforces  */
-/* the scope the page shows. A person outside the caller's visible     */
-/* set answers 404, the same "not found" pattern as leads.             */
+/* The team home's seven KPI cards (Total Lead / Today Lead            */
+/* Collection / Open / Due Today / Overdue / No Action Alert /         */
+/* Converted) drill down the reporting tree: a people level lists      */
+/* the current person's direct reports with their KPI numbers; a       */
+/* leaf level lists that person's actual leads for the KPI. The        */
+/* drill-down levels are computed CLIENT-side from the ONE overview    */
+/* payload; only the leaf lead list (GET /team/kpi/leads) and the      */
+/* export (GET /team/kpi/export) come from the server — both scoped    */
+/* by the same loadTeamOverviewForCaller visible set, so the server    */
+/* enforces the scope the page shows. A person outside the caller's    */
+/* visible set answers 404, the same "not found" pattern as leads.    */
+/* What each KPI counts lives ONLY in services/                       */
+/* teamKpiDefinitions.ts (kpiLeadPredicate) — the overview counts      */
+/* and the leaf list share it, so a card's number always equals its    */
+/* drill-down's rows.                                                  */
+/*                                                                     */
+/* Never-empty rule (owner, 2026-11-13): no people list here ever      */
+/* filters out zero-count people — everyone in scope appears, with     */
+/* 0s where they have none. The export carries the same rows the       */
+/* page shows, zeros included.                                         */
 /* ================================================================== */
 
-const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted'] as const;
-type KpiKey = (typeof KPI_KEYS)[number];
-const KPI_LABELS: Record<KpiKey, string> = {
-  open: 'Open leads',
-  dueToday: 'Due today',
-  overdue: 'Overdue',
-  converted: 'Converted',
-};
 /** `person=self` = the caller's OWN leaf list (My Day strip, members). */
 const SELF_PERSON_PARAM = 'self';
 /** Leaf lead lists (page + export) cap at the follow-up queue's max. */
 const KPI_LEADS_MAX = 200;
-
-function isKpiKey(value: string): value is KpiKey {
-  return (KPI_KEYS as readonly string[]).includes(value);
-}
 
 function kpiValueOfPerson(person: TeamOverviewPersonPayload, kpi: KpiKey): number {
   switch (kpi) {
@@ -749,6 +810,9 @@ function kpiValueOfPerson(person: TeamOverviewPersonPayload, kpi: KpiKey): numbe
     case 'dueToday': return person.dueToday;
     case 'overdue': return person.overdue;
     case 'converted': return person.convertedLeads;
+    case 'totalLeads': return person.totalLeads;
+    case 'todayCollection': return person.todayLeads;
+    case 'noAction': return person.noActionLeads;
   }
 }
 
@@ -759,20 +823,18 @@ export interface KpiLeadRow {
   mobile: string;
   currentStatus: string;
   nextFollowUpAt: string | null;
+  /** Stored entry instant (ISO) — the page shows it for No Action / Today Collection rows. */
+  createdAt: string | null;
 }
 
 /**
- * One person's leads matching a KPI — the EXACT overview definitions
- * (production column shapes: current_status, is_deleted,
- * next_follow_up_at; assigned_to holds the EMPLOYEE ID, matched
- * case-insensitively exactly as the overview counts do):
- *   open      = non-terminal + not deleted
- *   dueToday  = next_follow_up_at within the current Dhaka business
- *               day (NO terminal filter — the overview's
- *               due_today_count counts terminal leads too)
- *   overdue   = non-terminal + not deleted + next_follow_up_at
- *               before today's Dhaka start
- *   converted = current_status = 'Converted'
+ * One person's leads matching a KPI — the definition comes from the
+ * ONE shared predicate (services/teamKpiDefinitions.ts), the exact
+ * same definition the overview counts use, so this list contains
+ * exactly the leads the card counted. Production column shapes:
+ * current_status, is_deleted, next_follow_up_at, created_at;
+ * assigned_to holds the EMPLOYEE ID, matched case-insensitively
+ * exactly as the overview counts do.
  * Callers must already have proven the target is inside the caller's
  * visible set (membership in the overview people array); combined
  * with the assigned_to filter, that is the lead-visibility predicate
@@ -782,9 +844,17 @@ async function loadKpiLeadsForPerson(
   employeeId: string,
   kpi: KpiKey
 ): Promise<{ total: number; items: KpiLeadRow[] }> {
-  const bounds = getDhakaBusinessDayBounds(new Date());
+  const now = new Date();
+  const bounds = getDhakaBusinessDayBounds(now);
+  const cutoffIso = noActionCutoffIso(now);
   if (!useDb()) {
     const terminal = new Set((TERMINAL_LEAD_STATUSES as readonly string[]).map(s => s.toLowerCase()));
+    const createdMs = (l: any): number => {
+      const v = l.created_at || l.creationDate;
+      const t = v ? new Date(v).getTime() : NaN;
+      return t;
+    };
+    const noActionCutoff = new Date(cutoffIso).getTime();
     const matches = (l: any): boolean => {
       if (l.is_deleted === true) return false;
       if (String(l.assignedTo || '').toUpperCase() !== employeeId.toUpperCase()) return false;
@@ -798,6 +868,20 @@ async function loadKpiLeadsForPerson(
           return Number.isFinite(t) && t >= bounds.todayStart.getTime() && t < bounds.tomorrowStart.getTime();
         case 'overdue':
           return !terminal.has(st.toLowerCase()) && Number.isFinite(t) && t < bounds.todayStart.getTime();
+        case 'totalLeads': return true;
+        case 'todayCollection': {
+          const c = createdMs(l);
+          return Number.isFinite(c) && c >= bounds.todayStart.getTime() && c < bounds.tomorrowStart.getTime();
+        }
+        case 'noAction': {
+          // Demo proxy (see the overview demo branch): no activity
+          // ledger exists in the fallback store, so status still
+          // 'New' stands in for "never touched".
+          if (terminal.has(st.toLowerCase())) return false;
+          if (st !== 'New') return false;
+          const c = createdMs(l);
+          return Number.isFinite(c) && c < noActionCutoff;
+        }
       }
     };
     const rows = (fallbackStore.leads as any[]).filter(matches);
@@ -805,6 +889,11 @@ async function loadKpiLeadsForPerson(
       if (kpi === 'dueToday' || kpi === 'overdue') {
         return new Date(a.nextFollowUpDate || a.next_follow_up_at || 0).getTime()
           - new Date(b.nextFollowUpDate || b.next_follow_up_at || 0).getTime();
+      }
+      if (kpi === 'noAction') {
+        // Longest-waiting first — the most urgent no-action lead.
+        return new Date(a.created_at || a.creationDate || 0).getTime()
+          - new Date(b.created_at || b.creationDate || 0).getTime();
       }
       return new Date(b.created_at || b.creationDate || 0).getTime()
         - new Date(a.created_at || a.creationDate || 0).getTime();
@@ -816,43 +905,36 @@ async function loadKpiLeadsForPerson(
       mobile: l.mobile || '',
       currentStatus: l.currentStatus || 'New',
       nextFollowUpAt: storedTimestampIso(l.nextFollowUpDate || l.next_follow_up_at),
+      createdAt: storedTimestampIso(l.created_at || l.creationDate),
     }));
     return { total: rows.length, items };
   }
 
   const pool = getPool();
+  const support = await probeNoActionSupport(pool);
   const params: any[] = [employeeId.toUpperCase()];
-  const where: string[] = ['l.is_deleted = FALSE', 'UPPER(l.assigned_to) = $1'];
-  const notTerminalSql = (): string => {
-    const placeholders = (TERMINAL_LEAD_STATUSES as readonly string[]).map(s => {
-      params.push(s);
-      return `$${params.length}`;
-    });
-    return `l.current_status NOT IN (${placeholders.join(', ')})`;
+  const pushParam = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
   };
-  if (kpi === 'open') {
-    where.push(notTerminalSql());
-  } else if (kpi === 'converted') {
-    params.push('Converted');
-    where.push(`l.current_status = $${params.length}`);
-  } else if (kpi === 'dueToday') {
-    // No terminal filter here — deliberately: the overview's
-    // due_today_count counts every lead due today, terminal or not,
-    // and this list must contain exactly the leads it counted.
-    params.push(bounds.todayStartIso, bounds.tomorrowStartIso);
-    where.push(`l.next_follow_up_at >= $${params.length - 1} AND l.next_follow_up_at < $${params.length}`);
-  } else {
-    where.push(notTerminalSql());
-    params.push(bounds.todayStartIso);
-    where.push(`l.next_follow_up_at < $${params.length}`);
-  }
+  const where: string[] = ['l.is_deleted = FALSE', 'UPPER(l.assigned_to) = $1'];
+  where.push(kpiLeadPredicate(kpi, {
+    pushParam,
+    alias: 'l',
+    support,
+    todayStartIso: bounds.todayStartIso,
+    tomorrowStartIso: bounds.tomorrowStartIso,
+    noActionCutoffIso: cutoffIso,
+  }));
   const orderBy = (kpi === 'dueToday' || kpi === 'overdue')
     ? 'ORDER BY l.next_follow_up_at ASC NULLS LAST, l.created_at DESC'
-    : 'ORDER BY l.created_at DESC';
+    : kpi === 'noAction'
+      ? 'ORDER BY l.created_at ASC'
+      : 'ORDER BY l.created_at DESC';
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS total FROM leads l WHERE ${where.join(' AND ')}`, params),
     pool.query(
-      `SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.current_status, l.next_follow_up_at
+      `SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.current_status, l.next_follow_up_at, l.created_at
        FROM leads l WHERE ${where.join(' AND ')} ${orderBy} LIMIT ${KPI_LEADS_MAX}`,
       params
     ),
@@ -864,6 +946,7 @@ async function loadKpiLeadsForPerson(
     mobile: row.mobile || '',
     currentStatus: row.current_status || 'New',
     nextFollowUpAt: storedTimestampIso(row.next_follow_up_at),
+    createdAt: storedTimestampIso(row.created_at),
   }));
   return { total: Number(countRes.rows[0]?.total || 0), items };
 }
@@ -911,7 +994,7 @@ router.get('/team/kpi/leads', requireAuth, async (req, res) => {
   try {
     const kpiRaw = String(req.query?.kpi || '').trim();
     if (!isKpiKey(kpiRaw)) {
-      return sendJson(res, 400, { success: false, message: 'kpi must be open, dueToday, overdue, or converted.' });
+      return sendJson(res, 400, { success: false, message: kpiKeysMessage() });
     }
     const kpi = kpiRaw as KpiKey;
     const personParam = req.query?.person ? String(req.query.person).trim() : '';
@@ -957,7 +1040,7 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
   try {
     const kpiRaw = String(req.query?.kpi || '').trim();
     if (!isKpiKey(kpiRaw)) {
-      return sendJson(res, 400, { success: false, message: 'kpi must be open, dueToday, overdue, or converted.' });
+      return sendJson(res, 400, { success: false, message: kpiKeysMessage() });
     }
     const kpi = kpiRaw as KpiKey;
     const personParam = req.query?.person ? String(req.query.person).trim() : '';
