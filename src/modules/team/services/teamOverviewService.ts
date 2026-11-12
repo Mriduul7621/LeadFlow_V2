@@ -102,13 +102,35 @@ export function getSelfPerson(
 /**
  * The UM-1 team-lead fact: the caller HAS a team when at least one
  * person reports to them. Derived from the tree (the overview's own
- * `directReports` on the caller's row) — never from a role label, so
- * an Organization-scope admin with no reports does NOT qualify, and
- * any lead with one report does.
+ * `directReports` on the caller's row) — never from a role label.
+ * This is the raw tree fact only; the LANDING decision and the
+ * Team/My-work switch use callerSeesTeam below (KPI drill-down,
+ * 2026-11-13), which also counts callers who can SEE a team without
+ * anyone reporting to them (admin / CEO / administration roles).
  */
 export function callerHasTeam(people: TeamOverviewPerson[] | null | undefined): boolean {
   const self = getSelfPerson(people);
   return Boolean(self && self.directReports > 0);
+}
+
+/**
+ * The "sees a team" fact the TL+ landing decision runs on
+ * (owner-approved 2026-11-13): the caller gets the team-first home
+ * whenever they can see MORE than just themself — the scoped
+ * overview's `scope` is not 'Own' ('Organization' or 'Team') — OR
+ * they have at least one direct report. The scope arm is what puts
+ * admin / CEO / administration roles on the team home: ADMIN and
+ * SUPERADMIN resolve to Organization scope, and CEO/BH likewise,
+ * even with no reports in the tree. A leaf member (scope 'Own', no
+ * reports) still gets the member landing. An empty scope (a payload
+ * that never loaded properly) falls back to the tree fact alone,
+ * never to a guessed team view.
+ */
+export function callerSeesTeam(overview: TeamOverviewResponse | null | undefined): boolean {
+  if (!overview) return false;
+  const scope = overview.scope || '';
+  if (scope !== '' && scope !== 'Own') return true;
+  return callerHasTeam(overview.people);
 }
 
 export interface TeamTotals {

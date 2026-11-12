@@ -19,7 +19,7 @@ import {
   setHomeViewPreference,
 } from '../services/homeLanding';
 import {
-  callerHasTeam,
+  callerSeesTeam,
   loadTeamOverview,
   readCachedTeamOverview,
   type TeamOverviewResponse,
@@ -40,8 +40,9 @@ const TeamHome = lazy(() => import('../../team/pages/TeamHome'));
  * session (see services/homeLanding.ts for the marker lifetime):
  *
  *   first arrival this session -> decide:
- *       caller HAS a team (UM-1: >= 1 report, from the scoped
- *         GET /api/team/overview payload — never a role label) and
+ *       caller SEES a team (KPI drill-down, 2026-11-13: the scoped
+ *         GET /api/team/overview payload's `scope` is not 'Own' —
+ *         Organization or Team — OR the caller has >= 1 report) and
  *         did not toggle to My work
  *                           -> render the team-first home (TeamHome)
  *       Workbench access    -> redirect to /workbench
@@ -182,7 +183,7 @@ export default function HomeLanding({ children }: { children: React.ReactNode })
     if (decision !== null || !settled || !overviewSettled || !user || !userId || alreadyLanded) return;
     const memberHome = resolveHomePath(user.role, matchRole(roles, user));
     const home = resolveHomeLandingDecision({
-      hasTeam: callerHasTeam(overview?.people),
+      hasTeam: callerSeesTeam(overview),
       preference: getHomeViewPreference(userId),
       memberHomePath: memberHome,
     });
@@ -207,7 +208,7 @@ export default function HomeLanding({ children }: { children: React.ReactNode })
     // the Team view, whose home IS the team home.
     if (preference === 'team') {
       if (!overviewSettled) return <AccessResolving />;
-      if (callerHasTeam(overview?.people)) return <TeamHomePage />;
+      if (callerSeesTeam(overview)) return <TeamHomePage />;
     }
     return <>{children}</>;
   }

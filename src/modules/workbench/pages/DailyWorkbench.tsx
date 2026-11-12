@@ -3,10 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   Calendar as CalendarIcon,
+  CalendarClock,
   CheckCircle2,
   Clock,
+  FolderOpen,
   History,
   Phone,
+  TrendingUp,
   Video,
   ClipboardCheck,
   RefreshCw,
@@ -37,6 +40,7 @@ import { toast } from 'sonner';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { getSelfPerson } from '../../team/services/teamOverviewService';
 import HomeViewSwitch from '../../team/components/HomeViewSwitch';
 
 /** ------------------------------------------------------------
@@ -253,6 +257,66 @@ function SummaryCard({
         {sub && <p className="text-[11px] font-medium text-stone-400 mt-2">{sub}</p>}
       </div>
     </div>
+  );
+}
+
+/**
+ * KpiStripCard — one number of the "My numbers" strip (KPI drill-down,
+ * 2026-11-13): the caller's OWN four KPIs from their overview row,
+ * each linking to /team/kpi/:kpi?person=self — their own leads for
+ * that KPI. The Daily Summary cards above are NOT linked: their
+ * counts mix scheduled activities with leads, so they would not match
+ * the KPI page's numbers; this strip's numbers are exactly the KPI
+ * numbers, so the card and the page always agree.
+ */
+function KpiStripCard({
+  label,
+  value,
+  icon: Icon,
+  variant = 'default',
+  to,
+}: {
+  label: string;
+  value: number;
+  icon: React.ComponentType<{ className?: string }>;
+  variant?: 'default' | 'blue' | 'orange' | 'emerald' | 'red' | 'olive' | 'slate';
+  to: string;
+}) {
+  const variantClass: Record<string, string> = {
+    default: 'kpi-card',
+    blue: 'kpi-card kpi-card-blue',
+    orange: 'kpi-card kpi-card-orange',
+    emerald: 'kpi-card kpi-card-emerald',
+    red: 'kpi-card kpi-card-red',
+    olive: 'kpi-card kpi-card-olive',
+    slate: 'kpi-card',
+  };
+  const iconClass: Record<string, string> = {
+    default: 'icon-capsule icon-capsule-slate',
+    blue: 'icon-capsule icon-capsule-blue',
+    orange: 'icon-capsule icon-capsule-orange',
+    emerald: 'icon-capsule icon-capsule-emerald',
+    red: 'icon-capsule icon-capsule-red',
+    olive: 'icon-capsule icon-capsule-olive',
+    slate: 'icon-capsule icon-capsule-slate',
+  };
+  return (
+    <Link
+      to={to}
+      className={cn(variantClass[variant] || variantClass.default, 'block hover:ring-2 hover:ring-[#978C21]/40 transition-shadow')}
+      aria-label={`${label}: ${value} — view my leads`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-500">{label}</p>
+        <div className={cn(iconClass[variant] || iconClass.default)}>
+          <Icon className="w-4 h-4" />
+        </div>
+      </div>
+      <div className="mt-4">
+        <p className="text-2xl md:text-[28px] font-black tracking-tight leading-none text-brand-text">{value}</p>
+        <p className="text-[11px] font-medium text-stone-400 mt-2">Tap to see my leads</p>
+      </div>
+    </Link>
   );
 }
 
@@ -615,6 +679,30 @@ export default function DailyWorkbench() {
           </Link>
         </div>
       </div>
+
+      {/* My numbers — the caller's OWN four KPIs (KPI drill-down,
+          2026-11-13). From the already-loaded overview self row, so no
+          extra request; hidden until the overview loads (a failed
+          overview must never break My Day). Each card opens the
+          caller's own leads for that KPI. */}
+      {(() => {
+        const self = getSelfPerson(callerTeam.overview?.people);
+        if (!self) return null;
+        return (
+          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">My numbers</h2>
+              <span className="text-[11px] font-semibold text-stone-400">Your own leads</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiStripCard label="Open leads" value={self.openLeads} icon={FolderOpen} variant="default" to="/team/kpi/open?person=self" />
+              <KpiStripCard label="Due today" value={self.dueToday} icon={CalendarClock} variant="orange" to="/team/kpi/dueToday?person=self" />
+              <KpiStripCard label="Overdue" value={self.overdue} icon={AlertTriangle} variant="red" to="/team/kpi/overdue?person=self" />
+              <KpiStripCard label="Converted" value={self.convertedLeads} icon={TrendingUp} variant="emerald" to="/team/kpi/converted?person=self" />
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Partial failure banners */}
       {(followUpError || scheduledError || roadshowError) && !error && (

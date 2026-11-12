@@ -15,9 +15,12 @@
  *      column): open lead with a past-due follow-up counts; terminal
  *      and deleted leads never do.
  *   2. resolveHomeLandingDecision — the pure landing decision:
- *      TL+ default team, My-work opt-out, leaf member unchanged, and
- *      an Organization-scope admin with NO reports stays a member
- *      for landing (hasTeam is tree-derived, not scope-derived).
+ *      TL+ default team, My-work opt-out, leaf member unchanged.
+ *      (KPI drill-down, 2026-11-13: HomeLanding now feeds this
+ *      resolver callerSeesTeam — scope not 'Own' OR reports — so an
+ *      Organization-scope admin with no reports gets the team home;
+ *      the pure resolver itself is unchanged, and the admin case is
+ *      pinned in tl-plus-home-kpi-drilldown.test.ts.)
  *   3. Home-view preference lifecycle (session cache, per user,
  *      reset on fresh login together with the landing marker).
  *   4. teamOverviewService shaping — callerHasTeam, totals,
@@ -261,7 +264,7 @@ describe('TL+ Home — GET /api/team/overview overdue counts (production leads s
     const self = res.body.people[0];
     assert.equal(self.employeeId, 'TMEM');
     assert.equal(self.isSelf, true);
-    assert.equal(self.directReports, 0, 'no reports -> callerHasTeam is false -> member landing');
+    assert.equal(self.directReports, 0, "no reports, Own scope -> callerSeesTeam is false -> member landing");
     assert.equal(self.overdue, 2, 'own overdue still reported for the member themself');
   });
 });
@@ -311,12 +314,16 @@ describe('resolveHomeLandingDecision — TL+ landing decision', () => {
     }
   });
 
-  it('an Organization-scope admin with NO reports is a member for landing', () => {
-    // Pinned behaviour (UM-1): "has a team" is derived from the
-    // reporting tree (the self row's directReports), NOT from the
-    // visibility scope. An admin who can SEE everyone but has nobody
-    // reporting to them is an individual contributor at landing time;
-    // they can still open My Team from navigation.
+  it('hasTeam=false still maps to the member landing (the resolver is unchanged)', () => {
+    // KPI drill-down (2026-11-13): what changed is what FEEDS this
+    // resolver, not the resolver itself. HomeLanding used to feed it
+    // callerHasTeam (the tree fact only), so an Organization-scope
+    // admin with no reports landed as a member. It now feeds
+    // callerSeesTeam (scope not 'Own' OR reports), so that admin
+    // gets the team home — pinned in
+    // tl-plus-home-kpi-drilldown.test.ts. The pure rule below still
+    // holds: a caller who sees NOBODY (a leaf member) keeps the
+    // member landing in every preference state.
     assert.equal(
       resolveHomeLandingDecision({ hasTeam: false, preference: null, memberHomePath: WORKBENCH_HOME_PATH }),
       WORKBENCH_HOME_PATH
@@ -324,7 +331,7 @@ describe('resolveHomeLandingDecision — TL+ landing decision', () => {
     assert.equal(
       resolveHomeLandingDecision({ hasTeam: false, preference: 'team', memberHomePath: WORKBENCH_HOME_PATH }),
       WORKBENCH_HOME_PATH,
-      'even a stale Team preference cannot conjure a team home without reports'
+      'even a stale Team preference cannot conjure a team home for a caller who sees nobody'
     );
   });
 });

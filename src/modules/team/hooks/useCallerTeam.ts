@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '../../auth/store/authStore';
 import {
-  callerHasTeam,
+  callerSeesTeam,
   loadTeamOverview,
   readCachedTeamOverview,
   type TeamOverviewResponse,
@@ -10,15 +10,16 @@ import {
 /**
  * useCallerTeam
  * ------------------------------------------------------------------
- * The caller's team overview + the derived UM-1 "has a team" fact,
- * for components that only need to know whether the caller leads a
- * team (the Daily Workbench's Team toggle) or want the payload
- * itself (the TL+ team home). Cache-first through
- * teamOverviewService: when HomeLanding already loaded the overview
- * for the landing decision this is a synchronous cache hit; the
- * network is touched at most once per session otherwise. A failed
- * load settles as `error` with hasTeam=false — callers fail back to
- * the member experience, never to a guessed team view.
+ * The caller's team overview + the derived "sees a team" fact
+ * (callerSeesTeam: scope not 'Own', or >= 1 direct report), for
+ * components that only need to know whether the caller gets the
+ * team home (the Daily Workbench's Team toggle) or want the payload
+ * itself (the TL+ team home, the KPI drill-down). Cache-first
+ * through teamOverviewService: when HomeLanding already loaded the
+ * overview for the landing decision this is a synchronous cache hit;
+ * the network is touched at most once per session otherwise. A
+ * failed load settles as `error` with hasTeam=false — callers fail
+ * back to the member experience, never to a guessed team view.
  */
 export interface CallerTeamState {
   loading: boolean;
@@ -72,7 +73,11 @@ export function useCallerTeam(): CallerTeamState {
     loading,
     error,
     overview,
-    hasTeam: callerHasTeam(overview?.people),
+    // KPI drill-down (2026-11-13): the switch and the team home
+    // follow the "sees a team" rule now, not direct reports alone —
+    // an admin/CEO with no reports still sees the team home (and
+    // this switch), because their scope is not 'Own'.
+    hasTeam: callerSeesTeam(overview),
     refresh: () => setReloadTick(t => t + 1),
   };
 }

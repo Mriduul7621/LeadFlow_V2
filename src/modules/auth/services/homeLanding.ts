@@ -89,12 +89,14 @@ export function setHomeViewPreference(userId: string, view: HomeViewPreference):
 /**
  * The TL+-aware landing decision (pure; HomeLanding applies it).
  *
- * "Has a team" is the UM-1 derived fact — the caller's own row in
- * GET /api/team/overview carries `directReports > 0` — never a role
- * label: an Organization-scope admin with NO reports is an individual
- * contributor for landing purposes and keeps the member landing,
- * while any Team Lead / Manager with at least one report gets the
- * team-first home unless they toggled to My work for this session.
+ * "Has a team" is the "sees a team" fact (callerSeesTeam in
+ * teamOverviewService): the scoped overview's scope is not 'Own'
+ * (Organization or Team), OR the caller has >= 1 direct report
+ * (the UM-1 tree fact). Admin / CEO / administration roles land on
+ * the team home even with no reports, because their scope is not
+ * 'Own'; a leaf member (scope 'Own', no reports) keeps the member
+ * landing. The caller's choice to toggle to My work still wins for
+ * the session.
  *
  * Returns TEAM_HOME_PATH (render the team home at `/`), or the member
  * decision unchanged (WORKBENCH_HOME_PATH / DASHBOARD_HOME_PATH as

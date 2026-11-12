@@ -76,7 +76,8 @@ import {
   type ImportMode,
 } from '../userBulkImport.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
-import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES } from '../../utils/businessTime.js';
+import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES, storedTimestampIso } from '../../utils/businessTime.js';
+import { buildKpiExportWorkbook, dhakaDateText } from '../../services/TeamKpiExportService.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
   AUDIT_CHANGE_CAP,
@@ -110,6 +111,8 @@ import {
   summarizeAccessChanges,
   useDb,
   withMembershipDepartments,
+  type CallerDbInfo,
+  type CallerVisibilityResult,
 } from './shared.js';
 
 const router = Router();
@@ -549,6 +552,342 @@ router.get('/users', requireAuth, async (req, res) => {
    ladder level <= 2 with reports), "teamLead" = has direct reports,
    otherwise "teamMember". Counts mirror the roster's definitions
    (open = assigned, not deleted, non-terminal). */
+/** One row of the scoped team overview payload (the server shape of
+ * the client's TeamOverviewPerson). */
+export interface TeamOverviewPersonPayload {
+  userId: string;
+  employeeId: string;
+  name: string;
+  designation: string | null;
+  roleName: string | null;
+  department: string | null;
+  managerEmployeeId: string | null;
+  managerName: string | null;
+  tier: 'manager' | 'teamLead' | 'teamMember';
+  directReports: number;
+  openLeads: number;
+  convertedLeads: number;
+  dueToday: number;
+  overdue: number;
+  isSelf: boolean;
+}
+
+/**
+ * The scoped team overview, shared by GET /team/overview and the KPI
+ * drill-down endpoints (GET /team/kpi/leads, GET /team/kpi/export):
+ * the caller's visible people with their per-person KPI counts. The
+ * visibility scope (resolveCallerVisibility, UM-1 tree floor
+ * included) is applied here, once — every consumer below inherits
+ * the same visible set, so a caller can never see, drill into, or
+ * export anyone outside it. Moved verbatim out of the /team/overview
+ * handler (KPI drill-down, 2026-11-13); the endpoint's behaviour is
+ * unchanged.
+ */
+async function loadTeamOverviewForCaller(
+  caller: CallerDbInfo,
+  visibility: CallerVisibilityResult
+): Promise<{ scope: string; people: TeamOverviewPersonPayload[] }> {
+  const scopeIds = visibility.all
+    ? null
+    : new Set(visibility.employeeIds.map(e => String(e).toUpperCase()));
+  const scopeLabel = visibility.all ? 'Organization' : (scopeIds && scopeIds.size > 1 ? 'Team' : 'Own');
+
+  if (!useDb()) {
+    const users = (fallbackStore.users as any[]).filter(u => u.isActive !== false && u.status !== 'Inactive');
+    const inScope = (u: any) => !scopeIds || scopeIds.has(String(u.employeeId).toUpperCase());
+    const scoped = users.filter(inScope);
+    const byKey = new Map<string, any>();
+    for (const u of users) { byKey.set(String(u.id), u); byKey.set(String(u.employeeId).toUpperCase(), u); }
+    const managerOf = (u: any) => (u.managerId ? byKey.get(String(u.managerId)) : undefined);
+    const scopedKeys = new Set<string>();
+    for (const u of scoped) { scopedKeys.add(String(u.id)); scopedKeys.add(String(u.employeeId).toUpperCase()); }
+    const reportsOf = (u: any) => scoped.filter(r => {
+      const m = managerOf(r);
+      return m && (String(m.id) === String(u.id));
+    });
+    const todayBounds = getDhakaBusinessDayBounds(new Date());
+    const people: TeamOverviewPersonPayload[] = scoped.map(u => {
+      const reports = reportsOf(u);
+      const tier = reports.length > 0 && reports.some((r: any) => reportsOf(r).length > 0)
+        ? 'manager'
+        : reports.length > 0 ? 'teamLead' : 'teamMember';
+      const mine = (fallbackStore.leads as any[]).filter(l => String(l.assignedTo).toUpperCase() === String(u.employeeId).toUpperCase() && !l.isDeleted);
+      const dueToday = mine.filter(l => {
+        if (!l.nextFollowUpDate) return false;
+        const t = new Date(l.nextFollowUpDate).getTime();
+        return t >= new Date(todayBounds.todayStartIso).getTime() && t < new Date(todayBounds.tomorrowStartIso).getTime();
+      }).length;
+      const overdue = mine.filter(l => {
+        if (!l.nextFollowUpDate) return false;
+        if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
+        return new Date(l.nextFollowUpDate).getTime() < new Date(todayBounds.todayStartIso).getTime();
+      }).length;
+      const mgr = managerOf(u);
+      return {
+        userId: String(u.id),
+        employeeId: u.employeeId,
+        name: u.fullName || u.name,
+        designation: u.designation || u.roleName || u.role || null,
+        roleName: u.roleName || null,
+        department: null,
+        managerEmployeeId: mgr?.employeeId || null,
+        managerName: mgr ? (mgr.fullName || mgr.name) : null,
+        tier,
+        directReports: reports.length,
+        openLeads: mine.filter(l => !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)).length,
+        convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
+        dueToday,
+        overdue,
+        isSelf: String(u.id) === String(caller.id),
+      };
+    });
+    return { scope: scopeLabel, people };
+  }
+
+  const pool = getPool();
+  const peopleRes = await pool.query(
+    `SELECT u.id, u.employee_id, u.full_name, u.designation, u.manager_id,
+            r.role_code, r.role_name, r.hierarchy_level, d.department_name
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     LEFT JOIN departments d ON d.id = u.department_id
+     WHERE u.is_active = TRUE
+     ORDER BY u.full_name ASC`
+  );
+  const all = peopleRes.rows as any[];
+  const inScope = (row: any) => !scopeIds || scopeIds.has(String(row.employee_id).toUpperCase());
+  const scoped = all.filter(inScope);
+  const scopedIds = new Set(scoped.map(r => String(r.id)));
+  const byId = new Map(all.map(r => [String(r.id), r]));
+  const childrenCount = new Map<string, number>();
+  for (const row of scoped) {
+    if (row.manager_id && scopedIds.has(String(row.manager_id))) {
+      childrenCount.set(String(row.manager_id), (childrenCount.get(String(row.manager_id)) || 0) + 1);
+    }
+  }
+  const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(new Date());
+  const countsRes = await pool.query(
+    `SELECT assigned_to,
+            COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
+            COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
+            COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count,
+            COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at < $1)::int AS overdue_count
+     FROM leads
+     WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
+     GROUP BY assigned_to`,
+    [startIso, endIso]
+  );
+  const counts = new Map((countsRes.rows as any[]).map(r => [String(r.assigned_to).toUpperCase(), r]));
+  const people: TeamOverviewPersonPayload[] = scoped.map(row => {
+    const directReports = childrenCount.get(String(row.id)) || 0;
+    const reportIds = scoped
+      .filter(r => r.manager_id && String(r.manager_id) === String(row.id))
+      .map(r => String(r.id));
+    const hasGrandReports = reportIds.some(id => (childrenCount.get(id) || 0) > 0);
+    const level = row.hierarchy_level != null ? Number(row.hierarchy_level) : null;
+    const tier = directReports > 0 && (hasGrandReports || (level != null && level <= 2))
+      ? 'manager'
+      : directReports > 0 ? 'teamLead' : 'teamMember';
+    const c = counts.get(String(row.employee_id).toUpperCase()) || {};
+    const manager = row.manager_id ? byId.get(String(row.manager_id)) : null;
+    return {
+      userId: String(row.id),
+      employeeId: row.employee_id,
+      name: row.full_name,
+      designation: row.designation || row.role_name || null,
+      roleName: row.role_name || null,
+      department: row.department_name || null,
+      managerEmployeeId: manager?.employee_id || null,
+      managerName: manager?.full_name || null,
+      tier,
+      directReports,
+      openLeads: c.open_count || 0,
+      convertedLeads: c.converted_count || 0,
+      dueToday: c.due_today_count || 0,
+      overdue: c.overdue_count || 0,
+      isSelf: String(row.id) === String(caller.id),
+    };
+  });
+  return { scope: scopeLabel, people };
+}
+
+/* ================================================================== */
+/* KPI drill-down (TL+ Home, owner-approved 2026-11-13)                */
+/*                                                                     */
+/* The team home's four KPI cards (Open / Due Today / Overdue /       */
+/* Converted) drill down the reporting tree: a people level lists the  */
+/* current person's direct reports with their KPI numbers; a leaf      */
+/* level lists that person's actual leads for the KPI. The drill-down  */
+/* levels are computed CLIENT-side from the ONE overview payload;      */
+/* only the leaf lead list (GET /team/kpi/leads) and the export        */
+/* (GET /team/kpi/export) come from the server — both scoped by the    */
+/* same loadTeamOverviewForCaller visible set, so the server enforces  */
+/* the scope the page shows. A person outside the caller's visible     */
+/* set answers 404, the same "not found" pattern as leads.             */
+/* ================================================================== */
+
+const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted'] as const;
+type KpiKey = (typeof KPI_KEYS)[number];
+const KPI_LABELS: Record<KpiKey, string> = {
+  open: 'Open leads',
+  dueToday: 'Due today',
+  overdue: 'Overdue',
+  converted: 'Converted',
+};
+/** `person=self` = the caller's OWN leaf list (My Day strip, members). */
+const SELF_PERSON_PARAM = 'self';
+/** Leaf lead lists (page + export) cap at the follow-up queue's max. */
+const KPI_LEADS_MAX = 200;
+
+function isKpiKey(value: string): value is KpiKey {
+  return (KPI_KEYS as readonly string[]).includes(value);
+}
+
+function kpiValueOfPerson(person: TeamOverviewPersonPayload, kpi: KpiKey): number {
+  switch (kpi) {
+    case 'open': return person.openLeads;
+    case 'dueToday': return person.dueToday;
+    case 'overdue': return person.overdue;
+    case 'converted': return person.convertedLeads;
+  }
+}
+
+export interface KpiLeadRow {
+  id: string;
+  leadCode: string | null;
+  customerName: string;
+  mobile: string;
+  currentStatus: string;
+  nextFollowUpAt: string | null;
+}
+
+/**
+ * One person's leads matching a KPI — the EXACT overview definitions
+ * (production column shapes: current_status, is_deleted,
+ * next_follow_up_at; assigned_to holds the EMPLOYEE ID, matched
+ * case-insensitively exactly as the overview counts do):
+ *   open      = non-terminal + not deleted
+ *   dueToday  = next_follow_up_at within the current Dhaka business
+ *               day (NO terminal filter — the overview's
+ *               due_today_count counts terminal leads too)
+ *   overdue   = non-terminal + not deleted + next_follow_up_at
+ *               before today's Dhaka start
+ *   converted = current_status = 'Converted'
+ * Callers must already have proven the target is inside the caller's
+ * visible set (membership in the overview people array); combined
+ * with the assigned_to filter, that is the lead-visibility predicate
+ * (assignee in scope), so no second visibility clause is needed.
+ */
+async function loadKpiLeadsForPerson(
+  employeeId: string,
+  kpi: KpiKey
+): Promise<{ total: number; items: KpiLeadRow[] }> {
+  const bounds = getDhakaBusinessDayBounds(new Date());
+  if (!useDb()) {
+    const terminal = new Set((TERMINAL_LEAD_STATUSES as readonly string[]).map(s => s.toLowerCase()));
+    const matches = (l: any): boolean => {
+      if (l.is_deleted === true) return false;
+      if (String(l.assignedTo || '').toUpperCase() !== employeeId.toUpperCase()) return false;
+      const st = String(l.currentStatus || '');
+      const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+      const t = nfd ? new Date(nfd).getTime() : NaN;
+      switch (kpi) {
+        case 'open': return !terminal.has(st.toLowerCase());
+        case 'converted': return st === 'Converted';
+        case 'dueToday':
+          return Number.isFinite(t) && t >= bounds.todayStart.getTime() && t < bounds.tomorrowStart.getTime();
+        case 'overdue':
+          return !terminal.has(st.toLowerCase()) && Number.isFinite(t) && t < bounds.todayStart.getTime();
+      }
+    };
+    const rows = (fallbackStore.leads as any[]).filter(matches);
+    rows.sort((a, b) => {
+      if (kpi === 'dueToday' || kpi === 'overdue') {
+        return new Date(a.nextFollowUpDate || a.next_follow_up_at || 0).getTime()
+          - new Date(b.nextFollowUpDate || b.next_follow_up_at || 0).getTime();
+      }
+      return new Date(b.created_at || b.creationDate || 0).getTime()
+        - new Date(a.created_at || a.creationDate || 0).getTime();
+    });
+    const items = rows.slice(0, KPI_LEADS_MAX).map((l: any) => ({
+      id: String(l.id),
+      leadCode: (l as any).leadCode || null,
+      customerName: l.customerName || l.prospectName || '',
+      mobile: l.mobile || '',
+      currentStatus: l.currentStatus || 'New',
+      nextFollowUpAt: storedTimestampIso(l.nextFollowUpDate || l.next_follow_up_at),
+    }));
+    return { total: rows.length, items };
+  }
+
+  const pool = getPool();
+  const params: any[] = [employeeId.toUpperCase()];
+  const where: string[] = ['l.is_deleted = FALSE', 'UPPER(l.assigned_to) = $1'];
+  const notTerminalSql = (): string => {
+    const placeholders = (TERMINAL_LEAD_STATUSES as readonly string[]).map(s => {
+      params.push(s);
+      return `$${params.length}`;
+    });
+    return `l.current_status NOT IN (${placeholders.join(', ')})`;
+  };
+  if (kpi === 'open') {
+    where.push(notTerminalSql());
+  } else if (kpi === 'converted') {
+    params.push('Converted');
+    where.push(`l.current_status = $${params.length}`);
+  } else if (kpi === 'dueToday') {
+    // No terminal filter here — deliberately: the overview's
+    // due_today_count counts every lead due today, terminal or not,
+    // and this list must contain exactly the leads it counted.
+    params.push(bounds.todayStartIso, bounds.tomorrowStartIso);
+    where.push(`l.next_follow_up_at >= $${params.length - 1} AND l.next_follow_up_at < $${params.length}`);
+  } else {
+    where.push(notTerminalSql());
+    params.push(bounds.todayStartIso);
+    where.push(`l.next_follow_up_at < $${params.length}`);
+  }
+  const orderBy = (kpi === 'dueToday' || kpi === 'overdue')
+    ? 'ORDER BY l.next_follow_up_at ASC NULLS LAST, l.created_at DESC'
+    : 'ORDER BY l.created_at DESC';
+  const [countRes, rowsRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS total FROM leads l WHERE ${where.join(' AND ')}`, params),
+    pool.query(
+      `SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.current_status, l.next_follow_up_at
+       FROM leads l WHERE ${where.join(' AND ')} ${orderBy} LIMIT ${KPI_LEADS_MAX}`,
+      params
+    ),
+  ]);
+  const items: KpiLeadRow[] = (rowsRes.rows as any[]).map(row => ({
+    id: String(row.id),
+    leadCode: row.lead_code || null,
+    customerName: row.customer_name || '',
+    mobile: row.mobile || '',
+    currentStatus: row.current_status || 'New',
+    nextFollowUpAt: storedTimestampIso(row.next_follow_up_at),
+  }));
+  return { total: Number(countRes.rows[0]?.total || 0), items };
+}
+
+/**
+ * Resolve the drill-down's current person from the caller's scoped
+ * overview people: `person=self` (or absent) = the caller themself,
+ * otherwise the employee ID — matched case-insensitively. Returns
+ * null when the person is NOT in the visible set: the handlers
+ * answer 404, so an out-of-scope person is indistinguishable from
+ * a nonexistent one (the leads "not found" pattern).
+ */
+function resolveKpiPerson(
+  people: TeamOverviewPersonPayload[],
+  personParam: string
+): { person: TeamOverviewPersonPayload; forceLeaf: boolean } | null {
+  if (!personParam || personParam.toLowerCase() === SELF_PERSON_PARAM) {
+    const self = people.find(p => p.isSelf);
+    return self ? { person: self, forceLeaf: personParam.toLowerCase() === SELF_PERSON_PARAM } : null;
+  }
+  const found = people.find(p => p.employeeId.toUpperCase() === personParam.toUpperCase());
+  return found ? { person: found, forceLeaf: false } : null;
+}
+
 router.get('/team/overview', requireAuth, async (req, res) => {
   if (sendDbUnavailable(res)) return;
   try {
@@ -557,130 +896,139 @@ router.get('/team/overview', requireAuth, async (req, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
     }
     const visibility = await resolveCallerVisibility(caller as any);
-    const scopeIds = visibility.all
-      ? null
-      : new Set(visibility.employeeIds.map(e => String(e).toUpperCase()));
-    const scopeLabel = visibility.all ? 'Organization' : (scopeIds && scopeIds.size > 1 ? 'Team' : 'Own');
-
-    if (!useDb()) {
-      const users = (fallbackStore.users as any[]).filter(u => u.isActive !== false && u.status !== 'Inactive');
-      const inScope = (u: any) => !scopeIds || scopeIds.has(String(u.employeeId).toUpperCase());
-      const scoped = users.filter(inScope);
-      const byKey = new Map<string, any>();
-      for (const u of users) { byKey.set(String(u.id), u); byKey.set(String(u.employeeId).toUpperCase(), u); }
-      const managerOf = (u: any) => (u.managerId ? byKey.get(String(u.managerId)) : undefined);
-      const scopedKeys = new Set<string>();
-      for (const u of scoped) { scopedKeys.add(String(u.id)); scopedKeys.add(String(u.employeeId).toUpperCase()); }
-      const reportsOf = (u: any) => scoped.filter(r => {
-        const m = managerOf(r);
-        return m && (String(m.id) === String(u.id));
-      });
-      const todayBounds = getDhakaBusinessDayBounds(new Date());
-      const people = scoped.map(u => {
-        const reports = reportsOf(u);
-        const tier = reports.length > 0 && reports.some((r: any) => reportsOf(r).length > 0)
-          ? 'manager'
-          : reports.length > 0 ? 'teamLead' : 'teamMember';
-        const mine = (fallbackStore.leads as any[]).filter(l => String(l.assignedTo).toUpperCase() === String(u.employeeId).toUpperCase() && !l.isDeleted);
-        const dueToday = mine.filter(l => {
-          if (!l.nextFollowUpDate) return false;
-          const t = new Date(l.nextFollowUpDate).getTime();
-          return t >= new Date(todayBounds.todayStartIso).getTime() && t < new Date(todayBounds.tomorrowStartIso).getTime();
-        }).length;
-        const overdue = mine.filter(l => {
-          if (!l.nextFollowUpDate) return false;
-          if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
-          return new Date(l.nextFollowUpDate).getTime() < new Date(todayBounds.todayStartIso).getTime();
-        }).length;
-        const mgr = managerOf(u);
-        return {
-          userId: String(u.id),
-          employeeId: u.employeeId,
-          name: u.fullName || u.name,
-          designation: u.designation || u.roleName || u.role || null,
-          roleName: u.roleName || null,
-          department: null,
-          managerEmployeeId: mgr?.employeeId || null,
-          managerName: mgr ? (mgr.fullName || mgr.name) : null,
-          tier,
-          directReports: reports.length,
-          openLeads: mine.filter(l => !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)).length,
-          convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
-          dueToday,
-          overdue,
-          isSelf: String(u.id) === String(caller.id),
-        };
-      });
-      return sendJson(res, 200, { success: true, scope: scopeLabel, people });
-    }
-
-    const pool = getPool();
-    const peopleRes = await pool.query(
-      `SELECT u.id, u.employee_id, u.full_name, u.designation, u.manager_id,
-              r.role_code, r.role_name, r.hierarchy_level, d.department_name
-       FROM users u
-       LEFT JOIN roles r ON r.id = u.role_id
-       LEFT JOIN departments d ON d.id = u.department_id
-       WHERE u.is_active = TRUE
-       ORDER BY u.full_name ASC`
-    );
-    const all = peopleRes.rows as any[];
-    const inScope = (row: any) => !scopeIds || scopeIds.has(String(row.employee_id).toUpperCase());
-    const scoped = all.filter(inScope);
-    const scopedIds = new Set(scoped.map(r => String(r.id)));
-    const byId = new Map(all.map(r => [String(r.id), r]));
-    const childrenCount = new Map<string, number>();
-    for (const row of scoped) {
-      if (row.manager_id && scopedIds.has(String(row.manager_id))) {
-        childrenCount.set(String(row.manager_id), (childrenCount.get(String(row.manager_id)) || 0) + 1);
-      }
-    }
-    const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(new Date());
-    const countsRes = await pool.query(
-      `SELECT assigned_to,
-              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
-              COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
-              COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count,
-              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at < $1)::int AS overdue_count
-       FROM leads
-       WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
-       GROUP BY assigned_to`,
-      [startIso, endIso]
-    );
-    const counts = new Map((countsRes.rows as any[]).map(r => [String(r.assigned_to).toUpperCase(), r]));
-    const people = scoped.map(row => {
-      const directReports = childrenCount.get(String(row.id)) || 0;
-      const reportIds = scoped
-        .filter(r => r.manager_id && String(r.manager_id) === String(row.id))
-        .map(r => String(r.id));
-      const hasGrandReports = reportIds.some(id => (childrenCount.get(id) || 0) > 0);
-      const level = row.hierarchy_level != null ? Number(row.hierarchy_level) : null;
-      const tier = directReports > 0 && (hasGrandReports || (level != null && level <= 2))
-        ? 'manager'
-        : directReports > 0 ? 'teamLead' : 'teamMember';
-      const c = counts.get(String(row.employee_id).toUpperCase()) || {};
-      const manager = row.manager_id ? byId.get(String(row.manager_id)) : null;
-      return {
-        userId: String(row.id),
-        employeeId: row.employee_id,
-        name: row.full_name,
-        designation: row.designation || row.role_name || null,
-        roleName: row.role_name || null,
-        department: row.department_name || null,
-        managerEmployeeId: manager?.employee_id || null,
-        managerName: manager?.full_name || null,
-        tier,
-        directReports,
-        openLeads: c.open_count || 0,
-        convertedLeads: c.converted_count || 0,
-        dueToday: c.due_today_count || 0,
-        overdue: c.overdue_count || 0,
-        isSelf: String(row.id) === String(caller.id),
-      };
-    });
-    return sendJson(res, 200, { success: true, scope: scopeLabel, people });
+    const { scope, people } = await loadTeamOverviewForCaller(caller, visibility);
+    return sendJson(res, 200, { success: true, scope, people });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Team overview failed' });
+  }
+});
+
+/* GET /team/kpi/leads — one visible person's leads for one KPI (the
+   drill-down's leaf level). Requires leads.view; the person must be
+   inside the caller's scoped overview set (else 404). */
+router.get('/team/kpi/leads', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const kpiRaw = String(req.query?.kpi || '').trim();
+    if (!isKpiKey(kpiRaw)) {
+      return sendJson(res, 400, { success: false, message: 'kpi must be open, dueToday, overdue, or converted.' });
+    }
+    const kpi = kpiRaw as KpiKey;
+    const personParam = req.query?.person ? String(req.query.person).trim() : '';
+    const caller = await getCallerDbInfo(req as any);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const [canViewLeads, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller as any),
+    ]);
+    if (!canViewLeads) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const { people } = await loadTeamOverviewForCaller(caller, visibility);
+    const resolved = resolveKpiPerson(people, personParam);
+    if (!resolved) {
+      return sendJson(res, 404, { success: false, message: 'Person not found.' });
+    }
+    const { total, items } = await loadKpiLeadsForPerson(resolved.person.employeeId, kpi);
+    return sendJson(res, 200, {
+      success: true,
+      kpi,
+      employeeId: resolved.person.employeeId,
+      total,
+      items,
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'KPI leads failed' });
+  }
+});
+
+/* GET /team/kpi/export — .xlsx of EXACTLY the level the drill-down
+   page currently shows: the current person's direct reports (name,
+   employee ID, designation, KPI value) at a people level, or that
+   person's matching leads at a leaf level. Gated on the existing
+   `leads.export` permission (grantable in Roles & Access); audited
+   as leads.export. The level is resolved server-side from the
+   caller's scoped overview set, so an export can never carry data
+   outside the caller's visible set. */
+router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'), async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const kpiRaw = String(req.query?.kpi || '').trim();
+    if (!isKpiKey(kpiRaw)) {
+      return sendJson(res, 400, { success: false, message: 'kpi must be open, dueToday, overdue, or converted.' });
+    }
+    const kpi = kpiRaw as KpiKey;
+    const personParam = req.query?.person ? String(req.query.person).trim() : '';
+    const caller = await getCallerDbInfo(req as any);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const visibility = await resolveCallerVisibility(caller as any);
+    const { people } = await loadTeamOverviewForCaller(caller, visibility);
+    const resolved = resolveKpiPerson(people, personParam);
+    if (!resolved) {
+      return sendJson(res, 404, { success: false, message: 'Person not found.' });
+    }
+    const current = resolved.person;
+    const isLeafLevel = resolved.forceLeaf || current.directReports === 0;
+    const kpiLabel = KPI_LABELS[kpi];
+    const todayDate = getDhakaBusinessDayBounds(new Date()).todayDate;
+    let workbook: Buffer;
+    let rowCount: number;
+    let totalRows: number | undefined;
+    let level: 'people' | 'leads';
+    let scopeLabel: string;
+    if (isLeafLevel) {
+      level = 'leads';
+      const { total, items } = await loadKpiLeadsForPerson(current.employeeId, kpi);
+      scopeLabel = current.isSelf ? 'Your leads' : `${current.name}'s leads`;
+      workbook = await buildKpiExportWorkbook({
+        kpiLabel,
+        level,
+        scopeLabel,
+        leadRows: items.map(l => ({
+          leadCode: l.leadCode,
+          customerName: l.customerName,
+          mobile: l.mobile,
+          currentStatus: l.currentStatus,
+          nextFollowUpDate: dhakaDateText(l.nextFollowUpAt),
+        })),
+        totalRows: total,
+      });
+      rowCount = items.length;
+      totalRows = total;
+    } else {
+      level = 'people';
+      // Same order as the page (KPI desc, then name — see
+      // src/modules/team/utils/kpiDrilldown.ts sortKpiRows).
+      const rows = people
+        .filter(p => p.managerEmployeeId && p.managerEmployeeId.toUpperCase() === current.employeeId.toUpperCase())
+        .map(p => ({
+          name: p.name,
+          employeeId: p.employeeId,
+          designation: p.designation,
+          kpiValue: kpiValueOfPerson(p, kpi),
+        }))
+        .sort((a, b) => b.kpiValue - a.kpiValue || a.name.localeCompare(b.name));
+      scopeLabel = current.isSelf ? 'Your team' : `${current.name}'s team`;
+      workbook = await buildKpiExportWorkbook({ kpiLabel, level, scopeLabel, peopleRows: rows });
+      rowCount = rows.length;
+    }
+    await logAccessChange({
+      actorId: caller.id,
+      actionCode: 'leads.export',
+      entityType: 'lead',
+      metadata: { kpi, person: current.employeeId, level, count: rowCount, total: totalRows ?? rowCount },
+    });
+    const safeEmp = current.employeeId.replace(/[^A-Za-z0-9_-]/g, '-');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="kpi-${kpi}-${safeEmp}-${todayDate}.xlsx"`);
+    res.setHeader('X-Lead-Count', String(rowCount));
+    return res.send(workbook);
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'KPI export failed' });
   }
 });
 

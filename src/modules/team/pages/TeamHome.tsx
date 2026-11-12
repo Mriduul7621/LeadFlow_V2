@@ -22,13 +22,17 @@ import {
 /**
  * TeamHome — the TL+ team-first home (owner-approved 2026-11-11)
  * ------------------------------------------------------------------
- * Anyone with at least one person reporting to them lands here (at
- * `/`, rendered by HomeLanding) instead of the member My Day view:
- * the day starts with the TEAM — totals, who owes follow-ups today,
- * and whose leads are going stale — with a one-tap switch to their
- * own work. Everything renders from the ONE scoped payload
- * (GET /api/team/overview via teamOverviewService), the same data the
- * My Team page shows; rows link through to /team for the full view.
+ * Anyone who can SEE a team lands here (at `/`, rendered by
+ * HomeLanding) instead of the member My Day view: the day starts
+ * with the TEAM — totals, who owes follow-ups today, and whose
+ * leads are going stale — with a one-tap switch to their own work.
+ * "Sees a team" is callerSeesTeam: the scoped overview's scope is
+ * not 'Own' (Organization/Team — admin, CEO, managers, team leads),
+ * or the caller has >= 1 direct report. Everything renders from the
+ * ONE scoped payload (GET /api/team/overview via teamOverviewService),
+ * the same data the My Team page shows; rows link through to /team
+ * for the full view, and the four KPI cards drill down the tree at
+ * /team/kpi/:kpi (KPI drill-down, 2026-11-13).
  */
 
 function StatCard({
@@ -37,21 +41,27 @@ function StatCard({
   icon: Icon,
   tone,
   iconTone,
+  to,
 }: {
   label: string;
   value: number;
   icon: typeof FolderOpen;
   tone: string;
   iconTone: string;
+  to: string;
 }) {
   return (
-    <div className={cn('rounded-2xl py-3 px-4 text-center', tone)}>
+    <Link
+      to={to}
+      className={cn('rounded-2xl py-3 px-4 text-center block hover:ring-2 hover:ring-[#978C21]/40 transition-shadow', tone)}
+      aria-label={`${label}: ${value} — view details`}
+    >
       <p className="text-xl font-black text-stone-800 flex items-center justify-center gap-1.5">
         <Icon className={cn('w-4 h-4', iconTone)} />
         {value}
       </p>
       <p className="text-[8px] font-black uppercase tracking-widest text-stone-400 mt-0.5">{label}</p>
-    </div>
+    </Link>
   );
 }
 
@@ -135,10 +145,10 @@ export function TeamHomeContent({
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <StatCard label="Open leads" value={totals.open} icon={FolderOpen} tone="bg-stone-50" iconTone="text-stone-400" />
-        <StatCard label="Due today" value={totals.dueToday} icon={CalendarClock} tone="bg-amber-50" iconTone="text-amber-500" />
-        <StatCard label="Overdue" value={totals.overdue} icon={AlertTriangle} tone="bg-red-50" iconTone="text-red-500" />
-        <StatCard label="Converted" value={totals.converted} icon={TrendingUp} tone="bg-emerald-50" iconTone="text-emerald-500" />
+        <StatCard label="Open leads" value={totals.open} icon={FolderOpen} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/open" />
+        <StatCard label="Due today" value={totals.dueToday} icon={CalendarClock} tone="bg-amber-50" iconTone="text-amber-500" to="/team/kpi/dueToday" />
+        <StatCard label="Overdue" value={totals.overdue} icon={AlertTriangle} tone="bg-red-50" iconTone="text-red-500" to="/team/kpi/overdue" />
+        <StatCard label="Converted" value={totals.converted} icon={TrendingUp} tone="bg-emerald-50" iconTone="text-emerald-500" to="/team/kpi/converted" />
       </div>
 
       <section className="space-y-3">
@@ -229,18 +239,18 @@ export default function TeamHome() {
   }
 
   if (!hasTeam) {
-    // Defensive: HomeLanding only renders this for callers with a
-    // team, but the roster can change mid-session — fall back to the
-    // switch and a plain explanation instead of an empty team view.
+    // Defensive: HomeLanding only renders this for callers who see
+    // a team, but the roster can change mid-session — fall back to
+    // the switch and a plain explanation instead of an empty view.
     return (
       <div className="space-y-4 text-left">
         <div className="flex justify-end">
           <HomeViewSwitch active="team" />
         </div>
         <div className="bg-white border border-stone-200/80 rounded-2xl p-10 text-center space-y-2">
-          <p className="text-sm font-black text-stone-700">No team reports to you right now</p>
+          <p className="text-sm font-black text-stone-700">No team to show right now</p>
           <p className="text-xs text-stone-400">
-            When people report to you — directly or through your team — your day will start with their follow-ups here.
+            When people report to you — or your role can see the wider team — your day will start with their follow-ups here.
           </p>
         </div>
       </div>
