@@ -3,6 +3,7 @@ import { getPool } from '../database/connection.js';
 
 import authRouter from './production/auth.routes.js';
 import notificationsRouter from './production/notifications.routes.js';
+import operationsRouter from './production/operations.routes.js';
 import metadataRouter from './production/metadata.routes.js';
 import calendarRouter from './production/calendar.routes.js';
 import dangerZoneRouter from './production/dangerZone.routes.js';
@@ -120,6 +121,15 @@ router.use(metadataRouter);
 ==================================================================== */
 
 router.use(calendarRouter);
+
+/* ====================================================================
+   OPERATIONS & LIMITS — ./production/operations.routes.ts (Admin
+   Control programme, slice DZ-2): bounded import caps + image
+   upload limit as real Settings values. New paths
+   (/settings/operations) — no overlap with the domains above.
+==================================================================== */
+
+router.use(operationsRouter);
 
 /* ====================================================================
    DANGER ZONE — ./production/dangerZone.routes.ts (Admin Control

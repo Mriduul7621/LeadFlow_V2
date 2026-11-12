@@ -54,6 +54,7 @@ import {
   buildIdempotencyKey,
   insertNotificationWithIdempotency,
 } from './NotificationService.js';
+import { getNotificationSettings } from './NotificationSettingsService.js';
 import { sendPushToUser, type PushToUserSummary } from './PushReminderService.js';
 
 export const MEETING_INVITED_EVENT = 'meeting-invited';
@@ -210,6 +211,20 @@ export interface MeetingFanoutSummary {
 
 const EMPTY_FANOUT: MeetingFanoutSummary = { created: 0, skipped: 0 };
 
+/**
+ * DZ-2 (audit §4, L2): the meeting-notifications toggle. One read per
+ * fan-out call; getNotificationSettings fails ON, so a missing or
+ * unreadable row keeps today's behaviour. Demo mode reads the same
+ * value from the fallback store through the same service.
+ */
+async function meetingNotificationsOn(): Promise<boolean> {
+  try {
+    return (await getNotificationSettings()).meetingNotifications;
+  } catch {
+    return true;
+  }
+}
+
 /* ====================================================================
    Fan-outs (called by the scheduled-activity route handlers AFTER
    the business mutation commits; they never throw)
@@ -227,6 +242,7 @@ export async function notifyMeetingInvites(opts: {
   attendees: MeetingRecipient[];
 }): Promise<MeetingFanoutSummary> {
   const summary = { ...EMPTY_FANOUT };
+  if (!(await meetingNotificationsOn())) return summary;
   try {
     const title = meetingDisplayTitle(opts.activity);
     const when = whenText(opts.activity);
@@ -269,6 +285,7 @@ export async function notifyMeetingMoved(opts: {
   attendees: MeetingRecipient[];
 }): Promise<MeetingFanoutSummary> {
   const summary = { ...EMPTY_FANOUT };
+  if (!(await meetingNotificationsOn())) return summary;
   try {
     const title = meetingDisplayTitle(opts.activity);
     const when = whenText(opts.activity);
@@ -312,6 +329,7 @@ export async function notifyMeetingClosed(opts: {
   kind: 'cancelled' | 'completed';
 }): Promise<MeetingFanoutSummary> {
   const summary = { ...EMPTY_FANOUT };
+  if (!(await meetingNotificationsOn())) return summary;
   try {
     const title = meetingDisplayTitle(opts.activity);
     const when = whenText(opts.activity);
@@ -355,6 +373,7 @@ export async function notifyMeetingRsvp(opts: {
   response: 'accepted' | 'declined';
 }): Promise<MeetingFanoutSummary> {
   const summary = { ...EMPTY_FANOUT };
+  if (!(await meetingNotificationsOn())) return summary;
   try {
     const organiserId = opts.activity.createdBy ? String(opts.activity.createdBy) : '';
     if (!organiserId || organiserId === String(opts.responder.userId)) {
@@ -571,6 +590,7 @@ async function resolveEmployeeIds(userIds: string[]): Promise<Map<string, string
  */
 export async function runMeetingReminders(now: Date = new Date()): Promise<MeetingReminderRunSummary> {
   const summary: MeetingReminderRunSummary = { ...EMPTY_RUN };
+  if (!(await meetingNotificationsOn())) return summary;
   const due = useDb() ? await findDueActivitiesDb(now) : findDueActivitiesDemo(now);
   summary.scanned = due.length;
   if (due.length === 0) return summary;

@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, Download, AlertTriangle, CheckCircle2, XCircle, FileSpreadsheet, Copy, ShieldCheck, Info } from 'lucide-react';
 import { downloadWorkbook, LEGACY_XLS_MESSAGE } from '../../shared/utils/excel';
 import { parseUserImportFile, downloadUserImportTemplate, mapToServerRows, type ParsedUserBulkRow, USER_BULK_MAX_ROWS } from '../utils/userBulkImport';
+import { operationsSettingsService } from '../../settings/services/operationsSettingsService';
 import { userService } from '../services/userService';
 import { orgService } from '../../hierarchy/services/orgService';
 import { adminService } from '../../admin/services/adminService';
@@ -71,6 +72,19 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
   const [commitLoading, setCommitLoading] = useState(false);
   const [commitResult, setCommitResult] = useState<CommitResult | null>(null);
 
+  // DZ-2 (G2): the user bulk-import cap is a real Settings value now.
+  // The modal quotes the EFFECTIVE cap; until it loads, the ceiling
+  // (the old hardcoded 1000) applies. The server re-checks anyway.
+  const [userCap, setUserCap] = useState<number>(USER_BULK_MAX_ROWS);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    operationsSettingsService.getSettings()
+      .then((s) => { if (!cancelled) setUserCap(s.userBulkImportMaxRows); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
+
   const resetState = useCallback(() => {
     setStep('upload');
     setFileName('');
@@ -119,8 +133,8 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
         toast.error('No data rows found in file');
         return;
       }
-      if (rows.length > USER_BULK_MAX_ROWS) {
-        toast.error(`File exceeds maximum ${USER_BULK_MAX_ROWS} rows`);
+      if (rows.length > userCap) {
+        toast.error(`File exceeds maximum ${userCap} rows`);
         return;
       }
       const issues = rows.filter(r => r.issues.length > 0).length;
@@ -130,7 +144,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
     } catch (err: any) {
       toast.error(err?.message || 'Failed to parse file');
     }
-  }, [mode, runServerValidation]);
+  }, [mode, runServerValidation, userCap]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -291,7 +305,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
               >
                 <Upload className="w-8 h-8 mx-auto text-gray-400 mb-3" />
                 <p className="text-sm font-medium text-gray-700">Drag & drop your XLSX file here</p>
-                <p className="text-xs text-gray-500 mt-1">or click to browse — max {USER_BULK_MAX_ROWS} rows</p>
+                <p className="text-xs text-gray-500 mt-1">or click to browse — max {userCap} rows</p>
                 <button onClick={() => fileInputRef.current?.click()} className="mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm hover:bg-blue-700">
                   Browse File
                 </button>
