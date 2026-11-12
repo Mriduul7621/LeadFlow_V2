@@ -466,7 +466,11 @@ describe('FIX-1b — source guards', () => {
   });
 
   it('the Team overview page and Administration entry exist', () => {
-    assert.match(teamPage, /\/api\/team\/overview/);
+    // Org-tree evolution (2026-11-11): the page's ONE data path is now
+    // GET /api/team/tree (a superset payload — the flat groups below are
+    // rendered from it). The /api/team/overview endpoint itself is
+    // unchanged and its API assertions above still pin it.
+    assert.match(teamPage, /\/api\/team\/tree/);
     assert.match(teamPage, /Managers/);
     assert.match(teamPage, /Team Leaders/);
     assert.match(teamPage, /Team Members/);
