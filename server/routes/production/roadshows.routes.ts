@@ -35,6 +35,7 @@ import {
   fetchActivityQualitySignals,
   fetchScheduledQualitySignals,
 } from '../../utils/leadQualitySignals.js';
+import { getLeadQualityConfig } from '../../services/LeadQualityConfigService.js';
 import {
   resolveNextStep,
   syncNextStepAfterFollowUp,
@@ -841,7 +842,10 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
       const schedDemoQuality = compactQualityForFallbackLeads(
         pageLeads,
         (fallbackStore as any).leadActivities || [],
-        (fallbackStore as any).scheduledActivities || []
+        (fallbackStore as any).scheduledActivities || [],
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        await getLeadQualityConfig()
       );
       const items = page.map((r: any) => {
         const lead = leadById.get(String(r.leadId || r.lead_id));
@@ -939,9 +943,11 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
     const parentIds = Array.from(
       new Set((listRes.rows || []).map((r: any) => String(r.lead_id || '')))
     ).filter(Boolean);
-    const [schedActivity, schedPlanned] = await Promise.all([
+    const [schedActivity, schedPlanned, schedQualityConfig] = await Promise.all([
       fetchActivityQualitySignals(pool, parentIds),
       fetchScheduledQualitySignals(pool, parentIds),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig(),
     ]);
     const items = listRes.rows.map((row: any) => {
       const mapped: any = mapScheduledActivityRow(row);
@@ -958,7 +964,10 @@ router.get('/scheduled-activities', requireAuth, async (req: any, res) => {
           custom_fields: { interestedAmount: row.lead_interested_amount },
         },
         schedActivity.get(parentKey),
-        schedPlanned.get(parentKey)
+        schedPlanned.get(parentKey),
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        schedQualityConfig
       ) : null;
       return mapped;
     });
