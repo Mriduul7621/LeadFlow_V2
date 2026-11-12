@@ -36,6 +36,8 @@ import { FOLLOWUP_SYNCED } from '../../leads/services/followUpOutbox';
 import { toast } from 'sonner';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import HomeViewSwitch from '../../team/components/HomeViewSwitch';
 
 /** ------------------------------------------------------------
  * Daily Workbench — focused daily lead execution workspace.
@@ -295,6 +297,11 @@ export default function DailyWorkbench() {
   // grant mutation capability. No new permission architecture.
   const canEditScheduled = canAccess('lead_tracking', 'edit');
   const canViewRoadshows = useRoadshowAccess();
+  // TL+ Home: a caller who HAS a team gets the Team/My-work switch in
+  // the header (their home defaults to the team view; this page is
+  // their "My work"). Members without reports never see it — their
+  // Workbench is unchanged.
+  const callerTeam = useCallerTeam();
 
   const todayYmd = useMemo(() => getDhakaTodayYmd(), []);
   const tomorrowYmd = useMemo(() => {
@@ -588,6 +595,7 @@ export default function DailyWorkbench() {
           <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
         </div>
         <div className="flex items-center gap-2">
+          {callerTeam.hasTeam && <HomeViewSwitch active="work" />}
           <OutboxIndicator />
           <button
             type="button"

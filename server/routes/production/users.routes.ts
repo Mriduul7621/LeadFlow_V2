@@ -538,7 +538,9 @@ router.get('/users', requireAuth, async (req, res) => {
 
 /* Team overview (FIX-1 item 5): the caller's people from the reporting
    tree, grouped Manager -> Team Leader -> Team Member by the CLIENT,
-   each row carrying open / converted / due-today lead counts.
+   each row carrying open / converted / due-today / overdue lead counts.
+   (Overdue added for TL+ Home: an OPEN lead — non-terminal, not
+   deleted — whose next follow-up sits before today's Dhaka start.)
    Visibility is EXACTLY the caller's existing scope
    (resolveCallerVisibility, UM-1 tree floor included): the people list
    is the scoped employee set — nobody outside it is named, and lead
@@ -585,6 +587,11 @@ router.get('/team/overview', requireAuth, async (req, res) => {
           const t = new Date(l.nextFollowUpDate).getTime();
           return t >= new Date(todayBounds.todayStartIso).getTime() && t < new Date(todayBounds.tomorrowStartIso).getTime();
         }).length;
+        const overdue = mine.filter(l => {
+          if (!l.nextFollowUpDate) return false;
+          if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
+          return new Date(l.nextFollowUpDate).getTime() < new Date(todayBounds.todayStartIso).getTime();
+        }).length;
         const mgr = managerOf(u);
         return {
           userId: String(u.id),
@@ -600,6 +607,7 @@ router.get('/team/overview', requireAuth, async (req, res) => {
           openLeads: mine.filter(l => !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)).length,
           convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
           dueToday,
+          overdue,
           isSelf: String(u.id) === String(caller.id),
         };
       });
@@ -632,7 +640,8 @@ router.get('/team/overview', requireAuth, async (req, res) => {
       `SELECT assigned_to,
               COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
               COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
-              COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count
+              COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at < $1)::int AS overdue_count
        FROM leads
        WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
        GROUP BY assigned_to`,
@@ -665,6 +674,7 @@ router.get('/team/overview', requireAuth, async (req, res) => {
         openLeads: c.open_count || 0,
         convertedLeads: c.converted_count || 0,
         dueToday: c.due_today_count || 0,
+        overdue: c.overdue_count || 0,
         isSelf: String(row.id) === String(caller.id),
       };
     });
