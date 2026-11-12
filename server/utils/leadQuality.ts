@@ -68,7 +68,9 @@ export type LeadQualityBand =
   | 'Developing'
   | 'Cold'
   | 'Converted'
-  | 'Not Interested';
+  | 'Not Interested'
+  // A renamed terminal status keeps its own name as its band (DZ-6).
+  | (string & {});
 
 export type LeadQualityActiveBand = 'Hot' | 'Warm' | 'Developing' | 'Cold';
 
@@ -124,9 +126,12 @@ export const LEAD_QUALITY_INVESTMENT_POINTS = 3;
    (audit Finding 5). A status with no configured weight scores 0,
    exactly as unknown/custom statuses do today.
 
-   The scale itself (0–100) is NOT configurable: the terminal
-   scores (Converted = 100, Not Interested = 0) are pinned to it
-   and terminal handling belongs to DZ-6, not this slice.
+   The scale itself (0–100) is NOT configurable: a won terminal
+   scores 100 and a lost terminal scores 0, and WHICH statuses are
+   terminal (won vs lost) is resolved from the dictionary's
+   isTerminal / isWon flags by the config service at read time
+   (DZ-6) into cfg.terminalWon / cfg.terminalLost — never from
+   hardcoded names, so renaming a status keeps its terminal score.
 ==================================================================== */
 
 /** One rung of a day-based ladder: applies while days <= maxDays; maxDays null = open-ended last rung. */
@@ -156,6 +161,16 @@ export interface LeadQualityConfig {
   followUp: { scheduledPoints: number; overdue: LeadQualityLadderRung[] };
   /** F6 — explicit investment interest (flat bonus). */
   investment: { points: number };
+  /**
+   * DZ-6 — terminal statuses, keyed by CURRENT status name and
+   * resolved from the dictionary's isTerminal / isWon flags by the
+   * config service at read time (never stored in the config row).
+   * A won terminal scores 100, a lost terminal scores 0; a status
+   * in neither list is scored on the active scale.
+   */
+  terminalWon: string[];
+  /** Terminal statuses that are losses (score 0). See terminalWon. */
+  terminalLost: string[];
 }
 
 /** Sane bounds for editable point values (validation rejects outside). */
@@ -201,6 +216,8 @@ export const DEFAULT_LEAD_QUALITY_CONFIG: LeadQualityConfig = {
     ],
   },
   investment: { points: LEAD_QUALITY_INVESTMENT_POINTS },
+  terminalWon: ['Converted'],
+  terminalLost: ['Not Interested'],
 };
 
 /** Deep copy of a config (callers must never mutate the default). */
@@ -354,6 +371,14 @@ export function normalizeLeadQualityConfig(value?: unknown): LeadQualityConfig {
     failedContact: { ...c.failedContact },
     followUp: { scheduledPoints: c.followUp.scheduledPoints, overdue: c.followUp.overdue.map(r => ({ ...r })) },
     investment: { ...c.investment },
+    // DZ-6: resolved from the dictionary by the config service;
+    // a bare / stored config carries none, so the canonical two apply.
+    terminalWon: Array.isArray((c as any).terminalWon) && (c as any).terminalWon.length > 0
+      ? [...(c as any).terminalWon]
+      : ['Converted'],
+    terminalLost: Array.isArray((c as any).terminalLost) && (c as any).terminalLost.length > 0
+      ? [...(c as any).terminalLost]
+      : ['Not Interested'],
   };
 }
 
@@ -482,15 +507,23 @@ export function calculateLeadQuality(input: LeadQualityInput, config?: LeadQuali
 
   const status = canonicalizeQualityStatus(input.status);
 
-  /* ---- Terminal outcomes bypass the active scale ------------------ */
-  if (status === 'Converted') {
+  /* ---- Terminal outcomes bypass the active scale ------------------
+     DZ-6: which statuses are terminal (and won vs lost) comes from
+     the dictionary's isTerminal / isWon flags, resolved into
+     cfg.terminalWon / cfg.terminalLost by the config service at
+     read time — never from hardcoded names. A renamed 'Converted'
+     still scores 100 with its own name as its band. */
+  const statusKey = status.toLowerCase();
+  const isWonTerminal = (cfg.terminalWon || []).some(s => String(s).toLowerCase() === statusKey);
+  const isLostTerminal = (cfg.terminalLost || []).some(s => String(s).toLowerCase() === statusKey);
+  if (isWonTerminal) {
     return {
       score: LEAD_QUALITY_MAX_SCORE,
-      band: 'Converted',
+      band: status as LeadQualityBand,
       isTerminal: true,
       positiveFactors: [
         {
-          label: 'Converted — successful outcome (terminal)',
+          label: `${status} — successful outcome (terminal)`,
           points: LEAD_QUALITY_MAX_SCORE - cfg.baseScore,
         },
       ],
@@ -498,15 +531,15 @@ export function calculateLeadQuality(input: LeadQualityInput, config?: LeadQuali
       attentionReasons: [],
     };
   }
-  if (status === 'Not Interested') {
+  if (isLostTerminal) {
     return {
       score: LEAD_QUALITY_MIN_SCORE,
-      band: 'Not Interested',
+      band: status as LeadQualityBand,
       isTerminal: true,
       positiveFactors: [],
       negativeFactors: [
         {
-          label: 'Not Interested — closed (terminal)',
+          label: `${status} — closed (terminal)`,
           points: LEAD_QUALITY_MIN_SCORE - cfg.baseScore,
         },
       ],

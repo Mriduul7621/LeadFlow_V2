@@ -425,6 +425,22 @@ export const leadService = {
     return data;
   },
 
+  /**
+   * Effective stage rules (DZ-6): the per-status required fields the
+   * server enforces on POST /leads/:id/follow-up, resolved to current
+   * status names. The client form validates from this same list so the
+   * two can never drift. Returns null when the list cannot be read —
+   * the caller falls back to the code-default table in
+   * leadStatusRules.ts (exactly the server's fallback).
+   */
+  async getStageRules(): Promise<{ rules: import('../utils/leadStatusRules').StageRule[]; terminalNames: string[] } | null> {
+    try {
+      return await apiRequest<{ rules: import('../utils/leadStatusRules').StageRule[]; terminalNames: string[] }>('/api/leads/stage-rules');
+    } catch {
+      return null;
+    }
+  },
+
   async getLeadActivities(leadId: string): Promise<Array<Record<string, any>>> {
     try {
       const activities = await apiRequest<Array<Record<string, any>>>(`/api/leads/${encodeURIComponent(leadId)}/activities`);

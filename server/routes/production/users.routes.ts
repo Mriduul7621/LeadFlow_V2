@@ -62,7 +62,6 @@ import {
   hasLeadsTable,
   summarizeOpenLeads,
   transferOpenLeads,
-  TERMINAL_STATUSES,
 } from '../../utils/userDeactivation.js';
 import {
   generateTempPassword,
@@ -82,6 +81,7 @@ import {
 } from '../../services/SecurityPolicyService.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
+import { getTerminalStatusNames } from '../../services/StageRulesService.js';
 import {
   AUDIT_CHANGE_CAP,
   EMPLOYEE_ID_RE,
@@ -348,10 +348,12 @@ async function buildHierarchyConfig(
   try {
     if (await hasLeadsTable(pool)) {
       const inactiveOwners = await fetchInactiveOwnersWithOpenLeads(pool);
+      // DZ-6: open-lead total excludes the dictionary's terminal statuses.
+      const terminal = await getTerminalStatusNames(pool);
       const openTotal = await pool.query(
         `SELECT COUNT(*)::int AS count FROM leads l
           WHERE l.is_deleted = FALSE AND l.current_status <> ALL($1::text[])`,
-        [TERMINAL_STATUSES]
+        [terminal]
       );
       ownership = {
         available: true,

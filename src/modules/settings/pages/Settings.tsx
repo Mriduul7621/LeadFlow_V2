@@ -47,6 +47,7 @@ import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZo
 import DangerZoneLeadQuality from '../components/DangerZoneLeadQuality';
 import DangerZoneRoleDefaults from '../components/DangerZoneRoleDefaults';
 import DangerZoneSecurityPolicy from '../components/DangerZoneSecurityPolicy';
+import DangerZoneStageRules from '../components/DangerZoneStageRules';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -2111,6 +2112,15 @@ export default function Settings() {
 
                       {/* DZ-5 — Role defaults (audit §2.2 B6). */}
                       <DangerZoneRoleDefaults
+                        onLocked={() => {
+                          setDzOverview(null);
+                          setDzSecondsLeft(0);
+                          setDzState('locked');
+                        }}
+                      />
+
+                      {/* DZ-6 — Stage rules & terminal statuses (audit §2.4 D2/D3). */}
+                      <DangerZoneStageRules
                         onLocked={() => {
                           setDzOverview(null);
                           setDzSecondsLeft(0);

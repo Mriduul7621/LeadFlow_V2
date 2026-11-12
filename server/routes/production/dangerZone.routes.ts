@@ -59,6 +59,22 @@
  *                            apply routine (zero-grant roles only,
  *                            visibility only while still 'Own') and
  *                            audit-logs what it actually changed.
+ *   GET  /danger-zone/stage-rules
+ *                            requires a VALID unlock: the current
+ *                            effective stage rules (DZ-6, audit §2.4
+ *                            D2/D3) — per-status required fields
+ *                            keyed by dictionary-entry id + the
+ *                            terminal flags — + the code defaults +
+ *                            the version + the last change
+ *                            (who/when/old→new, from the audit log).
+ *   PUT  /danger-zone/stage-rules
+ *                            requires a VALID unlock: saves one
+ *                            versioned rule set + terminal flags
+ *                            (version +1) and writes an audit row
+ *                            with old→new values. The follow-up
+ *                            endpoint enforces the saved rules from
+ *                            the next request on; every "open lead"
+ *                            definition reads the saved terminal flags.
  *
  * Unlock lifetime: 10 minutes, non-sliding (owner decision
  * 2026-11-11). Re-lock triggers: expiry, Lock, logout (the client
@@ -112,6 +128,12 @@ import {
   setRoleDefaults,
   type RoleDefaultsInput,
 } from '../../services/RoleDefaultsService.js';
+import {
+  getStageRulesForEdit,
+  setStageRules,
+  StageRulesValidationError,
+  type StageRulesInput,
+} from '../../services/StageRulesService.js';
 import {
   dbErrorStatus,
   logAccessChange,
@@ -443,6 +465,54 @@ router.post('/danger-zone/role-defaults/apply', requireAuth, requireSuperAdmin, 
     return sendJson(res, 200, { success: true, data: result });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not apply role defaults.' });
+  }
+});
+
+/* ====================================================================
+   STAGE RULES + TERMINAL (DZ-6 — audit §2.4 D2/D3, §4, §5 Finding 5)
+   --------------------------------------------------------------------
+   The per-status required-field rules and the terminal flags live
+   here now: the rules in the lead_stage_rules table (migration 060,
+   keyed by FollowUpStatus dictionary-entry id, so a rename keeps
+   its rule) and the terminal flags on the dictionary rows
+   themselves (meta.isTerminal — the single source every "open lead"
+   definition reads). GET returns the current effective rules +
+   the code defaults + the field vocabulary + the per-status
+   options (terminal / won / lost / current rule) + the version +
+   the last change (who/when/old→new, rendered only inside the
+   Danger Zone per Q2). PUT saves one versioned set (version +1)
+   and audit-logs old→new; saving alone changes no lead, but the
+   follow-up endpoint enforces the saved rules from the next
+   request on. Both sit behind the same three gates as the overview:
+   requireAuth → DB-resolved super admin (403) → valid unlock else
+   403 danger_zone_locked (never 401 — a 401 logs the admin out via
+   the shared HTTP layer).
+==================================================================== */
+
+router.get('/danger-zone/stage-rules', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  try {
+    const data = await getStageRulesForEdit();
+    return sendJson(res, 200, { success: true, data });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Stage rules failed.' });
+  }
+});
+
+router.put('/danger-zone/stage-rules', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const saved = await setStageRules(req.body as StageRulesInput, {
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, { success: true, data: saved });
+  } catch (error: any) {
+    // Validation failures are the caller's fault (400, clear message);
+    // anything else is a server/database failure (503 via dbErrorStatus).
+    if (error instanceof StageRulesValidationError) {
+      return sendJson(res, 400, { success: false, message: error.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save stage rules.' });
   }
 });
 

@@ -39,8 +39,8 @@ import { createId, fallbackStore } from '../fallbackStore.js';
 import {
   classifyFollowUpBucket,
   getDhakaBusinessDayBounds,
-  TERMINAL_LEAD_STATUSES,
 } from '../utils/businessTime.js';
+import { getTerminalStatusNames, getTerminalStatusNamesFallback } from './StageRulesService.js';
 import {
   normalizeRole,
   resolveCallerVisibility,
@@ -322,7 +322,8 @@ export async function computeFollowUpReminderCounts(
   const visibility = await resolveCallerVisibility(caller);
 
   if (!useDb()) {
-    const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+    // DZ-6: demo mirror of the dictionary terminal set.
+    const terminal = new Set(getTerminalStatusNamesFallback().map(s => s.toLowerCase()));
     const visEmp = (visibility.employeeIds || []).map((e: string) => String(e).toUpperCase());
     let dueToday = 0;
     let overdue = 0;
@@ -342,7 +343,9 @@ export async function computeFollowUpReminderCounts(
     return { dueToday, overdue };
   }
 
-  const params: any[] = [[...TERMINAL_LEAD_STATUSES], bounds.todayStartIso, bounds.tomorrowStartIso];
+  // DZ-6: the terminal set is the dictionary's isTerminal flag.
+  const terminalNames = await getTerminalStatusNames();
+  const params: any[] = [terminalNames, bounds.todayStartIso, bounds.tomorrowStartIso];
   let visibilityClause = '';
   if (!visibility.all) {
     params.push(visibility.userIds);
