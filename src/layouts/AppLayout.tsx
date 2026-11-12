@@ -312,8 +312,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     const handleForcedPasswordReset = async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = newPassword.trim();
-      if (trimmed.length < 6) {
-        toast.error("Security policy requires password to be at least 6 characters.");
+      // DZ-4: mirrors the Danger Zone security policy's default
+      // minimum (8); the server enforces the live value.
+      if (trimmed.length < 8) {
+        toast.error("Security policy requires password to be at least 8 characters.");
         return;
       }
       if (trimmed !== confirmPassword.trim()) {
