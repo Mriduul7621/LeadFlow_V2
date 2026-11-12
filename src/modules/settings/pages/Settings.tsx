@@ -26,7 +26,8 @@ import {
   Lock,
   Upload,
   Download,
-  FileJson
+  FileJson,
+  SlidersHorizontal
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -41,6 +42,7 @@ import { leadService } from '../../leads/services/leadService';
 import { databaseStatusService } from '../../../services/syncService';
 import { calendarService, type CalendarHoliday, type HolidayImportResult } from '../../calendar/services/calendarService';
 import { notificationSettingsService, type NotificationSettings } from '../services/notificationSettingsService';
+import { operationsSettingsService, OPERATIONS_LIMITS, DEFAULT_OPERATIONS_SETTINGS, type OperationsSettings } from '../services/operationsSettingsService';
 import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZoneService';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
@@ -252,9 +254,21 @@ export default function Settings() {
   // genuinely stop when their switch is off. Nothing on that card is
   // display-only any more.
   const canEditNotifications = canEditCalendar;
-  const [notifSettings, setNotifSettings] = useState<NotificationSettings>({ assignmentAlerts: true, dailyPushSummary: true });
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings>({ assigneeAlerts: true, uplineAlerts: true, assignmentAlerts: true, dailyPushSummary: true, meetingNotifications: true });
   const [notifLoaded, setNotifLoaded] = useState(false);
   const [notifSavingKey, setNotifSavingKey] = useState<string | null>(null);
+
+  // Operations & Limits (Admin Control programme, DZ-2): the bounded
+  // caps (G1/G2/M1) are real Settings values served by
+  // GET /settings/operations. Loaded on mount because the profile
+  // image upload in the Overview tab enforces the effective image
+  // cap; until loaded, the defaults (the old hardcoded values) apply.
+  const canEditOperations = canEditCalendar;
+  const [opsSettings, setOpsSettings] = useState<OperationsSettings>({ ...DEFAULT_OPERATIONS_SETTINGS });
+  const [opsDraft, setOpsDraft] = useState<OperationsSettings>({ ...DEFAULT_OPERATIONS_SETTINGS });
+  const [opsLoaded, setOpsLoaded] = useState(false);
+  const [opsSaving, setOpsSaving] = useState(false);
+  const opsDirty = JSON.stringify(opsDraft) !== JSON.stringify(opsSettings);
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [weekendDraft, setWeekendDraft] = useState<number[]>([5, 6]);
   const [weekendSaved, setWeekendSaved] = useState<number[]>([5, 6]);
@@ -393,6 +407,43 @@ export default function Settings() {
       .catch(() => { if (!cancelled) setNotifLoaded(true); });
     return () => { cancelled = true; };
   }, [activeSection, notifLoaded]);
+
+  // Operations limits load once (the image-upload cap in Overview
+  // needs the effective value even before this section is opened).
+  useEffect(() => {
+    let cancelled = false;
+    operationsSettingsService.getSettings()
+      .then(s => {
+        if (cancelled) return;
+        setOpsSettings(s);
+        setOpsDraft(s);
+        setOpsLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setOpsLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSaveOperations = async () => {
+    if (!canEditOperations || opsSaving || !opsDirty) return;
+    for (const [key, { min, max }] of Object.entries(OPERATIONS_LIMITS)) {
+      const value = opsDraft[key as keyof OperationsSettings];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+        toast.error(`${key} must be between ${min} and ${max}. Nothing was changed.`);
+        return;
+      }
+    }
+    setOpsSaving(true);
+    try {
+      const saved = await operationsSettingsService.saveSettings(opsDraft);
+      setOpsSettings(saved);
+      setOpsDraft(saved);
+      toast.success('Operations limits saved — they apply right away.');
+    } catch {
+      toast.error('Could not save operations limits. Nothing was changed.');
+    } finally {
+      setOpsSaving(false);
+    }
+  };
 
   const handleToggleNotification = async (key: keyof NotificationSettings) => {
     if (!canEditNotifications || notifSavingKey) return;
@@ -924,6 +975,7 @@ export default function Settings() {
 
   const sections = [
     { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
+    { id: 'operations', label: 'Operations & Limits', icon: SlidersHorizontal, desc: 'Import row caps and image upload limit', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, desc: 'Weekend days and government holidays', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
     { id: 'danger-zone', label: 'Danger Zone', icon: ShieldAlert, desc: 'System rules — super admin only, password required', allowed: isSystemAdmin },
@@ -1210,7 +1262,7 @@ export default function Settings() {
                         {/* Controls */}
                         <div className="flex-1 space-y-4 w-full text-left">
                           <p className="text-[11px] text-slate-500 leading-normal uppercase tracking-tight font-bold">
-                            Select an identity preset below, or upload a custom image (max 1.5MB JPEG/PNG) to synchronize across the network.
+                            Select an identity preset below, or upload a custom image (max {opsSettings.imageUploadMaxMb}MB JPEG/PNG) to synchronize across the network.
                           </p>
                           
                           <div className="flex flex-wrap gap-3">
@@ -1223,8 +1275,10 @@ export default function Settings() {
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   if (file) {
-                                    if (file.size > 1.5 * 1024 * 1024) {
-                                      toast.error('Asset limits exceeded: Maximum 1.5MB allowed');
+                                    // DZ-2 (M1): the image cap is a real Settings value now
+                                    // (Operations & Limits); the default equals the old 1.5MB.
+                                    if (file.size > opsSettings.imageUploadMaxMb * 1024 * 1024) {
+                                      toast.error(`Asset limits exceeded: Maximum ${opsSettings.imageUploadMaxMb}MB allowed`);
                                       return;
                                     }
                                     const reader = new FileReader();
@@ -1522,7 +1576,9 @@ export default function Settings() {
 
                     <div className="space-y-4 pt-4 border-t border-slate-150">
                       {([
-                        { key: 'assignmentAlerts', label: 'In-App Assignment Alerts', desc: 'Assignee and upline managers are notified in the app immediately' },
+                        { key: 'assigneeAlerts', label: 'Assignee Assignment Alerts', desc: 'The assignee is notified in the app immediately' },
+                        { key: 'uplineAlerts', label: 'Upline Assignment Alerts', desc: 'Managers up the chain are notified in the app immediately' },
+                        { key: 'meetingNotifications', label: 'Meeting Notifications', desc: 'Invites, moves, cancellations, completions, RSVPs and reminders' },
                         { key: 'dailyPushSummary', label: 'Daily Push Summary', desc: 'Opt-in browser push each morning with due and overdue follow-ups' },
                       ] as const).map((n) => {
                         const enabled = notifSettings[n.key];
@@ -1866,6 +1922,70 @@ export default function Settings() {
                           ))}
                         </div>
                       ))}
+                    </div>
+                  </div>
+                </motion.div>
+              ) : activeSection === 'operations' ? (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-white p-10 rounded-sm border border-slate-100 shadow-sm space-y-8 italic text-left"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
+                        <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
+                      </button>
+                      <h3 className="font-bold text-xl text-slate-800">Operations &amp; Limits</h3>
+                    </div>
+                  </div>
+
+                  <div className="p-8 bg-[#FBFAF8] rounded-sm border border-slate-100 space-y-6">
+                    <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Bounded Operational Limits</h4>
+                    <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
+                      Real limits — each one takes effect immediately and is recorded in the audit log. Every limit has a code ceiling (shown in brackets): you can lower it, never raise it above the ceiling.
+                    </p>
+
+                    <div className="space-y-4 pt-4 border-t border-slate-150">
+                      {([
+                        { key: 'leadBulkImportMaxRows', label: 'Lead Bulk Import Max Rows', desc: 'Max leads per bulk import request (ceiling 5,000)', step: 1 },
+                        { key: 'userBulkImportMaxRows', label: 'User Bulk Import Max Rows', desc: 'Max users per bulk import request (ceiling 1,000)', step: 1 },
+                        { key: 'imageUploadMaxMb', label: 'Image Upload Max Size (MB)', desc: 'Max profile/logo image size (ceiling 1.5 MB)', step: 0.1 },
+                      ] as const).map((f) => {
+                        const limits = OPERATIONS_LIMITS[f.key];
+                        return (
+                          <div key={f.key} className="flex items-center justify-between gap-4 p-4 bg-white border border-slate-100 rounded-sm">
+                            <div>
+                              <p className="text-[11px] font-black text-slate-700 uppercase">{f.label}</p>
+                              <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">{f.desc}</p>
+                            </div>
+                            <input
+                              type="number"
+                              min={limits.min}
+                              max={limits.max}
+                              step={f.step}
+                              value={opsDraft[f.key]}
+                              disabled={!canEditOperations || !opsLoaded || opsSaving}
+                              onChange={(e) => setOpsDraft((prev) => ({ ...prev, [f.key]: Number(e.target.value) }))}
+                              className="w-24 px-2 py-1.5 border border-stone-200 rounded-[8px] text-xs font-bold text-stone-700 text-right disabled:opacity-50"
+                              aria-label={f.label}
+                            />
+                          </div>
+                        );
+                      })}
+                      {!canEditOperations && (
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">You can see these settings, but only a settings manager can change them.</p>
+                      )}
+                      {canEditOperations && (
+                        <button
+                          type="button"
+                          onClick={handleSaveOperations}
+                          disabled={!opsDirty || opsSaving || !opsLoaded}
+                          className="px-4 py-2.5 bg-stone-700 hover:bg-stone-800 text-white rounded-[10px] text-xs font-bold disabled:opacity-40 flex items-center gap-2"
+                        >
+                          <Save className="w-4 h-4" /> {opsSaving ? 'Saving...' : 'Save Limits'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </motion.div>

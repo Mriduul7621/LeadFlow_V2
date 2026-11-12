@@ -198,7 +198,10 @@ describe('Decision 1 — no email notifications (copy truth)', () => {
     const settings = readSrc('src/modules/settings/pages/Settings.tsx');
     assert.ok(!/Upline Team Tracking Emails/.test(settings), 'the email row must be removed');
     assert.ok(!/Emails to Managers/.test(settings), 'no email-alert claim may remain');
-    assert.ok(/In-App Assignment Alerts/.test(settings), 'the truthful in-app row stays');
+    // DZ-2: the combined "In-App Assignment Alerts" row split into
+    // the assignee and upline rows — the truthful in-app rows stay.
+    assert.ok(/Assignee Assignment Alerts/.test(settings), 'the truthful assignee in-app row stays');
+    assert.ok(/Upline Assignment Alerts/.test(settings), 'the truthful upline in-app row stays');
     assert.ok(/Daily Push Summary/.test(settings), 'the real (daily) push behaviour is documented');
   });
 

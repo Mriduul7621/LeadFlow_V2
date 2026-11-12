@@ -65,7 +65,6 @@ import {
   TERMINAL_STATUSES,
 } from '../../utils/userDeactivation.js';
 import {
-  USER_BULK_MAX_ROWS,
   generateTempPassword,
   validatePasswordPolicy,
   normalizeUserBulkRow,
@@ -75,6 +74,7 @@ import {
   type NormalizedUserBulkRow,
   type ImportMode,
 } from '../userBulkImport.js';
+import { getUserBulkImportMaxRows } from '../../services/OperationsSettingsService.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
@@ -1469,8 +1469,11 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
     if (!rawRows.length) {
       return sendJson(res, 400, { success: false, message: 'No rows supplied for validation' });
     }
-    if (rawRows.length > USER_BULK_MAX_ROWS) {
-      return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
+    // DZ-2 (audit §4, G2): the row cap is a real Settings value now,
+    // read at request time (ceiling 1000 = the old hardcoded value).
+    const maxRows = await getUserBulkImportMaxRows();
+    if (rawRows.length > maxRows) {
+      return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${maxRows}` });
     }
 
     // Normalize rows
@@ -1549,8 +1552,10 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   if (!rawRows.length) {
     return sendJson(res, 400, { success: false, message: 'No rows supplied for commit' });
   }
-  if (rawRows.length > USER_BULK_MAX_ROWS) {
-    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${USER_BULK_MAX_ROWS}` });
+  // DZ-2 (audit §4, G2): same Settings-driven cap as the validate path.
+  const maxRows = await getUserBulkImportMaxRows();
+  if (rawRows.length > maxRows) {
+    return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${maxRows}` });
   }
 
   const pool = getPool();

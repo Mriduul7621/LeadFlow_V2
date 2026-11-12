@@ -69,6 +69,7 @@ import {
   createAssignmentNotifications,
   createAssignmentNotificationsDemo,
 } from '../../services/NotificationService.js';
+import { getLeadBulkImportMaxRows } from '../../services/OperationsSettingsService.js';
 import {
   AUTO_ASSIGN_AUDIT_ACTION,
   AUTO_ASSIGN_RULE,
@@ -1267,8 +1268,6 @@ router.post('/leads', requireAuth, async (req: any, res) => {
      response's `autoAssigned` field (see AutoAssignmentService).
 ==================================================================== */
 
-const BULK_IMPORT_MAX_ROWS = 5000;
-
 interface PlannedImportRow {
   row: ImportRow;
   assigned: { userId: string; employeeId: string } | null;
@@ -1446,8 +1445,11 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
   if (incoming.length === 0) {
     return sendJson(res, 400, { success: false, message: 'No leads supplied for bulk import.' });
   }
-  if (incoming.length > BULK_IMPORT_MAX_ROWS) {
-    return sendJson(res, 413, { success: false, message: `Bulk import is limited to ${BULK_IMPORT_MAX_ROWS} rows per request.` });
+  // DZ-2 (audit §4, G1): the row cap is a real Settings value now,
+  // read at request time (ceiling 5000 = the old hardcoded value).
+  const maxRows = await getLeadBulkImportMaxRows();
+  if (incoming.length > maxRows) {
+    return sendJson(res, 413, { success: false, message: `Bulk import is limited to ${maxRows} rows per request.` });
   }
 
   try {
