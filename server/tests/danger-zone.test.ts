@@ -241,9 +241,9 @@ describe('Danger Zone DZ-0 — super-admin gate, password step-up, shell', () =>
     return r.rows;
   }
 
-  it('migration 057 is registered and creates danger_zone_unlocks (idempotent; 058 is the tail)', async () => {
+  it('migration 057 is registered and creates danger_zone_unlocks (idempotent; 060 is the tail)', async () => {
     assert.ok(MIGRATION_IDS.includes('057_danger_zone_unlocks'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '058_user_designation_backfill', '058 is the migration tail (057 stays registered)');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the migration tail (057 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('057_danger_zone_unlocks'), 'runner names migration 057');
     const cols: any = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'danger_zone_unlocks' ORDER BY column_name`

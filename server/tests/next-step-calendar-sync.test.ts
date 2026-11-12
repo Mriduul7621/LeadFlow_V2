@@ -14,7 +14,13 @@ import { storedTimestampIso } from '../utils/businessTime.js';
 // timezone and shift the instant (e.g. −6h under TZ=Asia/Dhaka).
 import { MIGRATION_IDS } from '../database/runMigrations.js';
 import { up as migrate054 } from '../database/migrations/054_next_step_calendar_sync.js';
-import { syncNextStepAfterFollowUp } from '../services/NextStepCalendarSync.js';
+
+// Loaded lazily in before(), AFTER the test env vars are set:
+// NextStepCalendarSync imports StageRulesService (DZ-6), which pulls
+// in production/shared.ts — and shared.ts reads JWT_SECRET once at
+// module load. A top-level import here would cache the unset value
+// and every test token would verify as invalid (401 on lead create).
+let syncNextStepAfterFollowUp: typeof import('../services/NextStepCalendarSync.js').syncNextStepAfterFollowUp;
 
 // Same test-only fixture secret the other integration suites use
 // (assembled in parts so this file carries no contiguous literal).
@@ -236,6 +242,9 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
     process.env.JWT_SECRET = JWT_SECRET;
     process.env.NODE_ENV = 'test';
 
+    // Env first, imports second (see the note at the top of this file).
+    ({ syncNextStepAfterFollowUp } = await import('../services/NextStepCalendarSync.js'));
+
     await getPGliteInstanceAsync();
     pool = await createPGlitePoolAsync();
     _setTestPoolForTest(pool);
@@ -351,7 +360,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
 
   it('migration 054 is registered as the tail and adds the link columns + unique partial index', async () => {
     assert.ok(MIGRATION_IDS.includes('054_next_step_calendar_sync'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '058_user_designation_backfill', '058 is the migration tail (056 stays registered)');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the migration tail (056 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('054_next_step_calendar_sync'), 'runner names migration 054');
     const cols: any = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'scheduled_activities' AND column_name IN ('source_activity_id', 'source_kind')`

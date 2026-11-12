@@ -17,8 +17,8 @@
  *               can therefore never send a lead somewhere a manual
  *               assignment by the same caller would be forbidden.
  *   load      = OPEN leads owned (assigned_to = user, not deleted,
- *               status not in TERMINAL_LEAD_STATUSES — the same
- *               "open" predicate the follow-up queue and the
+ *               status not in the dictionary's terminal set (DZ-6) —
+ *               the same "open" predicate the follow-up queue and the
  *               deactivation transfer use).
  *   pick      = fewest open leads; ties break to the member whose most
  *               recent assignment (leads.assigned_at) is OLDEST —
@@ -44,7 +44,7 @@
 
 import { getPool } from '../database/connection.js';
 import { fallbackStore } from '../fallbackStore.js';
-import { TERMINAL_LEAD_STATUSES } from '../utils/businessTime.js';
+import { getTerminalStatusNames, getTerminalStatusNamesFallback } from './StageRulesService.js';
 import {
   useDb,
   type CallerDbInfo,
@@ -61,8 +61,6 @@ export const AUTO_ASSIGN_RULE = 'least_loaded';
 export const AUTO_ASSIGN_HISTORY_NOTE =
   'Auto-assigned by rule: least-loaded active team member';
 export const AUTO_ASSIGN_AUDIT_ACTION = 'leads.auto_assign';
-
-const TERMINAL_STATUSES: string[] = [...TERMINAL_LEAD_STATUSES];
 
 /* ====================================================================
    The pure decision function
@@ -169,6 +167,10 @@ export async function loadAutoAssignCandidates(
 ): Promise<AutoAssignCandidate[]> {
   if (poolUserIds !== null && poolUserIds.length === 0) return [];
   try {
+    // DZ-6: open-lead counts exclude the dictionary's terminal
+    // statuses (isTerminal flag), resolved through the passed
+    // executor — never the deleted code constant.
+    const terminal = await getTerminalStatusNames(exec);
     const result = await exec.query(
       `SELECT u.id AS user_id,
               u.employee_id AS employee_id,
@@ -180,7 +182,7 @@ export async function loadAutoAssignCandidates(
         WHERE ($1::uuid[] IS NULL OR u.id = ANY($1::uuid[]))
           AND COALESCE(u.is_active, TRUE) = TRUE
         GROUP BY u.id, u.employee_id`,
-      [poolUserIds, TERMINAL_STATUSES]
+      [poolUserIds, terminal]
     );
     return result.rows.map((row: any) => ({
       userId: String(row.user_id),
@@ -214,7 +216,8 @@ export function buildDemoAutoAssignCandidates(
   poolUserIds: string[] | null
 ): AutoAssignCandidate[] {
   const pool = poolUserIds === null ? null : new Set(poolUserIds);
-  const terminal = new Set(TERMINAL_STATUSES.map(s => s.toLowerCase()));
+  // DZ-6: demo mirror of the dictionary terminal set.
+  const terminal = new Set(getTerminalStatusNamesFallback().map(s => s.toLowerCase()));
   const users = (fallbackStore.users as any[]).filter(
     u => (pool === null || pool.has(u.id)) && demoUserIsActive(u)
   );

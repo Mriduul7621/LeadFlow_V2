@@ -21,6 +21,13 @@ import {
  * (`enforceLeadStatusRules`), and `LeadUpdate.tsx` derives its messages from
  * it too, so they cannot drift.
  *
+ * DZ-6: this table is the CODE DEFAULT only. The effective rules live in
+ * the `lead_stage_rules` table (migration 060), keyed by dictionary-entry
+ * id — see the StageRulesService on the server. The server enforces the
+ * effective rules (validateLeadStatusFieldsAsync) and the client fetches
+ * them from GET /api/leads/stage-rules; both fall back to this table when
+ * the DB list cannot be read, so a rename never detaches a rule.
+ *
  * The status NAMES are the canonical FollowUpStatus dictionary values (an
  * admin can edit the dictionary, so every lookup here is by normalized key
  * and an unknown status simply has no extra requirement — the dictionary
@@ -102,18 +109,28 @@ export function ruleForLeadStatus(status: string): StageRule | undefined {
 }
 
 /**
- * The single required-field check.
+ * The single required-field check against an EXPLICIT rule list.
+ *
+ * DZ-6: the server enforces the DB rules (StageRulesService
+ * resolves them to current names), while the client form enforces
+ * the same list fetched from GET /api/leads/stage-rules. The static
+ * LEAD_STAGE_RULES below are only the code default both sides fall
+ * back to when the DB list cannot be read.
  *
  * @param status   the status being persisted (already resolved against the
  *                 dictionary — an unknown status never reaches this point)
  * @param payload  the normalized business fields of the request
+ * @param rules    the rule list to enforce (defaults to the code table)
  * @returns        every violation; empty means the update is allowed
  */
-export function validateLeadStatusFields(
+export function validateLeadStatusFieldsWithRules(
   status: string,
   payload: Record<string, unknown>,
+  rules: StageRule[],
 ): RequiredFieldViolation[] {
-  const rule = ruleForLeadStatus(status);
+  const key = normalizeStatusKey(status);
+  if (!key) return [];
+  const rule = rules.find(r => normalizeStatusKey(r.status) === key);
   if (!rule) return [];
 
   const violations: RequiredFieldViolation[] = [];
@@ -153,6 +170,19 @@ export function validateLeadStatusFields(
     }
   }
   return violations;
+}
+
+/**
+ * The single required-field check against the CODE-DEFAULT table.
+ * Prefer validateLeadStatusFieldsWithRules with the effective (DB)
+ * rules whenever they are available; this stays as the fail-closed
+ * fallback for both sides.
+ */
+export function validateLeadStatusFields(
+  status: string,
+  payload: Record<string, unknown>,
+): RequiredFieldViolation[] {
+  return validateLeadStatusFieldsWithRules(status, payload, LEAD_STAGE_RULES);
 }
 
 /**

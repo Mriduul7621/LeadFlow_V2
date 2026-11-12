@@ -29,8 +29,13 @@ import { createPerf } from '../../utils/perf.js';
 import {
   leadStatusViolationMessage,
   resolveNextActionStatus,
-  validateLeadStatusFields,
 } from '../../utils/leadStatusRules.js';
+import {
+  getEffectiveStageRules,
+  getTerminalStatusNames,
+  getTerminalStatusNamesFallback,
+  validateLeadStatusFieldsAsync,
+} from '../../services/StageRulesService.js';
 // NOTE: the `.js` extension is mandatory here. Vercel transpiles every
 // traced file individually and runs the tree as plain Node ESM, where an
 // extensionless relative import is a runtime ERR_MODULE_NOT_FOUND even
@@ -49,7 +54,6 @@ import {
 } from '../leadImport.js';
 import {
   BUSINESS_TIMEZONE,
-  TERMINAL_LEAD_STATUSES,
   getDhakaBusinessDayBounds,
   overdueDays,
   parseYmd,
@@ -2269,6 +2273,28 @@ async function checkLeadDeletePermission(req: any, res: any): Promise<boolean> {
  * columns when available) or fallback lead object.
  */
 /* ------------------------------------------------------------------
+   GET /leads/stage-rules — effective per-status required fields (DZ-6)
+   MUST be registered BEFORE /leads/:id so "stage-rules" is never an id.
+   Any authenticated lead editor may read it: the client form
+   (LeadUpdate) validates from this same list the server enforces on
+   POST /leads/:id/follow-up, so the two can never drift. Both sides
+   fall back to the code-default table when the DB list cannot be read.
+------------------------------------------------------------------- */
+router.get('/leads/stage-rules', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const rules = await getEffectiveStageRules();
+    const terminalNames = await getTerminalStatusNames();
+    return sendJson(res, 200, {
+      success: true,
+      data: { rules, terminalNames },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Stage rules failed.' });
+  }
+});
+
+/* ------------------------------------------------------------------
    GET /leads/follow-ups — operational follow-up queue (Step 4B)
    MUST be registered BEFORE /leads/:id so "follow-ups" is never an id.
 ------------------------------------------------------------------- */
@@ -2359,7 +2385,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
 
     if (!useDb()) {
       if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
-      const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+      // DZ-6: demo mirror of the dictionary terminal set.
+      const terminal = new Set(getTerminalStatusNamesFallback().map(s => s.toLowerCase()));
       let rows = (fallbackStore.leads || []).filter((l: any) => {
         if (l.is_deleted === true) return false;
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
@@ -2427,7 +2454,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
                 currentStatus: l.currentStatus,
               },
               slaConfig.firstContactHours,
-              slaNow
+              slaNow,
+              [...terminal]
             )
           : null;
         return {
@@ -2474,8 +2502,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       'l.next_follow_up_at IS NOT NULL',
     ];
 
+    // DZ-6: the terminal set is the dictionary's isTerminal flag —
+    // one resolution for the queue filter AND the per-row SLA below.
+    const terminalNames = await getTerminalStatusNames();
     if (!includeTerminal) {
-      params.push([...TERMINAL_LEAD_STATUSES]);
+      params.push(terminalNames);
       where.push(`l.current_status <> ALL($${params.length}::text[])`);
     }
     if (statusFilter) {
@@ -2603,7 +2634,8 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
               currentStatus: row.current_status,
             },
             slaConfig.firstContactHours,
-            slaNow
+            slaNow,
+            terminalNames
           )
         : null;
       return {
@@ -2961,13 +2993,16 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     /* ---- F6: per-status required fields (server-authoritative) ----------------
        The conditionals used to live only in the Update form, so any other
        caller could park a lead in "Meeting Fixed" with no meeting, "Converted"
-       with no premium, or "Not Interested" with no reason. Same rule table as
-       the form (src/modules/leads/utils/leadStatusRules.ts), evaluated on the
-       NORMALIZED payload, so 0 / "" / null all count as missing.
+       with no premium, or "Not Interested" with no reason. DZ-6: the rules
+       live in the lead_stage_rules table, keyed by dictionary-entry id
+       (StageRulesService), and are resolved to current names at request
+       time — renaming a status keeps its rule. The client form fetches
+       the same effective list (GET /leads/stage-rules); both sides fall
+       back to the code-default table when the DB list cannot be read.
        A partial update (remarks only, no status) keeps working: the rule is
        keyed on the status being written.                                          */
     if (validatedStatus !== undefined) {
-      const violations = validateLeadStatusFields(validatedStatus, {
+      const violations = await validateLeadStatusFieldsAsync(validatedStatus, {
         nextFollowUpDate: nextFollowUpDateInput,
         meetingDate: meetingDateInput,
         productName: productNameInput,

@@ -48,10 +48,10 @@
  *   - The follow-up set NO next step → open entries are left alone
  *     (the lead's next_follow_up_at is likewise preserved by those
  *     handlers), UNLESS the lead reached a terminal status
- *     (TERMINAL_LEAD_STATUSES): 'Converted' completes the open entry
- *     (the journey succeeded), 'Not Interested' cancels it (closed —
- *     the same outcome pair the calendar's own complete/cancel
- *     endpoints produce).
+ *     (dictionary isTerminal flag, DZ-6): a WON terminal completes
+ *     the open entry (the journey succeeded), any other terminal
+ *     status cancels it (closed — the same outcome pair the
+ *     calendar's own complete/cancel endpoints produce).
  *   - assigned_to is the lead's assignee after the write — the same
  *     default POST /scheduled-activities uses for manual entries.
  *
@@ -80,7 +80,14 @@
  * in-memory fallbackStore (NotificationService convention).
  */
 
-import { TERMINAL_LEAD_STATUSES, storedTimestampIso } from '../utils/businessTime.js';
+import { storedTimestampIso } from '../utils/businessTime.js';
+import {
+  FALLBACK_TERMINAL_STATUS_NAMES,
+  getTerminalStatusInfo,
+  getTerminalStatusInfoFallback,
+  isTerminalStatus,
+  type TerminalStatusInfo,
+} from './StageRulesService.js';
 import { createId } from '../fallbackStore.js';
 
 type Queryable = {
@@ -90,10 +97,26 @@ type Queryable = {
 export type NextStepKind = 'call' | 'meeting' | 'follow_up';
 export type NextStepSourceKind = 'follow_up' | 'scheduled_complete' | 'lead_save' | 'bulk_import' | 'backfill';
 
-const TERMINAL_SET = new Set<string>(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+/**
+ * Pure terminal check against a resolved name list (DZ-6: the
+ * dictionary's isTerminal flag is the single source; callers pass
+ * the resolved names, the default is the canonical fallback pair).
+ */
+export function isTerminalLeadStatus(
+  status: unknown,
+  terminalNames: readonly string[] = FALLBACK_TERMINAL_STATUS_NAMES
+): boolean {
+  return isTerminalStatus(status, terminalNames);
+}
 
-export function isTerminalLeadStatus(status: unknown): boolean {
-  return TERMINAL_SET.has(String(status ?? '').trim().toLowerCase());
+/** True when the status is a WON terminal (its calendar entry completes, not cancels). */
+export function isWonTerminalLeadStatus(
+  status: unknown,
+  wonNames: readonly string[] = ['Converted']
+): boolean {
+  const key = String(status ?? '').trim().toLowerCase();
+  if (!key) return false;
+  return (wonNames || []).some(n => String(n).trim().toLowerCase() === key);
 }
 
 /**
@@ -188,6 +211,12 @@ export async function syncNextStepAfterFollowUp(
     console.warn('[next-step-calendar] sync skipped (pre-054 schema)');
     return { synced: false };
   }
+  // DZ-6: terminal (and won vs lost) comes from the dictionary's
+  // isTerminal / isWon flags, resolved through this transaction's
+  // own client (probeFirst: a missing options table must be
+  // decided before any statement can abort the caller's
+  // transaction — the DZ-1 regression).
+  const terminalInfo = await getTerminalStatusInfo(db, { probeFirst: true });
   {
     if (args.nextStepAt) {
       // Supersede: every OTHER open managed entry for this lead was
@@ -218,9 +247,12 @@ export async function syncNextStepAfterFollowUp(
       return { synced: true };
     }
 
-    if (isTerminalLeadStatus(args.leadStatusAfter)) {
-      const converted = String(args.leadStatusAfter).trim().toLowerCase() === 'converted';
-      if (converted) {
+    if (isTerminalLeadStatus(args.leadStatusAfter, terminalInfo.names)) {
+      // DZ-6: a WON terminal completes the open entry (the journey
+      // succeeded); any other terminal status cancels it. Which
+      // names are won comes from the dictionary's isWon flag.
+      const won = isWonTerminalLeadStatus(args.leadStatusAfter, terminalInfo.wonNames);
+      if (won) {
         await db.query(
           `UPDATE scheduled_activities
               SET status = 'completed', completed_at = NOW(), completed_by = $2,
@@ -276,7 +308,14 @@ export async function reconcileLeadNextStepCalendar(
     const lead = leadRes.rows[0];
     if (!lead) return { synced: false };
 
-    if (isTerminalLeadStatus(lead.current_status)) {
+    // DZ-6: the terminal set is the dictionary's isTerminal flag
+    // (probeFirst — this runs inside the caller's transaction).
+    // Outcome is unchanged from before: a closed lead keeps no
+    // open next step, whatever kind it was (the follow-up path's
+    // won→complete / lost→cancel split lives in
+    // syncNextStepAfterFollowUp, which owns the activity).
+    const terminalInfo = await getTerminalStatusInfo(db, { probeFirst: true });
+    if (isTerminalLeadStatus(lead.current_status, terminalInfo.names)) {
       // A closed lead keeps no open next step, whatever kind it was.
       await db.query(
         `UPDATE scheduled_activities
@@ -477,10 +516,13 @@ export function syncNextStepAfterFollowUpDemo(store: any, args: {
     return;
   }
 
-  if (isTerminalLeadStatus(args.leadStatusAfter)) {
-    const converted = String(args.leadStatusAfter).trim().toLowerCase() === 'converted';
+  // DZ-6: demo mirror of the dictionary terminal set (fallback
+  // store, else the canonical pair) and its won/lost split.
+  const terminalInfo = getTerminalStatusInfoFallback();
+  if (isTerminalLeadStatus(args.leadStatusAfter, terminalInfo.names)) {
+    const won = isWonTerminalLeadStatus(args.leadStatusAfter, terminalInfo.wonNames);
     for (const row of openManaged()) {
-      demoCloseEntry(row, converted ? 'completed' : 'cancelled', args.actorId, converted ? args.sourceActivityId : null, nowIso);
+      demoCloseEntry(row, won ? 'completed' : 'cancelled', args.actorId, won ? args.sourceActivityId : null, nowIso);
     }
   }
 }
@@ -503,7 +545,10 @@ export function reconcileLeadNextStepCalendarDemo(store: any, args: {
     (!followUpOnly || String(r.activityType ?? r.activity_type) === 'follow_up')
   );
 
-  if (isTerminalLeadStatus(lead.currentStatus ?? lead.current_status)) {
+  // DZ-6: demo mirror — a terminal lead (dictionary flag) keeps no
+  // open next step, whatever kind it was.
+  const terminalInfo = getTerminalStatusInfoFallback();
+  if (isTerminalLeadStatus(lead.currentStatus ?? lead.current_status, terminalInfo.names)) {
     for (const row of openManaged(false)) demoCloseEntry(row, 'cancelled', args.actorId, null, nowIso);
     return;
   }

@@ -7,7 +7,7 @@ import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { useTranslation } from '../../shared/utils/translations';
 import { cn } from '../../../lib/utils';
-import { validateLeadStatusFields } from '../utils/leadStatusRules';
+import { LEAD_STAGE_RULES, validateLeadStatusFieldsWithRules, type StageRule } from '../utils/leadStatusRules';
 import type { Lead } from '../../shared/types';
 
 /**
@@ -131,6 +131,11 @@ export default function LeadUpdate() {
   );
   const [meetingTypes, setMeetingTypes] = useState<string[]>([]);
   const [lossReasons, setLossReasons] = useState<string[]>([]);
+  // DZ-6: the effective stage rules the server enforces, fetched once on
+  // mount. Null while loading OR when the read failed — validation then
+  // uses the code-default table (exactly the server's fallback), so the
+  // form is never left unguarded and never blocked by a rules read.
+  const [stageRules, setStageRules] = useState<StageRule[] | null>(null);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -169,15 +174,17 @@ export default function LeadUpdate() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [p, m, l] = await Promise.all([
+      const [p, m, l, rules] = await Promise.all([
         metadataService.getActiveValues('Product').catch(() => [] as string[]),
         metadataService.getActiveValues('MeetingType').catch(() => [] as string[]),
         metadataService.getActiveValues('LossReason').catch(() => [] as string[]),
+        leadService.getStageRules(),
       ]);
       if (cancelled) return;
       setProducts(p);
       setMeetingTypes(m);
       setLossReasons(l);
+      if (rules) setStageRules(rules.rules);
     })();
     return () => {
       cancelled = true;
@@ -200,10 +207,21 @@ export default function LeadUpdate() {
   const needsLossReason = effectiveStatus === NOT_INTERESTED;
 
   /**
-   * F6 — the conditional fields are validated from the SAME table the server
-   * enforces (`validateLeadStatusFields`), so the form can never ask for less
-   * (or more) than the API accepts. Only the copy differs: the form keeps its
-   * translated messages, the API returns a plain sentence for non-UI callers.
+   * F6 — the conditional fields are validated from the SAME effective
+   * rules the server enforces (GET /leads/stage-rules, DZ-6), so the
+   * form can never ask for less (or more) than the API accepts. While
+   * the rules are loading — or when the read failed — the code-default
+   * table applies (the server's fallback too). Only the copy differs:
+   * the form keeps its translated messages, the API returns a plain
+   * sentence for non-UI callers.
+   *
+   * Known limitation (DZ-6 scope): the show/hide booleans above
+   * (needsMeeting, needsProposalFields, ...) are still name-based,
+   * so for a RENAMED status the server still enforces the right rule
+   * and this validation still uses the effective rules, but the form
+   * may not show the field until the status name matches. Full
+   * rename-proofing of field visibility is UI vocabulary work
+   * (D4), not a rule change.
    */
   const validate = (): boolean => {
     const e: Record<string, string> = {};
@@ -212,7 +230,7 @@ export default function LeadUpdate() {
     // final status); the server does not demand it, so it stays client-side.
     if (needsNextAction && !nextAction) e.nextAction = t('updErrNextAction');
 
-    const violations = validateLeadStatusFields(effectiveStatus, {
+    const violations = validateLeadStatusFieldsWithRules(effectiveStatus, {
       nextFollowUpDate: followUpAt,
       meetingDate: meetingAt,
       productName,
@@ -220,7 +238,7 @@ export default function LeadUpdate() {
       projectedNCP: projectedNCP.trim() === '' ? undefined : Number(projectedNCP),
       collectedNCP: collectedNCP.trim() === '' ? undefined : Number(collectedNCP),
       lossReason,
-    });
+    }, stageRules ?? LEAD_STAGE_RULES);
     for (const violation of violations) {
       const key = FORM_ERROR_KEY_BY_API_FIELD[violation.field] || violation.field;
       const messageKey = FORM_MESSAGE_KEY_BY_API_FIELD[violation.field] as TranslationKey | undefined;
