@@ -14,16 +14,22 @@
  *
  * UM-1 split: links that are BROKEN (CEO holding a manager, a Level 2+
  * employee with none, a manager that no longer exists) stay in
- * `invalidLinks`. Links that merely have an unusual SHAPE (gap > 2,
- * same/lower level, off-ladder manager, cross-department) are accepted
- * by the write path since UM-1 and are reported separately in
- * `warnings`, via the shared pure helper `reportingLinkWarnings`
+ * `invalidLinks`. Links that merely have an unusual SHAPE (gap wider
+ * than the configured maximum, same/lower level, off-ladder manager,
+ * cross-department while the same-department requirement is on) are
+ * accepted by the write path since UM-1 and are reported separately
+ * in `warnings`, via the shared pure helper `reportingLinkWarnings`
  * (server/utils/reportingRules) so the health screen and the write
  * paths can never drift apart.
+ *
+ * DZ-7: the shape thresholds are the live Danger Zone hierarchy
+ * knobs. Callers pass them as the third argument; omitting them
+ * keeps the code defaults, so this module stays usable without a
+ * database.
  * The function never mutates the input and never touches the database.
  */
 
-import { UNASSIGNED_LEVEL, reportingLinkWarnings } from './reportingRules.js';
+import { UNASSIGNED_LEVEL, reportingLinkWarnings, type HierarchyRulesShape, DEFAULT_HIERARCHY_RULES } from './reportingRules.js';
 
 export { UNASSIGNED_LEVEL };
 
@@ -61,8 +67,10 @@ export interface HierarchyHealth {
   invalidLinks: InvalidLink[];
   /**
    * Reporting relationships that are VALID but unusually shaped
-   * (UM-1): gap > 2, same/lower level, off-ladder manager, or
-   * cross-department. Accepted by design — listed for admin awareness.
+   * (UM-1): gap wider than the configured maximum, same/lower
+   * level, off-ladder manager, or cross-department (while the
+   * same-department requirement is switched on). Accepted by
+   * design — listed for admin awareness.
    */
   warnings: InvalidLink[];
 }
@@ -79,11 +87,13 @@ export function levelForRole(
 
 /**
  * Compute ladder health (missing-manager count + invalid links) from the
- * raw user rows and a roleCode -> ladder-level map.
+ * raw user rows and a roleCode -> ladder-level map. `rules` carries the
+ * live DZ-7 hierarchy knobs (default = code defaults).
  */
 export function computeHierarchyHealth(
   users: HierarchyUserRow[],
-  levelByRoleCode: Map<string, number>
+  levelByRoleCode: Map<string, number>,
+  rules: HierarchyRulesShape = DEFAULT_HIERARCHY_RULES
 ): HierarchyHealth {
   const byId = new Map<string, HierarchyUserRow>(
     users.map((u) => [u.id, u])
@@ -142,14 +152,15 @@ export function computeHierarchyHealth(
 
     const managerLevel = levelForRole(levelByRoleCode, manager.role_code);
     // UM-1: an unusual link SHAPE is a warning, not an invalid link —
-    // the write path accepts these links since UM-1.
+    // the write path accepts these links since UM-1. DZ-7: the shape
+    // thresholds are the live Danger Zone knobs, passed in by the caller.
     for (const warning of reportingLinkWarnings({
       employeeLevel: level,
       managerLevel,
       employeeDepartmentId: u.department_id || null,
       managerDepartmentId: manager.department_id || null,
       managerDepartmentIds: manager.department_ids || null,
-    })) {
+    }, rules)) {
       warnings.push({
         employeeId: u.employee_id,
         employeeName: u.full_name,

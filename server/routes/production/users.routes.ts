@@ -82,6 +82,7 @@ import {
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import { getTerminalStatusNames } from '../../services/StageRulesService.js';
+import { getHierarchyRules } from '../../services/HierarchyRulesService.js';
 import {
   AUDIT_CHANGE_CAP,
   EMPLOYEE_ID_RE,
@@ -304,12 +305,17 @@ async function buildHierarchyConfig(
   // department memberships so a link via a manager's ADDITIONAL department
   // seat is judged by the same rule the write path enforces (never flagged
   // as a wrong-department problem).
+  // DZ-7: the shape thresholds are the LIVE Danger Zone hierarchy
+  // knobs (gap bound + same-department requirement), read fresh at
+  // request time; the health screen flags exactly what the knobs
+  // say, and the `rules` block below reports them back to the UI.
   const membershipMap = await getMembershipDepartmentMap(pool);
   const healthUsers = (usersResult.rows as any[]).map((row: any) => ({
     ...row,
     department_ids: membershipMap.get(String(row.id)) || [],
   }));
-  const health = computeHierarchyHealth(healthUsers as any, levelMap);
+  const hierarchyRules = await getHierarchyRules();
+  const health = computeHierarchyHealth(healthUsers as any, levelMap, hierarchyRules);
 
   // F16 Phase D — department health. One department = one mirror team, a
   // roster that equals its memberships and a leader that equals its primary
@@ -397,10 +403,10 @@ async function buildHierarchyConfig(
       warnings: health.warnings,
     },
     rules: {
-      levelGap: 2,
-      sameDepartmentRequired: false,
+      levelGap: hierarchyRules.maxReportingGap,
+      sameDepartmentRequired: hierarchyRules.requireSameDepartment,
       level1CrossesDepartments: true,
-      description: 'Level 1 = CEO (company-wide) and reports to no one. Every other employee needs exactly one reporting manager, who may be any active employee (UM-1). Links more than two levels up, or across departments, are allowed and flagged below as warnings.',
+      description: `Level 1 = CEO (company-wide) and reports to no one. Every other employee needs exactly one reporting manager, who may be any active employee (UM-1). Links more than ${hierarchyRules.maxReportingGap} level${hierarchyRules.maxReportingGap > 1 ? 's' : ''} up${hierarchyRules.requireSameDepartment ? ', or across departments,' : ''} are allowed and flagged below as warnings.`,
     },
   };
 }
@@ -1580,12 +1586,15 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
 
     // A1 (DZ-4): bulk-import temporary passwords follow the live policy minimum.
     const bulkMinLength = await getPasswordMinLength();
+    // DZ-7: link-shape warnings follow the live hierarchy knobs.
+    const bulkHierarchyRules = await getHierarchyRules();
     const preview = validateBulkRows({
       rows: normalized,
       maps,
       mode,
       permissions: { canCreate, canEdit },
       passwordMinLength: bulkMinLength,
+      hierarchyRules: bulkHierarchyRules,
     });
 
     preview.fileName = fileName;
@@ -1643,6 +1652,9 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
   // read fresh at request time; it only has to be fixed for the
   // duration of this one import.
   const bulkMinLength = await getPasswordMinLength();
+  // DZ-7: same read-before-BEGIN rule for the hierarchy knobs — the
+  // commit re-validation flags link shapes against the live values.
+  const bulkHierarchyRules = await getHierarchyRules();
 
   const pool = getPool();
   const client = await pool.connect();
@@ -1683,6 +1695,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
       mode,
       permissions: { canCreate, canEdit },
       passwordMinLength: bulkMinLength,
+      hierarchyRules: bulkHierarchyRules,
     });
 
     const validRows = preview.rows.filter(r => r.isValid);
