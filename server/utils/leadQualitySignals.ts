@@ -26,6 +26,7 @@ import {
   calculateLeadQuality,
   toCompactQuality,
   type LeadQualityBand,
+  type LeadQualityConfig,
   type LeadQualityInput,
   type LeadQualityResult,
 } from './leadQuality.js';
@@ -252,9 +253,10 @@ export function scoreLeadRow(
   row: LeadRowLike,
   activity: ActivityQualitySignals | undefined,
   scheduled: ScheduledQualitySignals | undefined,
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): LeadQualityResult {
-  return calculateLeadQuality(qualityInputFromRow(row, activity, scheduled, now));
+  return calculateLeadQuality(qualityInputFromRow(row, activity, scheduled, now), config);
 }
 
 /** Compact { score, band } for one already-fetched row (no I/O). */
@@ -262,9 +264,10 @@ export function compactScoreLeadRow(
   row: LeadRowLike,
   activity: ActivityQualitySignals | undefined,
   scheduled: ScheduledQualitySignals | undefined,
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): { score: number; band: LeadQualityBand } {
-  return toCompactQuality(scoreLeadRow(row, activity, scheduled, now));
+  return toCompactQuality(scoreLeadRow(row, activity, scheduled, now, config));
 }
 
 /* ====================================================================
@@ -307,7 +310,8 @@ export async function aggregateQualityForScope(
   visibilitySql: string,
   visibilityParams: any[],
   terminalStatuses: string[],
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): Promise<LeadQualityDashboard> {
   const params: any[] = [...visibilityParams, terminalStatuses];
   const pTerminal = params.length;
@@ -359,7 +363,8 @@ export async function aggregateQualityForScope(
       },
       activityMap.get(id),
       scheduledMap.get(id),
-      now
+      now,
+      config
     );
     // Terminal guard: scope already excludes terminal statuses, but a
     // custom/alias edge must never pollute the active bands.
@@ -386,7 +391,8 @@ export function aggregateQualityForFallbackLeads(
   leads: any[],
   leadActivities: any[],
   scheduledActivities: any[],
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): LeadQualityDashboard {
   const agg = emptyQualityDashboard();
   const terminal = new Set(['converted', 'not interested']);
@@ -432,7 +438,8 @@ export function aggregateQualityForFallbackLeads(
       lead as LeadRowLike,
       { lastActivityAt, failedContactCount: failed, meaningfulEngagementCount: meaningful },
       { nextScheduledAt },
-      now
+      now,
+      config
     );
     if (result.isTerminal) continue;
     agg.activeScored += 1;
@@ -456,7 +463,8 @@ export function compactQualityForFallbackLeads(
   leads: any[],
   leadActivities: any[],
   scheduledActivities: any[],
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): Map<string, { score: number; band: LeadQualityBand }> {
   const out = new Map<string, { score: number; band: LeadQualityBand }>();
   const MEANINGFUL = new Set([
@@ -503,7 +511,8 @@ export function compactQualityForFallbackLeads(
         lead as LeadRowLike,
         { lastActivityAt, failedContactCount: failed, meaningfulEngagementCount: meaningful },
         { nextScheduledAt: nextScheduledByLead.get(key) ?? null },
-        now
+        now,
+        config
       )
     );
   }
@@ -515,7 +524,8 @@ export function scoreFallbackLead(
   lead: any,
   leadActivities: any[],
   scheduledActivities: any[],
-  now?: Date | string
+  now?: Date | string,
+  config?: LeadQualityConfig
 ): LeadQualityResult {
   const key = String(lead?.id ?? '');
   const MEANINGFUL = new Set([
@@ -547,6 +557,7 @@ export function scoreFallbackLead(
     lead as LeadRowLike,
     { lastActivityAt, failedContactCount: failed, meaningfulEngagementCount: meaningful },
     { nextScheduledAt },
-    now
+    now,
+    config
   );
 }

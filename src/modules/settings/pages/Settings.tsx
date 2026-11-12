@@ -44,6 +44,7 @@ import { calendarService, type CalendarHoliday, type HolidayImportResult } from 
 import { notificationSettingsService, type NotificationSettings } from '../services/notificationSettingsService';
 import { operationsSettingsService, OPERATIONS_LIMITS, DEFAULT_OPERATIONS_SETTINGS, type OperationsSettings } from '../services/operationsSettingsService';
 import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZoneService';
+import DangerZoneLeadQuality from '../components/DangerZoneLeadQuality';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -2085,6 +2086,15 @@ export default function Settings() {
                           ))}
                         </ul>
                       </div>
+
+                      {/* DZ-3 — Lead Quality scoring config (audit §2.6 F1–F6). */}
+                      <DangerZoneLeadQuality
+                        onLocked={() => {
+                          setDzOverview(null);
+                          setDzSecondsLeft(0);
+                          setDzState('locked');
+                        }}
+                      />
 
                       <div className="space-y-4">
                         <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Rules you can see (read-only)</h4>
