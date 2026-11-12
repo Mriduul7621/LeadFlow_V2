@@ -76,7 +76,8 @@ import {
   type ImportMode,
 } from '../userBulkImport.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
-import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES } from '../../utils/businessTime.js';
+import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES, dhakaYmd, dhakaStartUtc } from '../../utils/businessTime.js';
+import { buildTeamTree, EMPTY_TEAM_STATS, type TeamOwnStats, type TeamTreePersonInput } from '../../services/teamTree.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
   AUDIT_CHANGE_CAP,
@@ -671,6 +672,172 @@ router.get('/team/overview', requireAuth, async (req, res) => {
     return sendJson(res, 200, { success: true, scope: scopeLabel, people });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Team overview failed' });
+  }
+});
+
+/* Team org-tree report (owner request, 2026-11-11): the same scoped
+   people as /team/overview, returned as the reporting TREE with own
+   stats, subtree rollups (incl. pipeline value = summed expected
+   premium of OPEN leads — the "possible business"), and per-subtree
+   lead counts by status for the drill-down detail. ONE data path: the
+   /team page renders its tree, detail and flat groups from this
+   payload alone. Visibility is the caller's existing scope, exactly
+   like the overview — the tree contains nobody outside it, and edges
+   exist only among returned people (buildTeamTree).
+   Definitions (all on production columns — current_status,
+   assigned_to, next_follow_up_at, is_deleted, expected_premium,
+   converted_at): open = non-terminal; due today / overdue count OPEN
+   leads only (a converted lead's follow-up is not actionable — the
+   older overview counts due-today without the status filter; the two
+   can differ by terminal leads with a follow-up date still set);
+   converted this month = converted_at inside the current Dhaka month. */
+router.get('/team/tree', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req as any);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const visibility = await resolveCallerVisibility(caller as any);
+    const scopeIds = visibility.all
+      ? null
+      : new Set(visibility.employeeIds.map(e => String(e).toUpperCase()));
+    const scopeLabel = visibility.all ? 'Organization' : (scopeIds && scopeIds.size > 1 ? 'Team' : 'Own');
+    const now = new Date();
+    const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(now);
+    const { y: dhakaYear, m: dhakaMonth } = dhakaYmd(now);
+    const monthStartIso = dhakaStartUtc(dhakaYear, dhakaMonth, 1).toISOString();
+
+    if (!useDb()) {
+      const users = (fallbackStore.users as any[]).filter(u => u.isActive !== false && u.status !== 'Inactive');
+      const inScope = (u: any) => !scopeIds || scopeIds.has(String(u.employeeId).toUpperCase());
+      const scoped = users.filter(inScope);
+      const byKey = new Map<string, any>();
+      for (const u of users) { byKey.set(String(u.id), u); byKey.set(String(u.employeeId).toUpperCase(), u); }
+      const stats = new Map<string, TeamOwnStats>();
+      const status = new Map<string, Record<string, number>>();
+      const todayStart = new Date(startIso).getTime();
+      const tomorrowStart = new Date(endIso).getTime();
+      const monthStart = new Date(monthStartIso).getTime();
+      for (const u of scoped) {
+        const key = String(u.employeeId).toUpperCase();
+        const mine = (fallbackStore.leads as any[]).filter(l => String(l.assignedTo).toUpperCase() === key && !l.isDeleted);
+        const s: TeamOwnStats = { ...EMPTY_TEAM_STATS };
+        const byStatus: Record<string, number> = {};
+        for (const l of mine) {
+          byStatus[l.currentStatus] = (byStatus[l.currentStatus] || 0) + 1;
+          const open = !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus);
+          if (open) {
+            s.openLeads += 1;
+            s.pipelineValue += Number(l.expectedPremium ?? l.projectedNCP ?? 0) || 0;
+            if (l.nextFollowUpDate) {
+              const t = new Date(l.nextFollowUpDate).getTime();
+              if (t >= todayStart && t < tomorrowStart) s.dueToday += 1;
+              if (t < todayStart) s.overdue += 1;
+            }
+          }
+          if (l.currentStatus === 'Converted') {
+            s.converted += 1;
+            const ct = l.convertedAt ? new Date(l.convertedAt).getTime() : NaN;
+            if (Number.isFinite(ct) && ct >= monthStart) s.convertedThisMonth += 1;
+          }
+        }
+        stats.set(key, s);
+        status.set(key, byStatus);
+      }
+      const inputs: TeamTreePersonInput[] = scoped.map(u => {
+        const mgr = u.managerId ? byKey.get(String(u.managerId)) : undefined;
+        return {
+          userId: String(u.id),
+          employeeId: u.employeeId,
+          name: u.fullName || u.name,
+          designation: u.designation || u.roleName || u.role || null,
+          roleName: u.roleName || null,
+          department: null,
+          managerUserId: mgr ? String(mgr.id) : null,
+          managerEmployeeId: mgr?.employeeId || null,
+          managerName: mgr ? (mgr.fullName || mgr.name) : null,
+          hierarchyLevel: null,
+          isSelf: String(u.id) === String(caller.id),
+        };
+      });
+      const tree = buildTeamTree(inputs, stats, status);
+      return sendJson(res, 200, { success: true, scope: scopeLabel, people: tree.people, rootIds: tree.rootIds });
+    }
+
+    const pool = getPool();
+    const peopleRes = await pool.query(
+      `SELECT u.id, u.employee_id, u.full_name, u.designation, u.manager_id,
+              r.role_code, r.role_name, r.hierarchy_level, d.department_name
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE u.is_active = TRUE
+       ORDER BY u.full_name ASC`
+    );
+    const all = peopleRes.rows as any[];
+    const inScope = (row: any) => !scopeIds || scopeIds.has(String(row.employee_id).toUpperCase());
+    const scoped = all.filter(inScope);
+    const byId = new Map(all.map(r => [String(r.id), r]));
+
+    const countsRes = await pool.query(
+      `SELECT assigned_to,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
+              COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
+              COUNT(*) FILTER (WHERE current_status = 'Converted' AND converted_at >= $3)::int AS converted_month_count,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested') AND next_follow_up_at < $1)::int AS overdue_count,
+              COALESCE(SUM(expected_premium) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested')), 0)::float8 AS pipeline_value
+       FROM leads
+       WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
+       GROUP BY assigned_to`,
+      [startIso, endIso, monthStartIso]
+    );
+    const stats = new Map<string, TeamOwnStats>();
+    for (const r of countsRes.rows as any[]) {
+      stats.set(String(r.assigned_to).toUpperCase(), {
+        openLeads: r.open_count || 0,
+        dueToday: r.due_today_count || 0,
+        overdue: r.overdue_count || 0,
+        converted: r.converted_count || 0,
+        convertedThisMonth: r.converted_month_count || 0,
+        pipelineValue: Number(r.pipeline_value) || 0,
+      });
+    }
+    const statusRes = await pool.query(
+      `SELECT assigned_to, current_status, COUNT(*)::int AS n
+       FROM leads
+       WHERE is_deleted = FALSE AND assigned_to IS NOT NULL AND current_status IS NOT NULL
+       GROUP BY assigned_to, current_status`
+    );
+    const status = new Map<string, Record<string, number>>();
+    for (const r of statusRes.rows as any[]) {
+      const key = String(r.assigned_to).toUpperCase();
+      const entry = status.get(key) || {};
+      entry[r.current_status] = r.n;
+      status.set(key, entry);
+    }
+
+    const inputs: TeamTreePersonInput[] = scoped.map(row => {
+      const manager = row.manager_id ? byId.get(String(row.manager_id)) : null;
+      return {
+        userId: String(row.id),
+        employeeId: row.employee_id,
+        name: row.full_name,
+        designation: row.designation || row.role_name || null,
+        roleName: row.role_name || null,
+        department: row.department_name || null,
+        managerUserId: row.manager_id ? String(row.manager_id) : null,
+        managerEmployeeId: manager?.employee_id || null,
+        managerName: manager?.full_name || null,
+        hierarchyLevel: row.hierarchy_level != null ? Number(row.hierarchy_level) : null,
+        isSelf: String(row.id) === String(caller.id),
+      };
+    });
+    const tree = buildTeamTree(inputs, stats, status);
+    return sendJson(res, 200, { success: true, scope: scopeLabel, people: tree.people, rootIds: tree.rootIds });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Team tree failed' });
   }
 });
 
