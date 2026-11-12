@@ -75,6 +75,11 @@ import {
   type ImportMode,
 } from '../userBulkImport.js';
 import { getUserBulkImportMaxRows } from '../../services/OperationsSettingsService.js';
+import {
+  USER_UNLOCK_AUDIT_ACTION,
+  clearFailedLoginAttempts,
+  getPasswordMinLength,
+} from '../../services/SecurityPolicyService.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
@@ -672,6 +677,18 @@ router.post('/users', requireAuth, requirePermissionCode('users.create'), async 
     return sendJson(res, 400, { success: false, message: 'Employee ID may only contain letters, numbers, dot, dash and underscore (2-30 chars).' });
   }
 
+  // A1 (DZ-4): an admin-set initial password follows the same policy
+  // minimum as every other password set (blank stays blank — the
+  // client auto-generates a 10-character temporary password, and the
+  // server stores an empty value for a password-less create exactly
+  // as before).
+  if (payload.password && String(payload.password).length > 0) {
+    const createMinLength = await getPasswordMinLength();
+    if (String(payload.password).length < createMinLength) {
+      return sendJson(res, 400, { success: false, message: `Password must be at least ${createMinLength} characters` });
+    }
+  }
+
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const role = normalizeRole(payload.role || payload.roleCode);
@@ -851,6 +868,23 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     return sendJson(res, 403, { success: false, message: 'Password reset is restricted to administrators.' });
   }
 
+  // A9 (DZ-4): early unlock of a locked account lives in this edit
+  // flow (Q4) — CLEAR-ONLY, never a lock: it can only remove a
+  // lockout, never set one, so no edit can lock the last super admin
+  // out (audit §3.4 invariant 4). Admin-only, like the reset.
+  if (payload.clearLockout === true && !callerIsAdmin(req)) {
+    return sendJson(res, 403, { success: false, message: 'Only administrators can unlock a locked account.' });
+  }
+
+  // A1 (DZ-4): the admin inline password set on this route follows
+  // the same policy minimum as every other password set.
+  if (payload.password && String(payload.password).length > 0) {
+    const editMinLength = await getPasswordMinLength();
+    if (String(payload.password).length < editMinLength) {
+      return sendJson(res, 400, { success: false, message: `Password must be at least ${editMinLength} characters` });
+    }
+  }
+
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const existing = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
@@ -886,6 +920,11 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     if (payload.mustChangePassword !== undefined) existing.mustChangePassword = !!payload.mustChangePassword;
     if (Array.isArray(payload.reportingChain)) existing.reportingChain = payload.reportingChain;
     if (Array.isArray(payload.subordinates)) existing.subordinates = payload.subordinates;
+    // A9 early unlock (demo-mode parity): clear-only, see the gate above.
+    if (payload.clearLockout === true) {
+      existing.failedLoginAttempts = 0;
+      existing.lockedUntil = null;
+    }
     const { password: _pw, ...safeUser } = existing;
     return sendJson(res, 200, { success: true, data: safeUser });
   }
@@ -1027,6 +1066,12 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     const existingChain = jsonbOr(existing.reporting_chain, []);
     const existingSubs = jsonbOr(existing.subordinates, []);
 
+    // A9 early unlock (DZ-4): whether the account actually carries a
+    // lockout right now — the audit row below is written only when
+    // something was really cleared.
+    const wasLocked = (Number(existing.failed_login_attempts) || 0) > 0 ||
+      (existing.locked_until ? new Date(existing.locked_until).getTime() > Date.now() : false);
+
     let hash = existing.password;
     if (payload.password && String(payload.password).length > 0) {
       hash = await bcrypt.hash(String(payload.password), 10);
@@ -1092,6 +1137,15 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
             : `Transferred while editing ${existing.employee_id}`,
         })
       : null;
+    // A9 early unlock (DZ-4): clear-only, in the SAME transaction as
+    // the edit — either the edit and the unlock land together, or
+    // neither does.
+    if (payload.clearLockout === true) {
+      await client.query(
+        'UPDATE users SET failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1',
+        [existing.id]
+      );
+    }
     await client.query('COMMIT');
     const fresh = await getPool().query(`${USER_SELECT} WHERE u.id = $1`, [row.id]);
     const freshRow = fresh.rows[0] || row;
@@ -1121,6 +1175,18 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
           transferredLeads: transfer?.transferred ?? 0,
           transferTargetEmployeeId: deactivation.target?.employeeId || null,
         },
+      });
+    }
+    // A9 early unlock (DZ-4): audited only when a lock was really
+    // cleared — a no-op unlock on an unlocked account writes nothing.
+    if (payload.clearLockout === true && wasLocked) {
+      await logAccessChange({
+        actorId: req.currentUser?.id,
+        targetUserId: existing.id,
+        actionCode: USER_UNLOCK_AUDIT_ACTION,
+        entityType: 'user',
+        entityId: existing.id,
+        metadata: { employeeId: existing.employee_id },
       });
     }
     return sendJson(res, 200, {
@@ -1322,8 +1388,11 @@ router.delete('/users/:id', requireAuth, requirePermissionCode('users.delete'), 
 // POST /auth/change-password and never requires any admin capability.)
 router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
   const password = String(req.body?.password || '');
-  if (password.length < 5) {
-    return sendJson(res, 400, { success: false, message: 'Password must be at least 5 characters' });
+  // A1 (DZ-4): the Danger Zone security policy's minimum (default 8,
+  // code floor 5) — one value for every password set.
+  const resetMinLength = await getPasswordMinLength();
+  if (password.length < resetMinLength) {
+    return sendJson(res, 400, { success: false, message: `Password must be at least ${resetMinLength} characters` });
   }
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
@@ -1343,6 +1412,10 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
       'UPDATE users SET password = $1, must_change_password = TRUE, updated_at = NOW() WHERE id = $2',
       [hash, found.rows[0].id]
     );
+    // A9 (DZ-4): an admin reset restores access — a locked account
+    // with a fresh temporary password must be able to sign in, so
+    // the lockout counter is cleared with the reset (best-effort).
+    void clearFailedLoginAttempts(found.rows[0].id);
     // Danger Zone re-lock trigger (DZ-0): an admin reset ends any
     // Danger Zone unlock the target holds. Best-effort.
     try { await revokeDangerZoneUnlocks(found.rows[0].id); } catch { /* best-effort re-lock */ }
@@ -1503,11 +1576,14 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
     const refData = await loadUserBulkReferenceData(pool, batchEmpIds, batchEmails, batchMgrIds);
     const maps = buildReferenceMaps(refData);
 
+    // A1 (DZ-4): bulk-import temporary passwords follow the live policy minimum.
+    const bulkMinLength = await getPasswordMinLength();
     const preview = validateBulkRows({
       rows: normalized,
       maps,
       mode,
       permissions: { canCreate, canEdit },
+      passwordMinLength: bulkMinLength,
     });
 
     preview.fileName = fileName;
@@ -1558,6 +1634,14 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
     return sendJson(res, 400, { success: false, message: `Too many rows: ${rawRows.length} exceeds maximum ${maxRows}` });
   }
 
+  // A1 (DZ-4): bulk-import temporary passwords follow the live policy
+  // minimum. Read BEFORE BEGIN: the policy read runs on the pool, and
+  // on a single-connection store (PGlite in tests) a failing policy
+  // query would abort the open transaction below. The value is still
+  // read fresh at request time; it only has to be fixed for the
+  // duration of this one import.
+  const bulkMinLength = await getPasswordMinLength();
+
   const pool = getPool();
   const client = await pool.connect();
 
@@ -1596,6 +1680,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
       maps,
       mode,
       permissions: { canCreate, canEdit },
+      passwordMinLength: bulkMinLength,
     });
 
     const validRows = preview.rows.filter(r => r.isValid);
@@ -1650,7 +1735,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
           if (!plainPassword) {
             plainPassword = generateTempPassword(10);
           }
-          const pwErr = validatePasswordPolicy(plainPassword);
+          const pwErr = validatePasswordPolicy(plainPassword, bulkMinLength);
           if (pwErr) throw new Error(pwErr);
 
           const hash = await bcrypt.hash(plainPassword, 10);
@@ -2872,7 +2957,14 @@ router.post('/roles', requireAuth, requirePermissionCode('roles.manage'), async 
 
 router.delete('/roles/:roleId', requireAuth, requirePermissionCode('roles.manage'), async (req, res) => {
   const roleIdRaw = req.params.roleId;
-  if (/^admin$/i.test(roleIdRaw)) {
+  // B10 (DZ-4): the system roles can never be deleted — audit §3.4
+  // invariant 10. The old guard matched the literal 'ADMIN' only,
+  // so SUPERADMIN slipped through, and EITHER role addressed by its
+  // UUID bypassed the guard entirely — both were saved only by the
+  // FK when users held the role. The literal check covers demo mode;
+  // the DB branch below resolves the role first and refuses by its
+  // STORED code, so no addressing form can delete a system role.
+  if (/^(admin|superadmin)$/i.test(roleIdRaw)) {
     return sendJson(res, 400, { success: false, message: 'The Super Admin system role cannot be deleted.' });
   }
   if (!useDb()) {
@@ -2880,9 +2972,17 @@ router.delete('/roles/:roleId', requireAuth, requirePermissionCode('roles.manage
     return sendJson(res, 200, { success: true, message: 'Role deleted (demo mode)' });
   }
   try {
-    const result = await getPool().query(
-      'DELETE FROM roles WHERE id::text = $1 OR UPPER(role_code) = UPPER($1) RETURNING id',
+    const found = await getPool().query(
+      'SELECT id, role_code FROM roles WHERE id::text = $1 OR UPPER(role_code) = UPPER($1) LIMIT 1',
       [roleIdRaw]
+    );
+    if (!found.rows[0]) return sendJson(res, 404, { success: false, message: 'Role not found' });
+    if (['ADMIN', 'SUPERADMIN'].includes(String(found.rows[0].role_code || '').toUpperCase())) {
+      return sendJson(res, 400, { success: false, message: 'The Super Admin system role cannot be deleted.' });
+    }
+    const result = await getPool().query(
+      'DELETE FROM roles WHERE id = $1 RETURNING id',
+      [found.rows[0].id]
     );
     if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Role not found' });
     // Ledger: deleting a role drops every grant it carried.
@@ -2895,7 +2995,12 @@ router.delete('/roles/:roleId', requireAuth, requirePermissionCode('roles.manage
     });
     return sendJson(res, 200, { success: true, message: 'Role deleted' });
   } catch (error: any) {
-    if (error?.code === '23503') {
+    // B10 (DZ-4): the users.role_id FK is ON DELETE RESTRICT, and a
+    // RESTRICT refusal raises 23001 (restrict_violation) — NOT 23503
+    // (foreign_key_violation, which is the NO ACTION / INSERT shape).
+    // The old catch matched 23503 only, so deleting a role that still
+    // held users answered 500 instead of the documented 409.
+    if (error?.code === '23503' || error?.code === '23001') {
       return sendJson(res, 409, { success: false, message: 'Role is assigned to existing users and cannot be deleted.' });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Role delete failed' });

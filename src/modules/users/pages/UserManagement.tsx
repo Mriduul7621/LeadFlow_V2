@@ -471,6 +471,26 @@ export default function UserManagement() {
     await userService.createUser(body);
   };
 
+  // A9 (DZ-4) early unlock: an admin clears a locked account from its
+  // edit screen. Clear-only — the server refuses non-admins and never
+  // lets this set a lock. The modal stays open on the same user, now
+  // unlocked; the roster refreshes behind it.
+  const [unlockingUser, setUnlockingUser] = useState(false);
+  const handleUnlockUser = async () => {
+    if (!editingUser) return;
+    setUnlockingUser(true);
+    try {
+      const saved = await userService.updateUser(editingUser.id, { clearLockout: true });
+      if (saved) setEditingUser(saved);
+      toast.success(`${editingUser.name || editingUser.employeeId} is unlocked and can sign in again.`);
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not unlock this account.');
+    } finally {
+      setUnlockingUser(false);
+    }
+  };
+
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.name.trim() || !userForm.employeeId.trim() || !userForm.email.trim()) {
@@ -2384,6 +2404,27 @@ export default function UserManagement() {
                       ? "Enter a new password to reset (administrators only). The employee will be required to change it on next login."
                       : "A temporary password will be auto-generated if left blank. The employee must change it on first login."}
                   </p>
+                  {/* A9 (DZ-4) early unlock: a locked account shows here with an
+                      admin-only Unlock button. Clear-only — it can never lock. */}
+                  {editingUser && editingUser.lockedUntil && new Date(editingUser.lockedUntil).getTime() > Date.now() && isPlatformAdmin && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg space-y-2">
+                      <p className="text-xs font-bold text-red-700">
+                        This account is locked after {editingUser.failedLoginAttempts ?? 0} failed sign-ins — it opens
+                        again at {new Date(editingUser.lockedUntil).toLocaleString('en-GB')}.
+                      </p>
+                      <p className="text-xs text-red-600">
+                        Unlocking lets them sign in immediately. The lock returns if they fail again.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleUnlockUser()}
+                        disabled={unlockingUser}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold disabled:opacity-40"
+                      >
+                        {unlockingUser ? 'Unlocking...' : 'Unlock account now'}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Actions */}

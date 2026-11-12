@@ -14,6 +14,7 @@
 
 import jwt from 'jsonwebtoken';
 import { isWeakJwtSecret } from '../../config/env.js';
+import { resolveTokenLifetimeDays } from '../../utils/jwt.js';
 import { getPool, isDatabaseConfigured } from '../../database/connection.js';
 import { fallbackStore } from '../../fallbackStore.js';
 import { resolveVisibility } from '../../authz.js';
@@ -66,14 +67,21 @@ export function normalizeRole(value?: string): string {
   return String(value).trim().toUpperCase();
 }
 
-export function signToken(payload: Record<string, any>): string {
+export function signToken(payload: Record<string, any>, options?: { expiresInDays?: number }): string {
   if (IS_PRODUCTION && isWeakJwtSecret(process.env.JWT_SECRET)) {
     throw new Error(
       'JWT_SECRET is not configured, or is a known weak/default value. ' +
         'Refusing to sign a token in production.'
     );
   }
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  // A5 (DZ-4): the lifetime is the Danger Zone security policy's
+  // (1–30 days, default 7), resolved by the caller per request and
+  // clamped here as defence in depth. Callers that pass nothing
+  // keep today's 7 days. NOTE: this is the issuer the production
+  // login/bootstrap flows actually use — server/utils/jwt.ts
+  // carries the same option, but nothing on the live path signs
+  // through it.
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: `${resolveTokenLifetimeDays(options?.expiresInDays)}d` });
 }
 
 export function getAuthUser(req: any): any {
@@ -376,6 +384,14 @@ export function mapUserRow(row: any, managerEmployeeId?: string | null) {
     joiningDate: row.joining_date || null,
     lastLogin: row.last_login || null,
     mustChangePassword: row.must_change_password === true,
+    /**
+     * A9 (DZ-4): per-account lockout state (migration-022 columns).
+     * The user-edit screen reads these to show a locked account and
+     * offer the admin early-unlock; a fixture row that predates
+     * migration 022 simply reports zero / null.
+     */
+    failedLoginAttempts: Number(row.failed_login_attempts) || 0,
+    lockedUntil: row.locked_until ? new Date(row.locked_until).toISOString() : null,
     reportingChain: jsonbOr(row.reporting_chain, []),
     subordinates: jsonbOr(row.subordinates, []),
     hierarchyLevel: Number(row.hierarchy_level) > 0 ? Number(row.hierarchy_level) : 0,

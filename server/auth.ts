@@ -10,7 +10,7 @@ export type CurrentUser = Omit<JwtPayload, 'role' | 'roleCode'> & {
   roleCode: string;
 };
 
-export function signToken(payload: { id: string; employeeId: string; role: string }): string {
+export function signToken(payload: { id: string; employeeId: string; role: string }, options?: { expiresInDays?: number }): string {
   return createToken({
     id: payload.id,
     employeeId: payload.employeeId,
@@ -19,7 +19,7 @@ export function signToken(payload: { id: string; employeeId: string; role: strin
     roleCode: payload.role,
     roleName: payload.role,
     hierarchyLevel: 0,
-  });
+  }, options);
 }
 
 export function verifyToken(token: string): CurrentUser | null {

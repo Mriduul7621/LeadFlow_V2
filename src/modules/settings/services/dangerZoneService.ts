@@ -105,6 +105,56 @@ export interface LeadQualityConfigInput {
   investment: { points: number };
 }
 
+/**
+ * Security policy (DZ-4, audit §2.1 A1/A5/A8/A9). One versioned
+ * policy: minimum password length, per-account lockout (on/off +
+ * threshold + duration), token lifetime in days (newly issued
+ * tokens only) and the failed-sign-in limit per 15 min per IP.
+ * Length-only — no complexity toggles (owner decision Q3).
+ */
+export interface SecurityPolicy {
+  version: number;
+  passwordMinLength: number;
+  lockoutEnabled: boolean;
+  lockoutThreshold: number;
+  lockoutMinutes: number;
+  tokenLifetimeDays: number;
+  authRateLimitAttempts: number;
+}
+
+export interface SecurityPolicyBounds {
+  passwordMinLength: { min: number; max: number };
+  lockoutThreshold: { min: number; max: number };
+  lockoutMinutes: { min: number; max: number };
+  tokenLifetimeDays: { min: number; max: number };
+  authRateLimitAttempts: { min: number; max: number };
+}
+
+export interface SecurityPolicyLastChange {
+  actorUserId: string | null;
+  createdAt: string;
+  version: number;
+  oldValue: SecurityPolicy | null;
+  newValue: SecurityPolicy;
+}
+
+export interface SecurityPolicyForEdit {
+  version: number;
+  policy: SecurityPolicy;
+  defaults: SecurityPolicy;
+  bounds: SecurityPolicyBounds;
+  lastChange: SecurityPolicyLastChange | null;
+}
+
+export interface SecurityPolicyInput {
+  passwordMinLength: number;
+  lockoutEnabled: boolean;
+  lockoutThreshold: number;
+  lockoutMinutes: number;
+  tokenLifetimeDays: number;
+  authRateLimitAttempts: number;
+}
+
 export const dangerZoneService = {
   async getStatus(): Promise<DangerZoneStatus> {
     return apiRequest<DangerZoneStatus>('/api/danger-zone/status');
@@ -151,6 +201,17 @@ export const dangerZoneService = {
 
   async saveLeadQuality(input: LeadQualityConfigInput): Promise<LeadQualityConfigForEdit> {
     return apiRequest<LeadQualityConfigForEdit>('/api/danger-zone/lead-quality', {
+      method: 'PUT',
+      ...jsonBody(input),
+    });
+  },
+
+  async getSecurityPolicy(): Promise<SecurityPolicyForEdit> {
+    return apiRequest<SecurityPolicyForEdit>('/api/danger-zone/security-policy');
+  },
+
+  async saveSecurityPolicy(input: SecurityPolicyInput): Promise<SecurityPolicyForEdit> {
+    return apiRequest<SecurityPolicyForEdit>('/api/danger-zone/security-policy', {
       method: 'PUT',
       ...jsonBody(input),
     });

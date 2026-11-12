@@ -23,6 +23,9 @@ export interface FallbackUser {
   updatedAt?: string;
   password?: string;
   mustChangePassword?: boolean;
+  /** A9 (DZ-4, demo-mode parity): per-account lockout counters. */
+  failedLoginAttempts?: number;
+  lockedUntil?: string | null;
   reportingChain?: string[];
   subordinates?: string[];
 }

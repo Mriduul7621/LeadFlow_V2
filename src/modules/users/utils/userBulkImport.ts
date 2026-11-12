@@ -315,8 +315,10 @@ export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkR
           if (!fullName) issues.push('Full Name is required');
           if (!department) issues.push('Department is required');
           if (!role) issues.push('Role is required');
-          if (temporaryPassword && temporaryPassword.length > 0 && temporaryPassword.length < 6) {
-            issues.push('Temporary password must be at least 6 characters');
+          // DZ-4: mirrors the Danger Zone security policy's default
+          // minimum (8); the server enforces the live value.
+          if (temporaryPassword && temporaryPassword.length > 0 && temporaryPassword.length < 8) {
+            issues.push('Temporary password must be at least 8 characters');
           }
 
           return {

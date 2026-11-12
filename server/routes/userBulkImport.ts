@@ -20,6 +20,16 @@ import {
 } from '../utils/reportingRules.js';
 import { USER_BULK_IMPORT_MAX_ROWS_CEILING } from '../services/operationsLimits.js';
 
+// NOTE (DZ-4): this module must NOT statically import
+// SecurityPolicyService — that service imports production/shared.ts,
+// whose JWT_SECRET is captured at module load. Test files import
+// this module at the top level, before their before() sets
+// process.env.JWT_SECRET, so a static edge here would load the
+// shared module with the wrong secret and every Bearer token would
+// verify as invalid. The literal 8 below mirrors
+// DEFAULT_SECURITY_POLICY.passwordMinLength (the code default); the
+// live policy value is always passed in by the route handlers.
+
 /**
  * DZ-2 (audit §4, G2): the ceiling for the user bulk-import row cap.
  * The effective cap is a Settings value (OperationsSettingsService)
@@ -151,10 +161,13 @@ export function generateTempPassword(length = 10): string {
   return out;
 }
 
-export function validatePasswordPolicy(pw: string): string | null {
+export function validatePasswordPolicy(pw: string, minLength: number = 8): string | null {
   if (!pw) return null; // blank allowed, will be generated
-  if (pw.length < 6) return 'Temporary password must be at least 6 characters';
-  // Could enforce more rules, but keep minimal to match current policy (>=5/6)
+  // A1 (DZ-4): a bulk-import temporary password follows the same
+  // Danger Zone security policy minimum as every other password set
+  // (default 8, code floor 5). Callers pass the live value; the
+  // default above is only the fallback when they do not.
+  if (pw.length < minLength) return `Temporary password must be at least ${minLength} characters`;
   return null;
 }
 
@@ -365,8 +378,11 @@ export function validateBulkRows(opts: {
   maps: ReferenceMaps;
   mode: ImportMode;
   permissions: { canCreate: boolean; canEdit: boolean };
+  /** A1 (DZ-4): the live policy minimum; defaults to the code default (8). */
+  passwordMinLength?: number;
 }): BulkPreviewResult {
   const { rows, maps, mode, permissions } = opts;
+  const passwordMinLength = opts.passwordMinLength ?? 8;
 
   // duplicate detection within file
   const empIdCount = new Map<string, number[]>();
@@ -432,7 +448,7 @@ export function validateBulkRows(opts: {
     if (statusParsed.error) errors.push(statusParsed.error);
 
     // Temporary password validation
-    const pwError = validatePasswordPolicy(row.temporaryPassword);
+    const pwError = validatePasswordPolicy(row.temporaryPassword, passwordMinLength);
     if (pwError) errors.push(pwError);
 
     // Resolve Role
