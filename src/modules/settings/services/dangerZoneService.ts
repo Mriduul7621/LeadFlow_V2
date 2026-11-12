@@ -155,6 +155,67 @@ export interface SecurityPolicyInput {
   authRateLimitAttempts: number;
 }
 
+/**
+ * Role defaults (DZ-5, audit §2.2 B6). The defaults table: which
+ * permission codes and which data-visibility scope a standard role
+ * holds before anyone configures it. Saving the table changes no
+ * role — Apply runs the guarded routine (zero-grant roles only).
+ * ADMIN / SUPERADMIN can never be keys (they bypass everything).
+ */
+export interface RoleDefaults {
+  version: number;
+  grants: Record<string, string[]>;
+  visibility: Record<string, string>;
+}
+
+export interface RoleDefaultsPermissionCode {
+  code: string;
+  name: string | null;
+}
+
+export interface UnconfiguredRole {
+  roleCode: string;
+  roleName: string;
+}
+
+export interface RoleDefaultsLastChange {
+  actorUserId: string | null;
+  createdAt: string;
+  version: number;
+  oldValue: RoleDefaults | null;
+  newValue: RoleDefaults;
+}
+
+export interface RoleDefaultsForEdit {
+  version: number;
+  defaults: RoleDefaults;
+  codeDefaults: RoleDefaults;
+  permissionCodes: RoleDefaultsPermissionCode[];
+  unconfiguredRoles: UnconfiguredRole[];
+  lastChange: RoleDefaultsLastChange | null;
+}
+
+export interface RoleDefaultsInput {
+  grants: Record<string, string[]>;
+  visibility: Record<string, string>;
+}
+
+export interface RoleDefaultsApplyEntry {
+  roleCode: string;
+  grantsAdded: string[];
+  visibilityChanged: boolean;
+  visibilityFrom: string | null;
+  visibilityTo: string | null;
+}
+
+export interface RoleDefaultsApplyResult {
+  version: number;
+  report: {
+    applied: RoleDefaultsApplyEntry[];
+    skipped: string[];
+  };
+}
+
 export const dangerZoneService = {
   async getStatus(): Promise<DangerZoneStatus> {
     return apiRequest<DangerZoneStatus>('/api/danger-zone/status');
@@ -214,6 +275,24 @@ export const dangerZoneService = {
     return apiRequest<SecurityPolicyForEdit>('/api/danger-zone/security-policy', {
       method: 'PUT',
       ...jsonBody(input),
+    });
+  },
+
+  async getRoleDefaults(): Promise<RoleDefaultsForEdit> {
+    return apiRequest<RoleDefaultsForEdit>('/api/danger-zone/role-defaults');
+  },
+
+  async saveRoleDefaults(input: RoleDefaultsInput): Promise<RoleDefaultsForEdit> {
+    return apiRequest<RoleDefaultsForEdit>('/api/danger-zone/role-defaults', {
+      method: 'PUT',
+      ...jsonBody(input),
+    });
+  },
+
+  async applyRoleDefaults(): Promise<RoleDefaultsApplyResult> {
+    return apiRequest<RoleDefaultsApplyResult>('/api/danger-zone/role-defaults/apply', {
+      method: 'POST',
+      ...jsonBody({}),
     });
   },
 };

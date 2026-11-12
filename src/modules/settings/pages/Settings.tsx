@@ -45,6 +45,7 @@ import { notificationSettingsService, type NotificationSettings } from '../servi
 import { operationsSettingsService, OPERATIONS_LIMITS, DEFAULT_OPERATIONS_SETTINGS, type OperationsSettings } from '../services/operationsSettingsService';
 import { dangerZoneService, type DangerZoneOverview } from '../services/dangerZoneService';
 import DangerZoneLeadQuality from '../components/DangerZoneLeadQuality';
+import DangerZoneRoleDefaults from '../components/DangerZoneRoleDefaults';
 import DangerZoneSecurityPolicy from '../components/DangerZoneSecurityPolicy';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
@@ -2101,6 +2102,15 @@ export default function Settings() {
 
                       {/* DZ-4 — Security policy (audit §2.1 A1/A5/A8/A9). */}
                       <DangerZoneSecurityPolicy
+                        onLocked={() => {
+                          setDzOverview(null);
+                          setDzSecondsLeft(0);
+                          setDzState('locked');
+                        }}
+                      />
+
+                      {/* DZ-5 — Role defaults (audit §2.2 B6). */}
+                      <DangerZoneRoleDefaults
                         onLocked={() => {
                           setDzOverview(null);
                           setDzSecondsLeft(0);
