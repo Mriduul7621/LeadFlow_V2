@@ -76,6 +76,7 @@ import {
   type ImportMode,
 } from '../userBulkImport.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
+import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES } from '../../utils/businessTime.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
 import {
   AUDIT_CHANGE_CAP,
@@ -532,6 +533,144 @@ router.get('/users', requireAuth, async (req, res) => {
     )));
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'User fetch failed' });
+  }
+});
+
+/* Team overview (FIX-1 item 5): the caller's people from the reporting
+   tree, grouped Manager -> Team Leader -> Team Member by the CLIENT,
+   each row carrying open / converted / due-today lead counts.
+   Visibility is EXACTLY the caller's existing scope
+   (resolveCallerVisibility, UM-1 tree floor included): the people list
+   is the scoped employee set — nobody outside it is named, and lead
+   counts are only attached to people inside it. Tier is structural:
+   "manager" = has reports who themselves have reports (or sits at
+   ladder level <= 2 with reports), "teamLead" = has direct reports,
+   otherwise "teamMember". Counts mirror the roster's definitions
+   (open = assigned, not deleted, non-terminal). */
+router.get('/team/overview', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req as any);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const visibility = await resolveCallerVisibility(caller as any);
+    const scopeIds = visibility.all
+      ? null
+      : new Set(visibility.employeeIds.map(e => String(e).toUpperCase()));
+    const scopeLabel = visibility.all ? 'Organization' : (scopeIds && scopeIds.size > 1 ? 'Team' : 'Own');
+
+    if (!useDb()) {
+      const users = (fallbackStore.users as any[]).filter(u => u.isActive !== false && u.status !== 'Inactive');
+      const inScope = (u: any) => !scopeIds || scopeIds.has(String(u.employeeId).toUpperCase());
+      const scoped = users.filter(inScope);
+      const byKey = new Map<string, any>();
+      for (const u of users) { byKey.set(String(u.id), u); byKey.set(String(u.employeeId).toUpperCase(), u); }
+      const managerOf = (u: any) => (u.managerId ? byKey.get(String(u.managerId)) : undefined);
+      const scopedKeys = new Set<string>();
+      for (const u of scoped) { scopedKeys.add(String(u.id)); scopedKeys.add(String(u.employeeId).toUpperCase()); }
+      const reportsOf = (u: any) => scoped.filter(r => {
+        const m = managerOf(r);
+        return m && (String(m.id) === String(u.id));
+      });
+      const todayBounds = getDhakaBusinessDayBounds(new Date());
+      const people = scoped.map(u => {
+        const reports = reportsOf(u);
+        const tier = reports.length > 0 && reports.some((r: any) => reportsOf(r).length > 0)
+          ? 'manager'
+          : reports.length > 0 ? 'teamLead' : 'teamMember';
+        const mine = (fallbackStore.leads as any[]).filter(l => String(l.assignedTo).toUpperCase() === String(u.employeeId).toUpperCase() && !l.isDeleted);
+        const dueToday = mine.filter(l => {
+          if (!l.nextFollowUpDate) return false;
+          const t = new Date(l.nextFollowUpDate).getTime();
+          return t >= new Date(todayBounds.todayStartIso).getTime() && t < new Date(todayBounds.tomorrowStartIso).getTime();
+        }).length;
+        const mgr = managerOf(u);
+        return {
+          userId: String(u.id),
+          employeeId: u.employeeId,
+          name: u.fullName || u.name,
+          designation: u.designation || u.roleName || u.role || null,
+          roleName: u.roleName || null,
+          department: null,
+          managerEmployeeId: mgr?.employeeId || null,
+          managerName: mgr ? (mgr.fullName || mgr.name) : null,
+          tier,
+          directReports: reports.length,
+          openLeads: mine.filter(l => !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)).length,
+          convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
+          dueToday,
+          isSelf: String(u.id) === String(caller.id),
+        };
+      });
+      return sendJson(res, 200, { success: true, scope: scopeLabel, people });
+    }
+
+    const pool = getPool();
+    const peopleRes = await pool.query(
+      `SELECT u.id, u.employee_id, u.full_name, u.designation, u.manager_id,
+              r.role_code, r.role_name, r.hierarchy_level, d.department_name
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE u.is_active = TRUE
+       ORDER BY u.full_name ASC`
+    );
+    const all = peopleRes.rows as any[];
+    const inScope = (row: any) => !scopeIds || scopeIds.has(String(row.employee_id).toUpperCase());
+    const scoped = all.filter(inScope);
+    const scopedIds = new Set(scoped.map(r => String(r.id)));
+    const byId = new Map(all.map(r => [String(r.id), r]));
+    const childrenCount = new Map<string, number>();
+    for (const row of scoped) {
+      if (row.manager_id && scopedIds.has(String(row.manager_id))) {
+        childrenCount.set(String(row.manager_id), (childrenCount.get(String(row.manager_id)) || 0) + 1);
+      }
+    }
+    const { todayStartIso: startIso, tomorrowStartIso: endIso } = getDhakaBusinessDayBounds(new Date());
+    const countsRes = await pool.query(
+      `SELECT assigned_to,
+              COUNT(*) FILTER (WHERE current_status NOT IN ('Converted', 'Not Interested'))::int AS open_count,
+              COUNT(*) FILTER (WHERE current_status = 'Converted')::int AS converted_count,
+              COUNT(*) FILTER (WHERE next_follow_up_at >= $1 AND next_follow_up_at < $2)::int AS due_today_count
+       FROM leads
+       WHERE is_deleted = FALSE AND assigned_to IS NOT NULL
+       GROUP BY assigned_to`,
+      [startIso, endIso]
+    );
+    const counts = new Map((countsRes.rows as any[]).map(r => [String(r.assigned_to).toUpperCase(), r]));
+    const people = scoped.map(row => {
+      const directReports = childrenCount.get(String(row.id)) || 0;
+      const reportIds = scoped
+        .filter(r => r.manager_id && String(r.manager_id) === String(row.id))
+        .map(r => String(r.id));
+      const hasGrandReports = reportIds.some(id => (childrenCount.get(id) || 0) > 0);
+      const level = row.hierarchy_level != null ? Number(row.hierarchy_level) : null;
+      const tier = directReports > 0 && (hasGrandReports || (level != null && level <= 2))
+        ? 'manager'
+        : directReports > 0 ? 'teamLead' : 'teamMember';
+      const c = counts.get(String(row.employee_id).toUpperCase()) || {};
+      const manager = row.manager_id ? byId.get(String(row.manager_id)) : null;
+      return {
+        userId: String(row.id),
+        employeeId: row.employee_id,
+        name: row.full_name,
+        designation: row.designation || row.role_name || null,
+        roleName: row.role_name || null,
+        department: row.department_name || null,
+        managerEmployeeId: manager?.employee_id || null,
+        managerName: manager?.full_name || null,
+        tier,
+        directReports,
+        openLeads: c.open_count || 0,
+        convertedLeads: c.converted_count || 0,
+        dueToday: c.due_today_count || 0,
+        isSelf: String(row.id) === String(caller.id),
+      };
+    });
+    return sendJson(res, 200, { success: true, scope: scopeLabel, people });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Team overview failed' });
   }
 });
 

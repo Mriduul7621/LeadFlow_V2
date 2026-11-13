@@ -46,6 +46,7 @@ const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
 const LeadUpdate = lazy(() => import('./modules/leads/pages/LeadUpdate'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
+const TeamOverview = lazy(() => import('./modules/team/pages/TeamOverview'));
 const ExecutionIntelligence = lazy(() => import('./modules/dashboard/pages/ExecutionIntelligence'));
 const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
 const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
@@ -179,7 +180,10 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/users"><LazyPage page={<UserManagement />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/team',
-    element: <ProtectedRoute><FeatureGate route="/team"><LazyPage page={<TeamHierarchy />} /></FeatureGate></ProtectedRoute>,  },
+    element: <ProtectedRoute><FeatureGate route="/team"><LazyPage page={<TeamOverview />} /></FeatureGate></ProtectedRoute>,  },
+  {
+    path: '/team/organogram',
+    element: <ProtectedRoute><FeatureGate route="/team/organogram"><LazyPage page={<TeamHierarchy />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/execution-intelligence',
     element: <ProtectedRoute><FeatureGate route="/execution-intelligence"><LazyPage page={<ExecutionIntelligence />} /></FeatureGate></ProtectedRoute>,  },

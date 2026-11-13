@@ -14,6 +14,7 @@
  * therefore matching behaviour) is unchanged.
  */
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database/connection.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import {
@@ -24,7 +25,6 @@ import {
   getCallerDbInfo,
   jsonbOr,
   logAccessChange,
-  requireAdmin,
   requireAuth,
   requirePermissionCode,
   sendDbUnavailable,
@@ -502,10 +502,15 @@ router.post('/workflow-rules', requireAuth, requirePermissionCode('workflow.mana
 
   try {
     const prior = await getPool().query('SELECT * FROM workflow_rules WHERE status = $1', [status]);
+    // The id is supplied from app code (randomUUID) on purpose: the
+    // production workflow_rules table is the legacy bootstrap shape
+    // (id VARCHAR PRIMARY KEY, NO default), so an INSERT that omits id
+    // dies with a not-null violation there. The ON CONFLICT update
+    // never touches id, so an existing row keeps its identity.
     const result = await getPool().query(
-      `INSERT INTO workflow_rules (status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
+      `INSERT INTO workflow_rules (id, status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
                                    requires_followup_type, requires_note, is_system, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
        ON CONFLICT (status) DO UPDATE SET
          allowed_next_statuses = EXCLUDED.allowed_next_statuses,
          requires_loss_reason = EXCLUDED.requires_loss_reason,
@@ -514,7 +519,7 @@ router.post('/workflow-rules', requireAuth, requirePermissionCode('workflow.mana
          requires_note = EXCLUDED.requires_note,
          updated_at = NOW()
        RETURNING *`,
-      [status, allowed ? JSON.stringify(allowed) : null, item.requiresLossReason, item.requiresMeetingType,
+      [randomUUID(), status, allowed ? JSON.stringify(allowed) : null, item.requiresLossReason, item.requiresMeetingType,
         item.requiresFollowUpType, item.requiresNote, item.isSystem]
     );
     await auditSettingsChange(req, 'workflow_rule.save', 'workflow_rule', result.rows[0].id, {
@@ -565,7 +570,14 @@ router.get('/form-fields', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
+// FIX-1 (audit item I1): the Form Builder mutations are gated by the
+// canonical `settings.manage` permission — the SAME gate that makes
+// the tab visible — instead of the token-claim requireAdmin check,
+// which 403'd every settings-permission holder who was not an
+// ADMIN/SUPERADMIN token (the "Required toggle does nothing" report:
+// the save silently failed). ADMIN/SUPERADMIN still pass through the
+// bypass inside hasPermissionCode.
+router.post('/form-fields', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const payload = req.body || {};
   const fieldKey = clean(payload.fieldKey || payload.field_key || payload.label);
   const label = clean(payload.label || payload.fieldKey || payload.field_key);
@@ -589,10 +601,17 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
 
   try {
     const prior = await getPool().query('SELECT * FROM form_fields WHERE field_key = $1', [fieldKey]);
+    // The id is supplied from app code (randomUUID) on purpose: the
+    // production form_fields table is the legacy bootstrap shape
+    // (id VARCHAR PRIMARY KEY, NO default), so an INSERT that omits id
+    // dies with `null value in column "id" ... violates not-null
+    // constraint` there (owner-verified live, 2026-11-11). The
+    // ON CONFLICT update never touches id, so an existing row keeps
+    // its identity.
     const result = await getPool().query(
-      `INSERT INTO form_fields (field_key, label, field_type, section, is_mandatory, is_visible, sort_order,
+      `INSERT INTO form_fields (id, field_key, label, field_type, section, is_mandatory, is_visible, sort_order,
                                 metadata_type_key, placeholder, is_system, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
        ON CONFLICT (field_key) DO UPDATE SET
          label = EXCLUDED.label,
          field_type = EXCLUDED.field_type,
@@ -604,7 +623,7 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
          placeholder = EXCLUDED.placeholder,
          updated_at = NOW()
        RETURNING *`,
-      [fieldKey, label, fieldType, clean(payload.section), isMandatory, isVisible, sortOrder,
+      [randomUUID(), fieldKey, label, fieldType, clean(payload.section), isMandatory, isVisible, sortOrder,
         clean(payload.metadataTypeKey) || null, clean(payload.placeholder) || null, isSystem]
     );
     await auditSettingsChange(req, 'form_field.save', 'form_field', result.rows[0].id, {
@@ -618,7 +637,7 @@ router.post('/form-fields', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/form-fields/:id', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     return sendJson(res, 200, { success: true });
@@ -641,7 +660,7 @@ router.delete('/form-fields/:id', requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
-router.post('/form-fields/reorder', requireAuth, requireAdmin, async (req, res) => {
+router.post('/form-fields/reorder', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : [];
   if (orderedIds.length === 0) return sendJson(res, 400, { error: 'No field order supplied' });
   if (!useDb()) {
