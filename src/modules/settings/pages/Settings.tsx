@@ -70,9 +70,12 @@ export default function Settings() {
   const [isAddingType, setIsAddingType] = useState(false);
   const [formFields, setFormFields] = useState<FormField[]>([]);
   const [isAddingField, setIsAddingField] = useState(false);
-  const [newFieldForm, setNewFieldForm] = useState<{ label: string; fieldType: FormFieldType; metadataTypeKey: string; isMandatory: boolean }>({
-    label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false,
+  const [newFieldForm, setNewFieldForm] = useState<{ label: string; fieldType: FormFieldType; metadataTypeKey: string; isMandatory: boolean; placeholder: string; section: string }>({
+    label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false, placeholder: '', section: 'Additional',
   });
+  // FIX-1: Form Builder field EDIT mode — the field whose properties
+  // the field form is currently editing (null = adding a new field).
+  const [editingField, setEditingField] = useState<FormField | null>(null);
   const [workflowRules, setWorkflowRules] = useState<WorkflowRule[]>([]);
   const [allStatuses, setAllStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -799,6 +802,25 @@ export default function Settings() {
     }
   };
 
+  const resetFieldForm = () => {
+    setNewFieldForm({ label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false, placeholder: '', section: 'Additional' });
+    setEditingField(null);
+    setIsAddingField(false);
+  };
+
+  const handleEditField = (field: FormField) => {
+    setEditingField(field);
+    setNewFieldForm({
+      label: field.label,
+      fieldType: field.fieldType,
+      metadataTypeKey: field.metadataTypeKey || '',
+      isMandatory: field.isMandatory,
+      placeholder: field.placeholder || '',
+      section: field.section || 'Additional',
+    });
+    setIsAddingField(true);
+  };
+
   const handleAddField = async () => {
     if (!newFieldForm.label.trim()) {
       toast.error('Please enter a field label');
@@ -809,22 +831,37 @@ export default function Settings() {
       return;
     }
     try {
-      const fieldKey = 'custom_' + newFieldForm.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
-      await formBuilderService.saveField({
-        fieldKey,
-        label: newFieldForm.label.trim(),
-        fieldType: newFieldForm.fieldType,
-        section: 'Additional',
-        isMandatory: newFieldForm.isMandatory,
-        isVisible: true,
-        metadataTypeKey: newFieldForm.fieldType === 'dropdown' ? newFieldForm.metadataTypeKey : null,
-      });
-      toast.success(`New field "${newFieldForm.label}" added to the Lead form`);
-      setNewFieldForm({ label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false });
-      setIsAddingField(false);
+      if (editingField) {
+        // Edit: spread the stored field so id / fieldKey / visibility /
+        // order / system flag survive untouched; only the editable
+        // properties come from the form.
+        await formBuilderService.saveField({
+          ...editingField,
+          label: newFieldForm.label.trim(),
+          fieldType: newFieldForm.fieldType,
+          section: newFieldForm.section || editingField.section,
+          isMandatory: newFieldForm.isMandatory,
+          placeholder: newFieldForm.placeholder.trim() || null,
+          metadataTypeKey: newFieldForm.fieldType === 'dropdown' ? newFieldForm.metadataTypeKey : null,
+        });
+        toast.success(`Field "${newFieldForm.label}" updated`);
+      } else {
+        const fieldKey = 'custom_' + newFieldForm.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        await formBuilderService.saveField({
+          fieldKey,
+          label: newFieldForm.label.trim(),
+          fieldType: newFieldForm.fieldType,
+          section: 'Additional',
+          isMandatory: newFieldForm.isMandatory,
+          isVisible: true,
+          metadataTypeKey: newFieldForm.fieldType === 'dropdown' ? newFieldForm.metadataTypeKey : null,
+        });
+        toast.success(`New field "${newFieldForm.label}" added to the Lead form`);
+      }
+      resetFieldForm();
       loadFormFields();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to create field');
+      toast.error(err.message || (editingField ? 'Failed to update field' : 'Failed to create field'));
     }
   };
 
@@ -843,8 +880,10 @@ export default function Settings() {
     try {
       await formBuilderService.saveField({ ...field, isMandatory: !field.isMandatory });
       loadFormFields();
-    } catch {
-      toast.error('Failed to update field');
+    } catch (err: any) {
+      // Surface the server's reason — a silent generic toast here is
+      // what made the Required toggle look broken (FIX-1).
+      toast.error(err?.message || 'Failed to update field');
     }
   };
 
@@ -852,8 +891,8 @@ export default function Settings() {
     try {
       await formBuilderService.saveField({ ...field, isVisible: !field.isVisible });
       loadFormFields();
-    } catch {
-      toast.error('Failed to update field');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update field');
     }
   };
 
@@ -2399,7 +2438,7 @@ export default function Settings() {
                 </p>
               </div>
               <button
-                onClick={() => setIsAddingField(true)}
+                onClick={() => { setEditingField(null); setNewFieldForm({ label: '', fieldType: 'text', metadataTypeKey: '', isMandatory: false, placeholder: '', section: 'Additional' }); setIsAddingField(true); }}
                 className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
@@ -2459,12 +2498,46 @@ export default function Settings() {
                     {newFieldForm.isMandatory ? 'Required' : 'Optional'}
                   </button>
                 </div>
-                <button
-                  onClick={handleAddField}
-                  className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg"
-                >
-                  Create Field
-                </button>
+                {editingField && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Placeholder</label>
+                      <input
+                        type="text"
+                        value={newFieldForm.placeholder}
+                        onChange={(e) => setNewFieldForm({ ...newFieldForm, placeholder: e.target.value })}
+                        placeholder="Shown inside the empty field"
+                        className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Section</label>
+                      <select
+                        value={newFieldForm.section}
+                        onChange={(e) => setNewFieldForm({ ...newFieldForm, section: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
+                      >
+                        {['Identity', 'Location', 'Business', 'Additional'].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  </>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAddField}
+                    className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg"
+                  >
+                    {editingField ? 'Save Changes' : 'Create Field'}
+                  </button>
+                  {editingField && (
+                    <button
+                      onClick={resetFieldForm}
+                      className="bg-white border border-slate-200 text-slate-500 px-4 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2494,6 +2567,12 @@ export default function Settings() {
                             )}
                           </div>
                           <div className="flex items-center gap-3 shrink-0">
+                            <button
+                              onClick={() => handleEditField(field)}
+                              className="text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-sm border bg-white text-slate-500 border-slate-200 hover:border-[#978C21]/50 hover:text-[#978C21]"
+                            >
+                              Edit
+                            </button>
                             <button
                               onClick={() => handleToggleFieldMandatory(field)}
                               className={cn(

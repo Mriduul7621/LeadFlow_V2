@@ -62,18 +62,6 @@ const INSIGHT_ROLES: string[] = [
   UserRole.ADMIN,
   ...rolesWithDefaultGrant('reports.view'),
 ];
-const TEAM_ROLES: string[] = [
-  UserRole.ADMIN,
-  UserRole.RM,
-  UserRole.ASM,
-  UserRole.BDM,
-  UserRole.BUSINESS_EXECUTIVE,
-  UserRole.BUSINESS_HEAD,
-  'MANAGER',
-  'SM',
-  'TEAM_LEAD',
-  'BDM',
-];
 /**
  * Roadshows stay behind explicit role lists (never ANY_ROLE): the business
  * rule is that roadshow visibility is a deliberate grant, so a role with
@@ -131,7 +119,17 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/ncp-progress': { route: '/ncp-progress', path: '/ncp-progress', roles: INSIGHT_ROLES },
   '/trend-charts': { route: '/trend-charts', path: '/trend-charts', roles: INSIGHT_ROLES },
   '/campaign-breakdown': { route: '/campaign-breakdown', path: '/campaign-breakdown', roles: INSIGHT_ROLES },
-  '/team': { route: '/team', path: '/team', roles: TEAM_ROLES },
+  // FIX-1: the Team overview follows the owner's model — anyone may
+  // open it; the endpoint returns only their own scope (a leaf employee
+  // sees just themself). The old static TEAM_ROLES list contradicted
+  // that model and hid the page from people with real subordinates.
+  '/team': { route: '/team', path: '/team', roles: EVERYONE },
+  // KPI drill-down (TL+ Home): same model as /team — anyone may open
+  // it; the overview payload scopes what they see (a leaf member
+  // sees only their own leads), and the leaf/export endpoints
+  // enforce the same scope server-side.
+  '/team/kpi/:kpi': { route: '/team/kpi/:kpi', path: '/team', roles: EVERYONE },
+  '/team/organogram': { route: '/team/organogram', path: '/team', roles: EVERYONE },
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
   '/settings': { route: '/settings', path: '/settings', roles: EVERYONE },
   '/settings/system': { route: '/settings/system', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },

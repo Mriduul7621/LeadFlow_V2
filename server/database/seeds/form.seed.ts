@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { query } from "../connection.js";
 
 /**
@@ -45,11 +46,13 @@ export async function seedFormBuilder(): Promise<void> {
   for (const field of DEFAULT_FIELDS) {
     await query(
       `INSERT INTO form_fields
-         (field_key, label, field_type, section, is_mandatory, is_visible, sort_order,
+         (id, field_key, label, field_type, section, is_mandatory, is_visible, sort_order,
           metadata_type_key, placeholder, is_system, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, NULL, TRUE, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, NULL, TRUE, NOW(), NOW())
        ON CONFLICT (field_key) DO NOTHING`,
-      [field.key, field.label, field.type, field.section, field.mandatory, field.order, field.metadataType || null]
+      // id supplied from app code: the legacy bootstrap shape of
+      // form_fields (id VARCHAR PRIMARY KEY) has no DB default.
+      [randomUUID(), field.key, field.label, field.type, field.section, field.mandatory, field.order, field.metadataType || null]
     );
   }
   console.log(`✅ Form Builder seed completed (${DEFAULT_FIELDS.length} system fields).`);
