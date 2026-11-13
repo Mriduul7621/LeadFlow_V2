@@ -47,6 +47,7 @@ const LeadUpdate = lazy(() => import('./modules/leads/pages/LeadUpdate'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
 const TeamOverview = lazy(() => import('./modules/team/pages/TeamOverview'));
+const TeamKpiDrilldown = lazy(() => import('./modules/team/pages/TeamKpiDrilldown'));
 const ExecutionIntelligence = lazy(() => import('./modules/dashboard/pages/ExecutionIntelligence'));
 const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
 const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
@@ -181,6 +182,9 @@ const router = createBrowserRouter([
   {
     path: '/team',
     element: <ProtectedRoute><FeatureGate route="/team"><LazyPage page={<TeamOverview />} /></FeatureGate></ProtectedRoute>,  },
+  {
+    path: '/team/kpi/:kpi',
+    element: <ProtectedRoute><FeatureGate route="/team/kpi/:kpi"><LazyPage page={<TeamKpiDrilldown />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/team/organogram',
     element: <ProtectedRoute><FeatureGate route="/team/organogram"><LazyPage page={<TeamHierarchy />} /></FeatureGate></ProtectedRoute>,  },

@@ -124,6 +124,11 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   // sees just themself). The old static TEAM_ROLES list contradicted
   // that model and hid the page from people with real subordinates.
   '/team': { route: '/team', path: '/team', roles: EVERYONE },
+  // KPI drill-down (TL+ Home): same model as /team — anyone may open
+  // it; the overview payload scopes what they see (a leaf member
+  // sees only their own leads), and the leaf/export endpoints
+  // enforce the same scope server-side.
+  '/team/kpi/:kpi': { route: '/team/kpi/:kpi', path: '/team', roles: EVERYONE },
   '/team/organogram': { route: '/team/organogram', path: '/team', roles: EVERYONE },
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
   '/settings': { route: '/settings', path: '/settings', roles: EVERYONE },
