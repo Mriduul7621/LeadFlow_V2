@@ -748,7 +748,12 @@ async function loadTeamOverviewForCaller(
     const tier = directReports > 0 && (hasGrandReports || (level != null && level <= 2))
       ? 'manager'
       : directReports > 0 ? 'teamLead' : 'teamMember';
-    const c = counts.get(String(row.employee_id).toUpperCase()) || {};
+    // assigned_to IS the assignee's user id (UUID FK → users.id,
+    // migration 014) — the counts map is keyed by it, so the lookup
+    // must use the user's id, never the employee ID. (Hotfix
+    // 2026-11-13: the employee-ID lookup matched nothing in
+    // production, so every KPI count read 0 for everyone.)
+    const c = counts.get(String(row.id).toUpperCase()) || {};
     const manager = row.manager_id ? byId.get(String(row.manager_id)) : null;
     return {
       userId: String(row.id),
@@ -833,15 +838,19 @@ export interface KpiLeadRow {
  * same definition the overview counts use, so this list contains
  * exactly the leads the card counted. Production column shapes:
  * current_status, is_deleted, next_follow_up_at, created_at;
- * assigned_to holds the EMPLOYEE ID, matched case-insensitively
- * exactly as the overview counts do.
+ * assigned_to is the assignee's USER id (UUID FK → users.id,
+ * migration 014) — the DB path compares it to person.userId with
+ * plain uuid equality (Postgres has no upper(uuid); comparing it
+ * to an employee ID 500s — hotfix 2026-11-13). The demo fallback
+ * has no database: its in-memory leads carry the employee ID, so
+ * that path still matches on person.employeeId.
  * Callers must already have proven the target is inside the caller's
  * visible set (membership in the overview people array); combined
  * with the assigned_to filter, that is the lead-visibility predicate
  * (assignee in scope), so no second visibility clause is needed.
  */
 async function loadKpiLeadsForPerson(
-  employeeId: string,
+  person: { userId: string; employeeId: string },
   kpi: KpiKey
 ): Promise<{ total: number; items: KpiLeadRow[] }> {
   const now = new Date();
@@ -857,7 +866,7 @@ async function loadKpiLeadsForPerson(
     const noActionCutoff = new Date(cutoffIso).getTime();
     const matches = (l: any): boolean => {
       if (l.is_deleted === true) return false;
-      if (String(l.assignedTo || '').toUpperCase() !== employeeId.toUpperCase()) return false;
+      if (String(l.assignedTo || '').toUpperCase() !== person.employeeId.toUpperCase()) return false;
       const st = String(l.currentStatus || '');
       const nfd = l.nextFollowUpDate || l.next_follow_up_at;
       const t = nfd ? new Date(nfd).getTime() : NaN;
@@ -912,12 +921,16 @@ async function loadKpiLeadsForPerson(
 
   const pool = getPool();
   const support = await probeNoActionSupport(pool);
-  const params: any[] = [employeeId.toUpperCase()];
+  // uuid = uuid: assigned_to is the assignee's user id, and
+  // Postgres has no upper(uuid) — never compare it to an employee
+  // ID (the 2026-11-13 hotfix: UPPER(l.assigned_to) 500d every
+  // leaf list and export in production).
+  const params: any[] = [person.userId];
   const pushParam = (value: unknown): string => {
     params.push(value);
     return `$${params.length}`;
   };
-  const where: string[] = ['l.is_deleted = FALSE', 'UPPER(l.assigned_to) = $1'];
+  const where: string[] = ['l.is_deleted = FALSE', 'l.assigned_to = $1'];
   where.push(kpiLeadPredicate(kpi, {
     pushParam,
     alias: 'l',
@@ -1014,7 +1027,7 @@ router.get('/team/kpi/leads', requireAuth, async (req, res) => {
     if (!resolved) {
       return sendJson(res, 404, { success: false, message: 'Person not found.' });
     }
-    const { total, items } = await loadKpiLeadsForPerson(resolved.person.employeeId, kpi);
+    const { total, items } = await loadKpiLeadsForPerson(resolved.person, kpi);
     return sendJson(res, 200, {
       success: true,
       kpi,
@@ -1065,7 +1078,7 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
     let scopeLabel: string;
     if (isLeafLevel) {
       level = 'leads';
-      const { total, items } = await loadKpiLeadsForPerson(current.employeeId, kpi);
+      const { total, items } = await loadKpiLeadsForPerson(current, kpi);
       scopeLabel = current.isSelf ? 'Your leads' : `${current.name}'s leads`;
       workbook = await buildKpiExportWorkbook({
         kpiLabel,

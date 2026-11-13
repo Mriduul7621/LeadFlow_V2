@@ -148,8 +148,8 @@ async function setupCommonSchema(pool: any) {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       customer_name VARCHAR(255),
       current_status VARCHAR(100),
-      assigned_to VARCHAR(30),
-      created_by VARCHAR(30),
+      assigned_to UUID REFERENCES users(id),
+      created_by UUID REFERENCES users(id),
       next_follow_up_at TIMESTAMP,
       is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
@@ -231,15 +231,29 @@ describe('FIX-1 item 5 — GET /api/team/overview', () => {
         [status, assignedTo, nextFollowUpAt, deleted]
       );
     };
-    await mkLead('TMEM1', 'Interested', dueToday);          // open + due today
-    await mkLead('TMEM1', 'Follow-up Set', dueTomorrow);    // open, not due today
-    await mkLead('TMEM1', 'Converted', null);               // converted
-    await mkLead('TMEM1', 'Not Interested', null);          // terminal, not open
-    await mkLead('TMEM1', 'Interested', dueToday, true);    // deleted — must not count
-    await mkLead('TLEAD', 'New', null);                     // lead's own open lead
-    await mkLead('TOTHER', 'Interested', dueToday);         // outsider's lead
+    await mkLead(mem1.id, 'Interested', dueToday);          // open + due today
+    await mkLead(mem1.id, 'Follow-up Set', dueTomorrow);    // open, not due today
+    await mkLead(mem1.id, 'Converted', null);               // converted
+    await mkLead(mem1.id, 'Not Interested', null);          // terminal, not open
+    await mkLead(mem1.id, 'Interested', dueToday, true);    // deleted — must not count
+    await mkLead(lead.id, 'New', null);                     // lead's own open lead
+    await mkLead(other.id, 'Interested', dueToday);         // outsider's lead
 
     app = await bootApp();
+  });
+
+  it('precondition: the fixture leads.assigned_to is a UUID FK (production shape)', async () => {
+    // Hotfix 2026-11-13: this fixture used to declare assigned_to
+    // VARCHAR(30) and store employee IDs, so the counts passed here
+    // while production (UUID FK → users.id, migration 014) read
+    // every count as 0. Pin the true shape.
+    const cols: any = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'leads' AND column_name IN ('assigned_to', 'created_by')`
+    );
+    const byName = new Map(cols.rows.map((r: any) => [r.column_name, r.data_type]));
+    assert.equal(byName.get('assigned_to'), 'uuid', 'assigned_to is uuid (migration 014), not VARCHAR');
+    assert.equal(byName.get('created_by'), 'uuid', 'created_by is uuid (migration 014), not VARCHAR');
   });
 
   it('a head sees their tree grouped by tier with per-person counts', async () => {

@@ -13,8 +13,8 @@
  * duplicated there by design: the client never fetches them).
  *
  * Definitions (production column shapes — current_status,
- * is_deleted, created_at, next_follow_up_at; assigned_to holds the
- * EMPLOYEE ID):
+ * is_deleted, created_at, next_follow_up_at; assigned_to is the
+ * assignee's user id, UUID FK → users.id per migration 014):
  *   open            = non-terminal + not deleted
  *   dueToday        = next_follow_up_at within the current Dhaka
  *                     business day — NO terminal filter (the

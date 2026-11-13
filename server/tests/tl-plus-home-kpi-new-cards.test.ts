@@ -274,8 +274,9 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
       );
     `);
     // PRODUCTION shape: current_status, next_follow_up_at, is_deleted,
-    // created_at, the legacy status_history JSONB column — and
-    // deliberately NO bare `status` column.
+    // created_at, assigned_to a UUID FK → users(id) (migration 014),
+    // the legacy status_history JSONB column — and deliberately NO
+    // bare `status` column.
     await pool.query(`
       CREATE TABLE leads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -283,8 +284,8 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
         customer_name VARCHAR(255),
         mobile VARCHAR(30),
         current_status VARCHAR(255),
-        assigned_to VARCHAR(30),
-        created_by VARCHAR(30),
+        assigned_to UUID REFERENCES users(id),
+        created_by UUID REFERENCES users(id),
         next_follow_up_at TIMESTAMP,
         status_history JSONB NOT NULL DEFAULT '[]'::jsonb,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
@@ -406,31 +407,31 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
 
     // NMEM (14 leads): total 13, today 3, noAction 2, open 11,
     // converted 2, dueToday 0, overdue 1.
-    await mkLead('NA Old Untouched', 'NMEM', 'New', old50h, null); // noAction
-    await mkLead('NA Boundary Past', 'NMEM', 'Interested', past48, null); // noAction (1 min past 48h)
-    await mkLead('NA Boundary Inside', 'NMEM', 'Interested', inside48, null); // NOT noAction (1 min inside 48h)
-    await mkLead('NA Recent Untouched', 'NMEM', 'New', recent10h, null); // NOT noAction (recent)
-    const withActivity = await mkLead('NA With Activity', 'NMEM', 'Interested', old50h, null);
+    await mkLead('NA Old Untouched', mem.id, 'New', old50h, null); // noAction
+    await mkLead('NA Boundary Past', mem.id, 'Interested', past48, null); // noAction (1 min past 48h)
+    await mkLead('NA Boundary Inside', mem.id, 'Interested', inside48, null); // NOT noAction (1 min inside 48h)
+    await mkLead('NA Recent Untouched', mem.id, 'New', recent10h, null); // NOT noAction (recent)
+    const withActivity = await mkLead('NA With Activity', mem.id, 'Interested', old50h, null);
     await mkActivity(withActivity, 'Interested'); // NOT noAction: an activity row exists
-    await mkLead('NA Legacy History', 'NMEM', 'Follow-up Set', old50h, null,
+    await mkLead('NA Legacy History', mem.id, 'Follow-up Set', old50h, null,
       { history: [{ status: 'Contacted', at: old50h }] }); // NOT noAction: legacy history counts
-    await mkLead('NA Terminal Old', 'NMEM', 'Converted', old5d, null); // NOT noAction: terminal
-    await mkLead('NA Deleted Old', 'NMEM', 'New', old5d, null, { deleted: true }); // excluded everywhere
-    await mkLead('NA Today Fresh', 'NMEM', 'New', todayPlus30m, null); // today
-    await mkLead('NA Today Converted', 'NMEM', 'Converted', todayPlus45m, null); // today (terminal included)
-    await mkLead('NA Yesterday', 'NMEM', 'Interested', yesterday, null); // NOT today
-    await mkLead('NA Today Boundary', 'NMEM', 'New', todayStartExact, null); // today (inclusive start)
-    await mkLead('NA Before Today', 'NMEM', 'New', beforeToday, null); // NOT today (1s before start)
-    const overdueOld = await mkLead('NA Overdue Old', 'NMEM', 'Interested', old50h, overdueAt);
+    await mkLead('NA Terminal Old', mem.id, 'Converted', old5d, null); // NOT noAction: terminal
+    await mkLead('NA Deleted Old', mem.id, 'New', old5d, null, { deleted: true }); // excluded everywhere
+    await mkLead('NA Today Fresh', mem.id, 'New', todayPlus30m, null); // today
+    await mkLead('NA Today Converted', mem.id, 'Converted', todayPlus45m, null); // today (terminal included)
+    await mkLead('NA Yesterday', mem.id, 'Interested', yesterday, null); // NOT today
+    await mkLead('NA Today Boundary', mem.id, 'New', todayStartExact, null); // today (inclusive start)
+    await mkLead('NA Before Today', mem.id, 'New', beforeToday, null); // NOT today (1s before start)
+    const overdueOld = await mkLead('NA Overdue Old', mem.id, 'Interested', old50h, overdueAt);
     await mkActivity(overdueOld, 'Interested'); // overdue, NOT noAction
 
     // NTL: total 2, today 1, noAction 1.
-    await mkLead('TL Old Untouched', 'NTL', 'New', old60h, null);
-    await mkLead('TL Today', 'NTL', 'New', todayPlus2h, null);
+    await mkLead('TL Old Untouched', tl.id, 'New', old60h, null);
+    await mkLead('TL Today', tl.id, 'New', todayPlus2h, null);
     // NSMEM (sibling subtree, visible to the head only): noAction 1.
-    await mkLead('SMEM Old Untouched', 'NSMEM', 'New', old60h, null);
+    await mkLead('SMEM Old Untouched', smem.id, 'New', old60h, null);
     // NOUT (outside the head's subtree): for the 404 pins.
-    await mkLead('OUT Old Untouched', 'NOUT', 'New', old60h, null);
+    await mkLead('OUT Old Untouched', out.id, 'New', old60h, null);
     // NSIB deliberately has NO leads: the never-empty pin — a
     // zero-count person who must still be listed with 0s.
 
@@ -446,6 +447,23 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
     request(app).get(`/api/team/kpi/leads?kpi=${kpi}&person=${encodeURIComponent(person)}`).set('Authorization', `Bearer ${token}`);
 
   /* ---------------- overview counts ---------------- */
+
+  it('precondition: the fixture leads.assigned_to is a UUID FK (production shape)', async () => {
+    // Hotfix 2026-11-13: this fixture used to declare assigned_to
+    // VARCHAR(30) and store employee IDs, so every KPI test passed
+    // here while production (UUID FK → users.id, migration 014)
+    // 500d with "function upper(uuid) does not exist" on every leaf
+    // list and export, and read every count as 0. Pin the true
+    // shape — with it, the counts/leaf/export tests below are the
+    // regression pins for that failure.
+    const cols: any = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'leads' AND column_name IN ('assigned_to', 'created_by')`
+    );
+    const byName = new Map(cols.rows.map((r: any) => [r.column_name, r.data_type]));
+    assert.equal(byName.get('assigned_to'), 'uuid', 'assigned_to is uuid (migration 014), not VARCHAR');
+    assert.equal(byName.get('created_by'), 'uuid', 'created_by is uuid (migration 014), not VARCHAR');
+  });
 
   it('overview carries the three new counts, exact', async () => {
     const res = await overview(headToken);

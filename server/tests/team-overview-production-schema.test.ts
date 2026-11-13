@@ -116,15 +116,16 @@ describe('Team overview — production leads shape (current_status, no status co
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
     `);
-    // PRODUCTION shape: current_status (035), next_follow_up_at +
-    // is_deleted (014) — and NO bare `status` column.
+    // PRODUCTION shape: current_status, next_follow_up_at, is_deleted,
+    // assigned_to a UUID FK → users(id) (migration 014) — and
+    // deliberately NO bare `status` column.
     await pool.query(`
       CREATE TABLE leads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         customer_name VARCHAR(255),
         current_status VARCHAR(255),
-        assigned_to VARCHAR(30),
-        created_by VARCHAR(30),
+        assigned_to UUID REFERENCES users(id),
+        created_by UUID REFERENCES users(id),
         next_follow_up_at TIMESTAMP,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
@@ -154,7 +155,7 @@ describe('Team overview — production leads shape (current_status, no status co
     };
     const head = await mkUser('PHEAD', headRole, null);
     const lead = await mkUser('PLEAD', leadRole, head.id);
-    await mkUser('PMEM', memRole, lead.id);
+    const mem = await mkUser('PMEM', memRole, lead.id);
     headToken = jwt.sign({ ...head, role: 'BH' }, JWT_SECRET, { expiresIn: '1h' });
 
     const bounds = getDhakaBusinessDayBounds(new Date());
@@ -166,12 +167,12 @@ describe('Team overview — production leads shape (current_status, no status co
         [status, assignedTo, nextFollowUpAt, deleted]
       );
     };
-    await mkLead('PMEM', 'Interested', dueToday);        // open + due today
-    await mkLead('PMEM', 'Follow-up Set', dueTomorrow);  // open, not due today
-    await mkLead('PMEM', 'Converted', null);             // converted
-    await mkLead('PMEM', 'Not Interested', null);        // terminal — not open
-    await mkLead('PMEM', 'Interested', dueToday, true);  // deleted — invisible to every count
-    await mkLead('PLEAD', 'New', null);                  // the lead's own open lead
+    await mkLead(mem.id, 'Interested', dueToday);        // open + due today
+    await mkLead(mem.id, 'Follow-up Set', dueTomorrow);  // open, not due today
+    await mkLead(mem.id, 'Converted', null);             // converted
+    await mkLead(mem.id, 'Not Interested', null);        // terminal — not open
+    await mkLead(mem.id, 'Interested', dueToday, true);  // deleted — invisible to every count
+    await mkLead(lead.id, 'New', null);                  // the lead's own open lead
 
     const mod = await import('../routes/production.routes.js');
     app = express();
@@ -181,11 +182,18 @@ describe('Team overview — production leads shape (current_status, no status co
 
   it('the test leads table is the production shape (precondition)', async () => {
     const cols: any = await pool.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'leads'`
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'leads'`
     );
     const names = cols.rows.map((r: any) => r.column_name);
     assert.ok(names.includes('current_status'), 'current_status present');
     assert.ok(!names.includes('status'), 'no bare status column — the production shape');
+    // Hotfix 2026-11-13: this fixture used to declare assigned_to
+    // VARCHAR(30) and store employee IDs, so the counts passed here
+    // while production (UUID FK → users.id, migration 014) read
+    // every count as 0. Pin the true shape.
+    const byName = new Map(cols.rows.map((r: any) => [r.column_name, r.data_type]));
+    assert.equal(byName.get('assigned_to'), 'uuid', 'assigned_to is uuid (migration 014), not VARCHAR');
+    assert.equal(byName.get('created_by'), 'uuid', 'created_by is uuid (migration 014), not VARCHAR');
   });
 
   it('GET /api/team/overview returns correct open/converted/due-today counts', async () => {

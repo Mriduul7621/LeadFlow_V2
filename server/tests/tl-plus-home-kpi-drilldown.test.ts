@@ -14,7 +14,8 @@
  *      chain (cycle-safe), out-of-scope not-found, URL builders.
  *   3. GET /team/kpi/leads — the leaf lead list against the
  *      PRODUCTION leads shape (current_status, is_deleted,
- *      next_follow_up_at; assigned_to holds the EMPLOYEE ID):
+ *      next_follow_up_at; assigned_to a UUID FK → users(id),
+ *      migration 014):
  *      the four original KPI definitions, scope 404s, leads.view
  *      403, and totals matching the overview counts exactly. (The
  *      three 2026-11-13 additions — Total Lead, Today Lead
@@ -403,8 +404,8 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
       );
     `);
     // PRODUCTION shape: current_status, next_follow_up_at, is_deleted,
-    // assigned_to holding the EMPLOYEE ID — and deliberately NO bare
-    // `status` column.
+    // assigned_to a UUID FK → users(id) (migration 014) — and
+    // deliberately NO bare `status` column.
     await pool.query(`
       CREATE TABLE leads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -412,8 +413,8 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
         customer_name VARCHAR(255),
         mobile VARCHAR(30),
         current_status VARCHAR(255),
-        assigned_to VARCHAR(30),
-        created_by VARCHAR(30),
+        assigned_to UUID REFERENCES users(id),
+        created_by UUID REFERENCES users(id),
         next_follow_up_at TIMESTAMP,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
@@ -487,18 +488,18 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
     };
     // KMEM: open 5 (M1,M2,M3,M5,M9), dueToday 2 (M3,M4), overdue 2
     // (M1,M2), converted 2 (M4,M6).
-    await mkLead('MEM Overdue 1', 'KMEM', 'Interested', overdueAt);
-    await mkLead('MEM Overdue 2', 'KMEM', 'Follow-up Set', overdueAt);
-    await mkLead('MEM Due Today', 'KMEM', 'Interested', dueToday);
-    await mkLead('MEM Converted Due', 'KMEM', 'Converted', dueTodayLater);
-    await mkLead('MEM No Date', 'KMEM', 'Interested', null);
-    await mkLead('MEM Converted', 'KMEM', 'Converted', null);
-    await mkLead('MEM Not Interested', 'KMEM', 'Not Interested', null);
-    await mkLead('MEM Deleted', 'KMEM', 'Interested', overdueAt, true);
-    await mkLead('MEM Tomorrow', 'KMEM', 'Interested', tomorrowStart);
-    await mkLead('TL Overdue', 'KTL', 'New', overdueAt);
-    await mkLead('SMEM Overdue', 'KSMEM', 'Interested', overdueAt);
-    await mkLead('OUT Overdue', 'KOUT', 'Interested', overdueAt);
+    await mkLead('MEM Overdue 1', mem.id, 'Interested', overdueAt);
+    await mkLead('MEM Overdue 2', mem.id, 'Follow-up Set', overdueAt);
+    await mkLead('MEM Due Today', mem.id, 'Interested', dueToday);
+    await mkLead('MEM Converted Due', mem.id, 'Converted', dueTodayLater);
+    await mkLead('MEM No Date', mem.id, 'Interested', null);
+    await mkLead('MEM Converted', mem.id, 'Converted', null);
+    await mkLead('MEM Not Interested', mem.id, 'Not Interested', null);
+    await mkLead('MEM Deleted', mem.id, 'Interested', overdueAt, true);
+    await mkLead('MEM Tomorrow', mem.id, 'Interested', tomorrowStart);
+    await mkLead('TL Overdue', tl.id, 'New', overdueAt);
+    await mkLead('SMEM Overdue', smem.id, 'Interested', overdueAt);
+    await mkLead('OUT Overdue', out.id, 'Interested', overdueAt);
 
     const mod = await import('../routes/production.routes.js');
     app = express();
@@ -508,6 +509,23 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
 
   const kpiLeads = (token: string, kpi: string, person: string) =>
     request(app).get(`/api/team/kpi/leads?kpi=${kpi}&person=${encodeURIComponent(person)}`).set('Authorization', `Bearer ${token}`);
+
+  it('precondition: the fixture leads.assigned_to is a UUID FK (production shape)', async () => {
+    // Hotfix 2026-11-13: this fixture used to declare assigned_to
+    // VARCHAR(30) and store employee IDs, so every KPI test passed
+    // here while production (UUID FK → users.id, migration 014)
+    // 500d with "function upper(uuid) does not exist" on every leaf
+    // list and export, and read every count as 0. Pin the true
+    // shape — with it, the leaf/export/count tests below are the
+    // regression pins for that failure.
+    const cols: any = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'leads' AND column_name IN ('assigned_to', 'created_by')`
+    );
+    const byName = new Map(cols.rows.map((r: any) => [r.column_name, r.data_type]));
+    assert.equal(byName.get('assigned_to'), 'uuid', 'assigned_to is uuid (migration 014), not VARCHAR');
+    assert.equal(byName.get('created_by'), 'uuid', 'created_by is uuid (migration 014), not VARCHAR');
+  });
 
   it('overdue: only open past-due leads of that person', async () => {
     const res = await kpiLeads(headToken, 'overdue', 'KMEM');

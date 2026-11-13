@@ -173,15 +173,16 @@ describe('TL+ Home — GET /api/team/overview overdue counts (production leads s
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
     `);
-    // PRODUCTION shape: current_status, next_follow_up_at, is_deleted
-    // — and deliberately NO bare `status` column.
+    // PRODUCTION shape: current_status, next_follow_up_at, is_deleted,
+    // assigned_to a UUID FK → users(id) (migration 014) — and
+    // deliberately NO bare `status` column.
     await pool.query(`
       CREATE TABLE leads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         customer_name VARCHAR(255),
         current_status VARCHAR(255),
-        assigned_to VARCHAR(30),
-        created_by VARCHAR(30),
+        assigned_to UUID REFERENCES users(id),
+        created_by UUID REFERENCES users(id),
         next_follow_up_at TIMESTAMP,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW()
@@ -224,19 +225,33 @@ describe('TL+ Home — GET /api/team/overview overdue counts (production leads s
         [status, assignedTo, nextFollowUpAt, deleted]
       );
     };
-    await mkLead('TMEM', 'Interested', overdueAt);            // open + overdue -> overdue 1
-    await mkLead('TMEM', 'Follow-up Set', overdueAt);         // open + overdue -> overdue 2
-    await mkLead('TMEM', 'Not Interested', overdueAt);        // terminal -> never overdue
-    await mkLead('TMEM', 'Converted', overdueAt);             // terminal -> never overdue
-    await mkLead('TMEM', 'Interested', overdueAt, true);      // deleted -> invisible
-    await mkLead('TMEM', 'Interested', dueToday);             // open + due today (not overdue)
-    await mkLead('TMEM', 'Interested', null);                 // open, no follow-up date
-    await mkLead('TLEAD', 'New', overdueAt);                  // the lead's own overdue lead
+    await mkLead(mem.id, 'Interested', overdueAt);            // open + overdue -> overdue 1
+    await mkLead(mem.id, 'Follow-up Set', overdueAt);         // open + overdue -> overdue 2
+    await mkLead(mem.id, 'Not Interested', overdueAt);        // terminal -> never overdue
+    await mkLead(mem.id, 'Converted', overdueAt);             // terminal -> never overdue
+    await mkLead(mem.id, 'Interested', overdueAt, true);      // deleted -> invisible
+    await mkLead(mem.id, 'Interested', dueToday);             // open + due today (not overdue)
+    await mkLead(mem.id, 'Interested', null);                 // open, no follow-up date
+    await mkLead(lead.id, 'New', overdueAt);                  // the lead's own overdue lead
 
     const mod = await import('../routes/production.routes.js');
     app = express();
     app.use(express.json({ limit: '50mb' }));
     app.use('/api', mod.default);
+  });
+
+  it('precondition: the fixture leads.assigned_to is a UUID FK (production shape)', async () => {
+    // Hotfix 2026-11-13: this fixture used to declare assigned_to
+    // VARCHAR(30) and store employee IDs, so the counts passed here
+    // while production (UUID FK → users.id, migration 014) read
+    // every count as 0. Pin the true shape.
+    const cols: any = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'leads' AND column_name IN ('assigned_to', 'created_by')`
+    );
+    const byName = new Map(cols.rows.map((r: any) => [r.column_name, r.data_type]));
+    assert.equal(byName.get('assigned_to'), 'uuid', 'assigned_to is uuid (migration 014), not VARCHAR');
+    assert.equal(byName.get('created_by'), 'uuid', 'created_by is uuid (migration 014), not VARCHAR');
   });
 
   it('counts overdue as open leads whose follow-up is before today (Dhaka)', async () => {
