@@ -965,6 +965,35 @@ async function loadKpiLeadsForPerson(
 }
 
 /**
+ * Top-level drill-down rows, mirroring the client (src/modules/team/
+ * utils/kpiDrilldown.ts topLevelRowsOf): the caller's direct reports,
+ * PLUS the visible tree roots outside the caller's own subtree. A
+ * root cannot be anyone's descendant inside the payload (its manager
+ * link is null or leaves the payload), so "outside the caller's
+ * subtree" is every root except the caller themself. An
+ * Organization-scope admin/CEO with no direct reports still gets
+ * the whole org's roots here instead of collapsing to their own
+ * leads; the LEAF level applies only when this set is empty (a true
+ * leaf member). The export endpoint resolves its level with this —
+ * it must never disagree with the page, or the file would carry
+ * different rows than the screen shows.
+ */
+function topLevelKpiRows(
+  people: TeamOverviewPersonPayload[],
+  self: TeamOverviewPersonPayload
+): TeamOverviewPersonPayload[] {
+  const byEmployee = new Set(people.map(p => p.employeeId.toUpperCase()));
+  const reports = people.filter(p => p.managerEmployeeId && p.managerEmployeeId.toUpperCase() === self.employeeId.toUpperCase());
+  const reportIds = new Set(reports.map(p => p.employeeId.toUpperCase()));
+  const outsideRoots = people.filter(p =>
+    (!p.managerEmployeeId || !byEmployee.has(p.managerEmployeeId.toUpperCase()))
+    && p.employeeId.toUpperCase() !== self.employeeId.toUpperCase()
+    && !reportIds.has(p.employeeId.toUpperCase())
+  );
+  return [...reports, ...outsideRoots];
+}
+
+/**
  * Resolve the drill-down's current person from the caller's scoped
  * overview people: `person=self` (or absent) = the caller themself,
  * otherwise the employee ID — matched case-insensitively. Returns
@@ -1043,9 +1072,14 @@ router.get('/team/kpi/leads', requireAuth, async (req, res) => {
 /* GET /team/kpi/export — .xlsx of EXACTLY the level the drill-down
    page currently shows: the current person's direct reports (name,
    employee ID, designation, KPI value) at a people level, or that
-   person's matching leads at a leaf level. Gated on the existing
-   `leads.export` permission (grantable in Roles & Access); audited
-   as leads.export. The level is resolved server-side from the
+   person's matching leads at a leaf level. At the TOP level (no
+   person param) the people rows are the caller's direct reports
+   PLUS the visible tree roots outside their own subtree — an
+   Organization-scope admin/CEO with no reports exports the org's
+   people, not their own leads (2026-11-13 fix, mirroring the
+   client's resolveKpiLevel). Gated on the existing `leads.export`
+   permission (grantable in Roles & Access); audited as
+   leads.export. The level is resolved server-side from the
    caller's scoped overview set, so an export can never carry data
    outside the caller's visible set. */
 router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'), async (req, res) => {
@@ -1068,7 +1102,31 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
       return sendJson(res, 404, { success: false, message: 'Person not found.' });
     }
     const current = resolved.person;
-    const isLeafLevel = resolved.forceLeaf || current.directReports === 0;
+    // The level rule mirrors the client (src/modules/team/utils/
+    // kpiDrilldown.ts resolveKpiLevel): `person=self` forces the
+    // leaf list; a NAMED person with reports shows their team; the
+    // TOP level (no person param) shows the caller's direct reports
+    // PLUS the visible tree roots outside the caller's own subtree
+    // — so an Organization-scope admin/CEO with no reports exports
+    // the org's people, not their own leads. The leaf level applies
+    // only when that combined set is empty (a true leaf member).
+    const isTopLevel = !personParam;
+    const ownReports = people.filter(p => p.managerEmployeeId && p.managerEmployeeId.toUpperCase() === current.employeeId.toUpperCase());
+    let isLeafLevel: boolean;
+    let peopleRows: TeamOverviewPersonPayload[];
+    if (resolved.forceLeaf) {
+      isLeafLevel = true;
+      peopleRows = [];
+    } else if (isTopLevel) {
+      peopleRows = topLevelKpiRows(people, current);
+      isLeafLevel = peopleRows.length === 0;
+    } else {
+      peopleRows = ownReports;
+      isLeafLevel = current.directReports === 0;
+    }
+    // The org view (top level for a caller with no reports of their
+    // own) is headed "Everyone" — the same heading the page uses.
+    const isOrgView = isTopLevel && !isLeafLevel && ownReports.length === 0;
     const kpiLabel = KPI_LABELS[kpi];
     const todayDate = getDhakaBusinessDayBounds(new Date()).todayDate;
     let workbook: Buffer;
@@ -1099,8 +1157,7 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
       level = 'people';
       // Same order as the page (KPI desc, then name — see
       // src/modules/team/utils/kpiDrilldown.ts sortKpiRows).
-      const rows = people
-        .filter(p => p.managerEmployeeId && p.managerEmployeeId.toUpperCase() === current.employeeId.toUpperCase())
+      const rows = peopleRows
         .map(p => ({
           name: p.name,
           employeeId: p.employeeId,
@@ -1108,7 +1165,7 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
           kpiValue: kpiValueOfPerson(p, kpi),
         }))
         .sort((a, b) => b.kpiValue - a.kpiValue || a.name.localeCompare(b.name));
-      scopeLabel = current.isSelf ? 'Your team' : `${current.name}'s team`;
+      scopeLabel = current.isSelf ? (isOrgView ? 'Everyone' : 'Your team') : `${current.name}'s team`;
       workbook = await buildKpiExportWorkbook({ kpiLabel, level, scopeLabel, peopleRows: rows });
       rowCount = rows.length;
     }

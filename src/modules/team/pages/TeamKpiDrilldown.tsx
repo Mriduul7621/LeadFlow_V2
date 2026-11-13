@@ -38,7 +38,12 @@ import {
  * level. A leaf level lists that person's actual leads for the KPI,
  * each linking to Lead360. A leaf member with no person param sees
  * their OWN leads directly (the member self-view); `person=self`
- * forces the caller's own leads even for a team holder.
+ * forces the caller's own leads even for a team holder. An
+ * Organization-scope admin/CEO with no reports of their own sees
+ * the whole organisation's roots at the top level instead (headed
+ * "Everyone", not "Your team") — the 2026-11-13 fix for the
+ * owner's report that Total Lead showed only the one lead assigned
+ * to him.
  *
  * Levels come from the ONE scoped overview payload (client-side
  * resolveKpiLevel); only the leaf list is fetched
@@ -180,11 +185,16 @@ export function TeamKpiDrilldownContent({
   const current = level.current;
   const chain = level.chain;
   const isPeople = level.kind === 'people';
+  const isOrgView = level.kind === 'people' && level.isOrgView;
   const levelTotal = isPeople
     ? level.rows.reduce((sum, p) => sum + kpiValueFor(p, kpi), 0)
     : (leads?.total ?? 0);
+  // The org view (top level for a caller with no reports of their
+  // own) shows the whole organisation's roots — headed "Everyone",
+  // never "Your team": these are not the caller's team.
+  const selfHeading = isPeople ? (isOrgView ? 'Everyone' : 'Your team') : 'Your leads';
   const heading = current.isSelf
-    ? isPeople ? 'Your team' : 'Your leads'
+    ? selfHeading
     : isPeople ? `${current.name}'s team` : `${current.name}'s leads`;
 
   return (
@@ -197,7 +207,7 @@ export function TeamKpiDrilldownContent({
         <Link to={kpiDrilldownUrl(kpi)} className="hover:text-stone-700">{meta.label}</Link>
         {chain.map((person, index) => {
           const isLast = index === chain.length - 1;
-          const label = person.isSelf ? (isPeople ? 'Your team' : 'Your leads') : person.name;
+          const label = person.isSelf ? selfHeading : person.name;
           return (
             <span key={person.userId} className="flex items-center gap-1">
               <ChevronRight className="w-3 h-3" />

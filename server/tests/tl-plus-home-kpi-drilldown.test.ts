@@ -11,7 +11,10 @@
  *      even with no reports; leaf members keep the member landing.
  *   2. resolveKpiLevel + drill-down helpers (pure): people levels,
  *      leaf levels, member self-view, person=self, breadcrumb
- *      chain (cycle-safe), out-of-scope not-found, URL builders.
+ *      chain (cycle-safe), out-of-scope not-found, URL builders;
+ *      the org top level (an Organization-scope admin/CEO with no
+ *      reports sees the org's roots, not their own leaf view —
+ *      the 2026-11-13 fix for the owner's Total Lead report).
  *   3. GET /team/kpi/leads — the leaf lead list against the
  *      PRODUCTION leads shape (current_status, is_deleted,
  *      next_follow_up_at; assigned_to a UUID FK → users(id),
@@ -23,7 +26,9 @@
  *      tl-plus-home-kpi-new-cards.test.ts.)
  *   4. GET /team/kpi/export — .xlsx of exactly the viewed level
  *      (people rows vs lead rows), `leads.export` grant -> 200 ->
- *      revoke -> 403, out-of-scope 404, audit row.
+ *      revoke -> 403, out-of-scope 404, audit row; the org top
+ *      level (admin export carries the roots as people rows), the
+ *      org totals pin, and server/client row agreement.
  *   5. Rendering (SSR, repo style) — the drill-down content at a
  *      people level, a leaf level, not-found; the Export button
  *      only with the grant; Team Home KPI cards link to the page.
@@ -52,6 +57,7 @@ import { getDhakaBusinessDayBounds } from '../utils/businessTime.js';
 import {
   callerHasTeam,
   callerSeesTeam,
+  summarizeTeamTotals,
   type TeamOverviewPerson,
   type TeamOverviewResponse,
 } from '../../src/modules/team/services/teamOverviewService';
@@ -66,7 +72,10 @@ import {
   kpiLeadsUrl,
   kpiValueFor,
   resolveKpiLevel,
+  rootsOutsideSubtreeOf,
   sortKpiRows,
+  topLevelRowsOf,
+  treeRootsOf,
   type KpiLevel,
 } from '../../src/modules/team/utils/kpiDrilldown';
 import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
@@ -126,6 +135,22 @@ const teamOverview = (people: TeamOverviewPerson[], scope: string): TeamOverview
   scope,
   people,
 });
+
+// Organization-scope admin (self, NO reports) outside the tree +
+// the org's roots: HEAD (2 reports) + two managerless people (OUT,
+// NOG). The admin's own row carries 1 total lead — the owner's
+// report (2026-11-13): Total Lead showed only that one lead.
+// Whole-set sums: totalLeads 12, open 10, dueToday 3, overdue 3,
+// converted 2, todayCollection 6, noAction 4.
+const orgPeople: TeamOverviewPerson[] = [
+  person({ userId: 'u-admin', employeeId: 'EMP-A', name: 'Admin A', isSelf: true, directReports: 0, tier: 'teamMember', totalLeads: 1, openLeads: 1, todayLeads: 1, designation: 'Administrator', roleName: 'ADMIN' }),
+  person({ userId: 'u-head', employeeId: 'EMP-H', name: 'Hana Head', directReports: 2, tier: 'manager', designation: 'Business Head', roleName: 'BH' }),
+  person({ userId: 'u-tl1', employeeId: 'EMP-T1', name: 'Tariq Lead', managerEmployeeId: 'EMP-H', managerName: 'Hana Head', directReports: 1, tier: 'teamLead', totalLeads: 1, openLeads: 1, dueToday: 1, noActionLeads: 1, designation: 'Unit Manager', roleName: 'UM' }),
+  person({ userId: 'u-m1', employeeId: 'EMP-M1', name: 'Mina Member', managerEmployeeId: 'EMP-T1', managerName: 'Tariq Lead', totalLeads: 7, openLeads: 5, dueToday: 2, overdue: 1, convertedLeads: 2, todayLeads: 3, noActionLeads: 2 }),
+  person({ userId: 'u-tl2', employeeId: 'EMP-T2', name: 'Tania Lead', managerEmployeeId: 'EMP-H', managerName: 'Hana Head', directReports: 0, tier: 'teamMember', designation: 'Unit Manager', roleName: 'UM' }),
+  person({ userId: 'u-out', employeeId: 'EMP-O', name: 'Outsider O', directReports: 0, totalLeads: 3, openLeads: 3, overdue: 2, todayLeads: 2, noActionLeads: 1 }),
+  person({ userId: 'u-nog', employeeId: 'EMP-N', name: 'Nog N', directReports: 0 }),
+];
 
 /* ================================================================ */
 /* 1. callerSeesTeam — the new landing rule                          */
@@ -228,6 +253,95 @@ describe('kpiDrilldown helpers — levels, chains, URLs', () => {
     assert.equal(level.current.employeeId, 'EMP-S', 'the member themself, not a team level');
   });
 
+  it('an Organization-scope admin with NO reports gets the org roots at the top level (not their own leaf view)', () => {
+    // THE owner-reported case (2026-11-13): his ADMIN account has no
+    // reports, so the old rule collapsed the top level to his own
+    // leads — Total Lead showed only the one lead assigned to him.
+    const level = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', null);
+    assert.equal(level.kind, 'people', 'roots exist, so this is a people level, not a leaf');
+    if (level.kind !== 'people') return;
+    assert.equal(level.isOrgView, true, 'the rows are the org roots, not the caller\'s team');
+    assert.deepEqual(level.rows.map(p => p.employeeId), ['EMP-O', 'EMP-H', 'EMP-N'],
+      'totalLeads desc: O (3) first; H and N tie at 0, name order');
+    assert.ok(!level.rows.some(p => p.isSelf), 'the caller themself is never a row');
+    assert.deepEqual(level.chain.map(p => p.employeeId), ['EMP-A']);
+  });
+
+  it('drilling an org root reaches their team; the leaf at the bottom shows that member\'s leads', () => {
+    const head = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', 'EMP-H');
+    assert.equal(head.kind, 'people');
+    if (head.kind !== 'people') return;
+    assert.equal(head.isOrgView, false, 'a drilled level is that person\'s team, not the org view');
+    assert.deepEqual(head.rows.map(p => p.employeeId), ['EMP-T1', 'EMP-T2'], 'totalLeads desc: T1 (1) before T2 (0)');
+    assert.deepEqual(head.chain.map(p => p.employeeId), ['EMP-H'], 'a root\'s chain is just the root');
+
+    const tl1 = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', 'EMP-T1');
+    assert.equal(tl1.kind, 'people');
+    if (tl1.kind !== 'people') return;
+    assert.deepEqual(tl1.rows.map(p => p.employeeId), ['EMP-M1']);
+    assert.deepEqual(tl1.chain.map(p => p.employeeId), ['EMP-H', 'EMP-T1']);
+
+    const m1 = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', 'EMP-M1');
+    assert.equal(m1.kind, 'leads', 'the bottom of the tree is the member\'s leads');
+    if (m1.kind !== 'leads') return;
+    assert.equal(m1.current.employeeId, 'EMP-M1');
+    assert.deepEqual(m1.chain.map(p => p.employeeId), ['EMP-H', 'EMP-T1', 'EMP-M1']);
+
+    const out = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', 'EMP-O');
+    assert.equal(out.kind, 'leads', 'a root with no reports is itself a leaf');
+    if (out.kind !== 'leads') return;
+    assert.deepEqual(out.chain.map(p => p.employeeId), ['EMP-O']);
+  });
+
+  it('a caller WITH reports still gets their direct reports at the top level (unchanged)', () => {
+    const level = resolveKpiLevel(teamOverview(treePeople, 'Team'), 'overdue', null);
+    assert.equal(level.kind, 'people');
+    if (level.kind !== 'people') return;
+    assert.equal(level.isOrgView, false, 'the caller has reports — this is their team');
+    assert.deepEqual(level.rows.map(p => p.employeeId), ['EMP-T1', 'EMP-T2']);
+  });
+
+  it('topLevelRowsOf unions direct reports with outside roots', () => {
+    // A FullTeam-scope manager: reports of their own AND a visible
+    // root outside their subtree (e.g. a sibling branch head).
+    const people = [
+      person({ userId: 'u-mgr', employeeId: 'EMP-G', name: 'Gina Manager', isSelf: true, directReports: 1, tier: 'manager' }),
+      person({ userId: 'u-r', employeeId: 'EMP-R', name: 'Rita Report', managerEmployeeId: 'EMP-G', managerName: 'Gina Manager' }),
+      person({ userId: 'u-x', employeeId: 'EMP-X', name: 'Xena Other', directReports: 1, tier: 'manager' }),
+      person({ userId: 'u-y', employeeId: 'EMP-Y', name: 'Yusuf Other', managerEmployeeId: 'EMP-X', managerName: 'Xena Other' }),
+    ];
+    assert.deepEqual(treeRootsOf(people).map(p => p.employeeId).sort(), ['EMP-G', 'EMP-X']);
+    assert.deepEqual(rootsOutsideSubtreeOf(people, people[0]).map(p => p.employeeId), ['EMP-X']);
+    assert.deepEqual(
+      topLevelRowsOf(people, people[0]).map(p => p.employeeId).sort(),
+      ['EMP-R', 'EMP-X'],
+      'own report + the outside root'
+    );
+    const level = resolveKpiLevel(teamOverview(people, 'Team'), 'open', null);
+    assert.equal(level.kind, 'people');
+    if (level.kind !== 'people') return;
+    assert.equal(level.isOrgView, false, 'the caller HAS reports — headed as their team');
+    assert.deepEqual(level.rows.map(p => p.employeeId).sort(), ['EMP-R', 'EMP-X']);
+  });
+
+  it('breadcrumbChain stops at a root: a root\'s chain is just the root', () => {
+    assert.deepEqual(breadcrumbChain(orgPeople, 'EMP-H', 'EMP-A').map(p => p.employeeId), ['EMP-H']);
+    assert.deepEqual(breadcrumbChain(orgPeople, 'EMP-O', 'EMP-A').map(p => p.employeeId), ['EMP-O']);
+    assert.deepEqual(breadcrumbChain(orgPeople, 'EMP-M1', 'EMP-A').map(p => p.employeeId), ['EMP-H', 'EMP-T1', 'EMP-M1'],
+      'the chain climbs to the root, not to the caller, outside the caller\'s subtree');
+  });
+
+  it('summarizeTeamTotals sums the WHOLE visible set (the org totals an admin sees)', () => {
+    assert.deepEqual(summarizeTeamTotals(orgPeople), {
+      open: 10, dueToday: 3, overdue: 3, converted: 2,
+      totalLeads: 12, todayCollection: 6, noAction: 4,
+    });
+    assert.deepEqual(summarizeTeamTotals([]), {
+      open: 0, dueToday: 0, overdue: 0, converted: 0,
+      totalLeads: 0, todayCollection: 0, noAction: 0,
+    });
+  });
+
   it('person=self forces the caller\'s own leads even with reports', () => {
     const level = resolveKpiLevel(teamOverview(treePeople, 'Team'), 'dueToday', 'self');
     assert.equal(level.kind, 'leads', 'the My Day strip always lands on own leads');
@@ -314,6 +428,7 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
   let memToken: string;
   let outToken: string;
   let nogToken: string;
+  let adminToken: string;
   let umRoleId: string;
   let memRoleId: string;
   let exportPermId: string;
@@ -435,6 +550,7 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
     memRoleId = await mkRole('RO', 6, 'Own');
     const memRole = memRoleId;
     const nogRole = await mkRole('NOG', 6, 'Own');
+    const adminRole = await mkRole('ADMIN', 1, 'Organization');
     const hash = await bcrypt.hash('password123', 10);
     const mkUser = async (emp: string, roleId: string, managerId: string | null) => {
       const r: any = await pool.query(
@@ -451,11 +567,16 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
     const smem = await mkUser('KSMEM', memRole, sib.id);
     const out = await mkUser('KOUT', memRole, null);
     const nog = await mkUser('KNOG', nogRole, null);
+    // THE owner-reported case (2026-11-13): an Organization-scope
+    // ADMIN who sits OUTSIDE the reporting tree (no manager, no
+    // reports) and owns exactly one lead.
+    const admin = await mkUser('KADM', adminRole, null);
     headToken = jwt.sign({ ...head, role: 'BH' }, JWT_SECRET, { expiresIn: '1h' });
     tlToken = jwt.sign({ ...tl, role: 'UM' }, JWT_SECRET, { expiresIn: '1h' });
     memToken = jwt.sign({ ...mem, role: 'RO' }, JWT_SECRET, { expiresIn: '1h' });
     outToken = jwt.sign({ ...out, role: 'RO' }, JWT_SECRET, { expiresIn: '1h' });
     nogToken = jwt.sign({ ...nog, role: 'NOG' }, JWT_SECRET, { expiresIn: '1h' });
+    adminToken = jwt.sign({ ...admin, role: 'ADMIN' }, JWT_SECRET, { expiresIn: '1h' });
 
     // Permission grants: BH gets leads.view + leads.export; UM/RO get
     // leads.view only (TL's export grant is toggled by the test);
@@ -500,6 +621,10 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
     await mkLead('TL Overdue', tl.id, 'New', overdueAt);
     await mkLead('SMEM Overdue', smem.id, 'Interested', overdueAt);
     await mkLead('OUT Overdue', out.id, 'Interested', overdueAt);
+    // The admin's ONE lead — created by the admin, assigned to the
+    // admin. Before the 2026-11-13 top-level fix, Total Lead showed
+    // the admin ONLY this lead.
+    await mkLead('ADMIN Only Lead', admin.id, 'New', null);
 
     const mod = await import('../routes/production.routes.js');
     app = express();
@@ -756,6 +881,85 @@ describe('KPI drill-down — HTTP endpoints (production leads shape)', () => {
     assert.equal(mine.metadata.count, 2);
     assert.equal(mine.metadata.total, 2);
   });
+
+  /* ---------------- org top level (2026-11-13 fix) ---------------- */
+
+  it('admin overview: Organization scope lists everyone; the admin themself has no reports', async () => {
+    const res = await request(app).get('/api/team/overview').set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.scope, 'Organization');
+    assert.deepEqual(
+      (res.body.people as any[]).map((p: any) => p.employeeId).sort(),
+      ['KADM', 'KHEAD', 'KOUT', 'KNOG', 'KSMEM', 'KSIB', 'KTL', 'KMEM'].sort()
+    );
+    const self = (res.body.people as any[]).find((p: any) => p.isSelf);
+    assert.equal(self.employeeId, 'KADM');
+    assert.equal(self.directReports, 0, 'the admin sits outside the tree — no reports');
+    assert.equal(self.totalLeads, 1, 'the one lead assigned to the admin');
+  });
+
+  it('admin top-level export carries the org roots as PEOPLE rows — never the admin\'s own leads', async () => {
+    const res = await kpiExport(adminToken, '?kpi=totalLeads');
+    assert.equal(res.status, 200, JSON.stringify(res.body).slice(0, 200));
+    const ws = await readWorkbook(res.body as Buffer);
+    const rows = sheetRows(ws);
+    assert.match(String(rows[0][0]), /Total Lead — Everyone/, 'the title heads the org view');
+    assert.deepEqual(rows[3], ['Name', 'Employee ID', 'Designation', 'Total Lead'], 'people headers, not lead headers');
+    assert.deepEqual(rows.slice(4).map(r => [r[1], r[3]]), [['KOUT', 1], ['KHEAD', 0], ['KNOG', 0]],
+      'the visible roots (self excluded), totalLeads desc');
+    assert.ok(!rows.slice(4).some(r => r[1] === 'KADM'), 'the admin themself is never a row');
+    assert.ok(!rows.slice(4).some(r => String(r[0]).includes('ADMIN Only Lead')),
+      'the admin\'s own lead is NOT in this export — it is a people level, not a leaf');
+  });
+
+  it('admin drilling a root exports that root\'s team', async () => {
+    const res = await kpiExport(adminToken, '?kpi=totalLeads&person=KHEAD');
+    assert.equal(res.status, 200, JSON.stringify(res.body).slice(0, 200));
+    const ws = await readWorkbook(res.body as Buffer);
+    const rows = sheetRows(ws);
+    assert.match(String(rows[0][0]), /Total Lead — Name KHEAD's team/);
+    assert.deepEqual(rows.slice(4).map(r => [r[1], r[3]]), [['KTL', 1], ['KSIB', 0]]);
+  });
+
+  it('admin leaf views still work: person=self shows only the admin\'s own lead', async () => {
+    const self = await kpiLeads(adminToken, 'totalLeads', 'self');
+    assert.equal(self.status, 200, JSON.stringify(self.body));
+    assert.equal(self.body.total, 1);
+    assert.deepEqual(self.body.items.map((l: any) => l.customerName), ['ADMIN Only Lead']);
+    const mem = await kpiLeads(adminToken, 'totalLeads', 'KMEM');
+    assert.equal(mem.status, 200, JSON.stringify(mem.body));
+    assert.equal(mem.body.total, 8, 'the admin can see a member\'s leads at the bottom of the tree');
+  });
+
+  it('team home totals for an Organization caller equal the sum over the whole visible set', async () => {
+    const overview = await request(app).get('/api/team/overview').set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(overview.status, 200, JSON.stringify(overview.body));
+    const people = overview.body.people as any[];
+    const sum = (key: string) => people.reduce((acc: number, p: any) => acc + (p[key] || 0), 0);
+    const dbTotal: any = await pool.query(`SELECT COUNT(*)::int AS n FROM leads WHERE is_deleted = FALSE`);
+    const dbOpen: any = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM leads WHERE is_deleted = FALSE AND current_status NOT IN ('Converted', 'Not Interested')`
+    );
+    assert.equal(sum('totalLeads'), 12, 'fixture sanity: 12 non-deleted leads');
+    assert.equal(sum('totalLeads'), dbTotal.rows[0].n, 'Total Lead sums the whole org');
+    assert.equal(sum('openLeads'), 9, 'fixture sanity: 9 open leads');
+    assert.equal(sum('openLeads'), dbOpen.rows[0].n, 'Open sums the whole org');
+  });
+
+  it('server and client agree: the admin top-level export carries exactly the page\'s rows', async () => {
+    const overview = await request(app).get('/api/team/overview').set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(overview.status, 200, JSON.stringify(overview.body));
+    const level = resolveKpiLevel(overview.body as TeamOverviewResponse, 'totalLeads', null);
+    assert.equal(level.kind, 'people', 'the page resolves a people level for the admin');
+    if (level.kind !== 'people') return;
+    assert.equal(level.isOrgView, true);
+    const pageRows = level.rows.map(p => [p.employeeId, kpiValueFor(p, 'totalLeads')]);
+    const res = await kpiExport(adminToken, '?kpi=totalLeads');
+    assert.equal(res.status, 200, JSON.stringify(res.body).slice(0, 200));
+    const ws = await readWorkbook(res.body as Buffer);
+    const fileRows = sheetRows(ws).slice(4).map(r => [r[1], r[3]]);
+    assert.deepEqual(fileRows, pageRows, 'the export carries exactly the rows the page shows, in the same order');
+  });
 });
 
 /* ================================================================ */
@@ -881,6 +1085,45 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
     for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
       assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
     }
+  });
+
+  it('the org top level is headed "Everyone", not "Your team", with root rows', () => {
+    const level = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', null);
+    const html = renderContent({ level, kpi: 'totalLeads' });
+    assert.ok(html.includes('Total Lead · Everyone'), 'the heading names the org view');
+    assert.ok(!html.includes('Your team'), 'no "Your team" anywhere on the org view');
+    assert.ok(html.includes('3 people · 3 total'), 'three roots, three leads between them');
+    assert.ok(html.includes('Hana Head') && html.includes('Outsider O') && html.includes('Nog N'), 'all three roots are listed');
+    assert.ok(!html.includes('Admin A'), 'the caller themself is not a row');
+    assert.ok(html.includes('href="/team/kpi/totalLeads?person=EMP-H"'), 'a root drills one level deeper');
+    assert.ok(html.includes('3 total lead'), 'the KPI value rides on the row');
+    assert.ok(html.includes('0 total lead'), 'zero-count roots are still listed (never-empty rule)');
+  });
+
+  it('a drilled root level shows the root\'s team with a root-only breadcrumb', () => {
+    const level = resolveKpiLevel(teamOverview(orgPeople, 'Organization'), 'totalLeads', 'EMP-H');
+    const html = renderContent({ level, kpi: 'totalLeads' });
+    assert.ok(html.includes('Hana Head'), 'the root heads the page');
+    assert.ok(html.includes('Tariq Lead') && html.includes('Tania Lead'), 'the root\'s team is listed');
+    assert.ok(!html.includes('Mina Member'), 'grand-reports stay one level down');
+    assert.ok(!html.includes('Everyone'), 'the drilled level is not the org view');
+    assert.ok(html.includes('href="/team/kpi/totalLeads"'), 'the KPI crumb links back to the top level');
+  });
+
+  it('Team Home totals for an Organization caller sum the whole visible set', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TeamHomeContent, { people: orgPeople, scope: 'Organization' })
+      )
+    );
+    assert.ok(html.includes('Organization scope'), 'the scope is shown');
+    assert.ok(html.includes('aria-label="Total Lead: 12 — view details"'),
+      'Total Lead shows the org-wide 12, not the admin\'s own 1');
+    assert.ok(html.includes('aria-label="Open leads: 10 — view details"'));
+    assert.ok(html.includes('aria-label="No Action Alert: 4 — view details"'));
+    assert.ok(html.includes('aria-label="Converted: 2 — view details"'));
   });
 });
 

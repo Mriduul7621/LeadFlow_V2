@@ -17,10 +17,18 @@ import { getSelfPerson } from '../services/teamOverviewService';
  * so an all-zero KPI still lists every in-scope person with 0s.
  *
  * Level rules (resolveKpiLevel):
- *   - `person=self` (or a member with no reports and no person) ->
- *     the LEAF view: the caller's own leads for the KPI. This is how
- *     a leaf member sees their own data, and how the My Day strip
- *     always lands on own leads even for a team holder.
+ *   - `person=self` -> the LEAF view: the caller's own leads. This
+ *     is how the My Day strip always lands on own leads even for a
+ *     team holder.
+ *   - no person (the TOP level) -> the caller's direct reports PLUS
+ *     the visible tree roots outside the caller's own subtree
+ *     (topLevelRowsOf). An Organization-scope admin/CEO who sits
+ *     OUTSIDE the reporting tree (no direct reports) sees the
+ *     whole org's roots here — the 2026-11-13 fix for the owner's
+ *     report that Total Lead showed only the one lead assigned to
+ *     him. The LEAF view at the top level applies only when that
+ *     combined set is empty: a true leaf member (scope 'Own',
+ *     nobody below).
  *   - a person with reports -> the PEOPLE view: their direct reports
  *     with their KPI numbers, each name drilling one level deeper.
  *   - a person without reports -> the LEAF view: their leads.
@@ -82,6 +90,50 @@ export function directReportsOf(
   return people.filter(p => sameEmployee(p.managerEmployeeId, employeeId));
 }
 
+/** Tree roots in the payload: people whose manager is not in the payload (no manager, or a manager outside the visible set). */
+export function treeRootsOf(people: TeamOverviewPerson[]): TeamOverviewPerson[] {
+  const byEmployee = new Set(people.map(p => p.employeeId.toUpperCase()));
+  return people.filter(p => !p.managerEmployeeId || !byEmployee.has(p.managerEmployeeId.toUpperCase()));
+}
+
+/**
+ * Visible tree roots OUTSIDE one person's own subtree. A root cannot
+ * be anyone's descendant inside the payload (its manager link is
+ * null or leaves the payload), so this is every root except the
+ * person themself — no subtree walk is needed.
+ */
+export function rootsOutsideSubtreeOf(
+  people: TeamOverviewPerson[],
+  self: TeamOverviewPerson
+): TeamOverviewPerson[] {
+  return treeRootsOf(people).filter(p => !sameEmployee(p.employeeId, self.employeeId));
+}
+
+/**
+ * Top-level drill-down rows (no person param): the caller's direct
+ * reports, PLUS the visible tree roots outside the caller's own
+ * subtree. The two sets are disjoint by construction (a direct
+ * report's manager IS the caller, so it is never a root); the
+ * dedupe below is defensive only. This is the 2026-11-13 fix for
+ * the owner's report: an Organization-scope admin/CEO who sits
+ * OUTSIDE the reporting tree (no direct reports) used to collapse
+ * to their own leaf view at the top level — Total Lead showed only
+ * the one lead assigned to them. Now the top level shows the whole
+ * org's roots instead; the LEAF view applies only when this set is
+ * empty (a true leaf member — scope 'Own', nobody below).
+ */
+export function topLevelRowsOf(
+  people: TeamOverviewPerson[],
+  self: TeamOverviewPerson
+): TeamOverviewPerson[] {
+  const reports = directReportsOf(people, self.employeeId);
+  const reportIds = new Set(reports.map(p => p.employeeId.toUpperCase()));
+  const outsideRoots = rootsOutsideSubtreeOf(people, self).filter(
+    p => !reportIds.has(p.employeeId.toUpperCase())
+  );
+  return [...reports, ...outsideRoots];
+}
+
 /**
  * Drill-down rows, worst first: highest KPI value, then name. The
  * export endpoint sorts the same way (server/routes/production/
@@ -124,6 +176,14 @@ export type KpiLevel =
       current: TeamOverviewPerson;
       rows: TeamOverviewPerson[];
       chain: TeamOverviewPerson[];
+      /**
+       * True when the top level shows the organisation's roots
+       * because the caller has no reports of their own (an
+       * admin/CEO outside the tree) — the page heads it
+       * "Everyone", not "Your team". False for named-person levels
+       * and for callers with reports.
+       */
+      isOrgView: boolean;
     }
   | {
       kind: 'leads';
@@ -149,18 +209,31 @@ export function resolveKpiLevel(
   if (!self) return { kind: 'not-found' };
 
   if (!personParam || personParam.toLowerCase() === SELF_PERSON_PARAM) {
-    // No person: the caller's own level — their reports when they
-    // have any, otherwise their own leads (the member self-view).
     // `person=self`: the caller's own leads, even with reports.
     const forceLeaf = Boolean(personParam) && personParam.toLowerCase() === SELF_PERSON_PARAM;
-    if (forceLeaf || self.directReports === 0) {
+    if (forceLeaf) {
+      return { kind: 'leads', current: self, chain: [self] };
+    }
+    // No person: the top level — the caller's direct reports PLUS
+    // the visible tree roots outside the caller's own subtree
+    // (topLevelRowsOf). An Organization-scope admin/CEO who sits
+    // OUTSIDE the reporting tree (no direct reports) still sees
+    // the whole org's roots here instead of collapsing to their
+    // own leaf view; the LEAF view applies only when that combined
+    // set is empty — a true leaf member (scope 'Own', nobody
+    // below). The rows are purely outside roots exactly when the
+    // caller has no direct reports in the payload: that is the
+    // org view the page heads "Everyone".
+    const rows = sortKpiRows(topLevelRowsOf(people, self), kpi);
+    if (rows.length === 0) {
       return { kind: 'leads', current: self, chain: [self] };
     }
     return {
       kind: 'people',
       current: self,
-      rows: sortKpiRows(directReportsOf(people, self.employeeId), kpi),
+      rows,
       chain: [self],
+      isOrgView: directReportsOf(people, self.employeeId).length === 0,
     };
   }
 
@@ -175,6 +248,7 @@ export function resolveKpiLevel(
     current: person,
     rows: sortKpiRows(directReportsOf(people, person.employeeId), kpi),
     chain,
+    isOrgView: false,
   };
 }
 
