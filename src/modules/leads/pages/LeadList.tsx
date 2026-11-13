@@ -30,6 +30,13 @@ import { usePermissions } from '../../shared/hooks/usePermissions';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
 import LeadQualityPanel from '../components/LeadQualityPanel';
+import WhatsAppAction from '../components/WhatsAppAction';
+import {
+  buildLeadListFollowUpArgs,
+  validateLeadListStatusForm,
+  type LeadListStatusFormState,
+} from '../utils/leadListStatusForm';
+import { leadStatusViolationMessage } from '../utils/leadStatusRules';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
 
@@ -145,7 +152,9 @@ export default function LeadList() {
   const [formSumAssured, setFormSumAssured] = useState<number>(0);
   const [formProductName, setFormProductName] = useState('');
   const [formProjectedNCP, setFormProjectedNCP] = useState<number>(0);
+  const [formLossReason, setFormLossReason] = useState('');
   const [productOptions, setProductOptions] = useState<string[]>([]);
+  const [lossReasonOptions, setLossReasonOptions] = useState<string[]>([]);
 
   // Sync form states with selected lead
   useEffect(() => {
@@ -160,6 +169,7 @@ export default function LeadList() {
       setFormSumAssured(selectedLead.sumAssured || 0);
       setFormProductName(selectedLead.productName || '');
       setFormProjectedNCP(selectedLead.projectedNCP || 0);
+      setFormLossReason('');
     } else {
       setFormStatus('');
       setFormRemarks('');
@@ -171,6 +181,7 @@ export default function LeadList() {
       setFormSumAssured(0);
       setFormProductName('');
       setFormProjectedNCP(0);
+      setFormLossReason('');
     }
   }, [selectedLead]);
 
@@ -238,6 +249,9 @@ export default function LeadList() {
       
       const prodRes = await settingsService.getOptionsByType('Product');
       setProductOptions(prodRes || []);
+
+      const lossRes = await settingsService.getOptionsByType('LossReason');
+      setLossReasonOptions(lossRes || []);
     } catch (err) {
       console.error(err);
       setStatusOptions(DEFAULT_STATUS_LIST);
@@ -309,22 +323,46 @@ export default function LeadList() {
       }
     }
 
+    // FIX-1 (F6 parity): validate against the SAME rule table the
+    // server enforces, so a status whose conditional fields are
+    // missing (loss reason for Not Interested, product/sum/projected
+    // for Proposal Sent, ...) is stopped here with the server's own
+    // sentence instead of failing remotely behind a generic toast.
+    const formState: LeadListStatusFormState = {
+      formStatus,
+      formSubStatus,
+      formNextFollowUpDate,
+      formNextCallDate,
+      formMeetingDate,
+      formProductName,
+      formSumAssured,
+      formProjectedNCP,
+      formCollectedNCP,
+      formLossReason,
+    };
+    const violations = validateLeadListStatusForm(formState);
+    if (violations.length > 0) {
+      toast.error(leadStatusViolationMessage(violations));
+      return;
+    }
+
     try {
       const updaterName = user ? `${user.name} (${user.employeeId})` : 'System';
-      const finalStatus: LeadStatus = formStatus === 'Meeting Completed' ? (formSubStatus as LeadStatus) : formStatus;
+      const args = buildLeadListFollowUpArgs(formState, formRemarks);
 
       const updated = await leadService.updateLeadStatus(
-        selectedLead.id, 
-        finalStatus, 
-        isConverted ? formCollectedNCP : undefined, 
-        formRemarks, 
-        (finalStatus === 'Follow-up Set' || finalStatus === 'Interested' || finalStatus === 'Busy') ? formNextFollowUpDate : undefined,
+        selectedLead.id,
+        args.status as LeadStatus,
+        args.ncp,
+        args.remarks,
+        args.nextFollowUpDate,
         updaterName,
-        formStatus === 'No Response' ? formNextCallDate : undefined,
-        formStatus === 'Meeting Fixed' ? formMeetingDate : undefined,
-        (isPipelineLocked || isConverted) ? formSumAssured : undefined,
-        (isPipelineLocked || isConverted) ? formProductName : undefined,
-        isPipelineLocked ? formProjectedNCP : undefined
+        args.nextCallDate,
+        args.meetingDate,
+        args.sumAssured,
+        args.productName,
+        args.projectedNCP,
+        args.lossReason
       );
       toast.success('Lead status and remarks logged successfully!');
 
@@ -343,7 +381,9 @@ export default function LeadList() {
         setFormRemarks('');
         return;
       }
-      toast.error('Failed to update lead status');
+      // Show the SERVER's reason (e.g. the F6 field sentence), never a
+      // bare generic failure the agent cannot act on.
+      toast.error((err as any)?.message || 'Failed to update lead status');
     }
   };
 
@@ -364,7 +404,7 @@ export default function LeadList() {
         setSelectedLead(null);
         return;
       }
-      toast.error('Failed to update lead status');
+      toast.error((err as any)?.message || 'Failed to update lead status');
     }
   };
 
@@ -1080,6 +1120,9 @@ export default function LeadList() {
                              <Phone className="w-3.5 h-3.5" />
                           </button>
                        )}
+                       {/* WhatsApp (FIX-1): same action as Home / Lead 360 —
+                           suggested templates or open the chat directly. */}
+                       <WhatsAppAction variant="icon" mobile={selectedLead.mobile} name={selectedLead.prospectName} />
                     </div>
                     <p className="text-[10px] text-slate-400 font-bold uppercase">{selectedLead.area || 'N/A'}</p>
                   </div>
@@ -1175,6 +1218,7 @@ export default function LeadList() {
                              if (newStatus !== 'Meeting Fixed') setFormMeetingDate('');
                              if (newStatus !== 'Follow-up Set' && newStatus !== 'Interested' && newStatus !== 'Busy') setFormNextFollowUpDate('');
                              if (newStatus !== 'Meeting Completed') setFormSubStatus('');
+                             if (newStatus !== 'Not Interested' && newStatus !== 'Meeting Completed') setFormLossReason('');
                            }}
                            className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
                          >
@@ -1230,13 +1274,87 @@ export default function LeadList() {
                             <p className="text-[9px] font-black text-slate-400 uppercase italic">Meeting Result (Sub-Status) <span className="text-red-500">*</span></p>
                             <select 
                               value={formSubStatus}
-                              onChange={(e) => setFormSubStatus(e.target.value as any)}
+                              onChange={(e) => {
+                                const next = e.target.value as 'Pipeline Locked' | 'Not Interested' | '';
+                                setFormSubStatus(next);
+                                if (next !== 'Not Interested') setFormLossReason('');
+                              }}
                               className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] outline-none"
                             >
                                <option value="">-- SELECT RESULT --</option>
                                <option value="Pipeline Locked">Pipeline Locked</option>
                                <option value="Not Interested">Not Interested</option>
                             </select>
+                         </div>
+                      )}
+
+                      {/* Conditional Field: Not Interested (direct, or as the
+                          Meeting Completed result) -> Loss Reason. The F6
+                          rule table requires it; without this field the
+                          server refused every Not Interested save (FIX-1). */}
+                      {(formStatus === 'Not Interested' || (formStatus === 'Meeting Completed' && formSubStatus === 'Not Interested')) && (
+                         <div className="space-y-1">
+                            <p className="text-[9px] font-black text-slate-400 uppercase italic">Loss Reason <span className="text-red-500">*</span></p>
+                            {lossReasonOptions.length > 0 ? (
+                              <select
+                                value={formLossReason}
+                                onChange={(e) => setFormLossReason(e.target.value)}
+                                className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] outline-none"
+                              >
+                                 <option value="">-- SELECT LOSS REASON --</option>
+                                 {lossReasonOptions.map(r => (
+                                    <option key={r} value={r}>{r}</option>
+                                 ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={formLossReason}
+                                onChange={(e) => setFormLossReason(e.target.value)}
+                                placeholder="Why was this lead lost?"
+                                className="w-full bg-[#FBFAF8] border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
+                              />
+                            )}
+                         </div>
+                      )}
+
+                      {/* Conditional Fields block: Proposal Sent (F6 requires
+                          product, sum assured and projected FYCP) */}
+                      {formStatus === 'Proposal Sent' && (
+                         <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border border-cyan-200 p-3 bg-slate-50/50 rounded-md">
+                            <div className="space-y-1">
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Product Name <span className="text-red-500">*</span></p>
+                               <select
+                                 value={formProductName}
+                                 onChange={(e) => setFormProductName(e.target.value)}
+                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-1 focus:ring-[#978C21] outline-none"
+                               >
+                                  <option value="">-- SELECT PRODUCT --</option>
+                                  {productOptions.map(p => (
+                                     <option key={p} value={p}>{p}</option>
+                                  ))}
+                               </select>
+                            </div>
+                            <div className="space-y-1">
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Sum Assured (৳) <span className="text-red-500">*</span></p>
+                               <input
+                                 type="number"
+                                 placeholder="Sum Assured..."
+                                 value={formSumAssured || ''}
+                                 onChange={(e) => setFormSumAssured(parseFloat(e.target.value) || 0)}
+                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
+                               />
+                            </div>
+                            <div className="space-y-1">
+                               <p className="text-[9px] font-black text-slate-400 uppercase italic">Projected NCP (৳) <span className="text-red-500">*</span></p>
+                               <input
+                                 type="number"
+                                 placeholder="Projected NCP..."
+                                 value={formProjectedNCP || ''}
+                                 onChange={(e) => setFormProjectedNCP(parseFloat(e.target.value) || 0)}
+                                 className="w-full bg-white border border-slate-100 rounded-sm px-4 py-3 text-[11px] font-black focus:ring-1 focus:ring-[#978C21] outline-none placeholder:opacity-30"
+                               />
+                            </div>
                          </div>
                       )}
 

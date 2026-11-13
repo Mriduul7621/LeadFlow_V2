@@ -105,6 +105,16 @@ const DEFAULT_OPTIONS: DefaultOption[] = [
   { type: "FollowUpType", value: "SMS" },
   { type: "FollowUpType", value: "Email" },
   { type: "FollowUpType", value: "Visit" },
+
+  // WhatsApp message templates (FIX-1): value = template slug, label =
+  // picker label, meta.body = the Bangla message ({name} interpolates
+  // the lead's name). These MUST stay byte-identical to the built-in
+  // defaults in src/modules/leads/utils/whatsappTemplates.ts — the
+  // pickers fall back to those defaults when nothing is stored, so a
+  // drift here would show agents two different wordings.
+  { type: "WhatsAppTemplates", value: "first_contact", label: "First contact", meta: { body: "আসসালামু আলাইকুম {name}, আমি শান্তা লাইফ ইন্স্যুরেন্স থেকে বলছি। আপনার সুবিধামতো সময়ে আমাদের জীবন বীমা পরিকল্পনা সম্পর্কে সংক্ষেপে জানাতে চাই। কখন কথা বললে ভালো হয়, অনুগ্রহ করে জানাবেন। ধন্যবাদ।" } },
+  { type: "WhatsAppTemplates", value: "follow_up", label: "Follow-up", meta: { body: "আসসালামু আলাইকুম {name}, শান্তা লাইফ ইন্স্যুরেন্স থেকে ফলো-আপ করছি। আপনার জীবন বীমা পরিকল্পনা নিয়ে আগের আলোচনার বিষয়ে কোনো প্রশ্ন থাকলে অনুগ্রহ করে জানাবেন — আমি সাহায্য করতে প্রস্তুত আছি। ধন্যবাদ।" } },
+  { type: "WhatsAppTemplates", value: "meeting_confirmation", label: "Meeting confirmation", meta: { body: "আসসালামু আলাইকুম {name}, শান্তা লাইফ ইন্স্যুরেন্স থেকে আমাদের নির্ধারিত সাক্ষাতের বিষয়টি নিশ্চিত করতে বার্তা পাঠাচ্ছি। অনুগ্রহ করে সময়মতো উপস্থিত থাকবেন; কোনো পরিবর্তন প্রয়োজন হলে আগে থেকে জানালে কৃতজ্ঞ থাকব। ধন্যবাদ।" } },
 ];
 
 export async function seedMetadata(): Promise<void> {
@@ -125,6 +135,17 @@ export async function seedMetadata(): Promise<void> {
   } else {
     console.log(`ℹ️ Metadata types already present. Skipping type seed.`);
   }
+
+  // FIX-1: the WhatsAppTemplates type must exist even on databases
+  // whose metadata_types table was seeded long ago (the block above
+  // only runs on an empty table). Idempotent insert — an existing row
+  // (possibly admin-renamed) is never touched.
+  await query(
+    `INSERT INTO metadata_types (key, label, description, is_system, sort_order, created_at)
+     VALUES ('WhatsAppTemplates', 'WhatsApp Message Templates', 'Suggested WhatsApp messages agents send from a lead (the body may use {name} for the lead name)', FALSE,
+             (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM metadata_types), NOW())
+     ON CONFLICT (key) DO NOTHING`
+  );
 
   // Baseline option *values* are always (re)applied idempotently: each
   // insert is ON CONFLICT (field_key, option_value) DO NOTHING. A blanket

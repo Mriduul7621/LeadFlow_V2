@@ -1,9 +1,12 @@
 /**
  * whatsappTemplates.ts — WhatsApp click-to-chat message templates.
  * ==================================================================
- * EDIT ME: this is the ONE place the built-in WhatsApp message
- * templates live. To change the wording of a message agents send,
- * edit the `body` strings below — nothing else needs to change.
+ * The templates in this file are the built-in DEFAULTS. The live
+ * list is admin-managed in the Metadata Engine (type
+ * `WhatsAppTemplates`, seeded from these defaults — see
+ * `resolveWhatsAppTemplates` below and Settings → WhatsApp
+ * Templates). To change the DEFAULT wording of a message, edit the
+ * `body` strings below — nothing else needs to change.
  * ------------------------------------------------------------------
  * ZERO-COST DESIGN: messages are sent through free wa.me
  * click-to-chat links (https://wa.me/<number>?text=<message>). The
@@ -56,12 +59,99 @@ export function getWhatsAppTemplate(id: WhatsAppTemplateId): WhatsAppTemplate {
   return found;
 }
 
+/* ====================================================================
+ * FIX-1 — admin-managed templates (Metadata Engine) + direct open.
+ * ------------------------------------------------------------------
+ * The three templates above are now DEFAULTS. The live list lives in
+ * the Metadata Engine as options of type `WhatsAppTemplates` (seeded
+ * with these defaults; an admin adds / edits / deactivates them in
+ * Settings → WhatsApp Templates, gated `settings.manage`). The option
+ * shape is: value = template slug, label = picker label, meta.body =
+ * the Bangla message text (with the same `{name}` slot).
+ *
+ * Every picker resolves its list through `resolveWhatsAppTemplates`:
+ * stored Active options with a non-empty body win; when nothing is
+ * stored (fresh install, demo mode, read failure) the built-in
+ * defaults apply, so the action can never end up empty.
+ * ================================================================== */
+
+export const WHATSAPP_TEMPLATES_TYPE = 'WhatsAppTemplates';
+
+/** A template as the picker renders it — built-in or admin-stored. */
+export interface ResolvedWhatsAppTemplate {
+  id: string;
+  label: string;
+  body: string;
+}
+
+/** The built-in defaults in resolved shape. */
+export const DEFAULT_WHATSAPP_TEMPLATES: ResolvedWhatsAppTemplate[] = WHATSAPP_TEMPLATES.map(
+  (t) => ({ id: t.id, label: t.label, body: t.body }),
+);
+
+/** The minimal option shape the resolver reads (DropdownOption-compatible). */
+export interface WhatsAppTemplateOptionLike {
+  value: string;
+  label?: string;
+  status?: string;
+  meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Map stored metadata options to picker templates. Returns null when
+ * nothing usable is stored (no options, all inactive, or no option
+ * carries a message body) — the caller then uses the defaults.
+ */
+export function resolveWhatsAppTemplates(
+  options: WhatsAppTemplateOptionLike[] | null | undefined,
+): ResolvedWhatsAppTemplate[] | null {
+  if (!options || options.length === 0) return null;
+  const resolved: ResolvedWhatsAppTemplate[] = [];
+  for (const option of options) {
+    if (option.status && option.status !== 'Active') continue;
+    const body = typeof option.meta?.body === 'string' ? option.meta.body.trim() : '';
+    if (!body) continue;
+    resolved.push({
+      id: option.value,
+      label: (option.label || option.value || '').trim() || option.value,
+      body,
+    });
+  }
+  return resolved.length > 0 ? resolved : null;
+}
+
+/**
+ * Build the wa.me href for ANY resolved template (built-in or stored),
+ * or null when the mobile is not a valid BD mobile.
+ */
+export function buildWhatsAppHrefForTemplate(
+  mobile: unknown,
+  template: ResolvedWhatsAppTemplate,
+  name?: string | null,
+): string | null {
+  const intl = normalizeBdMobileIntl(mobile);
+  if (!intl) return null;
+  const text = renderWhatsAppTemplate(template, name);
+  return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`;
+}
+
+/**
+ * The second option the owner asked for: open the WhatsApp chat with
+ * NO prefilled message at all (a bare wa.me link), or null when the
+ * mobile is not a valid BD mobile.
+ */
+export function buildWhatsAppDirectHref(mobile: unknown): string | null {
+  const intl = normalizeBdMobileIntl(mobile);
+  if (!intl) return null;
+  return `https://wa.me/${intl}`;
+}
+
 /**
  * Replace `{name}` with the lead's name. A missing/blank name falls
  * back to a respectful generic address so the message never renders
  * a raw placeholder or an empty gap.
  */
-export function renderWhatsAppTemplate(template: WhatsAppTemplate, name?: string | null): string {
+export function renderWhatsAppTemplate(template: Pick<WhatsAppTemplate, 'body'>, name?: string | null): string {
   const trimmed = (name || '').trim();
   const displayName = trimmed || 'স্যার/ম্যাডাম';
   return template.body.split('{name}').join(displayName);
