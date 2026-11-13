@@ -26,7 +26,8 @@ import {
   Lock,
   Upload,
   Download,
-  FileJson
+  FileJson,
+  MessageCircle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
@@ -272,6 +273,93 @@ export default function Settings() {
   const [dzBusy, setDzBusy] = useState(false);
   const [dzSecondsLeft, setDzSecondsLeft] = useState(0);
   const [dzOverview, setDzOverview] = useState<DangerZoneOverview | null>(null);
+
+  // WhatsApp message templates (FIX-1): admin-managed in the Metadata
+  // Engine (type 'WhatsAppTemplates'; option label = picker label,
+  // meta.body = the message). Server writes are gated
+  // `settings.manage` and audit-logged with old→new values.
+  const [waTemplates, setWaTemplates] = useState<DropdownOption[]>([]);
+  const [waLoaded, setWaLoaded] = useState(false);
+  const [waEditingValue, setWaEditingValue] = useState<string | null>(null); // null = adding a new one
+  const [waFormOpen, setWaFormOpen] = useState(false);
+  const [waFormLabel, setWaFormLabel] = useState('');
+  const [waFormBody, setWaFormBody] = useState('');
+  const [waSaving, setWaSaving] = useState(false);
+
+  const loadWhatsAppTemplates = async () => {
+    try {
+      const values = await metadataService.getAllValues('WhatsAppTemplates', true);
+      setWaTemplates(values);
+    } catch {
+      toast.error('Failed to load WhatsApp templates');
+    } finally {
+      setWaLoaded(true);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection === 'whatsapp') loadWhatsAppTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
+
+  const waSlugFor = (label: string): string => {
+    const base = 'custom_' + label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    let slug = base;
+    let n = 2;
+    while (waTemplates.some(t => t.value === slug)) {
+      slug = `${base}_${n}`;
+      n += 1;
+    }
+    return slug;
+  };
+
+  const handleWaSave = async () => {
+    const label = waFormLabel.trim();
+    const body = waFormBody.trim();
+    if (!label) { toast.error('Please enter a template name'); return; }
+    if (!body) { toast.error('Please enter the message text'); return; }
+    setWaSaving(true);
+    try {
+      if (waEditingValue) {
+        const existing = waTemplates.find(t => t.value === waEditingValue);
+        if (!existing) throw new Error('Template not found');
+        await metadataService.updateValue({ ...existing, label, meta: { ...(existing.meta || {}), body } });
+        toast.success('WhatsApp template updated');
+      } else {
+        await metadataService.addValue('WhatsAppTemplates', waSlugFor(label), { body }, label);
+        toast.success('WhatsApp template added');
+      }
+      setWaFormOpen(false);
+      setWaEditingValue(null);
+      setWaFormLabel('');
+      setWaFormBody('');
+      loadWhatsAppTemplates();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save WhatsApp template');
+    } finally {
+      setWaSaving(false);
+    }
+  };
+
+  const handleWaToggle = async (option: DropdownOption) => {
+    try {
+      await metadataService.toggleActive(option);
+      loadWhatsAppTemplates();
+    } catch {
+      toast.error('Failed to update template');
+    }
+  };
+
+  const handleWaDelete = async (option: DropdownOption) => {
+    if (!confirm(`Delete the "${option.label}" WhatsApp template? Agents will no longer see it.`)) return;
+    try {
+      await metadataService.deleteValue(option.type, option.value);
+      toast.success('WhatsApp template deleted');
+      loadWhatsAppTemplates();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete template');
+    }
+  };
 
   const loadDangerZone = async () => {
     setDzState('loading');
@@ -924,6 +1012,7 @@ export default function Settings() {
     { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
     { id: 'system', label: 'System Configuration', icon: SettingsIcon, desc: 'Configure dashboard and system behavior', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, desc: 'Weekend days and government holidays', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
+    { id: 'whatsapp', label: 'WhatsApp Templates', icon: MessageCircle, desc: 'Suggested messages agents send from a lead', allowed: isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata') },
     { id: 'sync', label: 'Network & Sync', icon: Globe, desc: 'Check integration health and connection mode', allowed: isSystemAdmin || canAccess('settings_control', 'view_sync') },
     { id: 'danger-zone', label: 'Danger Zone', icon: ShieldAlert, desc: 'System rules — super admin only, password required', allowed: isSystemAdmin },
   ].filter(section => section.allowed);
@@ -1893,6 +1982,142 @@ export default function Settings() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                </motion.div>
+              ) : activeSection === 'whatsapp' ? (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-white p-10 rounded-sm border border-slate-100 shadow-sm space-y-8 italic text-left"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setActiveSection('overview')} className="p-2 hover:bg-slate-50 rounded-sm">
+                        <ArrowRight className="w-5 h-5 text-slate-300 rotate-180" />
+                      </button>
+                      <h3 className="font-bold text-xl text-slate-800 flex items-center gap-2">
+                        <MessageCircle className="w-5 h-5 text-emerald-600" /> WhatsApp Templates
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setWaEditingValue(null); setWaFormLabel(''); setWaFormBody(''); setWaFormOpen(true); }}
+                      className="bg-[#978C21] text-white px-5 py-2.5 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow"
+                    >
+                      <Plus className="w-4 h-4" /> New Template
+                    </button>
+                  </div>
+
+                  <p className="text-sm text-slate-500 leading-6 not-italic">
+                    These are the suggested messages an agent can send from a lead (Leads, Lead 360, My Work and the
+                    lead update form). Sending stays free: the message opens in the agent's own WhatsApp via a wa.me
+                    link, and agents can always choose "Open WhatsApp directly" instead. Use <code>{'{name}'}</code> in
+                    the message where the lead's name should appear. Deactivated templates disappear from the picker
+                    immediately; when no template is active, the built-in defaults are used.
+                  </p>
+
+                  {waFormOpen && (
+                    <div className="border border-[#978C21]/30 bg-[#FBFAF8] rounded-sm p-6 space-y-4 not-italic">
+                      <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-700">
+                        {waEditingValue ? 'Edit template' : 'New template'}
+                      </h4>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Template name</label>
+                        <input
+                          type="text"
+                          value={waFormLabel}
+                          onChange={(e) => setWaFormLabel(e.target.value)}
+                          placeholder="e.g. Document request"
+                          className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] outline-none"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Message text</label>
+                        <textarea
+                          value={waFormBody}
+                          onChange={(e) => setWaFormBody(e.target.value)}
+                          rows={4}
+                          placeholder={'আসসালামু আলাইকুম {name}, ...'}
+                          className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#978C21]/20 focus:border-[#978C21] outline-none"
+                        />
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={handleWaSave}
+                          disabled={waSaving}
+                          className="px-5 py-2.5 bg-[#978C21] hover:bg-black text-white rounded-sm text-[11px] font-black uppercase tracking-widest disabled:opacity-50 flex items-center gap-2"
+                        >
+                          <Save className="w-3.5 h-3.5" /> {waSaving ? 'Saving...' : 'Save Template'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setWaFormOpen(false); setWaEditingValue(null); }}
+                          className="px-5 py-2.5 bg-white border border-slate-200 text-slate-500 rounded-sm text-[11px] font-black uppercase tracking-widest"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3 not-italic">
+                    {!waLoaded ? (
+                      <p className="text-sm text-slate-400">Loading templates...</p>
+                    ) : waTemplates.length === 0 ? (
+                      <p className="text-sm text-slate-400">
+                        No templates are stored yet — the built-in defaults (First contact, Follow-up, Meeting
+                        confirmation) are what agents see. Add one here to take control of the list.
+                      </p>
+                    ) : (
+                      waTemplates.map((tpl) => (
+                        <div key={tpl.id || tpl.value} className="flex items-start justify-between gap-4 px-5 py-4 bg-slate-50 border border-slate-100 rounded-sm">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-bold text-slate-700">{tpl.label}</span>
+                              <span className={cn(
+                                "text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-sm border",
+                                tpl.status === 'Active' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-white text-slate-400 border-slate-200"
+                              )}>
+                                {tpl.status === 'Active' ? 'Active' : 'Inactive'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 leading-5 mt-1.5 whitespace-pre-wrap break-words">
+                              {typeof tpl.meta?.body === 'string' ? tpl.meta.body : <span className="text-red-400">No message text stored — this template is skipped in the picker.</span>}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWaEditingValue(tpl.value);
+                                setWaFormLabel(tpl.label);
+                                setWaFormBody(typeof tpl.meta?.body === 'string' ? tpl.meta.body : '');
+                                setWaFormOpen(true);
+                              }}
+                              className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-[8px] text-[11px] font-bold hover:border-[#978C21]/50"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleWaToggle(tpl)}
+                              title={tpl.status === 'Active' ? 'Deactivate' : 'Activate'}
+                              className="p-1.5 text-slate-300 hover:text-[#978C21]"
+                            >
+                              <Power className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleWaDelete(tpl)}
+                              className="p-1.5 text-slate-300 hover:text-red-500"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </motion.div>
               ) : activeSection === 'danger-zone' ? (
