@@ -216,6 +216,63 @@ export interface RoleDefaultsApplyResult {
   };
 }
 
+/**
+ * Stage rules + terminal flags (DZ-6, audit §2.4 D2/D3). The
+ * per-status required fields are edited per dictionary entry
+ * (option id) — renaming a status never detaches its rule. The
+ * terminal flags live on the same entries: ticking a status
+ * terminal closes leads in it everywhere (follow-up queue,
+ * dashboard, SLA, calendar sync, transfers, quality); un-ticking
+ * re-opens them. At least one terminal status is always required.
+ */
+export interface StageRuleField {
+  field: string;
+  label: string;
+  numeric?: boolean;
+  positive?: boolean;
+}
+
+export interface StageRuleEffective {
+  statusId: string;
+  status: string;
+  required: StageRuleField[];
+}
+
+export interface StageStatusOption {
+  id: string;
+  value: string;
+  label: string;
+  isActive: boolean;
+  isTerminal: boolean;
+  isWon: boolean;
+  isLost: boolean;
+  /** The effective required fields for this status (null = no rule). */
+  required: StageRuleField[] | null;
+}
+
+export interface StageRulesLastChange {
+  actorUserId: string | null;
+  createdAt: string;
+  version: number;
+  oldValue: { rules: StageRuleEffective[]; terminalStatusIds: string[] } | null;
+  newValue: { rules: StageRuleEffective[]; terminalStatusIds: string[] };
+}
+
+export interface StageRulesForEdit {
+  version: number;
+  rules: StageRuleEffective[];
+  defaults: StageRuleEffective[];
+  fieldVocabulary: StageRuleField[];
+  statusOptions: StageStatusOption[];
+  terminalStatusIds: string[];
+  lastChange: StageRulesLastChange | null;
+}
+
+export interface StageRulesInput {
+  rules: { statusId: string; required: StageRuleField[] }[];
+  terminalStatusIds: string[];
+}
+
 export const dangerZoneService = {
   async getStatus(): Promise<DangerZoneStatus> {
     return apiRequest<DangerZoneStatus>('/api/danger-zone/status');
@@ -293,6 +350,17 @@ export const dangerZoneService = {
     return apiRequest<RoleDefaultsApplyResult>('/api/danger-zone/role-defaults/apply', {
       method: 'POST',
       ...jsonBody({}),
+    });
+  },
+
+  async getStageRules(): Promise<StageRulesForEdit> {
+    return apiRequest<StageRulesForEdit>('/api/danger-zone/stage-rules');
+  },
+
+  async saveStageRules(input: StageRulesInput): Promise<StageRulesForEdit> {
+    return apiRequest<StageRulesForEdit>('/api/danger-zone/stage-rules', {
+      method: 'PUT',
+      ...jsonBody(input),
     });
   },
 };

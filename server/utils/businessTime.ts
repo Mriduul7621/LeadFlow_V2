@@ -9,8 +9,6 @@ export const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
 
 export type FollowUpBucket = 'overdue' | 'today' | 'upcoming' | 'all';
 
-export const TERMINAL_LEAD_STATUSES = ['Converted', 'Not Interested'] as const;
-
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }

@@ -34,7 +34,7 @@
  *                    the previous episode and does not count.
  *   window         = wall-clock hours (default 24), NOT a business-
  *                    hour calendar.
- *   terminal leads (Converted / Not Interested) and unassigned
+ *   terminal leads (dictionary isTerminal flag, DZ-6) and unassigned
  *   leads are excluded entirely.
  *
  * THE SWITCH: Metadata Engine options, group 'LeadSla' (seeded by
@@ -53,7 +53,7 @@
 
 import { getPool } from '../database/connection.js';
 import { createId, fallbackStore } from '../fallbackStore.js';
-import { TERMINAL_LEAD_STATUSES } from '../utils/businessTime.js';
+import { getTerminalStatusNames, getTerminalStatusNamesFallback } from './StageRulesService.js';
 import { useDb } from '../routes/production/shared.js';
 import {
   buildIdempotencyKey,
@@ -158,10 +158,6 @@ export interface LeadSlaResult {
   firstContactAt: string | null;
 }
 
-const TERMINAL_SET = new Set(
-  [...TERMINAL_LEAD_STATUSES].map(s => s.toLowerCase())
-);
-
 function toMs(value: string | Date | null | undefined): number | null {
   if (value == null || value === '') return null;
   const t = value instanceof Date ? value.getTime() : Date.parse(String(value));
@@ -178,14 +174,24 @@ function toMs(value: string | Date | null | undefined): number | null {
  * (met). Exactly at the deadline with no contact is breached
  * (the window has fully elapsed). due_soon begins when the time
  * left is <= 25% of the window.
+ *
+ * DZ-6: which statuses are terminal comes from the dictionary's
+ * isTerminal flag (terminalStatuses, resolved by the caller from
+ * StageRulesService). The default is the canonical fallback pair,
+ * used by the demo mirror and whenever the caller has nothing
+ * better — never a second source of truth.
  */
 export function computeLeadSla(
   input: LeadSlaInput,
   firstContactHours: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  terminalStatuses: readonly string[] = getTerminalStatusNamesFallback()
 ): LeadSlaResult | null {
   if (!input.assignedTo || String(input.assignedTo).trim() === '') return null;
-  if (TERMINAL_SET.has(String(input.currentStatus || '').toLowerCase())) return null;
+  const terminalSet = new Set(
+    (terminalStatuses || []).map(s => String(s).trim().toLowerCase())
+  );
+  if (terminalSet.has(String(input.currentStatus || '').toLowerCase())) return null;
 
   const clockStartMs = toMs(input.assignedAt) ?? toMs(input.createdAt);
   if (clockStartMs == null) return null;
@@ -245,6 +251,8 @@ async function scanBreachesDb(
   config: LeadSlaConfig,
   now: Date
 ): Promise<SlaBreach[]> {
+  // DZ-6: the terminal set is the dictionary's isTerminal flag.
+  const terminal = await getTerminalStatusNames();
   const result = await getPool().query(
     `SELECT l.id, l.lead_code, l.customer_name, l.assigned_to,
             l.assigned_at, l.created_at, l.last_contacted_at, l.current_status,
@@ -256,7 +264,7 @@ async function scanBreachesDb(
         AND l.current_status <> ALL($1::text[])
         AND COALESCE(l.assigned_at, l.created_at) IS NOT NULL
         AND COALESCE(l.assigned_at, l.created_at) < $2`,
-    [[...TERMINAL_LEAD_STATUSES], now.toISOString()]
+    [terminal, now.toISOString()]
   );
   const breaches: SlaBreach[] = [];
   for (const row of result.rows) {
@@ -269,7 +277,8 @@ async function scanBreachesDb(
         currentStatus: row.current_status,
       },
       config.firstContactHours,
-      now
+      now,
+      terminal
     );
     if (sla && sla.state === 'breached') {
       breaches.push({
