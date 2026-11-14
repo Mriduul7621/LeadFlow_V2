@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
-import { 
+import {
   User as UserIcon, 
   Briefcase, 
   ArrowRight,
@@ -16,6 +15,7 @@ import { useTranslation } from '../../shared/utils/translations';
 import { cn } from '../../../lib/utils';
 import { motion } from 'framer-motion';
 import { leadService } from '../services/leadService';
+import { buildLeadSchema } from '../utils/leadFormSchema';
 import CreatableSelect from '../components/CreatableSelect';
 import { metadataService } from '../../metadata/services/metadataService';
 import { formBuilderService } from '../../forms/services/formBuilderService';
@@ -29,54 +29,10 @@ import { BANGLADESH_GEOGRAPHY } from '../../shared/utils/bangladeshGeography';
 // the Form Builder can't be used to accidentally break lead creation.
 const ALWAYS_VISIBLE_FIELDS = new Set(['prospectName', 'mobile']);
 
-/**
- * Builds the Zod validation schema dynamically from the admin's Form
- * Builder configuration - a field's "Required" toggle in Settings >
- * Form Builder directly controls whether Zod enforces it here.
- */
-function buildLeadSchema(fieldConfigMap: Record<string, FormField>) {
-  const isMandatory = (key: string, fallback: boolean) =>
-    fieldConfigMap[key] ? fieldConfigMap[key].isMandatory : fallback;
-
-  const req = (key: string, fallback: boolean, message = 'Required') =>
-    isMandatory(key, fallback) ? z.string().min(1, message) : z.string().optional().default('');
-
-  return z.object({
-    prospectName: z.string().min(3, 'Required'),
-    mobile: z.string()
-      .length(11, 'Mobile number must be exactly 11 digits')
-      .refine(val => /^\d+$/.test(val), 'Mobile number must contain only numbers')
-      .refine(val => val.startsWith('01'), 'Mobile number must start with 01'),
-    profession: req('profession', true),
-    occupation: req('occupation', false),
-    priority: req('priority', false),
-    maritalStatus: req('maritalStatus', true),
-    noOfChildren: z.string().optional(),
-    familyMember: req('familyMember', false),
-    division: req('division', true),
-    district: req('district', true),
-    thana: req('thana', true),
-    residenceAddress: req('residenceAddress', false),
-    officeAddress: req('officeAddress', false),
-    source: req('source', true),
-    productName: req('productName', true),
-    campaignName: req('campaignName', true),
-    otherInfo: req('otherInfo', false),
-    customFields: z.record(z.string(), z.string()).optional(),
-  }).superRefine((data, ctx) => {
-    const needsChild = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
-    if (needsChild) {
-      if (!data.noOfChildren || data.noOfChildren.trim() === '') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Number of children is required',
-          path: ['noOfChildren'],
-        });
-      }
-    }
-  });
-}
-
+// The validation schema lives in ../utils/leadFormSchema.ts: the Form
+// Builder "Required" flag is the ONLY source of required-ness there —
+// conditional rules may decide when a field applies, never whether it is
+// required (owner decision, 2026-11-11).
 export default function LeadGenerate() {
   const { user } = useAuthStore();
   const { t, language } = useTranslation();
@@ -420,7 +376,7 @@ export default function LeadGenerate() {
 
             {['Married', 'Divorced', 'Widowed', 'Widow'].includes(maritalStatus) && (
               <div className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">{t("numberOfChildren")} *</label>
+                <label className="text-sm font-medium text-slate-700">{t("numberOfChildren")}{fieldConfigMap.noOfChildren?.isMandatory && ' *'}</label>
                 <input 
                   type="number"
                   min="0"
