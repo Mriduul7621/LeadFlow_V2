@@ -1,44 +1,60 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronDown, MessageCircle } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { normalizeBdMobileIntl } from '../../shared/utils/phone';
 import {
-  WHATSAPP_TEMPLATES,
-  buildWhatsAppHref,
+  DEFAULT_WHATSAPP_TEMPLATES,
+  WHATSAPP_TEMPLATES_TYPE,
+  buildWhatsAppDirectHref,
+  buildWhatsAppHrefForTemplate,
   renderWhatsAppTemplate,
-  type WhatsAppTemplateId,
+  resolveWhatsAppTemplates,
+  type ResolvedWhatsAppTemplate,
 } from '../utils/whatsappTemplates';
+import { metadataService } from '../../metadata/services/metadataService';
 
 /**
  * WhatsAppAction — free WhatsApp click-to-chat for a lead.
  * ------------------------------------------------------------------
- * Renders a WhatsApp button that opens a small template picker
- * (mirrors the AppLayout menu pattern: backdrop click closes, panel
- * anchored under the button). Choosing a template opens
- * https://wa.me/<number>?text=<prefilled Bangla message> in a new
- * tab — the agent sends from their own WhatsApp. No API, no cost.
+ * Renders a WhatsApp button that opens a small picker (mirrors the
+ * AppLayout menu pattern: backdrop click closes, panel anchored
+ * under the button). The picker offers BOTH options the owner asked
+ * for (FIX-1):
  *
- * Renders NOTHING when the lead's mobile is not a valid BD mobile,
- * so a broken link can never be produced. The menu links are pure
+ *   1. a suggested message → wa.me link with that Bangla text
+ *      prefilled (the agent reviews and presses send), and
+ *   2. "Open WhatsApp directly" → a bare wa.me link with NO
+ *      prefilled text at all.
+ *
+ * The template list is admin-managed in the Metadata Engine (type
+ * `WhatsAppTemplates`, Settings → WhatsApp Templates) and read live;
+ * the built-in defaults apply whenever nothing is stored. Choosing
+ * an option opens https://wa.me/... in a new tab — the agent sends
+ * from their own WhatsApp. No API, no cost. The menu links are pure
  * anchors: no backend call happens when one is clicked (initiating
  * a chat is therefore not written to the lead activity timeline —
  * the follow-up/status endpoint is the only activity write path
  * and it is reserved for real status updates).
+ *
+ * Renders NOTHING when the lead's mobile is not a valid BD mobile,
+ * so a broken link can never be produced.
  */
 
 export function WhatsAppTemplateLinks({
   mobile,
   name,
+  templates = DEFAULT_WHATSAPP_TEMPLATES,
   onSelect,
 }: {
   mobile: unknown;
   name?: string | null;
-  onSelect?: (templateId: WhatsAppTemplateId) => void;
+  templates?: ResolvedWhatsAppTemplate[];
+  onSelect?: (templateId: string) => void;
 }) {
   return (
     <>
-      {WHATSAPP_TEMPLATES.map((template) => {
-        const href = buildWhatsAppHref(mobile, template.id, name);
+      {templates.map((template) => {
+        const href = buildWhatsAppHrefForTemplate(mobile, template, name);
         if (!href) return null;
         return (
           <a
@@ -61,6 +77,60 @@ export function WhatsAppTemplateLinks({
   );
 }
 
+/** The no-message option: a bare wa.me anchor (renders nothing for a bad number). */
+export function WhatsAppDirectLink({
+  mobile,
+  onSelect,
+}: {
+  mobile: unknown;
+  onSelect?: () => void;
+}) {
+  const href = buildWhatsAppDirectHref(mobile);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      role="menuitem"
+      onClick={() => onSelect?.()}
+      className="block px-4 py-2.5 text-left hover:bg-emerald-50"
+    >
+      <span className="block text-xs font-bold text-stone-800">Open WhatsApp directly</span>
+      <span className="mt-0.5 block text-[11px] leading-relaxed text-stone-500">
+        No suggested message — just open the chat and type your own.
+      </span>
+    </a>
+  );
+}
+
+/**
+ * Load the live template list for the picker: stored metadata wins,
+ * the built-in defaults are the fallback (fresh install, demo mode,
+ * or any read failure). Reference-data read only — sends stay
+ * deliberately unlogged, as before.
+ */
+function useWhatsAppTemplates(): ResolvedWhatsAppTemplate[] {
+  const [templates, setTemplates] = useState<ResolvedWhatsAppTemplate[]>(DEFAULT_WHATSAPP_TEMPLATES);
+  useEffect(() => {
+    let cancelled = false;
+    metadataService
+      .getAllValues(WHATSAPP_TEMPLATES_TYPE)
+      .then((options) => {
+        if (cancelled) return;
+        const resolved = resolveWhatsAppTemplates(options);
+        if (resolved) setTemplates(resolved);
+      })
+      .catch(() => {
+        /* defaults stay — the picker must never end up empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return templates;
+}
+
 export default function WhatsAppAction({
   mobile,
   name,
@@ -73,6 +143,7 @@ export default function WhatsAppAction({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const templates = useWhatsAppTemplates();
 
   // Hide the action entirely for numbers wa.me cannot reach.
   if (!normalizeBdMobileIntl(mobile)) return null;
@@ -119,7 +190,14 @@ export default function WhatsAppAction({
             <p className="px-4 pb-1 pt-1.5 text-[10px] font-black uppercase tracking-widest text-stone-400">
               WhatsApp message
             </p>
-            <WhatsAppTemplateLinks mobile={mobile} name={name} onSelect={() => setOpen(false)} />
+            <WhatsAppTemplateLinks
+              mobile={mobile}
+              name={name}
+              templates={templates}
+              onSelect={() => setOpen(false)}
+            />
+            <div className="mx-4 my-1 border-t border-stone-100" />
+            <WhatsAppDirectLink mobile={mobile} onSelect={() => setOpen(false)} />
           </div>
         </>
       )}

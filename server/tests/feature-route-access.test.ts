@@ -78,7 +78,11 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     assert.equal(resolveFeatureRouteAccess('/team', 'BDM', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/team', 'BE', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/team', 'BH', undefined), true);
-    assert.equal(resolveFeatureRouteAccess('/team', 'RO', undefined), false, 'Team closed for RO (static)');
+    // FIX-1: /team is open to everyone now — the overview endpoint
+    // scopes the data server-side (a leaf employee sees only themself),
+    // which is the owner's model; the old static role list is gone.
+    assert.equal(resolveFeatureRouteAccess('/team', 'RO', undefined), true, 'Team overview open for RO (data scoped server-side)');
+    assert.equal(resolveFeatureRouteAccess('/team/organogram', 'RO', undefined), true, 'Organogram inherits the open Team module');
 
     for (const route of WORKSPACE_ROUTES) {
       for (const role of NON_ADMIN_ROLES) {
@@ -100,7 +104,7 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
 
     // Unrelated entries do not change the outcome (static fallback applies).
     assert.equal(resolveFeatureRouteAccess('/leads/upload', 'RO', { menuAccess: { '/other': true } } as any), false);
-    assert.equal(resolveFeatureRouteAccess('/team', 'RO', { menuAccess: {} } as any), false);
+    assert.equal(resolveFeatureRouteAccess('/team', 'RO', { menuAccess: {} } as any), true, 'FIX-1: Team overview static fallback is open; an empty profile cannot close it');
   });
 
   it('every report/pipeline route is gated by its OWN module toggle (the aggregate Reports gate is gone)', () => {

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, FileText, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
+import WhatsAppAction from '../components/WhatsAppAction';
 import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import { useTranslation } from '../../shared/utils/translations';
@@ -328,6 +329,11 @@ export default function LeadUpdate() {
             <span className={cn('mt-1 inline-block rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest', getLeadStatusColorClasses(lead.currentStatus))}>
               {lead.currentStatus}
             </span>
+            {/* WhatsApp (FIX-1): the Leads-page flow gets the same action
+                as Home / Lead 360 — templates or open the chat directly. */}
+            <div className="mt-3 flex justify-end">
+              <WhatsAppAction mobile={lead.mobile} name={lead.prospectName} />
+            </div>
           </div>
         </div>
       </section>
