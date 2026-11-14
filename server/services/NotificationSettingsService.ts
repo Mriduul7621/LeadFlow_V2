@@ -1,28 +1,36 @@
 /**
  * NotificationSettingsService — real, persisted notification toggles
- * (Admin Control programme, DZ-1 "Honest Settings").
+ * (Admin Control programme, DZ-1 "Honest Settings", DZ-2 split).
  * ------------------------------------------------------------------
  * The Settings → Push Intelligence card used to be a hardcoded array
  * with `enabled: true` on every row — it stored nothing and gated
- * nothing (audit item L5). Two of its rows describe behaviour that
- * genuinely exists, so they are now backed by real settings that the
- * services actually read:
+ * nothing (audit item L5). DZ-1 backed two of its rows with real
+ * settings; DZ-2 (audit §4) splits the assignment toggle in two and
+ * adds the meeting toggle, so every row now maps to one behaviour:
  *
- *   assignmentAlerts  — NotificationService.createAssignmentNotifications
- *                       (and its demo twin) create nothing when OFF.
+ *   assigneeAlerts  — NotificationService notifies the assignee.
+ *   uplineAlerts    — NotificationService notifies upline managers.
+ *   meetingNotifications — MeetingNotificationService fan-outs
+ *                       (invite/moved/cancelled/completed/RSVP/
+ *                       reminder) create nothing when OFF.
  *   dailyPushSummary  — PushReminderService.runDailyPushReminders
  *                       sends no digest pushes when OFF. (The SLA
  *                       breach rider on the same morning run has its
  *                       own switch and is NOT gated by this toggle.)
+ *
+ * DZ-1 stored one combined `assignmentAlerts` row. DZ-2 keeps that row
+ * as a migration fallback only: a split key with no row of its own
+ * inherits the legacy value, so an admin who turned assignment alerts
+ * OFF under DZ-1 keeps both halves OFF after the upgrade. Once a
+ * split key is written, the legacy row is kept in sync (derived
+ * assignee && upline) and is never consulted for that half again.
  *
  * Storage follows the CalendarConfigService pattern exactly: Metadata
  * Engine options, group 'Notifications', one row per toggle,
  * meta.enabled boolean, seeded lazily on first write. Reads fail back
  * to TRUE (today's behaviour) whenever the row is missing or
  * malformed, so a fresh or legacy database behaves exactly as the app
- * did before these toggles existed. The third old row, "Tomorrow Call
- * Reminders", described no behaviour anywhere in the app and was
- * removed from the UI rather than wired (DZ-1).
+ * did before these toggles existed.
  */
 
 import { getPool } from '../database/connection.js';
@@ -31,26 +39,50 @@ import { useDb } from '../routes/production/shared.js';
 
 export const NOTIFICATIONS_OPTION_TYPE = 'Notifications';
 export const ASSIGNMENT_ALERTS_OPTION_VALUE = 'assignmentAlerts';
+export const ASSIGNEE_ALERTS_OPTION_VALUE = 'assigneeAlerts';
+export const UPLINE_ALERTS_OPTION_VALUE = 'uplineAlerts';
+export const MEETING_NOTIFICATIONS_OPTION_VALUE = 'meetingNotifications';
 export const DAILY_PUSH_SUMMARY_OPTION_VALUE = 'dailyPushSummary';
 
 export interface NotificationSettings {
+  /** Assignee receives the "New Lead Assigned" notification (L1). */
+  assigneeAlerts: boolean;
+  /** Upline managers receive the assignment alert (L1). */
+  uplineAlerts: boolean;
+  /**
+   * Deprecated DZ-1 combined value, kept for API compatibility:
+   * true only when both assigneeAlerts and uplineAlerts are on.
+   * Accepted on write as an alias that sets both halves (only when
+   * neither half is sent explicitly).
+   */
   assignmentAlerts: boolean;
   dailyPushSummary: boolean;
+  /** Meeting invite/moved/cancelled/completed/RSVP/reminder alerts (L2). */
+  meetingNotifications: boolean;
 }
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  assigneeAlerts: true,
+  uplineAlerts: true,
   assignmentAlerts: true,
   dailyPushSummary: true,
+  meetingNotifications: true,
 };
 
 const OPTION_LABELS: Record<string, string> = {
   [ASSIGNMENT_ALERTS_OPTION_VALUE]: 'In-App Assignment Alerts',
+  [ASSIGNEE_ALERTS_OPTION_VALUE]: 'Assignee Assignment Alerts',
+  [UPLINE_ALERTS_OPTION_VALUE]: 'Upline Assignment Alerts',
+  [MEETING_NOTIFICATIONS_OPTION_VALUE]: 'Meeting Notifications',
   [DAILY_PUSH_SUMMARY_OPTION_VALUE]: 'Daily Push Summary',
 };
 
 const OPTION_SORT_ORDER: Record<string, number> = {
   [ASSIGNMENT_ALERTS_OPTION_VALUE]: 1,
-  [DAILY_PUSH_SUMMARY_OPTION_VALUE]: 2,
+  [ASSIGNEE_ALERTS_OPTION_VALUE]: 1,
+  [UPLINE_ALERTS_OPTION_VALUE]: 2,
+  [MEETING_NOTIFICATIONS_OPTION_VALUE]: 3,
+  [DAILY_PUSH_SUMMARY_OPTION_VALUE]: 4,
 };
 
 /**
@@ -68,12 +100,29 @@ export function parseEnabledMeta(meta: unknown): boolean {
 }
 
 function settingsFromOptionRows(rows: Array<{ value: string; meta: any }>): NotificationSettings {
-  const settings: NotificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS };
-  for (const row of rows) {
-    if (row.value === ASSIGNMENT_ALERTS_OPTION_VALUE) settings.assignmentAlerts = parseEnabledMeta(row.meta);
-    if (row.value === DAILY_PUSH_SUMMARY_OPTION_VALUE) settings.dailyPushSummary = parseEnabledMeta(row.meta);
-  }
-  return settings;
+  const byValue = new Map(rows.map((r) => [r.value, r.meta]));
+  // DZ-1 migration fallback: a split half with no row of its own
+  // inherits the legacy combined `assignmentAlerts` value (if any).
+  const legacy = byValue.has(ASSIGNMENT_ALERTS_OPTION_VALUE)
+    ? parseEnabledMeta(byValue.get(ASSIGNMENT_ALERTS_OPTION_VALUE))
+    : undefined;
+  const assigneeAlerts = byValue.has(ASSIGNEE_ALERTS_OPTION_VALUE)
+    ? parseEnabledMeta(byValue.get(ASSIGNEE_ALERTS_OPTION_VALUE))
+    : (legacy ?? true);
+  const uplineAlerts = byValue.has(UPLINE_ALERTS_OPTION_VALUE)
+    ? parseEnabledMeta(byValue.get(UPLINE_ALERTS_OPTION_VALUE))
+    : (legacy ?? true);
+  return {
+    assigneeAlerts,
+    uplineAlerts,
+    assignmentAlerts: assigneeAlerts && uplineAlerts,
+    dailyPushSummary: byValue.has(DAILY_PUSH_SUMMARY_OPTION_VALUE)
+      ? parseEnabledMeta(byValue.get(DAILY_PUSH_SUMMARY_OPTION_VALUE))
+      : true,
+    meetingNotifications: byValue.has(MEETING_NOTIFICATIONS_OPTION_VALUE)
+      ? parseEnabledMeta(byValue.get(MEETING_NOTIFICATIONS_OPTION_VALUE))
+      : true,
+  };
 }
 
 function fallbackOptionRows(): Array<{ value: string; meta: any }> {
@@ -134,6 +183,12 @@ async function hasOptionsColumns(exec: { query: Function }): Promise<boolean> {
  * createAssignmentNotifications so the check commits atomically with
  * the lead mutation and costs no extra connection). Fails ON.
  *
+ * `fallbackOptionValue` is the DZ-1 legacy row: when the primary key
+ * has no row, the fallback row's value is used instead (so an admin
+ * who switched the old combined toggle OFF keeps both halves OFF
+ * until they write the split keys). Both rows are fetched in one
+ * SELECT; the primary always wins when present.
+ *
  * The `options` table is PROBED (information_schema) before it is
  * touched — deciding first, never catching after. A try/catch around
  * the SELECT is NOT enough inside a transaction: when the statement
@@ -145,16 +200,21 @@ async function hasOptionsColumns(exec: { query: Function }): Promise<boolean> {
  */
 export async function readToggleWithExec(
   exec: { query: Function },
-  optionValue: string
+  optionValue: string,
+  fallbackOptionValue?: string
 ): Promise<boolean> {
   try {
     if (!(await hasOptionsColumns(exec))) return true;
+    const values = fallbackOptionValue ? [optionValue, fallbackOptionValue] : [optionValue];
     const result = await exec.query(
-      `SELECT meta FROM options WHERE field_key = $1 AND option_value = $2`,
-      [NOTIFICATIONS_OPTION_TYPE, optionValue]
+      `SELECT option_value, meta FROM options WHERE field_key = $1 AND option_value = ANY($2::text[])`,
+      [NOTIFICATIONS_OPTION_TYPE, values]
     );
-    if (!result || !Array.isArray(result.rows) || result.rows.length === 0) return true;
-    return parseEnabledMeta(result.rows[0].meta);
+    if (!result || !Array.isArray(result.rows)) return true;
+    const byValue = new Map(result.rows.map((r: any) => [r.option_value, r.meta]));
+    if (byValue.has(optionValue)) return parseEnabledMeta(byValue.get(optionValue));
+    if (fallbackOptionValue && byValue.has(fallbackOptionValue)) return parseEnabledMeta(byValue.get(fallbackOptionValue));
+    return true;
   } catch {
     return true;
   }
@@ -207,18 +267,37 @@ function setToggleFallback(optionValue: string, enabled: boolean): void {
 
 /**
  * Persist a partial update; returns the full resulting settings.
- * Only the two known keys are honoured.
+ * Only the known keys are honoured. The DZ-1 `assignmentAlerts` key
+ * is accepted as a legacy alias: it sets BOTH split halves, and only
+ * when neither half is sent explicitly. After any split-half write
+ * the legacy row is kept in sync (derived assignee && upline) so the
+ * Metadata Engine list never shows a stale combined value.
  */
 export async function setNotificationSettings(
   patch: Partial<NotificationSettings>
 ): Promise<NotificationSettings> {
   const entries: Array<[string, boolean]> = [];
-  if (typeof patch.assignmentAlerts === 'boolean') entries.push([ASSIGNMENT_ALERTS_OPTION_VALUE, patch.assignmentAlerts]);
+  if (typeof patch.assigneeAlerts === 'boolean') entries.push([ASSIGNEE_ALERTS_OPTION_VALUE, patch.assigneeAlerts]);
+  if (typeof patch.uplineAlerts === 'boolean') entries.push([UPLINE_ALERTS_OPTION_VALUE, patch.uplineAlerts]);
+  if (typeof patch.meetingNotifications === 'boolean') entries.push([MEETING_NOTIFICATIONS_OPTION_VALUE, patch.meetingNotifications]);
   if (typeof patch.dailyPushSummary === 'boolean') entries.push([DAILY_PUSH_SUMMARY_OPTION_VALUE, patch.dailyPushSummary]);
+  if (
+    typeof patch.assignmentAlerts === 'boolean' &&
+    typeof patch.assigneeAlerts !== 'boolean' &&
+    typeof patch.uplineAlerts !== 'boolean'
+  ) {
+    entries.push([ASSIGNEE_ALERTS_OPTION_VALUE, patch.assignmentAlerts]);
+    entries.push([UPLINE_ALERTS_OPTION_VALUE, patch.assignmentAlerts]);
+  }
+  const touchedSplit = entries.some(([v]) => v === ASSIGNEE_ALERTS_OPTION_VALUE || v === UPLINE_ALERTS_OPTION_VALUE);
   if (!useDb()) {
     for (const [value, enabled] of entries) setToggleFallback(value, enabled);
-    return getNotificationSettings();
+    const after = await getNotificationSettings();
+    if (touchedSplit) setToggleFallback(ASSIGNMENT_ALERTS_OPTION_VALUE, after.assignmentAlerts);
+    return after;
   }
   for (const [value, enabled] of entries) await upsertToggleRow(value, enabled);
-  return getNotificationSettings();
+  const after = await getNotificationSettings();
+  if (touchedSplit) await upsertToggleRow(ASSIGNMENT_ALERTS_OPTION_VALUE, after.assignmentAlerts);
+  return after;
 }

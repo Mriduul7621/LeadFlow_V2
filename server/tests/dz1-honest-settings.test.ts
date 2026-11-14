@@ -277,10 +277,14 @@ describe('DZ-1 Honest Settings — DB mode', () => {
   });
 
   it('settings default to ON when nothing is stored', async () => {
-    assert.deepEqual(await getNotificationSettings(), { assignmentAlerts: true, dailyPushSummary: true });
+    // DZ-2: the shape grew — the combined assignmentAlerts toggle
+    // split into assigneeAlerts/uplineAlerts and meetingNotifications
+    // joined (the combined key stays as the derived value).
+    const allOn = { assigneeAlerts: true, uplineAlerts: true, assignmentAlerts: true, dailyPushSummary: true, meetingNotifications: true };
+    assert.deepEqual(await getNotificationSettings(), allOn);
     const res = await request(app).get('/api/notifications/settings').set('Authorization', `Bearer ${tokenFor(plain)}`);
     assert.equal(res.status, 200);
-    assert.deepEqual(res.body.data, { assignmentAlerts: true, dailyPushSummary: true });
+    assert.deepEqual(res.body.data, allOn);
   });
 
   it('PUT requires settings.manage: plain user refused, settings manager allowed, change is audit-logged old→new', async () => {
@@ -293,7 +297,9 @@ describe('DZ-1 Honest Settings — DB mode', () => {
       .set('Authorization', `Bearer ${tokenFor(privileged)}`)
       .send({ assignmentAlerts: false });
     assert.equal(saved.status, 200);
-    assert.deepEqual(saved.body.data, { assignmentAlerts: false, dailyPushSummary: true });
+    // DZ-2: the legacy alias sets BOTH split halves (derived
+    // assignmentAlerts follows them).
+    assert.deepEqual(saved.body.data, { assigneeAlerts: false, uplineAlerts: false, assignmentAlerts: false, dailyPushSummary: true, meetingNotifications: true });
 
     const audit: any = await pool.query(`SELECT metadata FROM audit_logs WHERE action_code = 'notification_settings.save' ORDER BY created_at DESC LIMIT 1`);
     assert.equal(audit.rows.length, 1);
@@ -407,7 +413,8 @@ describe('DZ-1 Honest Settings — demo (fallback) mode', () => {
   });
 
   it('fallback settings default ON; OFF suppresses demo assignment notifications; ON restores them', async () => {
-    assert.deepEqual(getNotificationSettingsSyncFallback(), { assignmentAlerts: true, dailyPushSummary: true });
+    // DZ-2: five keys now (split halves + meeting toggle).
+    assert.deepEqual(getNotificationSettingsSyncFallback(), { assigneeAlerts: true, uplineAlerts: true, assignmentAlerts: true, dailyPushSummary: true, meetingNotifications: true });
 
     const users = (fallbackStore as any).users as any[];
     const assignee = { id: 'demo-user-asn', employeeId: 'DEMOASN', fullName: 'Demo Assignee' };

@@ -23,7 +23,9 @@
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
 import {
+  ASSIGNEE_ALERTS_OPTION_VALUE,
   ASSIGNMENT_ALERTS_OPTION_VALUE,
+  UPLINE_ALERTS_OPTION_VALUE,
   getNotificationSettingsSyncFallback,
   readToggleWithExec,
 } from './NotificationSettingsService.js';
@@ -287,19 +289,21 @@ export async function createAssignmentNotifications(
   let skipped = 0;
   let failed = 0;
 
-  // DZ-1 (Honest Settings): the Settings → Push Intelligence toggle
-  // "In-App Assignment Alerts" is a real switch now. When an admin has
-  // turned it OFF, no assignment notifications are created (the read
-  // rides the caller's transaction and fails ON, so a missing or
-  // malformed settings row keeps today's behaviour). The read PROBES
-  // information_schema before touching `options` — see
-  // readToggleWithExec: a failed SELECT here would abort the whole
-  // lead transaction, not just skip the notifications.
-  if (!(await readToggleWithExec(exec, ASSIGNMENT_ALERTS_OPTION_VALUE))) {
-    return { created, skipped, failed };
-  }
+  // DZ-2 (audit §4, L1 split): the assignee and the upline have
+  // SEPARATE toggles now. Each read rides the caller's transaction
+  // and fails ON, so a missing or malformed settings row keeps
+  // today's behaviour. Both reads pass the DZ-1 legacy
+  // `assignmentAlerts` row as the fallback, so an admin who switched
+  // the old combined toggle OFF keeps both halves OFF until they
+  // write the split keys. The reads PROBE information_schema before
+  // touching `options` — see readToggleWithExec: a failed SELECT
+  // here would abort the whole lead transaction, not just skip the
+  // notifications.
+  const assigneeAlertsOn = await readToggleWithExec(exec, ASSIGNEE_ALERTS_OPTION_VALUE, ASSIGNMENT_ALERTS_OPTION_VALUE);
+  const uplineAlertsOn = await readToggleWithExec(exec, UPLINE_ALERTS_OPTION_VALUE, ASSIGNMENT_ALERTS_OPTION_VALUE);
 
   // 1. Notify the assignee
+  if (assigneeAlertsOn) {
   const assigneeKey = buildIdempotencyKey(eventType, assignmentHistoryId, assignedToUserId);
   const assigneeResult = await insertNotificationWithIdempotency(exec, {
     userId: assignedToUserId,
@@ -314,8 +318,10 @@ export async function createAssignmentNotifications(
   });
   if (assigneeResult) created++;
   else skipped++;
+  }
 
   // 2. Resolve and notify upline managers
+  if (uplineAlertsOn) {
   const upline = await resolveUplineRecipients(
     exec,
     assignedToUserId,
@@ -338,6 +344,7 @@ export async function createAssignmentNotifications(
     });
     if (mgrResult) created++;
     else skipped++;
+  }
   }
 
   return { created, skipped, failed };
@@ -371,11 +378,13 @@ export function createAssignmentNotificationsDemo(
   let created = 0;
   let skipped = 0;
 
-  // DZ-1: same "In-App Assignment Alerts" toggle as the DB path,
-  // read from the fallback store (demo mode has no database).
-  if (!getNotificationSettingsSyncFallback().assignmentAlerts) {
-    return { created, skipped };
-  }
+  // DZ-2: same split toggles as the DB path, read from the fallback
+  // store (demo mode has no database). The derived `assignmentAlerts`
+  // is assignee && upline, so it is NOT consulted here — each half
+  // gates its own block.
+  const fallbackSettings = getNotificationSettingsSyncFallback();
+  const assigneeAlertsOn = fallbackSettings.assigneeAlerts;
+  const uplineAlertsOn = fallbackSettings.uplineAlerts;
 
   // Check for existing notification (demo-mode idempotency)
   const existing = (fallbackStore as any).notifications || [];
@@ -384,6 +393,7 @@ export function createAssignmentNotificationsDemo(
   );
 
   // Notify assignee
+  if (assigneeAlertsOn) {
   const assigneeKey = buildIdempotencyKey(eventType, assignmentHistoryId, assignedToEmployeeId);
   if (!existingKeys.has(assigneeKey)) {
     const assignee = fallbackStore.users.find(
@@ -408,8 +418,10 @@ export function createAssignmentNotificationsDemo(
   } else {
     skipped++;
   }
+  }
 
   // Notify upline (demo mode hierarchy walk)
+  if (uplineAlertsOn) {
   let currentEmpId = assignedToEmployeeId;
   const visited = new Set<string>([assignedToEmployeeId.toUpperCase()]);
   let depth = 0;
@@ -448,6 +460,7 @@ export function createAssignmentNotificationsDemo(
     }
     currentEmpId = String(manager?.employeeId || '');
     depth++;
+  }
   }
 
   return { created, skipped };

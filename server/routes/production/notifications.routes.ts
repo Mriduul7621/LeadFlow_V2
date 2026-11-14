@@ -383,7 +383,10 @@ router.get('/notifications/settings', requireAuth, async (_req, res) => {
 router.put('/notifications/settings', requireAuth, requirePermissionCode('settings.manage'), async (req, res) => {
   const body = (req.body || {}) as Record<string, unknown>;
   const patch: Partial<NotificationSettings> = {};
-  for (const key of ['assignmentAlerts', 'dailyPushSummary'] as const) {
+  // DZ-2: the split halves and the meeting toggle join the two DZ-1
+  // keys. `assignmentAlerts` stays accepted as the legacy alias that
+  // sets both halves (NotificationSettingsService).
+  for (const key of ['assigneeAlerts', 'uplineAlerts', 'assignmentAlerts', 'meetingNotifications', 'dailyPushSummary'] as const) {
     if (body[key] !== undefined) {
       if (typeof body[key] !== 'boolean') {
         return sendJson(res, 400, { success: false, message: `${key} must be true or false.` });
@@ -392,7 +395,7 @@ router.put('/notifications/settings', requireAuth, requirePermissionCode('settin
     }
   }
   if (Object.keys(patch).length === 0) {
-    return sendJson(res, 400, { success: false, message: 'Nothing to update: send assignmentAlerts and/or dailyPushSummary.' });
+    return sendJson(res, 400, { success: false, message: 'Nothing to update: send assigneeAlerts, uplineAlerts, meetingNotifications, assignmentAlerts and/or dailyPushSummary.' });
   }
   const before = await getNotificationSettings();
   const after = await setNotificationSettings(patch);

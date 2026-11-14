@@ -18,8 +18,16 @@ import {
   reportingLinkWarnings,
   reportingManagerRequiredError,
 } from '../utils/reportingRules.js';
+import { USER_BULK_IMPORT_MAX_ROWS_CEILING } from '../services/operationsLimits.js';
 
-export const USER_BULK_MAX_ROWS = 1000;
+/**
+ * DZ-2 (audit §4, G2): the ceiling for the user bulk-import row cap.
+ * The effective cap is a Settings value (OperationsSettingsService)
+ * that may only lower this number; this constant is the ceiling and
+ * the default. Kept exported for the test suite and for callers that
+ * need the ceiling without a settings read.
+ */
+export const USER_BULK_MAX_ROWS = USER_BULK_IMPORT_MAX_ROWS_CEILING;
 
 export type ImportMode = 'createOnly' | 'createAndUpdate';
 
