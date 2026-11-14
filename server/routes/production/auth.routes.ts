@@ -15,6 +15,14 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getPool } from '../../database/connection.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
+import {
+  checkAccountLockout,
+  clearFailedLoginAttempts,
+  getLockoutConfig,
+  getPasswordMinLength,
+  getTokenLifetimeDays,
+  recordFailedLoginAttempt,
+} from '../../services/SecurityPolicyService.js';
 import { fallbackStore, createId } from '../../fallbackStore.js';
 import { createPerf } from '../../utils/perf.js';
 import {
@@ -68,10 +76,14 @@ router.post('/auth/bootstrap-admin', async (req, res) => {
   const email = clean(payload.email).toLowerCase();
   const password = String(payload.password || '');
 
-  if (fullName.length < 3 || employeeId.length < 3 || !EMPLOYEE_ID_RE.test(employeeId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 5) {
+  // A1 (DZ-4): the minimum password length is the Danger Zone
+  // security policy's (default 8, code floor 5) — one value for
+  // bootstrap, self change, forced change and admin reset.
+  const minLength = await getPasswordMinLength();
+  if (fullName.length < 3 || employeeId.length < 3 || !EMPLOYEE_ID_RE.test(employeeId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < minLength) {
     return sendJson(res, 400, {
       success: false,
-      message: 'Valid full name, employee ID, email and a password of at least 5 characters are required.',
+      message: `Valid full name, employee ID, email and a password of at least ${minLength} characters are required.`,
     });
   }
 
@@ -112,7 +124,8 @@ router.post('/auth/bootstrap-admin', async (req, res) => {
       mustChangePassword: false,
     };
     fallbackStore.users.push(adminUser);
-    const token = signToken({ id: adminUser.id, employeeId, role: 'ADMIN', email, name: fullName });
+    // A5 (DZ-4): newly issued tokens carry the policy lifetime.
+    const token = signToken({ id: adminUser.id, employeeId, role: 'ADMIN', email, name: fullName }, { expiresInDays: await getTokenLifetimeDays() });
     const { password: _pw, ...safeUser } = adminUser;
     return sendJson(res, 201, { success: true, token, user: safeUser });
   }
@@ -163,7 +176,7 @@ router.post('/auth/bootstrap-admin', async (req, res) => {
     await client.query('COMMIT');
     const row = created.rows[0];
     const mapped = mapUserRow({ ...row, role_code: 'ADMIN', role_name: 'Administrator' });
-    const token = signToken({ id: row.id, employeeId, role: 'ADMIN', email, name: fullName });
+    const token = signToken({ id: row.id, employeeId, role: 'ADMIN', email, name: fullName }, { expiresInDays: await getTokenLifetimeDays() });
     return sendJson(res, 201, { success: true, token, user: mapped });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -198,14 +211,42 @@ router.post('/auth/login', async (req, res) => {
       logAuthLoginFailed({ reason: 'invalid_credentials' });
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
+    // A9 (DZ-4, demo-mode parity): a locked account answers 423
+    // BEFORE the password is checked, so the lock cannot be
+    // brute-forced further and a correct password does not shorten it.
+    const demoLockout = await getLockoutConfig();
+    const demoLockState = demoLockout.enabled ? checkAccountLockout(user) : { locked: false, lockedUntil: null };
+    if (demoLockState.locked) {
+      logAuthLoginFailed({ reason: 'account_locked' });
+      return sendJson(res, 423, {
+        success: false,
+        error: 'account_locked',
+        message: 'This account is temporarily locked after too many failed sign-in attempts. Please try again later.',
+        lockedUntil: demoLockState.lockedUntil,
+      });
+    }
     const ok = user.password.startsWith('$2')
       ? await bcrypt.compare(password, user.password)
       : user.password === password;
     if (!ok) {
       logAuthLoginFailed({ reason: 'invalid_credentials' });
+      if (demoLockout.enabled) {
+        user.failedLoginAttempts = (user.failedLoginAttempts ?? 0) + 1;
+        if (user.failedLoginAttempts >= demoLockout.threshold) {
+          user.lockedUntil = new Date(Date.now() + demoLockout.minutes * 60000).toISOString();
+          return sendJson(res, 423, {
+            success: false,
+            error: 'account_locked',
+            message: 'This account is temporarily locked after too many failed sign-in attempts. Please try again later.',
+            lockedUntil: user.lockedUntil,
+          });
+        }
+      }
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
-    const token = signToken({ id: user.id, employeeId: user.employeeId, role: normalizeRole(user.role), email: user.email, name: user.fullName || user.name });
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    const token = signToken({ id: user.id, employeeId: user.employeeId, role: normalizeRole(user.role), email: user.email, name: user.fullName || user.name }, { expiresInDays: await getTokenLifetimeDays() });
     logAuthLoginSuccess({ userId: user.id, role: normalizeRole(user.role) });
     const { password: _pw, ...safeUser } = user;
     return res.status(200).json({ token, user: { ...safeUser, name: user.fullName || user.name } });
@@ -232,22 +273,64 @@ router.post('/auth/login', async (req, res) => {
       perf.finish(res);
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
+    // A9 (DZ-4): per-account lockout, using the migration-022 columns
+    // and the live policy (default ON, 10 failures → 30 min). Checked
+    // BEFORE the password, so a locked account cannot be brute-forced
+    // further and a correct password does not shorten the lock. The
+    // answer is 423 — not 401 — so the legitimate owner learns the
+    // account is locked and when it opens; the per-IP limiter (A8)
+    // stays as the other layer. When lockout is disabled this whole
+    // check is skipped and the columns are left untouched.
+    const lockout = await getLockoutConfig();
+    if (lockout.enabled) {
+      const state = checkAccountLockout(user);
+      if (state.locked) {
+        logAuthLoginFailed({ reason: 'account_locked' });
+        perf.finish(res);
+        return sendJson(res, 423, {
+          success: false,
+          error: 'account_locked',
+          message: 'This account is temporarily locked after too many failed sign-in attempts. Please try again later.',
+          lockedUntil: state.lockedUntil,
+        });
+      }
+    }
     const valid = user.password && String(user.password).startsWith('$2')
       ? await bcrypt.compare(password, user.password)
       : user.password === password;
     perf.span('auth.bcryptVerify');
     if (!valid) {
       logAuthLoginFailed({ reason: 'invalid_credentials' });
+      // The failure is counted (one atomic UPDATE); the attempt that
+      // reaches the threshold locks the account and answers 423 at
+      // once instead of a misleading 401.
+      let lockedNow: string | null = null;
+      if (lockout.enabled) {
+        const recorded = await recordFailedLoginAttempt(user.id, lockout);
+        lockedNow = recorded?.justLocked ? recorded.lockedUntil : null;
+      }
       perf.finish(res);
+      if (lockedNow) {
+        return sendJson(res, 423, {
+          success: false,
+          error: 'account_locked',
+          message: 'This account is temporarily locked after too many failed sign-in attempts. Please try again later.',
+          lockedUntil: lockedNow,
+        });
+      }
       return sendJson(res, 401, { success: false, message: 'Invalid credentials' });
     }
+    // A successful login clears the counter (and any expired lock) —
+    // best-effort, like the last_login bookkeeping below.
+    void clearFailedLoginAttempts(user.id);
     // last_login is bookkeeping: its semantics are preserved (the update is
     // still issued for every successful login) but it no longer delays the
     // authenticated response — authentication is already confirmed.
     void pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id])
       .catch(() => undefined);
     const role = user.role_code || 'EMPLOYEE';
-    const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name });
+    // A5 (DZ-4): newly issued tokens carry the policy lifetime.
+    const token = signToken({ id: user.id, employeeId: user.employee_id, role, email: user.email, name: user.full_name }, { expiresInDays: await getTokenLifetimeDays() });
     logAuthLoginSuccess({ userId: user.id, role });
     perf.finish(res);
     // The session profile carries the caller's own memberships: the client
@@ -440,8 +523,11 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
   if (!userId || !currentPassword || !newPassword) {
     return sendJson(res, 400, { success: false, message: 'All password fields are required' });
   }
-  if (String(newPassword).length < 5) {
-    return sendJson(res, 400, { success: false, message: 'New password must be at least 5 characters' });
+  // A1 (DZ-4): the Danger Zone security policy's minimum (default 8,
+  // code floor 5) — one value for every password set.
+  const minLength = await getPasswordMinLength();
+  if (String(newPassword).length < minLength) {
+    return sendJson(res, 400, { success: false, message: `New password must be at least ${minLength} characters` });
   }
   // Self-service only: one authenticated user must not rotate another
   // user's password. Admins use POST /users/:id/reset-password.
@@ -463,6 +549,8 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
     }
     user.password = await bcrypt.hash(newPassword, 10);
     user.mustChangePassword = false;
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
     return sendJson(res, 200, { success: true, message: 'Password updated successfully' });
   }
 
@@ -484,6 +572,9 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
       `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
       [hashed, user.id]
     );
+    // A successful change proves the password, so any lockout counter
+    // on the account is cleared with it (best-effort).
+    void clearFailedLoginAttempts(user.id);
     // Danger Zone re-lock trigger (DZ-0): a password change ends any
     // Danger Zone unlock the user holds. Best-effort — it must never
     // fail the password change it rides along with.
@@ -513,15 +604,20 @@ router.post('/auth/change-password', requireAuth, async (req, res) => {
  *     required, and another user's password can never be changed here
  *   - the caller must exist AND currently have must_change_password = TRUE;
  *     otherwise 409 and this endpoint does NOT touch the password
- *   - password strength follows the forced-change UI minimum (>= 6 chars),
- *     hashed with the existing bcrypt policy (10 rounds)
+ *   - password strength follows the Danger Zone security policy's
+ *     minimum (default 8 characters), hashed with the existing
+ *     bcrypt policy (10 rounds)
  *   - the hash update and the flag clear happen in ONE UPDATE (atomic)
  *   - no plaintext password is logged and the hash is never returned
  */
 router.post('/auth/change-required-password', requireAuth, async (req: any, res) => {
   const newPassword = String(req.body?.newPassword ?? req.body?.password ?? '');
-  if (newPassword.length < 6) {
-    return sendJson(res, 400, { success: false, message: 'Password must be at least 6 characters' });
+  // A1 (DZ-4): the forced change follows the same policy minimum as
+  // every other password set (default 8, code floor 5) — the old
+  // hardcoded 6 is gone, so one value governs all four flows.
+  const minLength = await getPasswordMinLength();
+  if (newPassword.length < minLength) {
+    return sendJson(res, 400, { success: false, message: `Password must be at least ${minLength} characters` });
   }
 
   // The caller's identity comes from the verified bearer token, never from
@@ -548,6 +644,8 @@ router.post('/auth/change-required-password', requireAuth, async (req: any, res)
     }
     demoUser.password = await bcrypt.hash(newPassword, 10);
     demoUser.mustChangePassword = false;
+    demoUser.failedLoginAttempts = 0;
+    demoUser.lockedUntil = null;
     logAuthForcedPasswordChangeCompleted({ userId: demoUser.id });
     const { password: _pw, ...safeUser } = demoUser;
     return sendJson(res, 200, { success: true, data: { ...safeUser, name: demoUser.fullName || demoUser.name } });
@@ -574,6 +672,9 @@ router.post('/auth/change-required-password', requireAuth, async (req: any, res)
       `UPDATE users SET password = $1, must_change_password = FALSE, updated_at = NOW() WHERE id = $2`,
       [hashed, user.id]
     );
+
+    // A successful forced change clears any lockout counter with it (best-effort).
+    void clearFailedLoginAttempts(user.id);
 
     // Danger Zone re-lock trigger (DZ-0): see /auth/change-password.
     try { await revokeDangerZoneUnlocks(user.id); } catch { /* best-effort re-lock */ }

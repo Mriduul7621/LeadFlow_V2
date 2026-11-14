@@ -275,15 +275,35 @@ export const apiLimiter = rateLimit({
  * Auth limiter: keys on the client IP only (never on a request body field,
  * so a caller cannot pick their own bucket or target another account) and
  * only counts failed attempts, so ordinary successful logins are unharmed.
+ *
+ * A8 (DZ-4): the `max` is the Danger Zone security policy's
+ * authRateLimitAttempts (bounded 5–100 in code, default 20), read at
+ * request time — a policy change applies to the very next attempt
+ * without a restart. The read fails closed to 20, so a policy-store
+ * outage degrades to today's limit instead of opening (or closing)
+ * the gate. The 15-minute window stays in code (the audit does not
+ * move it). `createAuthLimiter` exists so tests can mount an isolated
+ * instance with its own store; production mounts the singleton below.
  */
-export const authLimiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: AUTH_ATTEMPT_RATE_LIMIT,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  handler: createLimitHandler('auth', AUTH_RATE_LIMIT_MESSAGE),
-});
+export function createAuthLimiter() {
+  return rateLimit({
+    windowMs: RATE_LIMIT_WINDOW_MS,
+    max: async () => {
+      try {
+        const { getAuthRateLimitAttempts } = await import('./services/SecurityPolicyService.js');
+        return getAuthRateLimitAttempts();
+      } catch {
+        return AUTH_ATTEMPT_RATE_LIMIT;
+      }
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    handler: createLimitHandler('auth', AUTH_RATE_LIMIT_MESSAGE),
+  });
+}
+
+export const authLimiter = createAuthLimiter();
 
 /** Mounts the general limiter (`/api`) then the stricter auth limiter. */
 export function applyRateLimiters(app: Express): void {
