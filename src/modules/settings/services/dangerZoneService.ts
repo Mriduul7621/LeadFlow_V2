@@ -38,6 +38,73 @@ export interface DangerZoneOverview {
   cards: DangerZoneRuleCard[];
 }
 
+/**
+ * Lead Quality config (DZ-3, audit §2.6 F1–F6). The effective
+ * `config` is keyed by current status NAME; the write payload keys
+ * status points by dictionary-entry ID (`statusPoints`), which the
+ * editor takes from `statusOptions[].id` — renaming a status never
+ * detaches its points.
+ */
+export interface LeadQualityLadderRung {
+  maxDays: number | null;
+  points: number;
+}
+
+export interface LeadQualityConfig {
+  version: number;
+  baseScore: number;
+  thresholds: { hot: number; warm: number; developing: number };
+  statusPoints: Record<string, number>;
+  advancedStatuses: string[];
+  recency: LeadQualityLadderRung[];
+  engagement: { pointsPerEvent: number; maxEvents: number };
+  failedContact: { pointsPerEvent: number; maxEvents: number; attentionAt: number };
+  followUp: { scheduledPoints: number; overdue: LeadQualityLadderRung[] };
+  investment: { points: number };
+}
+
+export interface LeadQualityStatusOption {
+  id: string;
+  value: string;
+  label: string;
+  isActive: boolean;
+  isTerminal: boolean;
+  points: number;
+  defaultPoints: number;
+  advanced: boolean;
+  defaultAdvanced: boolean;
+}
+
+export interface LeadQualityLastChange {
+  actorUserId: string | null;
+  createdAt: string;
+  version: number;
+  oldValue: LeadQualityConfig | null;
+  newValue: LeadQualityConfig;
+}
+
+export interface LeadQualityConfigForEdit {
+  version: number;
+  config: LeadQualityConfig;
+  defaults: LeadQualityConfig;
+  statusOptions: LeadQualityStatusOption[];
+  lastChange: LeadQualityLastChange | null;
+  scale: { min: number; max: number };
+}
+
+export interface LeadQualityConfigInput {
+  baseScore: number;
+  thresholds: { hot: number; warm: number; developing: number };
+  /** Keyed by FollowUpStatus dictionary-entry id. */
+  statusPoints: Record<string, number>;
+  advancedStatusIds: string[];
+  recency: LeadQualityLadderRung[];
+  engagement: { pointsPerEvent: number; maxEvents: number };
+  failedContact: { pointsPerEvent: number; maxEvents: number; attentionAt: number };
+  followUp: { scheduledPoints: number; overdue: LeadQualityLadderRung[] };
+  investment: { points: number };
+}
+
 export const dangerZoneService = {
   async getStatus(): Promise<DangerZoneStatus> {
     return apiRequest<DangerZoneStatus>('/api/danger-zone/status');
@@ -76,5 +143,16 @@ export const dangerZoneService = {
 
   async getOverview(): Promise<DangerZoneOverview> {
     return apiRequest<DangerZoneOverview>('/api/danger-zone/overview');
+  },
+
+  async getLeadQuality(): Promise<LeadQualityConfigForEdit> {
+    return apiRequest<LeadQualityConfigForEdit>('/api/danger-zone/lead-quality');
+  },
+
+  async saveLeadQuality(input: LeadQualityConfigInput): Promise<LeadQualityConfigForEdit> {
+    return apiRequest<LeadQualityConfigForEdit>('/api/danger-zone/lead-quality', {
+      method: 'PUT',
+      ...jsonBody(input),
+    });
   },
 };

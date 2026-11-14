@@ -32,6 +32,7 @@ import {
   aggregateQualityForScope,
   aggregateQualityForFallbackLeads,
 } from '../../utils/leadQualitySignals.js';
+import { getLeadQualityConfig } from '../../services/LeadQualityConfigService.js';
 import {
   buildDashboardVisibilitySql,
   dbErrorStatus,
@@ -363,7 +364,10 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       data.quality = aggregateQualityForFallbackLeads(
         leads,
         (fallbackStore as any).leadActivities || [],
-        (fallbackStore as any).scheduledActivities || []
+        (fallbackStore as any).scheduledActivities || [],
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        await getLeadQualityConfig()
       );
       return sendJson(res, 200, { success: true, data });
     }
@@ -458,7 +462,10 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       pool.query(metricSql, metricParams),
       pool.query(fuCountSql, fuParams),
       pool.query(agentSql, agentParams),
-      aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig().then(cfg =>
+        aggregateQualityForScope(pool, qualityVisibilitySql, qualityParams, terminalList, undefined, cfg)
+      ),
     ]);
     perf.span('db.queries');
 
