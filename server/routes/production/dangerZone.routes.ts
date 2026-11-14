@@ -43,6 +43,22 @@
  *                            requires a VALID unlock: saves one
  *                            versioned policy (version +1) and writes
  *                            an audit row with old→new values.
+ *   GET  /danger-zone/role-defaults
+ *                            requires a VALID unlock: the current
+ *                            effective role-defaults table (DZ-5,
+ *                            audit §2.2 B6) + the code defaults + the
+ *                            canonical permission codes + the roles
+ *                            holding zero grants + the last change.
+ *   PUT  /danger-zone/role-defaults
+ *                            requires a VALID unlock: saves one
+ *                            versioned defaults table (version +1)
+ *                            and writes an audit row with old→new
+ *                            values. Saving alone changes no role.
+ *   POST /danger-zone/role-defaults/apply
+ *                            requires a VALID unlock: runs the guarded
+ *                            apply routine (zero-grant roles only,
+ *                            visibility only while still 'Own') and
+ *                            audit-logs what it actually changed.
  *
  * Unlock lifetime: 10 minutes, non-sliding (owner decision
  * 2026-11-11). Re-lock triggers: expiry, Lock, logout (the client
@@ -89,6 +105,13 @@ import {
   setSecurityPolicy,
   type SecurityPolicyInput,
 } from '../../services/SecurityPolicyService.js';
+import {
+  applyRoleDefaults,
+  getRoleDefaultsForEdit,
+  RoleDefaultsValidationError,
+  setRoleDefaults,
+  type RoleDefaultsInput,
+} from '../../services/RoleDefaultsService.js';
 import {
   dbErrorStatus,
   logAccessChange,
@@ -360,6 +383,66 @@ router.put('/danger-zone/security-policy', requireAuth, requireSuperAdmin, requi
       return sendJson(res, 400, { success: false, message: error.message });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save security policy.' });
+  }
+});
+
+/* ====================================================================
+   ROLE DEFAULTS (DZ-5 — audit §2.2 B6, §4)
+   --------------------------------------------------------------------
+   The defaults table — which permission codes and which data
+   visibility scope a standard role holds before anyone configures
+   it — is editable here. GET returns the current effective table +
+   the code defaults + the canonical permission codes (from the
+   permissions table, so the editor never invents a code) + the
+   roles currently holding zero grants (what Apply would touch) +
+   the last change (who/when/old→new, rendered only inside the
+   Danger Zone per Q2). PUT saves one versioned table (version +1)
+   and audit-logs old→new; saving alone changes NO role. POST
+   .../apply runs the guarded apply routine (zero-grant roles only,
+   visibility only while still 'Own') and audit-logs what it
+   actually changed. All three sit behind the same three gates as
+   the overview: requireAuth → DB-resolved super admin (403) →
+   valid unlock else 403 danger_zone_locked (never 401 — a 401 logs
+   the admin out via the shared HTTP layer).
+==================================================================== */
+
+router.get('/danger-zone/role-defaults', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  try {
+    const data = await getRoleDefaultsForEdit();
+    return sendJson(res, 200, { success: true, data });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Role defaults failed.' });
+  }
+});
+
+router.put('/danger-zone/role-defaults', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const saved = await setRoleDefaults(req.body as RoleDefaultsInput, {
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, { success: true, data: saved });
+  } catch (error: any) {
+    // Validation failures are the caller's fault (400, clear message);
+    // anything else is a server/database failure (503 via dbErrorStatus).
+    if (error instanceof RoleDefaultsValidationError) {
+      return sendJson(res, 400, { success: false, message: error.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save role defaults.' });
+  }
+});
+
+router.post('/danger-zone/role-defaults/apply', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const result = await applyRoleDefaults({
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, { success: true, data: result });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not apply role defaults.' });
   }
 });
 
