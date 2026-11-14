@@ -75,6 +75,26 @@
  *                            endpoint enforces the saved rules from
  *                            the next request on; every "open lead"
  *                            definition reads the saved terminal flags.
+ *   GET  /danger-zone/hierarchy-rules
+ *                            requires a VALID unlock: the current
+ *                            effective hierarchy knobs (DZ-7, audit
+ *                            §2.3 C2/C4) — the maximum reporting gap
+ *                            (1–3) and the same-department
+ *                            requirement — + the code defaults + the
+ *                            bounds + the version + the last change
+ *                            (who/when/old→new, from the audit log).
+ *   PUT  /danger-zone/hierarchy-rules
+ *                            requires a VALID unlock: saves one
+ *                            versioned ruleset (version +1) and writes
+ *                            an audit row with old→new values. Saving
+ *                            alone changes no reporting link; the
+ *                            hierarchy-health check, the bulk-import
+ *                            warnings and the hierarchy screen flag
+ *                            against the saved knobs from the next
+ *                            read on. The knobs configure what gets
+ *                            FLAGGED, never what gets BLOCKED (UM-1);
+ *                            the Level-1 root rule and the Level-1
+ *                            cross-department exception stay in code.
  *
  * Unlock lifetime: 10 minutes, non-sliding (owner decision
  * 2026-11-11). Re-lock triggers: expiry, Lock, logout (the client
@@ -134,6 +154,12 @@ import {
   StageRulesValidationError,
   type StageRulesInput,
 } from '../../services/StageRulesService.js';
+import {
+  getHierarchyRulesForEdit,
+  HierarchyRulesValidationError,
+  setHierarchyRules,
+  type HierarchyRulesInput,
+} from '../../services/HierarchyRulesService.js';
 import {
   dbErrorStatus,
   logAccessChange,
@@ -513,6 +539,50 @@ router.put('/danger-zone/stage-rules', requireAuth, requireSuperAdmin, requireDa
       return sendJson(res, 400, { success: false, message: error.message });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save stage rules.' });
+  }
+});
+
+/* ====================================================================
+   HIERARCHY KNOBS (DZ-7 — audit §2.3 C2/C4, §4)
+   --------------------------------------------------------------------
+   The maximum reporting gap (bounded 1–3) and the same-department
+   requirement live here now: the two knobs behind the hierarchy
+   health check's warnings. GET returns the current effective knobs
+   + the code defaults + the bounds + the version + the last change
+   (who/when/old→new, rendered only inside the Danger Zone per Q2).
+   PUT saves one versioned ruleset (version +1) and audit-logs
+   old→new; saving alone changes no reporting link, but the health
+   screen, the bulk-import warnings and the hierarchy screen flag
+   against the saved knobs from the next read on. Both sit behind
+   the same three gates as the overview: requireAuth → DB-resolved
+   super admin (403) → valid unlock else 403 danger_zone_locked
+   (never 401 — a 401 logs the admin out via the shared HTTP layer).
+==================================================================== */
+
+router.get('/danger-zone/hierarchy-rules', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  try {
+    const data = await getHierarchyRulesForEdit();
+    return sendJson(res, 200, { success: true, data });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Hierarchy rules failed.' });
+  }
+});
+
+router.put('/danger-zone/hierarchy-rules', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const saved = await setHierarchyRules(req.body as HierarchyRulesInput, {
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, { success: true, data: saved });
+  } catch (error: any) {
+    // Validation failures are the caller's fault (400, clear message);
+    // anything else is a server/database failure (503 via dbErrorStatus).
+    if (error instanceof HierarchyRulesValidationError) {
+      return sendJson(res, 400, { success: false, message: error.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save hierarchy rules.' });
   }
 });
 

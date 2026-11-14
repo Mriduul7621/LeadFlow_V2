@@ -14,9 +14,11 @@
 import crypto from 'crypto';
 
 import {
+  DEFAULT_HIERARCHY_RULES,
   UNASSIGNED_LEVEL,
   reportingLinkWarnings,
   reportingManagerRequiredError,
+  type HierarchyRulesShape,
 } from '../utils/reportingRules.js';
 import { USER_BULK_IMPORT_MAX_ROWS_CEILING } from '../services/operationsLimits.js';
 
@@ -380,9 +382,18 @@ export function validateBulkRows(opts: {
   permissions: { canCreate: boolean; canEdit: boolean };
   /** A1 (DZ-4): the live policy minimum; defaults to the code default (8). */
   passwordMinLength?: number;
+  /**
+   * DZ-7: the live hierarchy knobs; defaults to the code defaults
+   * (gap 2, same-department flagged). Link SHAPE is a warning here,
+   * never a row error — the rules only decide WHAT gets flagged.
+   * The caller reads the live rules and passes them in (the commit
+   * path reads them BEFORE `BEGIN`, never inside the transaction).
+   */
+  hierarchyRules?: HierarchyRulesShape;
 }): BulkPreviewResult {
   const { rows, maps, mode, permissions } = opts;
   const passwordMinLength = opts.passwordMinLength ?? 8;
+  const hierarchyRules = opts.hierarchyRules ?? DEFAULT_HIERARCHY_RULES;
 
   // duplicate detection within file
   const empIdCount = new Map<string, number[]>();
@@ -584,7 +595,7 @@ export function validateBulkRows(opts: {
                 employeeDepartmentId: deptId ?? null,
                 managerDepartmentId: mgrDeptId ?? null,
                 managerDepartmentIds: mgrStored?.department_ids || [],
-              }));
+              }, hierarchyRules));
             }
           }
 
@@ -611,13 +622,14 @@ export function validateBulkRows(opts: {
                 // UM-1: shape warnings only (see the same-batch branch).
                 // The manager's ADDITIONAL department seats count toward
                 // the department judgement — same as manual create/edit.
+                // DZ-7: the thresholds are the live Danger Zone knobs.
                 warnings.push(...reportingLinkWarnings({
                   employeeLevel: roleLevel,
                   managerLevel: existingMgr.hierarchy_level,
                   employeeDepartmentId: deptId ?? null,
                   managerDepartmentId: existingMgr.department_id ?? null,
                   managerDepartmentIds: existingMgr.department_ids || [],
-                }));
+                }, hierarchyRules));
               }
             }
           }
