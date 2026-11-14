@@ -51,6 +51,7 @@ import {
   runLeadSlaBreachAlerts,
   type SlaBreachRunSummary,
 } from './LeadSlaService.js';
+import { getNotificationSettings } from './NotificationSettingsService.js';
 
 /* ====================================================================
    Configuration (VAPID + cron secret)
@@ -647,6 +648,13 @@ export async function runDailyPushReminders(now: Date = new Date()): Promise<Dai
   } catch (error: any) {
     console.warn(`[push-reminders] SLA breach detection failed: ${error?.message || 'unknown error'}`);
   }
+
+  // DZ-1 (Honest Settings): the "Daily Push Summary" toggle in
+  // Settings → Push Intelligence is a real switch now. When OFF, the
+  // morning digest sends nothing. The SLA rider above has its own
+  // switch (LeadSla) and has already run — this toggle gates only the
+  // push digest, never the SLA alerts. The settings read fails ON.
+  if (!(await getNotificationSettings()).dailyPushSummary) return summary;
 
   if (!isPushConfigured()) return summary;
   summary.enabled = true;
