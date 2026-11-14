@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { query } from "../connection.js";
 
 /**
@@ -26,11 +27,13 @@ export async function seedWorkflow(): Promise<void> {
   for (const rule of DEFAULT_RULES) {
     await query(
       `INSERT INTO workflow_rules
-         (status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
+         (id, status, allowed_next_statuses, requires_loss_reason, requires_meeting_type,
           requires_followup_type, requires_note, is_system, created_at, updated_at)
-       VALUES ($1, NULL, $2, $3, FALSE, FALSE, TRUE, NOW(), NOW())
+       VALUES ($1, $2, NULL, $3, $4, FALSE, FALSE, TRUE, NOW(), NOW())
        ON CONFLICT (status) DO NOTHING`,
-      [rule.status, !!rule.requiresLossReason, !!rule.requiresMeetingType]
+      // id supplied from app code: the legacy bootstrap shape of
+      // workflow_rules (id VARCHAR PRIMARY KEY) has no DB default.
+      [randomUUID(), rule.status, !!rule.requiresLossReason, !!rule.requiresMeetingType]
     );
   }
   console.log(`✅ Workflow seed completed (${DEFAULT_RULES.length} default rules).`);

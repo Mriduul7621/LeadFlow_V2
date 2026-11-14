@@ -186,7 +186,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
       { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
       { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
       { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Bulk Upload).' },
-      { code: 'leads.export', label: 'Export', desc: 'Export lead audit logs.' },
+      { code: 'leads.export', label: 'Export', desc: 'Export leads (own / team, with full history) as an Excel workbook from the Leads page; also gates the Lead Pool export logs action.' },
     ],
   },
   {

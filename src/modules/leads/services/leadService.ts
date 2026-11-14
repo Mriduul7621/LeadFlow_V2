@@ -149,6 +149,23 @@ export async function postFollowUpOnce(
   return null;
 }
 
+/** FIX-2 scoped lead export (see leadService.getLeadExportOptions / exportLeads). */
+export type LeadExportScope = 'own' | 'team' | 'teamwise';
+export type LeadExportBasis = 'added' | 'updated';
+
+export interface LeadExportOptions {
+  scopes: LeadExportScope[];
+  maxRows: number;
+  defaults: { scope: LeadExportScope; basis: LeadExportBasis; from: string; to: string };
+}
+
+export interface LeadExportRequest {
+  scope: LeadExportScope;
+  basis: LeadExportBasis;
+  from?: string;
+  to?: string;
+}
+
 export const leadService = {
   async createLead(leadData: Omit<Lead, 'id'>, options: { onMatch?: (info: { matchedBy: 'leadCode' | 'mobile' }) => void } = {}): Promise<Lead> {
     const leadDataWithId = leadData as Lead;
@@ -450,6 +467,49 @@ export const leadService = {
       if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return null;
     }
+  },
+
+  /**
+   * FIX-2 scoped export: which scopes the server will offer this
+   * caller (own always; team/teamwise only when their visible set
+   * reaches beyond themself), plus the default basis + date range.
+   */
+  async getLeadExportOptions(): Promise<LeadExportOptions> {
+    return apiRequest<LeadExportOptions>('/api/leads/export/options');
+  },
+
+  /**
+   * FIX-2 scoped export: POST the scope/basis/range and download the
+   * server-built .xlsx workbook (Leads + History sheets). Raw fetch
+   * on purpose — the response is a binary file, not JSON; the global
+   * authenticated fetch (lib/apiClient) still attaches the session
+   * token and the API base. Server errors arrive as JSON and are
+   * surfaced with the server's own message (e.g. the row cap).
+   */
+  async exportLeads(payload: LeadExportRequest): Promise<{ blob: Blob; filename: string; leadCount: number; historyCount: number }> {
+    let res: Response;
+    try {
+      res = await fetch('/api/leads/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      throw new Error('Unable to reach the server. Please check your connection and try again.');
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({} as any));
+      throw new Error(body?.message || 'Export failed. Please try again.');
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = /filename="([^"]+)"/.exec(disposition);
+    return {
+      blob,
+      filename: match?.[1] || 'leadflow-leads-export.xlsx',
+      leadCount: Number(res.headers.get('X-Lead-Count') || 0),
+      historyCount: Number(res.headers.get('X-History-Count') || 0),
+    };
   },
 
   async addDocument(leadId: string, name: string, note: string | undefined, uploadedBy: string) {

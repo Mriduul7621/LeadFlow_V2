@@ -137,6 +137,7 @@ export function AdministrationPage() {
 
   const items: DirectoryItem[] = [
     { label: 'User Management', description: 'Users, roles and access', path: '/users', icon: Users },
+    { label: 'Team', description: 'Team-wise leads: managers, team leaders, members', path: '/team', icon: Users },
     { label: 'Lead Upload', description: 'Import leads from a file', path: '/leads/upload', icon: Upload },
     { label: 'Lead Pool', description: 'Review and assign available leads', path: '/leads/all', icon: Database },
     { label: 'System', description: 'Strategy, forms, workflow, sync and system tools', path: '/settings/system', icon: Settings },
