@@ -273,6 +273,45 @@ export interface StageRulesInput {
   terminalStatusIds: string[];
 }
 
+/**
+ * Hierarchy knobs (DZ-7, audit §2.3 C2/C4). The two numbers behind
+ * the hierarchy-health check's warnings: the widest manager gap
+ * still called normal (1–3, default 2) and whether a reporting
+ * link across departments is flagged (default on). They configure
+ * what gets FLAGGED, never what gets BLOCKED (UM-1); the Level-1
+ * root rule and the Level-1 cross-department exception stay in code.
+ */
+export interface HierarchyRules {
+  version: number;
+  maxReportingGap: number;
+  requireSameDepartment: boolean;
+}
+
+export interface HierarchyRulesBounds {
+  maxReportingGap: { min: number; max: number };
+}
+
+export interface HierarchyRulesLastChange {
+  actorUserId: string | null;
+  createdAt: string;
+  version: number;
+  oldValue: HierarchyRules | null;
+  newValue: HierarchyRules;
+}
+
+export interface HierarchyRulesForEdit {
+  version: number;
+  rules: HierarchyRules;
+  defaults: HierarchyRules;
+  bounds: HierarchyRulesBounds;
+  lastChange: HierarchyRulesLastChange | null;
+}
+
+export interface HierarchyRulesInput {
+  maxReportingGap: number;
+  requireSameDepartment: boolean;
+}
+
 export const dangerZoneService = {
   async getStatus(): Promise<DangerZoneStatus> {
     return apiRequest<DangerZoneStatus>('/api/danger-zone/status');
@@ -359,6 +398,17 @@ export const dangerZoneService = {
 
   async saveStageRules(input: StageRulesInput): Promise<StageRulesForEdit> {
     return apiRequest<StageRulesForEdit>('/api/danger-zone/stage-rules', {
+      method: 'PUT',
+      ...jsonBody(input),
+    });
+  },
+
+  async getHierarchyRules(): Promise<HierarchyRulesForEdit> {
+    return apiRequest<HierarchyRulesForEdit>('/api/danger-zone/hierarchy-rules');
+  },
+
+  async saveHierarchyRules(input: HierarchyRulesInput): Promise<HierarchyRulesForEdit> {
+    return apiRequest<HierarchyRulesForEdit>('/api/danger-zone/hierarchy-rules', {
       method: 'PUT',
       ...jsonBody(input),
     });

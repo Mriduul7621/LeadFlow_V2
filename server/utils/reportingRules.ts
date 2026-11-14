@@ -30,12 +30,52 @@
  *   - A normal (in-ladder) Level 2+ employee still REQUIRES a manager
  *     (`reportingManagerRequiredError`) — UM-1 unblocks WHO the manager
  *     may be, not WHETHER one is needed.
+ *
+ * DZ-7 (Danger Zone, audit §2.3 C2/C4): the two numbers behind the
+ * warnings are no longer frozen in this file. The super admin edits
+ * them in the Danger Zone (`HierarchyRulesService` — one versioned
+ * Metadata row, code values as fallback) and every place that runs
+ * the health check reads the LIVE rules and passes them in as the
+ * `rules` argument below. The shape is the same either way:
+ *   - `maxReportingGap` (audit bound 1–3, default 2): the widest
+ *     manager gap the health check still calls normal.
+ *   - `requireSameDepartment` (default true): while on, a link whose
+ *     manager belongs to a different department is flagged; while
+ *     off, the health check ignores department shape entirely.
+ * The knobs configure what gets FLAGGED, never what gets BLOCKED —
+ * no DZ-7 value can re-impose a UM-1 write-path block, and the
+ * Level-1 root rule plus the Level-1 cross-department exception
+ * stay hardcoded here (§3.4). Callers that pass no `rules` get the
+ * code defaults, so the pure functions stay usable without a DB.
  */
 
 export const UNASSIGNED_LEVEL = 99;
 
 /** Maximum allowed upward reporting distance (in hierarchy levels). */
 export const MAX_REPORTING_GAP = 2;
+
+/** C2 (DZ-7, audit bound): the maximum reporting gap is 1–3 levels. */
+export const MAX_REPORTING_GAP_MIN = 1;
+export const MAX_REPORTING_GAP_MAX = 3;
+
+/**
+ * The DZ-7 hierarchy knobs (audit §2.3 C2/C4) — the live values a
+ * super admin edits in the Danger Zone. `HierarchyRulesService`
+ * stores the versioned row and resolves these at request time;
+ * this pure module only defines the shape and the code defaults.
+ */
+export interface HierarchyRulesShape {
+  /** C2 — widest manager gap the health check calls normal (1–3). */
+  maxReportingGap: number;
+  /** C4 — flag cross-department reporting links as warnings. */
+  requireSameDepartment: boolean;
+}
+
+/** Code defaults (today's behaviour): gap 2, department shape flagged. */
+export const DEFAULT_HIERARCHY_RULES: HierarchyRulesShape = {
+  maxReportingGap: MAX_REPORTING_GAP,
+  requireSameDepartment: true,
+};
 
 /** Coerce a raw role hierarchy_level into a ladder level (99 = unassigned). */
 export function resolveRoleLevel(raw: number | null | undefined): number {
@@ -48,11 +88,11 @@ export function isLadderLevel(level: number): boolean {
   return level > 0 && level < UNASSIGNED_LEVEL;
 }
 
-/** The manager levels an employee at `employeeLevel` may report to (1 or 2 up). */
-export function allowedManagerLevels(employeeLevel: number): number[] {
+/** The manager levels an employee at `employeeLevel` may report to (1 or 2 up, or up to `maxGap`). */
+export function allowedManagerLevels(employeeLevel: number, maxGap: number = MAX_REPORTING_GAP): number[] {
   if (!isLadderLevel(employeeLevel) || employeeLevel === 1) return [];
   const levels: number[] = [];
-  for (let gap = 1; gap <= MAX_REPORTING_GAP; gap++) {
+  for (let gap = 1; gap <= maxGap; gap++) {
     const managerLevel = employeeLevel - gap;
     if (managerLevel >= 1) levels.push(managerLevel);
   }
@@ -101,15 +141,23 @@ export function validateReportingManagerCandidate(
  * Advisory warnings for a direct-reporting link (UM-1). A link that
  * produces warnings is VALID and saves normally — the hierarchy-health
  * screen lists these so an admin can spot unusual shapes (a gap of
- * more than two levels, a manager at the same or a lower level, an
- * off-ladder manager, a cross-department link) without the write path
- * ever refusing the real line manager again.
+ * more than the configured maximum, a manager at the same or a lower
+ * level, an off-ladder manager, a cross-department link) without the
+ * write path ever refusing the real line manager again.
+ *
+ * DZ-7: `rules` carries the live Danger Zone knobs (default = code
+ * defaults). `maxReportingGap` sets the gap threshold; when
+ * `requireSameDepartment` is off, department shape is not flagged
+ * at all. The Level-1 cross-department exception stays in code: a
+ * CEO manager is never flagged for department shape.
  */
 export function reportingLinkWarnings(
-  c: ReportingManagerCandidate
+  c: ReportingManagerCandidate,
+  rules: HierarchyRulesShape = DEFAULT_HIERARCHY_RULES
 ): string[] {
   const { employeeLevel, managerLevel, employeeDepartmentId, managerDepartmentId, managerDepartmentIds } = c;
   const warnings: string[] = [];
+  const maxGap = rules.maxReportingGap;
 
   // Level 1 (CEO) has no manager at all; off-ladder employees keep
   // their optional-manager behaviour — neither produces shape warnings.
@@ -123,15 +171,17 @@ export function reportingLinkWarnings(
   const gap = employeeLevel - managerLevel;
   if (gap < 1) {
     warnings.push(`The reporting manager sits at Level ${managerLevel}, which is not above this employee's Level ${employeeLevel}.`);
-  } else if (gap > MAX_REPORTING_GAP) {
-    warnings.push(`The reporting manager is ${gap} levels above this employee — more than the usual ${MAX_REPORTING_GAP}.`);
+  } else if (gap > maxGap) {
+    warnings.push(`The reporting manager is ${gap} levels above this employee — more than the usual ${maxGap}.`);
   }
 
-  // Department shape: a Level-1 (CEO) manager legitimately sits above
-  // every department. Anyone else whose departments (primary +
-  // additional seats) do not include the employee's department makes
-  // the link cross-department — accepted, but flagged.
-  if (managerLevel !== 1) {
+  // Department shape (C4, DZ-7): only flagged while the
+  // same-department requirement is switched on. A Level-1 (CEO)
+  // manager legitimately sits above every department. Anyone else
+  // whose departments (primary + additional seats) do not include
+  // the employee's department makes the link cross-department —
+  // accepted, but flagged.
+  if (rules.requireSameDepartment && managerLevel !== 1) {
     const managerDepartments = new Set<string>();
     if (managerDepartmentId) managerDepartments.add(String(managerDepartmentId));
     if (Array.isArray(managerDepartmentIds)) {
