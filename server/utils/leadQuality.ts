@@ -108,6 +108,272 @@ export const LEAD_QUALITY_FAILED_CONTACT_POINTS_PER_EVENT = -3;
 export const LEAD_QUALITY_INVESTMENT_POINTS = 3;
 
 /* ====================================================================
+   VERSIONED CONFIG (Admin Control programme, DZ-3)
+   --------------------------------------------------------------------
+   Audit §2.6 (F1–F6): every value above used to live only in this
+   file. It now ALSO lives in a versioned config row (Metadata
+   Engine, type 'LeadQuality') that a super admin edits in the
+   Danger Zone. The values below remain the CODE DEFAULTS and the
+   fail-closed fallback: whenever no row exists, the row is corrupt,
+   or a caller passes nothing, scoring uses exactly these values.
+
+   The effective config is keyed by CURRENT status NAME — the
+   config service (LeadQualityConfigService) resolves the stored
+   dictionary-entry ids to today's names at read time, so renaming
+   a status in Settings → Metadata never detaches its points
+   (audit Finding 5). A status with no configured weight scores 0,
+   exactly as unknown/custom statuses do today.
+
+   The scale itself (0–100) is NOT configurable: the terminal
+   scores (Converted = 100, Not Interested = 0) are pinned to it
+   and terminal handling belongs to DZ-6, not this slice.
+==================================================================== */
+
+/** One rung of a day-based ladder: applies while days <= maxDays; maxDays null = open-ended last rung. */
+export interface LeadQualityLadderRung {
+  maxDays: number | null;
+  points: number;
+}
+
+export interface LeadQualityConfig {
+  /** Config version (0 = never saved; increments on every DZ save). */
+  version: number;
+  /** F1 — neutral starting point every active lead is scored from. */
+  baseScore: number;
+  /** F2 — active band thresholds. */
+  thresholds: { hot: number; warm: number; developing: number };
+  /** F3 — buying-intent weight per status, keyed by CURRENT status name. */
+  statusPoints: Record<string, number>;
+  /** Statuses advanced enough that a missing next action is an attention flag (current names). */
+  advancedStatuses: string[];
+  /** F4 — recency ladder (Dhaka calendar days since last touch). */
+  recency: LeadQualityLadderRung[];
+  /** F5 — engagement bonus. */
+  engagement: { pointsPerEvent: number; maxEvents: number };
+  /** F5 — failed-contact penalty + the attention flag threshold. */
+  failedContact: { pointsPerEvent: number; maxEvents: number; attentionAt: number };
+  /** F6 — follow-up discipline: scheduled bonus + overdue ladder. */
+  followUp: { scheduledPoints: number; overdue: LeadQualityLadderRung[] };
+  /** F6 — explicit investment interest (flat bonus). */
+  investment: { points: number };
+}
+
+/** Sane bounds for editable point values (validation rejects outside). */
+export const LEAD_QUALITY_POINT_MIN = -100;
+export const LEAD_QUALITY_POINT_MAX = 100;
+
+/** Code defaults, derived from the constants above (single source). */
+export const DEFAULT_LEAD_QUALITY_CONFIG: LeadQualityConfig = {
+  version: 0,
+  baseScore: LEAD_QUALITY_BASE_SCORE,
+  thresholds: {
+    hot: LEAD_QUALITY_THRESHOLDS.HOT_MIN,
+    warm: LEAD_QUALITY_THRESHOLDS.WARM_MIN,
+    developing: LEAD_QUALITY_THRESHOLDS.DEVELOPING_MIN,
+  },
+  statusPoints: Object.fromEntries(
+    Object.entries(LEAD_QUALITY_STATUS_POINTS).map(([name, w]) => [name, w.points])
+  ),
+  advancedStatuses: [...LEAD_QUALITY_ADVANCED_STATUSES],
+  recency: [
+    { maxDays: 1, points: 5 },
+    { maxDays: 3, points: 3 },
+    { maxDays: 7, points: 0 },
+    { maxDays: 14, points: -8 },
+    { maxDays: 30, points: -15 },
+    { maxDays: null, points: -22 },
+  ],
+  engagement: {
+    pointsPerEvent: LEAD_QUALITY_ENGAGEMENT_POINTS_PER_EVENT,
+    maxEvents: LEAD_QUALITY_ENGAGEMENT_CAP_EVENTS,
+  },
+  failedContact: {
+    pointsPerEvent: LEAD_QUALITY_FAILED_CONTACT_POINTS_PER_EVENT,
+    maxEvents: LEAD_QUALITY_FAILED_CONTACT_CAP_EVENTS,
+    attentionAt: 3,
+  },
+  followUp: {
+    scheduledPoints: 5,
+    overdue: [
+      { maxDays: 3, points: -5 },
+      { maxDays: 7, points: -10 },
+      { maxDays: null, points: -15 },
+    ],
+  },
+  investment: { points: LEAD_QUALITY_INVESTMENT_POINTS },
+};
+
+/** Deep copy of a config (callers must never mutate the default). */
+export function cloneLeadQualityConfig(config: LeadQualityConfig): LeadQualityConfig {
+  return JSON.parse(JSON.stringify(config)) as LeadQualityConfig;
+}
+
+function isIntIn(value: unknown, min: number, max: number): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
+/**
+ * Validate one day-ladder. Returns error strings (empty = valid).
+ * `pointMin`/`pointMax` bound the rung points; the ladder must have
+ * 1–10 rungs, strictly increasing maxDays, and an open-ended last rung.
+ */
+export function validateLeadQualityLadder(
+  value: unknown,
+  label: string,
+  pointMin: number,
+  pointMax: number
+): string[] {
+  const errors: string[] = [];
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) {
+    return [`${label} must be a list of 1 to 10 rungs.`];
+  }
+  let prevMax: number | null = null;
+  value.forEach((rung: any, i: number) => {
+    const at = `${label} rung ${i + 1}`;
+    if (!rung || typeof rung !== 'object') {
+      errors.push(`${at} must be an object with maxDays and points.`);
+      return;
+    }
+    const isLast = i === value.length - 1;
+    if (isLast) {
+      if (rung.maxDays !== null) errors.push(`${at} must be open-ended (maxDays null) so the ladder covers every day count.`);
+    } else {
+      if (!isIntIn(rung.maxDays, 0, 3650)) {
+        errors.push(`${at} maxDays must be a whole number of days (0–3650).`);
+      } else if (prevMax !== null && rung.maxDays <= prevMax) {
+        errors.push(`${at} maxDays must be larger than the previous rung's maxDays.`);
+      } else {
+        prevMax = rung.maxDays;
+      }
+    }
+    if (!isIntIn(rung.points, pointMin, pointMax)) {
+      errors.push(`${at} points must be a whole number between ${pointMin} and ${pointMax}.`);
+    }
+  });
+  return errors;
+}
+
+/**
+ * Shape validation for an EFFECTIVE (name-keyed) config. Returns error
+ * strings (empty = valid). The config service reuses this for the
+ * stored form after resolving ids to names, and adds the id-existence
+ * checks on top. Reads never throw — a config failing here falls back
+ * to the code defaults, never takes scoring down.
+ */
+export function validateLeadQualityConfig(value: unknown): string[] {
+  const errors: string[] = [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return ['Lead Quality config must be an object.'];
+  }
+  const c = value as Record<string, any>;
+  if (c.version !== undefined && !isIntIn(c.version, 0, Number.MAX_SAFE_INTEGER)) {
+    errors.push('version must be a whole number (0 or more).');
+  }
+  if (!isIntIn(c.baseScore, 0, 100)) {
+    errors.push('baseScore must be a whole number between 0 and 100.');
+  }
+  const t = c.thresholds;
+  if (!t || typeof t !== 'object') {
+    errors.push('thresholds must be an object with hot, warm and developing.');
+  } else {
+    for (const key of ['hot', 'warm', 'developing'] as const) {
+      if (!isIntIn(t[key], 0, 100)) errors.push(`thresholds.${key} must be a whole number between 0 and 100.`);
+    }
+    if (isIntIn(t.hot, 0, 100) && isIntIn(t.warm, 0, 100) && isIntIn(t.developing, 0, 100)) {
+      if (!(t.hot > t.warm && t.warm > t.developing)) {
+        errors.push('thresholds must be ordered hot > warm > developing.');
+      }
+    }
+  }
+  if (!c.statusPoints || typeof c.statusPoints !== 'object' || Array.isArray(c.statusPoints)) {
+    errors.push('statusPoints must be an object keyed by status name.');
+  } else {
+    for (const [name, points] of Object.entries(c.statusPoints)) {
+      if (!name || typeof name !== 'string') errors.push('statusPoints keys must be non-empty status names.');
+      if (!isIntIn(points, LEAD_QUALITY_POINT_MIN, LEAD_QUALITY_POINT_MAX)) {
+        errors.push(`statusPoints for "${name}" must be a whole number between ${LEAD_QUALITY_POINT_MIN} and ${LEAD_QUALITY_POINT_MAX}.`);
+      }
+    }
+  }
+  if (!Array.isArray(c.advancedStatuses) || c.advancedStatuses.some((s: any) => typeof s !== 'string' || !s)) {
+    errors.push('advancedStatuses must be a list of status names.');
+  }
+  errors.push(...validateLeadQualityLadder(c.recency, 'recency', LEAD_QUALITY_POINT_MIN, LEAD_QUALITY_POINT_MAX));
+  const e = c.engagement;
+  if (!e || typeof e !== 'object') {
+    errors.push('engagement must be an object with pointsPerEvent and maxEvents.');
+  } else {
+    if (!isIntIn(e.pointsPerEvent, 0, 20)) errors.push('engagement.pointsPerEvent must be a whole number between 0 and 20.');
+    if (!isIntIn(e.maxEvents, 0, 10)) errors.push('engagement.maxEvents must be a whole number between 0 and 10.');
+  }
+  const f = c.failedContact;
+  if (!f || typeof f !== 'object') {
+    errors.push('failedContact must be an object with pointsPerEvent, maxEvents and attentionAt.');
+  } else {
+    if (!isIntIn(f.pointsPerEvent, -20, 0)) errors.push('failedContact.pointsPerEvent must be a whole number between -20 and 0.');
+    if (!isIntIn(f.maxEvents, 0, 10)) errors.push('failedContact.maxEvents must be a whole number between 0 and 10.');
+    if (!isIntIn(f.attentionAt, 1, 10)) errors.push('failedContact.attentionAt must be a whole number between 1 and 10.');
+  }
+  const fu = c.followUp;
+  if (!fu || typeof fu !== 'object') {
+    errors.push('followUp must be an object with scheduledPoints and overdue.');
+  } else {
+    if (!isIntIn(fu.scheduledPoints, LEAD_QUALITY_POINT_MIN, LEAD_QUALITY_POINT_MAX)) {
+      errors.push(`followUp.scheduledPoints must be a whole number between ${LEAD_QUALITY_POINT_MIN} and ${LEAD_QUALITY_POINT_MAX}.`);
+    }
+    errors.push(...validateLeadQualityLadder(fu.overdue, 'followUp.overdue', LEAD_QUALITY_POINT_MIN, 0));
+  }
+  const inv = c.investment;
+  if (!inv || typeof inv !== 'object') {
+    errors.push('investment must be an object with points.');
+  } else if (!isIntIn(inv.points, 0, 100)) {
+    errors.push('investment.points must be a whole number between 0 and 100.');
+  }
+  return errors;
+}
+
+/**
+ * Resolve a caller-supplied config to a usable one. A missing,
+ * malformed or out-of-range config returns the code defaults — the
+ * scorer can never be taken down by a bad stored value.
+ */
+export function normalizeLeadQualityConfig(value?: unknown): LeadQualityConfig {
+  if (value === undefined || value === null) return cloneLeadQualityConfig(DEFAULT_LEAD_QUALITY_CONFIG);
+  if (validateLeadQualityConfig(value).length > 0) {
+    return cloneLeadQualityConfig(DEFAULT_LEAD_QUALITY_CONFIG);
+  }
+  const c = value as LeadQualityConfig;
+  return {
+    version: typeof c.version === 'number' ? c.version : 0,
+    baseScore: c.baseScore,
+    thresholds: { ...c.thresholds },
+    statusPoints: { ...c.statusPoints },
+    advancedStatuses: [...c.advancedStatuses],
+    recency: c.recency.map(r => ({ ...r })),
+    engagement: { ...c.engagement },
+    failedContact: { ...c.failedContact },
+    followUp: { scheduledPoints: c.followUp.scheduledPoints, overdue: c.followUp.overdue.map(r => ({ ...r })) },
+    investment: { ...c.investment },
+  };
+}
+
+/** First rung whose window covers `days` (the last rung is open-ended). */
+export function ladderRungForDays(
+  rungs: LeadQualityLadderRung[],
+  days: number
+): LeadQualityLadderRung | undefined {
+  for (const rung of rungs) {
+    if (rung.maxDays === null || days <= rung.maxDays) return rung;
+  }
+  return undefined;
+}
+
+/** Points of the rung covering `days` (0 when no rung covers it). */
+export function ladderPointsForDays(rungs: LeadQualityLadderRung[], days: number): number {
+  return ladderRungForDays(rungs, days)?.points ?? 0;
+}
+
+/* ====================================================================
    TYPES
 ==================================================================== */
 
@@ -187,10 +453,11 @@ function plural(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
 }
 
-export function bandForScore(score: number): LeadQualityActiveBand {
-  if (score >= LEAD_QUALITY_THRESHOLDS.HOT_MIN) return 'Hot';
-  if (score >= LEAD_QUALITY_THRESHOLDS.WARM_MIN) return 'Warm';
-  if (score >= LEAD_QUALITY_THRESHOLDS.DEVELOPING_MIN) return 'Developing';
+export function bandForScore(score: number, config?: LeadQualityConfig): LeadQualityActiveBand {
+  const cfg = normalizeLeadQualityConfig(config);
+  if (score >= cfg.thresholds.hot) return 'Hot';
+  if (score >= cfg.thresholds.warm) return 'Warm';
+  if (score >= cfg.thresholds.developing) return 'Developing';
   return 'Cold';
 }
 
@@ -201,8 +468,13 @@ export function bandForScore(score: number): LeadQualityActiveBand {
 /**
  * Deterministic score + full explanation for one lead.
  * Pure: no I/O, no randomness. Same input → same output.
+ *
+ * `config` is the effective (name-keyed) DZ-3 config; callers that
+ * pass nothing keep today's behaviour byte-identically (the code
+ * defaults). A malformed config normalizes to those defaults.
  */
-export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult {
+export function calculateLeadQuality(input: LeadQualityInput, config?: LeadQualityConfig): LeadQualityResult {
+  const cfg = normalizeLeadQualityConfig(config);
   const nowRaw = input.now !== undefined && input.now !== null ? input.now : new Date();
   const now = nowRaw instanceof Date ? nowRaw : new Date(String(nowRaw));
   const nowSafe = Number.isFinite(now.getTime()) ? now : new Date();
@@ -219,7 +491,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
       positiveFactors: [
         {
           label: 'Converted — successful outcome (terminal)',
-          points: LEAD_QUALITY_MAX_SCORE - LEAD_QUALITY_BASE_SCORE,
+          points: LEAD_QUALITY_MAX_SCORE - cfg.baseScore,
         },
       ],
       negativeFactors: [],
@@ -235,7 +507,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
       negativeFactors: [
         {
           label: 'Not Interested — closed (terminal)',
-          points: LEAD_QUALITY_MIN_SCORE - LEAD_QUALITY_BASE_SCORE,
+          points: LEAD_QUALITY_MIN_SCORE - cfg.baseScore,
         },
       ],
       attentionReasons: [],
@@ -245,7 +517,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
   const positiveFactors: LeadQualityFactor[] = [];
   const negativeFactors: LeadQualityFactor[] = [];
   const attentionReasons: string[] = [];
-  let total = LEAD_QUALITY_BASE_SCORE;
+  let total = cfg.baseScore;
 
   const push = (label: string, points: number) => {
     if (!Number.isFinite(points) || points === 0) return;
@@ -254,9 +526,9 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
   };
 
   /* ---- 1. Status / buying intent (strongest active signal) -------- */
-  const statusWeight = LEAD_QUALITY_STATUS_POINTS[status];
-  if (statusWeight && statusWeight.points !== 0) {
-    push(statusWeight.label, statusWeight.points);
+  const statusPoints = cfg.statusPoints[status];
+  if (typeof statusPoints === 'number' && statusPoints !== 0) {
+    push(LEAD_QUALITY_STATUS_POINTS[status]?.label ?? status, statusPoints);
   }
 
   /* ---- 2. Recency / freshness ------------------------------------- */
@@ -268,28 +540,36 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
   if (touchCandidates.length > 0) {
     const lastTouch = new Date(Math.max(...touchCandidates.map(d => d.getTime())));
     const daysSince = Math.max(0, dhakaCalendarDaysBetween(lastTouch, nowSafe));
-    if (daysSince <= 1) {
-      push('Touched within the last day', 5);
-    } else if (daysSince <= 3) {
-      push(`Touched ${daysSince} days ago`, 3);
-    } else if (daysSince <= 7) {
-      // Neutral week — no factor.
-    } else if (daysSince <= 14) {
-      push(`No progress in ${daysSince} days`, -8);
-    } else if (daysSince <= 30) {
-      push(`No progress in ${daysSince} days`, -15);
-      attentionReasons.push(`No meaningful progress in ${daysSince} days`);
-    } else {
-      push(`No progress in ${daysSince} days (stale)`, -22);
-      attentionReasons.push(`No meaningful progress in ${daysSince} days — going stale`);
+    const recencyRung = ladderRungForDays(cfg.recency, daysSince);
+    const recencyPoints = recencyRung?.points ?? 0;
+    if (recencyPoints !== 0) {
+      if (recencyPoints > 0) {
+        push(
+          daysSince <= 1 ? 'Touched within the last day' : `Touched ${daysSince} days ago`,
+          recencyPoints
+        );
+      } else {
+        push(
+          `No progress in ${daysSince} days${recencyRung?.maxDays === null ? ' (stale)' : ''}`,
+          recencyPoints
+        );
+      }
+    }
+    // Staleness flag: no meaningful progress in over two weeks. The
+    // day line is a fixed rule (not one of the configurable F-values);
+    // the ladder decides the points, this decides the flag.
+    if (daysSince > 14) {
+      attentionReasons.push(
+        `No meaningful progress in ${daysSince} days${daysSince > 30 ? ' — going stale' : ''}`
+      );
     }
   }
 
   /* ---- 3. Engagement (actual history, capped — never raw volume) -- */
   const meaningfulRaw = Math.max(0, Math.floor(Number(input.meaningfulEngagementCount) || 0));
   if (meaningfulRaw > 0) {
-    const counted = Math.min(meaningfulRaw, LEAD_QUALITY_ENGAGEMENT_CAP_EVENTS);
-    const points = counted * LEAD_QUALITY_ENGAGEMENT_POINTS_PER_EVENT;
+    const counted = Math.min(meaningfulRaw, cfg.engagement.maxEvents);
+    const points = counted * cfg.engagement.pointsPerEvent;
     const cappedNote = meaningfulRaw > counted ? ' (capped)' : '';
     push(
       meaningfulRaw === 1
@@ -303,8 +583,9 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
   const nextActionCandidates = [toDate(input.nextFollowUpAt), toDate(input.nextScheduledAt)].filter(
     (d): d is Date => d !== null
   );
+  const advancedStatuses = new Set(cfg.advancedStatuses);
   if (nextActionCandidates.length === 0) {
-    if (LEAD_QUALITY_ADVANCED_STATUSES.has(status)) {
+    if (advancedStatuses.has(status)) {
       attentionReasons.push(`No next action scheduled for ${status} lead`);
     }
   } else {
@@ -317,7 +598,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
         1,
         dhakaCalendarDaysBetween(nextAction, nowSafe)
       );
-      const penalty = daysOverdue <= 3 ? -5 : daysOverdue <= 7 ? -10 : -15;
+      const penalty = ladderPointsForDays(cfg.followUp.overdue, daysOverdue);
       push(
         `Next action overdue by ${daysOverdue} ${plural(daysOverdue, 'day', 'days')}`,
         penalty
@@ -326,7 +607,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
         `Next action overdue by ${daysOverdue} ${plural(daysOverdue, 'day', 'days')}`
       );
     } else {
-      push('Next action scheduled', 5);
+      push('Next action scheduled', cfg.followUp.scheduledPoints);
     }
   }
 
@@ -337,14 +618,14 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
       Number.isFinite(amount) && amount > 0
         ? ` (৳${amount.toLocaleString('en-US')})`
         : '';
-    push(`Customer shared an investment interest${amountNote}`, LEAD_QUALITY_INVESTMENT_POINTS);
+    push(`Customer shared an investment interest${amountNote}`, cfg.investment.points);
   }
 
   /* ---- 6. Failed contact history (capped penalty) ------------------ */
   const failedRaw = Math.max(0, Math.floor(Number(input.failedContactCount) || 0));
   if (failedRaw > 0) {
-    const counted = Math.min(failedRaw, LEAD_QUALITY_FAILED_CONTACT_CAP_EVENTS);
-    const points = counted * LEAD_QUALITY_FAILED_CONTACT_POINTS_PER_EVENT;
+    const counted = Math.min(failedRaw, cfg.failedContact.maxEvents);
+    const points = counted * cfg.failedContact.pointsPerEvent;
     const cappedNote = failedRaw > counted ? ' (capped)' : '';
     push(
       failedRaw === 1
@@ -352,7 +633,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
         : `${failedRaw} unanswered contact ${plural(failedRaw, 'attempt', 'attempts')}${cappedNote}`,
       points
     );
-    if (failedRaw >= 3) {
+    if (failedRaw >= cfg.failedContact.attentionAt) {
       attentionReasons.push(`Repeated unanswered contact (${failedRaw} attempts)`);
     }
   }
@@ -368,7 +649,7 @@ export function calculateLeadQuality(input: LeadQualityInput): LeadQualityResult
 
   return {
     score,
-    band: bandForScore(score),
+    band: bandForScore(score, cfg),
     isTerminal: false,
     positiveFactors,
     negativeFactors,
@@ -388,21 +669,25 @@ export function toCompactQuality(result: LeadQualityResult): {
  * Reconciliation check: the factors must always explain the score
  * (used by tests and safe to use in diagnostics).
  */
-export function reconcileQualityFactors(result: LeadQualityResult): {
+export function reconcileQualityFactors(
+  result: LeadQualityResult,
+  config?: LeadQualityConfig
+): {
   base: number;
   factorTotal: number;
   expected: number;
   matches: boolean;
 } {
+  const cfg = normalizeLeadQualityConfig(config);
   const factorTotal =
     result.positiveFactors.reduce((a, f) => a + f.points, 0) +
     result.negativeFactors.reduce((a, f) => a + f.points, 0);
   const expected = Math.min(
     LEAD_QUALITY_MAX_SCORE,
-    Math.max(LEAD_QUALITY_MIN_SCORE, LEAD_QUALITY_BASE_SCORE + factorTotal)
+    Math.max(LEAD_QUALITY_MIN_SCORE, cfg.baseScore + factorTotal)
   );
   return {
-    base: LEAD_QUALITY_BASE_SCORE,
+    base: cfg.baseScore,
     factorTotal,
     expected,
     matches: expected === result.score,

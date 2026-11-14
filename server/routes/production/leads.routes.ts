@@ -86,6 +86,7 @@ import {
   computeLeadSla,
   getLeadSlaConfig,
 } from '../../services/LeadSlaService.js';
+import { getLeadQualityConfig } from '../../services/LeadQualityConfigService.js';
 import {
   reconcileLeadNextStepCalendar,
   reconcileLeadNextStepCalendarDemo,
@@ -622,10 +623,14 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       )
     );
     const visible = scope(fallbackStore.leads || []);
+    // DZ-3: the stored Lead Quality config (code defaults when unset).
+    const qualityConfig = await getLeadQualityConfig();
     const qualityById = compactQualityForFallbackLeads(
       visible,
       (fallbackStore as any).leadActivities || [],
-      (fallbackStore as any).scheduledActivities || []
+      (fallbackStore as any).scheduledActivities || [],
+      undefined,
+      qualityConfig
     );
     const scored = visible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)) }));
     return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
@@ -706,9 +711,11 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     // Scoring runs in memory over rows the visibility scope already
     // allowed; the score itself grants no access.
     const ids = (result.rows || []).map((r: any) => String(r.id));
-    const [activityMap, scheduledMap] = await Promise.all([
+    const [activityMap, scheduledMap, qualityConfig] = await Promise.all([
       fetchActivityQualitySignals(pool, ids),
       fetchScheduledQualitySignals(pool, ids),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig(),
     ]);
     perf.span('db.qualitySignals');
     const scored = (result.rows || []).map((row: any) => {
@@ -716,7 +723,9 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       mapped.leadQuality = compactScoreLeadRow(
         row,
         activityMap.get(String(row.id)),
-        scheduledMap.get(String(row.id))
+        scheduledMap.get(String(row.id)),
+        undefined,
+        qualityConfig
       );
       return mapped;
     });
@@ -1536,7 +1545,10 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       lead.leadQuality = scoreFallbackLead(
         lead,
         (fallbackStore as any).leadActivities || [],
-        (fallbackStore as any).scheduledActivities || []
+        (fallbackStore as any).scheduledActivities || [],
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        await getLeadQualityConfig()
       );
 
       // Server-side notification for demo mode (replaces client fire-and-forget)
@@ -1675,14 +1687,18 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       });
       // Fresh full quality for the saved row (two single-lead bulk-safe
       // queries) so in-place UI patches never carry a stale score.
-      const [saveActivity, saveScheduled] = await Promise.all([
+      const [saveActivity, saveScheduled, saveQualityConfig] = await Promise.all([
         fetchActivityQualitySignals(pool, [String(row.id)]),
         fetchScheduledQualitySignals(pool, [String(row.id)]),
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        getLeadQualityConfig(),
       ]);
       mappedLead.leadQuality = scoreLeadRow(
         row,
         saveActivity.get(String(row.id)),
-        saveScheduled.get(String(row.id))
+        saveScheduled.get(String(row.id)),
+        undefined,
+        saveQualityConfig
       );
       perf.span('db.qualitySignals');
       perf.finish(res);
@@ -2853,7 +2869,10 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
       const demoQualityById = compactQualityForFallbackLeads(
         page,
         (fallbackStore as any).leadActivities || [],
-        (fallbackStore as any).scheduledActivities || []
+        (fallbackStore as any).scheduledActivities || [],
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        await getLeadQualityConfig()
       );
       const items = page.map((l: any) => {
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
@@ -3024,9 +3043,11 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
     // Lead Quality for the page: two bulk signal queries for all returned
     // leads — never per-lead. Scores attach to visible rows only.
     const queueIds = (listRes.rows || []).map((r: any) => String(r.id));
-    const [queueActivity, queueScheduled] = await Promise.all([
+    const [queueActivity, queueScheduled, queueQualityConfig] = await Promise.all([
       fetchActivityQualitySignals(pool, queueIds),
       fetchScheduledQualitySignals(pool, queueIds),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig(),
     ]);
     const items = listRes.rows.map((row: any) => {
       const cf = row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {};
@@ -3074,7 +3095,9 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
         leadQuality: compactScoreLeadRow(
           row,
           queueActivity.get(String(row.id)),
-          queueScheduled.get(String(row.id))
+          queueScheduled.get(String(row.id)),
+          undefined,
+          queueQualityConfig
         ),
         ...(sla ? { sla } : {}),
       };
@@ -3127,7 +3150,10 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
         leadQuality: scoreFallbackLead(
           lead,
           (fallbackStore as any).leadActivities || [],
-          (fallbackStore as any).scheduledActivities || []
+          (fallbackStore as any).scheduledActivities || [],
+          undefined,
+          // DZ-3: the stored Lead Quality config (code defaults when unset).
+          await getLeadQualityConfig()
         ),
       });
     }
@@ -3139,14 +3165,18 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
       return sendJson(res, 404, { success: false, message: 'Lead not found.' });
     }
     const mappedSingle: any = mapLeadRow(row);
-    const [singleActivity, singleScheduled] = await Promise.all([
+    const [singleActivity, singleScheduled, singleQualityConfig] = await Promise.all([
       fetchActivityQualitySignals(getPool(), [String(row.id)]),
       fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig(),
     ]);
     mappedSingle.leadQuality = scoreLeadRow(
       row,
       singleActivity.get(String(row.id)),
-      singleScheduled.get(String(row.id))
+      singleScheduled.get(String(row.id)),
+      undefined,
+      singleQualityConfig
     );
     return sendJson(res, 200, mappedSingle);
   } catch (error: any) {
@@ -3187,7 +3217,10 @@ router.get('/leads/:id/quality', requireAuth, async (req: any, res) => {
         data: scoreFallbackLead(
           lead,
           (fallbackStore as any).leadActivities || [],
-          (fallbackStore as any).scheduledActivities || []
+          (fallbackStore as any).scheduledActivities || [],
+          undefined,
+          // DZ-3: the stored Lead Quality config (code defaults when unset).
+          await getLeadQualityConfig()
         ),
       });
     }
@@ -3197,16 +3230,20 @@ router.get('/leads/:id/quality', requireAuth, async (req: any, res) => {
     if (!isLeadAccessible(row, visibility, caller)) {
       return sendJson(res, 404, { success: false, message: 'Lead not found.' });
     }
-    const [qualityActivity, qualityScheduled] = await Promise.all([
+    const [qualityActivity, qualityScheduled, qualityConfig] = await Promise.all([
       fetchActivityQualitySignals(getPool(), [String(row.id)]),
       fetchScheduledQualitySignals(getPool(), [String(row.id)]),
+      // DZ-3: the stored Lead Quality config (code defaults when unset).
+      getLeadQualityConfig(),
     ]);
     return sendJson(res, 200, {
       success: true,
       data: scoreLeadRow(
         row,
         qualityActivity.get(String(row.id)),
-        qualityScheduled.get(String(row.id))
+        qualityScheduled.get(String(row.id)),
+        undefined,
+        qualityConfig
       ),
     });
   } catch (error: any) {
@@ -3543,7 +3580,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       (lead as any).leadQuality = scoreFallbackLead(
         lead,
         (fallbackStore as any).leadActivities || [],
-        (fallbackStore as any).scheduledActivities || []
+        (fallbackStore as any).scheduledActivities || [],
+        undefined,
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        await getLeadQualityConfig()
       );
       const demoResponseBody = { success: true, data: { lead: lead, activity: mappedActivity } };
       if (clientMutationId) {
@@ -3810,14 +3850,18 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       });
       // Fresh full quality for the updated row (two single-lead bulk-safe
       // queries) — the follow-up changed status/recency/follow-up signals.
-      const [fuActivity, fuScheduled] = await Promise.all([
+      const [fuActivity, fuScheduled, fuQualityConfig] = await Promise.all([
         fetchActivityQualitySignals(getPool(), [String(updatedRow.id)]),
         fetchScheduledQualitySignals(getPool(), [String(updatedRow.id)]),
+        // DZ-3: the stored Lead Quality config (code defaults when unset).
+        getLeadQualityConfig(),
       ]);
       mappedLead.leadQuality = scoreLeadRow(
         updatedRow,
         fuActivity.get(String(updatedRow.id)),
-        fuScheduled.get(String(updatedRow.id))
+        fuScheduled.get(String(updatedRow.id)),
+        undefined,
+        fuQualityConfig
       );
       perf.span('db.qualitySignals');
       const mappedActivity = mapActivityRow({ ...activityInsert.rows[0], actor_employee_id: caller.employee_id });

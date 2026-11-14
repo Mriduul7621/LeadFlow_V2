@@ -24,6 +24,16 @@
  *                               the §3.4 hard invariants. The view
  *                               itself is audit-logged, once per
  *                               unlock session.
+ *   GET  /danger-zone/lead-quality
+ *                            requires a VALID unlock: the current
+ *                            effective Lead Quality config (DZ-3,
+ *                            audit §2.6 F1–F6) + the code defaults +
+ *                            the version + the last change (who/when/
+ *                            old→new, from the audit log).
+ *   PUT  /danger-zone/lead-quality
+ *                            requires a VALID unlock: saves one
+ *                            versioned config (version +1) and writes
+ *                            an audit row with old→new values.
  *
  * Unlock lifetime: 10 minutes, non-sliding (owner decision
  * 2026-11-11). Re-lock triggers: expiry, Lock, logout (the client
@@ -56,6 +66,13 @@ import {
   revokeDangerZoneUnlocks,
   type SuperAdminCaller,
 } from '../../services/DangerZoneService.js';
+import {
+  getLeadQualityConfigForEdit,
+  LEAD_QUALITY_SCALE,
+  LeadQualityConfigValidationError,
+  setLeadQualityConfig,
+  type LeadQualityConfigInput,
+} from '../../services/LeadQualityConfigService.js';
 import {
   dbErrorStatus,
   logAccessChange,
@@ -227,6 +244,53 @@ router.get('/danger-zone/overview', requireAuth, requireSuperAdmin, requireDange
     return sendJson(res, 200, { success: true, data: overview });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Danger Zone overview failed.' });
+  }
+});
+
+/* ====================================================================
+   LEAD QUALITY CONFIG (DZ-3 — audit §2.6 F1–F6)
+   --------------------------------------------------------------------
+   The scorer's weights live in one versioned config row (Metadata
+   Engine, type 'LeadQuality'). GET returns the current effective
+   config + the code defaults + the version + the last change
+   (who/when/old→new from the audit log, rendered only inside the
+   Danger Zone per Q2). PUT saves one versioned config (version +1)
+   and audit-logs old→new. Both sit behind the same three gates as
+   the overview: requireAuth → DB-resolved super admin (403) →
+   valid unlock else 403 danger_zone_locked (never 401 — a 401 logs
+   the admin out via the shared HTTP layer).
+==================================================================== */
+
+router.get('/danger-zone/lead-quality', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  try {
+    const data = await getLeadQualityConfigForEdit();
+    return sendJson(res, 200, {
+      success: true,
+      data: { ...data, scale: LEAD_QUALITY_SCALE },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Lead Quality config failed.' });
+  }
+});
+
+router.put('/danger-zone/lead-quality', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const saved = await setLeadQualityConfig(req.body as LeadQualityConfigInput, {
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, {
+      success: true,
+      data: { ...saved, scale: LEAD_QUALITY_SCALE },
+    });
+  } catch (error: any) {
+    // Validation failures are the caller's fault (400, clear message);
+    // anything else is a server/database failure (503 via dbErrorStatus).
+    if (error instanceof LeadQualityConfigValidationError) {
+      return sendJson(res, 400, { success: false, message: error.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save Lead Quality config.' });
   }
 });
 
