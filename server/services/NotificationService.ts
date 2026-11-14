@@ -22,6 +22,11 @@
 
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
+import {
+  ASSIGNMENT_ALERTS_OPTION_VALUE,
+  getNotificationSettingsSyncFallback,
+  readToggleWithExec,
+} from './NotificationSettingsService.js';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -282,6 +287,18 @@ export async function createAssignmentNotifications(
   let skipped = 0;
   let failed = 0;
 
+  // DZ-1 (Honest Settings): the Settings → Push Intelligence toggle
+  // "In-App Assignment Alerts" is a real switch now. When an admin has
+  // turned it OFF, no assignment notifications are created (the read
+  // rides the caller's transaction and fails ON, so a missing or
+  // malformed settings row keeps today's behaviour). The read PROBES
+  // information_schema before touching `options` — see
+  // readToggleWithExec: a failed SELECT here would abort the whole
+  // lead transaction, not just skip the notifications.
+  if (!(await readToggleWithExec(exec, ASSIGNMENT_ALERTS_OPTION_VALUE))) {
+    return { created, skipped, failed };
+  }
+
   // 1. Notify the assignee
   const assigneeKey = buildIdempotencyKey(eventType, assignmentHistoryId, assignedToUserId);
   const assigneeResult = await insertNotificationWithIdempotency(exec, {
@@ -353,6 +370,12 @@ export function createAssignmentNotificationsDemo(
 
   let created = 0;
   let skipped = 0;
+
+  // DZ-1: same "In-App Assignment Alerts" toggle as the DB path,
+  // read from the fallback store (demo mode has no database).
+  if (!getNotificationSettingsSyncFallback().assignmentAlerts) {
+    return { created, skipped };
+  }
 
   // Check for existing notification (demo-mode idempotency)
   const existing = (fallbackStore as any).notifications || [];

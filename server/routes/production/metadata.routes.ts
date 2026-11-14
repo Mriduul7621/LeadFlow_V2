@@ -561,6 +561,12 @@ router.delete('/workflow-rules/:id', requireAuth, requirePermissionCode('workflo
 
 /* ====================================================================
    FORM FIELDS
+   DZ-1 (audit item I1): mutations are gated by the settings.manage
+   permission code (DB-resolved), exactly like the rest of the
+   Settings surface — they used to require the ADMIN role claim
+   (requireAdmin), which both over- and under-granted: a settings
+   manager without the ADMIN role was refused, and the gate trusted
+   the token's role claim instead of the database.
 ==================================================================== */
 
 router.get('/form-fields', requireAuth, async (_req, res) => {
