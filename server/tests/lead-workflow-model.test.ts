@@ -128,13 +128,18 @@ describe('Lead workflow model', () => {
     const leadService = read('src/modules/leads/services/leadService.ts');
     const server = read('server/routes/production.routes.ts') + read('server/routes/production/leads.routes.ts');
     const workspace = read('src/modules/leads/pages/LeadList.tsx');
+    const updatePage = read('src/modules/leads/pages/LeadUpdate.tsx');
 
     assert.ok(leadService.includes("'/api/leads'"));
     assert.ok(leadService.includes('/api/leads/${encodeURIComponent(leadId)}/follow-up'));
     assert.ok(server.includes("router.post('/leads/:id/follow-up'"));
     assert.ok(server.includes('INSERT INTO lead_activities'));
     assert.ok(server.includes('assignmentHistory'));
-    assert.ok(workspace.includes('handleUpdateStatus'));
+    // FIX-1c: LeadList no longer writes follow-ups itself (its modal
+    // handler is gone); the single record path runs list -> Lead 360 ->
+    // LeadUpdate, and LeadUpdate performs the follow-up write.
+    assert.ok(workspace.includes('navigate(`/leads/${lead.id}`)'), 'list must open the Lead 360 workspace');
+    assert.ok(updatePage.includes('leadService.updateLeadStatus'), 'the update page must perform the follow-up write');
   });
 
   it('aligns campaign purge UI policy with the admin-only server policy', () => {
