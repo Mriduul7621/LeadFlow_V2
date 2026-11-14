@@ -98,7 +98,7 @@ export const userService = {
     return saved;
   },
 
-  async updateUser(userId: string, data: Partial<User>): Promise<User | null> {
+  async updateUser(userId: string, data: Partial<User> & { clearLockout?: boolean }): Promise<User | null> {
     const saved = await apiRequest<User>(`/api/users/${encodeURIComponent(userId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

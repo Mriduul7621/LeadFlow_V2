@@ -99,8 +99,10 @@ export default function ProfileSettings() {
       toast.error('Complete all password fields.');
       return;
     }
-    if (newPassword.length < 6) {
-      toast.error('Use at least 6 characters for your new password.');
+    // DZ-4: mirrors the Danger Zone security policy's default
+    // minimum (8); the server enforces the live value.
+    if (newPassword.length < 8) {
+      toast.error('Use at least 8 characters for your new password.');
       return;
     }
     if (newPassword !== confirmPassword) {

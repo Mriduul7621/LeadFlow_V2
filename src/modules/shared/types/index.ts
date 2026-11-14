@@ -67,6 +67,9 @@ export interface User {
 
   password?: string;
   mustChangePassword?: boolean;
+  /** A9 (DZ-4): per-account lockout state (migration-022 columns). */
+  failedLoginAttempts?: number;
+  lockedUntil?: string | null;
   avatarUrl?: string;
 
   createdAt?: string;

@@ -34,6 +34,15 @@
  *                            requires a VALID unlock: saves one
  *                            versioned config (version +1) and writes
  *                            an audit row with old→new values.
+ *   GET  /danger-zone/security-policy
+ *                            requires a VALID unlock: the current
+ *                            effective security policy (DZ-4, audit
+ *                            §2.1 A1/A5/A8/A9) + the code defaults +
+ *                            the bounds + the version + the last change.
+ *   PUT  /danger-zone/security-policy
+ *                            requires a VALID unlock: saves one
+ *                            versioned policy (version +1) and writes
+ *                            an audit row with old→new values.
  *
  * Unlock lifetime: 10 minutes, non-sliding (owner decision
  * 2026-11-11). Re-lock triggers: expiry, Lock, logout (the client
@@ -73,6 +82,13 @@ import {
   setLeadQualityConfig,
   type LeadQualityConfigInput,
 } from '../../services/LeadQualityConfigService.js';
+import {
+  getSecurityPolicyForEdit,
+  SECURITY_POLICY_BOUNDS,
+  SecurityPolicyValidationError,
+  setSecurityPolicy,
+  type SecurityPolicyInput,
+} from '../../services/SecurityPolicyService.js';
 import {
   dbErrorStatus,
   logAccessChange,
@@ -291,6 +307,59 @@ router.put('/danger-zone/lead-quality', requireAuth, requireSuperAdmin, requireD
       return sendJson(res, 400, { success: false, message: error.message });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save Lead Quality config.' });
+  }
+});
+
+/* ====================================================================
+   SECURITY POLICY (DZ-4 — audit §2.1 A1/A5/A8/A9, §4)
+   --------------------------------------------------------------------
+   One versioned policy a super admin edits in the Danger Zone:
+   minimum password length (A1, default 8, floor 5), per-account
+   lockout on/off + threshold + duration (A9, default on / 10 / 30
+   min, migration-022 columns), token lifetime in days (A5, default
+   7, bounded 1–30, newly issued tokens only) and the failed-sign-in
+   limit per 15 min per IP (A8, default 20, bounded 5–100; the window
+   stays in code). No complexity toggles — the owner decided
+   length-only (Q3). GET returns the current effective policy + the
+   code defaults + the bounds + the version + the last change
+   (who/when/old→new from the audit log, rendered only inside the
+   Danger Zone per Q2). PUT saves one versioned policy (version +1)
+   and audit-logs old→new. Both sit behind the same three gates as
+   the overview: requireAuth → DB-resolved super admin (403) →
+   valid unlock else 403 danger_zone_locked (never 401 — a 401 logs
+   the admin out via the shared HTTP layer).
+==================================================================== */
+
+router.get('/danger-zone/security-policy', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  try {
+    const data = await getSecurityPolicyForEdit();
+    return sendJson(res, 200, {
+      success: true,
+      data: { ...data, bounds: SECURITY_POLICY_BOUNDS },
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Security policy failed.' });
+  }
+});
+
+router.put('/danger-zone/security-policy', requireAuth, requireSuperAdmin, requireDangerZoneUnlock, async (req: any, res) => {
+  const admin = (req as any).dangerZoneAdmin as SuperAdminCaller;
+  try {
+    const saved = await setSecurityPolicy(req.body as SecurityPolicyInput, {
+      actorId: admin.id,
+      ip: clientIp(req),
+    });
+    return sendJson(res, 200, {
+      success: true,
+      data: { ...saved, bounds: SECURITY_POLICY_BOUNDS },
+    });
+  } catch (error: any) {
+    // Validation failures are the caller's fault (400, clear message);
+    // anything else is a server/database failure (503 via dbErrorStatus).
+    if (error instanceof SecurityPolicyValidationError) {
+      return sendJson(res, 400, { success: false, message: error.message });
+    }
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Could not save security policy.' });
   }
 });
 
