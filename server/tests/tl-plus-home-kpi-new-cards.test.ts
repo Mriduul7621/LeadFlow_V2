@@ -371,7 +371,15 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
     const old50h = iso(now.getTime() - 50 * 3600_000);
     const past48 = iso(now.getTime() - 48 * 3600_000 - 60_000); // 1 min past the cutoff
     const inside48 = iso(now.getTime() - 48 * 3600_000 + 60_000); // 1 min inside it
-    const recent10h = iso(now.getTime() - 10 * 3600_000);
+    // Flake fix 2026-11-13: this used to be `now − 10h` and the
+    // fixture assumed it was NOT today — true only before 10:00
+    // Dhaka, so after 10:00 the lead fell inside today's Dhaka day
+    // and todayCollection read 4 instead of 3 (fails on main too).
+    // Anchor it to the Dhaka day instead: yesterday 14:00 Dhaka
+    // (t0 − 10h) is NEVER inside today, and its age is always
+    // 10h–34h — under the 48h No Action cutoff at every hour of
+    // the day (10h just after midnight, ~34h just before it).
+    const recentYesterday = iso(t0 - 10 * 3600_000);
     const old5d = iso(now.getTime() - 5 * 24 * 3600_000);
     const old60h = iso(now.getTime() - 60 * 3600_000);
     const todayPlus30m = iso(t0 + 30 * 60_000);
@@ -410,7 +418,7 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
     await mkLead('NA Old Untouched', mem.id, 'New', old50h, null); // noAction
     await mkLead('NA Boundary Past', mem.id, 'Interested', past48, null); // noAction (1 min past 48h)
     await mkLead('NA Boundary Inside', mem.id, 'Interested', inside48, null); // NOT noAction (1 min inside 48h)
-    await mkLead('NA Recent Untouched', mem.id, 'New', recent10h, null); // NOT noAction (recent)
+    await mkLead('NA Recent Untouched', mem.id, 'New', recentYesterday, null); // NOT noAction (recent, under 48h)
     const withActivity = await mkLead('NA With Activity', mem.id, 'Interested', old50h, null);
     await mkActivity(withActivity, 'Interested'); // NOT noAction: an activity row exists
     await mkLead('NA Legacy History', mem.id, 'Follow-up Set', old50h, null,
@@ -529,7 +537,7 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
     );
     const names = res.body.items.map((l: any) => l.customerName);
     assert.ok(!names.includes('NA Boundary Inside'), '48h minus 1 minute is not yet no-action');
-    assert.ok(!names.includes('NA Recent Untouched'), 'a 10-hour-old lead is not no-action');
+    assert.ok(!names.includes('NA Recent Untouched'), 'a recent lead (under 48h old) is not no-action');
     assert.ok(!names.includes('NA With Activity'), 'one lead_activities row is an action');
     assert.ok(!names.includes('NA Legacy History'), 'a non-empty legacy status_history is an action');
     assert.ok(!names.includes('NA Terminal Old'), 'terminal leads are never no-action');
