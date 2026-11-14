@@ -766,12 +766,13 @@ describe('Performance & latency hardening — client source guards', () => {
 
   it('L. no new full-list refetch after a mutation (LeadList)', () => {
     const page = LEAD_LIST();
-    const saveHandler = page.slice(page.indexOf('const handleSaveLeadUpdate'), page.indexOf('const handleUpdateStatus'));
-    assert.ok(saveHandler.includes('applyLeadUpdate(updated)'), 'status save must patch from the authoritative response');
-    assert.ok(!saveHandler.includes('leadService.getLeads('), 'status save must not refetch the full lead list');
-    const quickHandler = page.slice(page.indexOf('const handleUpdateStatus'), page.indexOf('const filteredLeads'));
-    assert.ok(quickHandler.includes('applyLeadUpdate(updated)'), 'quick status update must patch in place');
-    assert.ok(!quickHandler.includes('leadService.getLeads('), 'quick status update must not refetch the full list');
+    // FIX-1c: the Leads list performs NO lead mutation at all — the
+    // in-list status modal was removed and edits open the Lead 360
+    // workspace instead. That is the strongest form of this guard:
+    // with no mutation there can be no post-mutation refetch.
+    assert.ok(!page.includes('updateLeadStatus'), 'LeadList must not write follow-ups (Lead 360 / LeadUpdate owns the write)');
+    assert.ok(!page.includes('handleSaveLeadUpdate'), 'the removed modal save handler must stay gone');
+    assert.ok(page.includes('navigate(`/leads/${lead.id}`)'), 'edits must route into the Lead 360 workspace');
     // Deletion is intentionally a Lead Pool responsibility now; the
     // execution workspace must not become a second delete workflow.
     assert.ok(!page.includes('const handleDeleteLead'), 'Lead Workspace must not own the delete workflow');
