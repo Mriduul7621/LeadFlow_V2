@@ -62,7 +62,6 @@ import {
   hasLeadsTable,
   summarizeOpenLeads,
   transferOpenLeads,
-  TERMINAL_STATUSES,
 } from '../../utils/userDeactivation.js';
 import {
   generateTempPassword,
@@ -81,7 +80,7 @@ import {
   getPasswordMinLength,
 } from '../../services/SecurityPolicyService.js';
 import { logAuthAdminPasswordReset } from '../../observability/events.js';
-import { getDhakaBusinessDayBounds, TERMINAL_LEAD_STATUSES, storedTimestampIso } from '../../utils/businessTime.js';
+import { getDhakaBusinessDayBounds, storedTimestampIso } from '../../utils/businessTime.js';
 import { buildKpiExportWorkbook, dhakaDateText } from '../../services/TeamKpiExportService.js';
 import {
   KPI_LABELS,
@@ -93,6 +92,7 @@ import {
   type KpiKey,
 } from '../../services/teamKpiDefinitions.js';
 import { revokeDangerZoneUnlocks } from '../../services/DangerZoneService.js';
+import { getTerminalStatusInfo, getTerminalStatusInfoFallback, getTerminalStatusNames } from '../../services/StageRulesService.js';
 import {
   AUDIT_CHANGE_CAP,
   EMPLOYEE_ID_RE,
@@ -361,10 +361,12 @@ async function buildHierarchyConfig(
   try {
     if (await hasLeadsTable(pool)) {
       const inactiveOwners = await fetchInactiveOwnersWithOpenLeads(pool);
+      // DZ-6: open-lead total excludes the dictionary's terminal statuses.
+      const terminal = await getTerminalStatusNames(pool);
       const openTotal = await pool.query(
         `SELECT COUNT(*)::int AS count FROM leads l
           WHERE l.is_deleted = FALSE AND l.current_status <> ALL($1::text[])`,
-        [TERMINAL_STATUSES]
+        [terminal]
       );
       ownership = {
         available: true,
@@ -624,6 +626,12 @@ async function loadTeamOverviewForCaller(
     });
     const todayBounds = getDhakaBusinessDayBounds(new Date());
     const noActionCutoff = new Date(noActionCutoffIso()).getTime();
+    // DZ-6: terminal / won names come from the dictionary (demo
+    // fallback store, else the canonical two) — the hardcoded
+    // TERMINAL_LEAD_STATUSES constant no longer exists.
+    const demoTerminal = getTerminalStatusInfoFallback();
+    const demoTerminalSet = new Set(demoTerminal.names.map(s => s.toLowerCase()));
+    const demoWonSet = new Set(demoTerminal.wonNames.map(s => s.toLowerCase()));
     const demoCreatedAt = (l: any): number => {
       const v = l.created_at || l.creationDate;
       const t = v ? new Date(v).getTime() : NaN;
@@ -642,7 +650,7 @@ async function loadTeamOverviewForCaller(
       }).length;
       const overdue = mine.filter(l => {
         if (!l.nextFollowUpDate) return false;
-        if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
+        if (demoTerminalSet.has(String(l.currentStatus || '').toLowerCase())) return false;
         return new Date(l.nextFollowUpDate).getTime() < new Date(todayBounds.todayStartIso).getTime();
       }).length;
       // Demo-mode no-action: no activity ledger exists in the
@@ -650,7 +658,7 @@ async function loadTeamOverviewForCaller(
       // still 'New' — any status move means someone acted on the
       // lead. (DB path: real lead_activities + status_history.)
       const noActionLeads = mine.filter(l => {
-        if ((TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)) return false;
+        if (demoTerminalSet.has(String(l.currentStatus || '').toLowerCase())) return false;
         if (String(l.currentStatus || '') !== 'New') return false;
         const created = demoCreatedAt(l);
         return Number.isFinite(created) && created < noActionCutoff;
@@ -673,8 +681,8 @@ async function loadTeamOverviewForCaller(
         managerName: mgr ? (mgr.fullName || mgr.name) : null,
         tier,
         directReports: reports.length,
-        openLeads: mine.filter(l => !(TERMINAL_LEAD_STATUSES as readonly string[]).includes(l.currentStatus)).length,
-        convertedLeads: mine.filter(l => l.currentStatus === 'Converted').length,
+        openLeads: mine.filter(l => !demoTerminalSet.has(String(l.currentStatus || '').toLowerCase())).length,
+        convertedLeads: mine.filter(l => demoWonSet.has(String(l.currentStatus || '').toLowerCase())).length,
         dueToday,
         overdue,
         totalLeads: mine.length,
@@ -712,6 +720,11 @@ async function loadTeamOverviewForCaller(
   // the counts query (DZ-1 precedent: never touch a table that may
   // not exist without probing first — minimal schemas lack both).
   const support = await probeNoActionSupport(pool);
+  // DZ-6: the terminal / won names for the KPI predicates come
+  // from the dictionary (canonical fallback when the dictionary
+  // is missing) — resolved once here, passed into the predicate
+  // context, so a renamed status keeps its KPI behaviour.
+  const terminalInfo = await getTerminalStatusInfo(pool);
   const countParams: any[] = [];
   const pushCountParam = (value: unknown): string => {
     countParams.push(value);
@@ -724,6 +737,8 @@ async function loadTeamOverviewForCaller(
     todayStartIso: bounds.todayStartIso,
     tomorrowStartIso: bounds.tomorrowStartIso,
     noActionCutoffIso: noActionCutoffIso(new Date()),
+    terminalNames: terminalInfo.names,
+    wonNames: terminalInfo.wonNames,
   };
   // Every count comes from the ONE shared predicate module
   // (teamKpiDefinitions) — the same definition the leaf list uses,
@@ -862,7 +877,10 @@ async function loadKpiLeadsForPerson(
   const bounds = getDhakaBusinessDayBounds(now);
   const cutoffIso = noActionCutoffIso(now);
   if (!useDb()) {
-    const terminal = new Set((TERMINAL_LEAD_STATUSES as readonly string[]).map(s => s.toLowerCase()));
+    // DZ-6: terminal / won names from the dictionary fallback.
+    const demoTerminal = getTerminalStatusInfoFallback();
+    const terminal = new Set(demoTerminal.names.map(s => s.toLowerCase()));
+    const won = new Set(demoTerminal.wonNames.map(s => s.toLowerCase()));
     const createdMs = (l: any): number => {
       const v = l.created_at || l.creationDate;
       const t = v ? new Date(v).getTime() : NaN;
@@ -877,7 +895,7 @@ async function loadKpiLeadsForPerson(
       const t = nfd ? new Date(nfd).getTime() : NaN;
       switch (kpi) {
         case 'open': return !terminal.has(st.toLowerCase());
-        case 'converted': return st === 'Converted';
+        case 'converted': return won.has(st.toLowerCase());
         case 'dueToday':
           return Number.isFinite(t) && t >= bounds.todayStart.getTime() && t < bounds.tomorrowStart.getTime();
         case 'overdue':
@@ -926,6 +944,10 @@ async function loadKpiLeadsForPerson(
 
   const pool = getPool();
   const support = await probeNoActionSupport(pool);
+  // DZ-6: terminal / won names from the dictionary (same
+  // resolution as the overview counts — one definition, so the
+  // leaf list always matches the card that counted it).
+  const terminalInfo = await getTerminalStatusInfo(pool);
   // uuid = uuid: assigned_to is the assignee's user id, and
   // Postgres has no upper(uuid) — never compare it to an employee
   // ID (the 2026-11-13 hotfix: UPPER(l.assigned_to) 500d every
@@ -943,6 +965,8 @@ async function loadKpiLeadsForPerson(
     todayStartIso: bounds.todayStartIso,
     tomorrowStartIso: bounds.tomorrowStartIso,
     noActionCutoffIso: cutoffIso,
+    terminalNames: terminalInfo.names,
+    wonNames: terminalInfo.wonNames,
   }));
   const orderBy = (kpi === 'dueToday' || kpi === 'overdue')
     ? 'ORDER BY l.next_follow_up_at ASC NULLS LAST, l.created_at DESC'

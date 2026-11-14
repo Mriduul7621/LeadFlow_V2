@@ -56,9 +56,16 @@
  * missing table/column degrades to the semantically correct
  * reading (no activities table = no actions can exist; no history
  * column = no legacy history), never to a 500.
+ *
+ * DZ-6 — terminal statuses are NOT a constant here any more: the
+ * hardcoded TERMINAL_LEAD_STATUSES constant was deleted (the
+ * dictionary's meta.isTerminal is the single source). This module
+ * stays pure and synchronous, so the caller resolves the current
+ * terminal / won names once per request (StageRulesService
+ * getTerminalStatusInfo) and passes them in via the context.
+ * An empty terminal list is honoured as-is (nothing terminal);
+ * an empty won list makes 'converted' match nothing.
  */
-
-import { TERMINAL_LEAD_STATUSES } from '../utils/businessTime.js';
 
 export const KPI_KEYS = [
   'open',
@@ -139,6 +146,13 @@ export interface KpiPredicateContext {
   tomorrowStartIso: string;
   /** noActionCutoffIso() for the same `now` as the bounds. */
   noActionCutoffIso: string;
+  /** DZ-6: current terminal status names, resolved by the caller
+   *  from the dictionary (getTerminalStatusInfo). Empty = the
+   *  dictionary flags nothing terminal — honoured as-is. */
+  terminalNames: string[];
+  /** DZ-6: current won-terminal names, resolved by the caller
+   *  (getTerminalStatusInfo). Empty = 'converted' matches nothing. */
+  wonNames: string[];
 }
 
 /**
@@ -150,14 +164,26 @@ export interface KpiPredicateContext {
 export function kpiLeadPredicate(kpi: KpiKey, ctx: KpiPredicateContext): string {
   const a = ctx.alias;
   const notTerminal = (): string => {
-    const placeholders = (TERMINAL_LEAD_STATUSES as readonly string[]).map(s => ctx.pushParam(s));
+    // DZ-6: no terminal names (a dictionary that flags nothing
+    // terminal) means nothing is terminal — NOT IN () is invalid
+    // SQL, so the predicate is just TRUE.
+    if (ctx.terminalNames.length === 0) return 'TRUE';
+    const placeholders = ctx.terminalNames.map(s => ctx.pushParam(s));
     return `${a}.current_status NOT IN (${placeholders.join(', ')})`;
+  };
+  const isWon = (): string => {
+    // DZ-6: 'converted' = a won terminal, resolved from the
+    // dictionary — never the hardcoded name, so renaming
+    // 'Converted' keeps the KPI. No won names = matches nothing.
+    if (ctx.wonNames.length === 0) return 'FALSE';
+    const placeholders = ctx.wonNames.map(s => ctx.pushParam(s));
+    return `${a}.current_status IN (${placeholders.join(', ')})`;
   };
   switch (kpi) {
     case 'open':
       return notTerminal();
     case 'converted':
-      return `${a}.current_status = ${ctx.pushParam('Converted')}`;
+      return isWon();
     case 'dueToday':
       // Deliberately NO terminal filter — see the module header.
       return `${a}.next_follow_up_at >= ${ctx.pushParam(ctx.todayStartIso)} AND ${a}.next_follow_up_at < ${ctx.pushParam(ctx.tomorrowStartIso)}`;

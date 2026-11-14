@@ -21,13 +21,13 @@ import { fallbackStore } from '../../fallbackStore.js';
 import { createPerf } from '../../utils/perf.js';
 import {
   BUSINESS_TIMEZONE,
-  TERMINAL_LEAD_STATUSES,
   getDhakaBusinessDayBounds,
   parseYmd,
   dhakaStartUtc,
   addCalendarDays,
   classifyFollowUpBucket,
 } from '../../utils/businessTime.js';
+import { getTerminalStatusInfo, getTerminalStatusInfoFallback, getTerminalStatusNamesFallback } from '../../services/StageRulesService.js';
 import {
   aggregateQualityForScope,
   aggregateQualityForFallbackLeads,
@@ -154,8 +154,16 @@ function computeDashboardFromLeads(
   followUpCounts: { overdue: number; today: number; upcoming: number; all: number },
   bounds: ReturnType<typeof getDhakaBusinessDayBounds>,
   periodLabel: string,
-  agents: Array<{ employeeId: string; name: string; role?: string }> = []
+  agents: Array<{ employeeId: string; name: string; role?: string }> = [],
+  // DZ-6: which statuses count as terminal / won / lost. Defaults to the
+  // canonical pair (the demo branch's fallback); the DB branch passes the
+  // dictionary-resolved sets. Without this, a renamed 'Converted' would
+  // count as active and the conversion rate would read 0.
+  sets?: { names: string[]; wonNames: string[]; lostNames: string[] }
 ) {
+  const terminalSet = new Set((sets?.names ?? getTerminalStatusNamesFallback()).map(s => s.toLowerCase()));
+  const wonSet = new Set((sets?.wonNames ?? ['Converted']).map(s => s.toLowerCase()));
+  const lostSet = new Set((sets?.lostNames ?? ['Not Interested']).map(s => s.toLowerCase()));
   const statusCounts = emptyStatusCounts();
   let totalLeads = 0;
   let activeLeads = 0;
@@ -184,9 +192,9 @@ function computeDashboardFromLeads(
     sumAssured += sa;
     if (coll > 0 || proj > 0) pipelineVolume += 1;
     if (status !== 'New') responses += 1;
-    if (status !== 'Converted' && status !== 'Not Interested') activeLeads += 1;
-    if (status === 'Converted') converted += 1;
-    if (status === 'Not Interested') notInterested += 1;
+    if (!terminalSet.has(status.toLowerCase())) activeLeads += 1;
+    if (wonSet.has(status.toLowerCase())) converted += 1;
+    if (lostSet.has(status.toLowerCase())) notInterested += 1;
     if (['Contacted', 'Interested', 'Follow-up Set'].includes(status)) contactedCombo += 1;
     if (status === 'Meeting Fixed') meetings += 1;
     if (status === 'Follow-up Set') followUpsSet += 1;
@@ -203,7 +211,7 @@ function computeDashboardFromLeads(
     });
     const agentCollected = agentLeads.reduce((a, l) => a + leadCollectedNcp(l), 0);
     const agentProjected = agentLeads.reduce((a, l) => a + leadProjectedNcp(l), 0);
-    const agentConverted = agentLeads.filter(l => String(l.currentStatus || l.current_status) === 'Converted').length;
+    const agentConverted = agentLeads.filter(l => wonSet.has(String(l.currentStatus || l.current_status).toLowerCase())).length;
     return {
       name: agent.name,
       employeeId: agent.employeeId,
@@ -302,7 +310,12 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
     const period = parseDashboardPeriod(req.query || {});
 
     // Follow-up queue counts — same semantics as GET /leads/follow-ups (Step 4B).
-    const terminalList = [...TERMINAL_LEAD_STATUSES];
+    // DZ-6: the terminal / won / lost sets are the dictionary's
+    // isTerminal / isWon / isLost flags — resolved once here and
+    // reused by every count below, so a renamed status keeps its
+    // meaning. The demo branch reads the canonical fallback pair.
+    const terminalInfo = useDb() ? await getTerminalStatusInfo() : getTerminalStatusInfoFallback();
+    const terminalList = terminalInfo.names;
     const todayLit = bounds.todayStartIso.replace(/'/g, "''");
     const tomorrowLit = bounds.tomorrowStartIso.replace(/'/g, "''");
     const bucketExpr = `CASE WHEN l.next_follow_up_at < '${todayLit}'::timestamp THEN 'overdue' WHEN l.next_follow_up_at < '${tomorrowLit}'::timestamp THEN 'today' ELSE 'upcoming' END`;
@@ -330,7 +343,8 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         return true;
       });
 
-      const terminal = new Set(TERMINAL_LEAD_STATUSES.map(s => s.toLowerCase()));
+      // DZ-6: demo mirror of the dictionary terminal set.
+      const terminal = new Set(terminalInfo.names.map(s => s.toLowerCase()));
       const fuBase = (fallbackStore.leads || []).filter((l: any) => {
         if (l.is_deleted === true) return false;
         const nfd = l.nextFollowUpDate || l.next_follow_up_at;
@@ -360,7 +374,8 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         })
         .map((u: any) => ({ employeeId: u.employeeId, name: u.fullName || u.name || u.employeeId, role: u.role }));
 
-      const data: any = computeDashboardFromLeads(leads, followUpCounts, bounds, period.label, agents);
+      // DZ-6: demo mirror of the dictionary terminal/won/lost sets.
+      const data: any = computeDashboardFromLeads(leads, followUpCounts, bounds, period.label, agents, terminalInfo);
       data.quality = aggregateQualityForFallbackLeads(
         leads,
         (fallbackStore as any).leadActivities || [],
@@ -382,6 +397,12 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       metricParams.push(period.start.toISOString(), period.end.toISOString());
       metricWhere.push(`l.created_at >= $${metricParams.length - 1}::timestamp AND l.created_at < $${metricParams.length}::timestamp`);
     }
+    metricParams.push(terminalInfo.wonNames);
+    const pWon = metricParams.length;
+    metricParams.push(terminalInfo.lostNames);
+    const pLost = metricParams.length;
+    metricParams.push(terminalInfo.names);
+    const pTerminal = metricParams.length;
 
     // projected = expected_premium column, with custom_fields fallback
     // collected = custom_fields.collectedNCP (no dedicated column)
@@ -398,10 +419,10 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         COUNT(*) FILTER (WHERE l.current_status = 'Meeting Fixed')::int AS meeting_fixed,
         COUNT(*) FILTER (WHERE l.current_status = 'Meeting Completed')::int AS meeting_completed,
         COUNT(*) FILTER (WHERE l.current_status = 'Pipeline Locked')::int AS pipeline_locked,
-        COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
-        COUNT(*) FILTER (WHERE l.current_status = 'Not Interested')::int AS not_interested,
+        COUNT(*) FILTER (WHERE l.current_status = ANY($${pWon}::text[]))::int AS converted,
+        COUNT(*) FILTER (WHERE l.current_status = ANY($${pLost}::text[]))::int AS not_interested,
         COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'New')::int AS responses,
-        COUNT(*) FILTER (WHERE l.current_status IS DISTINCT FROM 'Converted' AND l.current_status IS DISTINCT FROM 'Not Interested')::int AS active_leads,
+        COUNT(*) FILTER (WHERE l.current_status <> ALL($${pTerminal}::text[]))::int AS active_leads,
         COUNT(*) FILTER (WHERE l.current_status IN ('Contacted','Interested','Follow-up Set'))::int AS contacted_combo,
         COUNT(*) FILTER (
           WHERE COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0) > 0
@@ -433,6 +454,9 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
       agentParams.push(period.start.toISOString(), period.end.toISOString());
       agentWhere.push(`l.created_at >= $${agentParams.length - 1}::timestamp AND l.created_at < $${agentParams.length}::timestamp`);
     }
+    // DZ-6: the agent's converted count is the dictionary's won set.
+    agentParams.push(terminalInfo.wonNames);
+    const pAgentWon = agentParams.length;
     const agentSql = `
       SELECT
         COALESCE(au.employee_id, 'UNASSIGNED') AS employee_id,
@@ -440,7 +464,7 @@ router.get('/dashboard', requireAuth, async (req: any, res) => {
         COUNT(*)::int AS assigned,
         COUNT(*) FILTER (WHERE l.current_status = 'New')::int AS no_call,
         COUNT(*) FILTER (WHERE l.current_status = 'Follow-up Set')::int AS follow_up,
-        COUNT(*) FILTER (WHERE l.current_status = 'Converted')::int AS converted,
+        COUNT(*) FILTER (WHERE l.current_status = ANY($${pAgentWon}::text[]))::int AS converted,
         COALESCE(SUM(COALESCE(l.expected_premium, NULLIF(l.custom_fields->>'projectedNCP','')::numeric, 0)), 0)::float AS projected,
         COALESCE(SUM(COALESCE(NULLIF(l.custom_fields->>'collectedNCP','')::numeric, 0)), 0)::float AS collected
       FROM leads l

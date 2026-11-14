@@ -37,10 +37,11 @@
  * on anything out of range) and audit-logged with old→new values
  * (action `danger_zone.lead_quality.update`, Q7).
  *
- * Terminal statuses (Converted / Not Interested) take NO points:
- * they bypass the active scale with fixed scores, and terminal
- * handling belongs to DZ-6 — a PUT that assigns points (or the
- * advanced flag) to one is refused.
+ * Terminal statuses take NO points: they bypass the active scale
+ * with fixed scores (won = 100, lost = 0), and WHICH statuses are
+ * terminal is resolved from the dictionary's isTerminal / isWon
+ * flags at read time (DZ-6 — see resolveStoredConfig). A PUT that
+ * assigns points (or the advanced flag) to one is refused.
  *
  * Storage mirrors NotificationSettingsService / OperationsSettingsService
  * exactly (lazy seeding on first write, fallback-store path for demo
@@ -50,6 +51,11 @@
 import { getPool } from '../database/connection.js';
 import { fallbackStore } from '../fallbackStore.js';
 import { useDb, logAccessChange } from '../routes/production/shared.js';
+import {
+  isLostDictionaryEntry,
+  isTerminalDictionaryEntry,
+  isWonDictionaryEntry,
+} from './StageRulesService.js';
 import {
   DEFAULT_LEAD_QUALITY_CONFIG,
   LEAD_QUALITY_POINT_MIN,
@@ -148,16 +154,23 @@ export interface FollowUpStatusEntry {
   label: string;
   isActive: boolean;
   isTerminal: boolean;
+  /** Dictionary isWon flag (DZ-6: won terminals score 100). */
+  isWon: boolean;
+  /** Dictionary isLost flag (DZ-6: lost terminals score 0). */
+  isLost: boolean;
 }
 
-/** Canonical terminal names (DZ-6 unifies on the dictionary flag; until then both agree). */
-export function isTerminalStatusName(value: string): boolean {
-  const v = String(value || '').trim().toLowerCase();
-  return v === 'converted' || v === 'not interested';
-}
-
+/**
+ * Terminal, won and lost for ONE dictionary entry (DZ-6): the
+ * dictionary flag decides; an explicit false is honoured; only a
+ * missing flag falls back to the canonical names. The entry's
+ * isTerminal / isWon / isLost booleans are already resolved this
+ * way by dictionaryFromRows below, so these helpers just read them
+ * — they exist so the resolution rule has one home (see
+ * StageRulesService) and this file never re-implements it.
+ */
 function isTerminalEntry(entry: FollowUpStatusEntry): boolean {
-  return entry.isTerminal === true || isTerminalStatusName(entry.value);
+  return entry.isTerminal === true;
 }
 
 /* ====================================================================
@@ -191,7 +204,24 @@ export function resolveStoredConfig(
   stored: LeadQualityStoredConfig | null,
   dictionary: FollowUpStatusEntry[]
 ): LeadQualityConfig {
-  if (!stored) return cloneLeadQualityConfig(DEFAULT_LEAD_QUALITY_CONFIG);
+  // DZ-6: the terminal sets are resolved from the dictionary's
+  // isTerminal / isWon flags at read time (same read that carries
+  // the status points) — a renamed terminal status keeps its score.
+  // An empty dictionary means "unreadable", so the code defaults
+  // (canonical names) apply; a dictionary that exists but flags
+  // nothing terminal is honoured as-is (zero terminal names).
+  const terminal = dictionary.length === 0
+    ? { won: ['Converted'], lost: ['Not Interested'] }
+    : {
+        won: dictionary.filter(e => e.isTerminal && e.isWon).map(e => e.value),
+        lost: dictionary.filter(e => e.isTerminal && !e.isWon).map(e => e.value),
+      };
+  if (!stored) {
+    const defaults = cloneLeadQualityConfig(DEFAULT_LEAD_QUALITY_CONFIG);
+    defaults.terminalWon = terminal.won;
+    defaults.terminalLost = terminal.lost;
+    return defaults;
+  }
   const byId = new Map(dictionary.map(e => [e.id, e]));
   // A stored row exists, so the effective weights come ONLY from it:
   // a dictionary entry with no stored weight scores 0 (today's
@@ -223,6 +253,8 @@ export function resolveStoredConfig(
       effective.advancedStatuses.push(entry.value);
     }
   }
+  effective.terminalWon = terminal.won;
+  effective.terminalLost = terminal.lost;
   return effective;
 }
 
@@ -312,12 +344,17 @@ interface DictionaryAndStored {
 function dictionaryFromRows(rows: any[]): FollowUpStatusEntry[] {
   return (rows || []).map((r: any) => {
     const meta = r.meta && typeof r.meta === 'object' ? r.meta : {};
+    const value = String(r.option_value ?? r.value ?? '');
     return {
       id: String(r.id),
-      value: String(r.option_value ?? r.value ?? ''),
+      value,
       label: String(r.option_label ?? r.label ?? r.option_value ?? r.value ?? ''),
       isActive: r.is_active !== false && r.status !== 'Inactive',
-      isTerminal: meta.isTerminal === true,
+      // DZ-6 tri-state: an explicit flag (true OR false) is honoured;
+      // only a missing key falls back to the canonical names.
+      isTerminal: isTerminalDictionaryEntry({ value, meta }),
+      isWon: isWonDictionaryEntry({ value, meta }),
+      isLost: isLostDictionaryEntry({ value, meta }),
     };
   });
 }

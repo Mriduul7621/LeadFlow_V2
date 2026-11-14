@@ -23,16 +23,26 @@
  *      were switched off before this rule existed (or archived by an import).
  *
  * "Open" is NOT defined here. It is the app's existing terminal-status
- * vocabulary (`TERMINAL_LEAD_STATUSES`), the very same predicate the
- * follow-up queue uses — a converted or "not interested" lead is finished
+ * vocabulary (the dictionary's isTerminal flag, DZ-6 — resolved fresh
+ * through the caller's client), the very same predicate the
+ * follow-up queue uses — a terminal lead is finished
  * business and must never be dragged onto somebody else's desk.
  */
 
-import { TERMINAL_LEAD_STATUSES } from './businessTime.js';
+import { getTerminalStatusNames } from '../services/StageRulesService.js';
 import { createAssignmentNotifications } from '../services/NotificationService.js';
 
-/** The terminal (finished) statuses, as a plain array for SQL `ANY(...)`. */
-export const TERMINAL_STATUSES: string[] = [...TERMINAL_LEAD_STATUSES];
+/**
+ * Resolve the terminal names through the caller's own client.
+ * DZ-6: the dictionary's isTerminal flag is the single source.
+ * probeFirst is REQUIRED here: these functions run inside the
+ * caller's transaction, and a query against a missing `options`
+ * table would abort it (the DZ-1 regression) — the probe decides
+ * via information_schema before any statement can fail.
+ */
+async function resolveTerminalStatuses(client: any): Promise<string[]> {
+  return getTerminalStatusNames(client, { probeFirst: true });
+}
 
 export interface OpenLeadRef {
   id: string;
@@ -79,12 +89,13 @@ export async function summarizeOpenLeads(
   if (!userId || !(await hasLeadsTable(client))) {
     return { available: false, count: 0, sample: [] };
   }
+  const terminal = await resolveTerminalStatuses(client);
   const counted = await client.query(
     `SELECT COUNT(*)::int AS count FROM leads l
       WHERE l.assigned_to = $1
         AND l.is_deleted = FALSE
         AND l.current_status <> ALL($2::text[])`,
-    [userId, TERMINAL_STATUSES]
+    [userId, terminal]
   );
   const count = counted.rows[0]?.count ?? 0;
   if (count === 0) return { available: true, count: 0, sample: [] };
@@ -97,7 +108,7 @@ export async function summarizeOpenLeads(
         AND l.current_status <> ALL($2::text[])
       ORDER BY l.created_at DESC
       LIMIT $3`,
-    [userId, TERMINAL_STATUSES, Math.max(1, Math.min(50, sampleLimit))]
+    [userId, terminal, Math.max(1, Math.min(50, sampleLimit))]
   );
   return {
     available: true,
@@ -145,6 +156,7 @@ export async function transferOpenLeads(
 ): Promise<TransferResult> {
   if (!(await hasLeadsTable(client))) return { transferred: 0, leadCodes: [], notified: 0 };
 
+  const terminal = await resolveTerminalStatuses(client);
   const note = opts.note || `Transferred when ${opts.fromEmployeeId} was deactivated`;
   const updated = await client.query(
     `UPDATE leads l SET
@@ -179,7 +191,7 @@ export async function transferOpenLeads(
       opts.toEmployeeId,
       opts.actorEmployeeId,
       note,
-      TERMINAL_STATUSES,
+      terminal,
     ]
   );
 
@@ -227,6 +239,7 @@ export async function fetchInactiveOwnersWithOpenLeads(
   client: any
 ): Promise<Array<{ employeeId: string; fullName: string; openLeadCount: number }>> {
   if (!(await hasLeadsTable(client))) return [];
+  const terminal = await resolveTerminalStatuses(client);
   const rows = await client.query(
     `SELECT u.employee_id, u.full_name, COUNT(l.id)::int AS open_lead_count
        FROM users u
@@ -236,7 +249,7 @@ export async function fetchInactiveOwnersWithOpenLeads(
         AND l.current_status <> ALL($1::text[])
       GROUP BY u.id, u.employee_id, u.full_name
       ORDER BY open_lead_count DESC, u.employee_id ASC`,
-    [TERMINAL_STATUSES]
+    [terminal]
   );
   return rows.rows.map((r: any) => ({
     employeeId: r.employee_id,
@@ -256,6 +269,7 @@ export async function fetchOpenLeadCountMap(
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (!userIds || userIds.length === 0 || !(await hasLeadsTable(client))) return map;
+  const terminal = await resolveTerminalStatuses(client);
   const rows = await client.query(
     `SELECT l.assigned_to AS user_id, COUNT(*)::int AS count
        FROM leads l
@@ -263,7 +277,7 @@ export async function fetchOpenLeadCountMap(
         AND l.is_deleted = FALSE
         AND l.current_status <> ALL($2::text[])
       GROUP BY l.assigned_to`,
-    [userIds, TERMINAL_STATUSES]
+    [userIds, terminal]
   );
   for (const row of rows.rows) {
     map.set(String(row.user_id), row.count ?? 0);

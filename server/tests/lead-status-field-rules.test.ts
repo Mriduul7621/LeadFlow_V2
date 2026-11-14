@@ -123,7 +123,10 @@ describe('F6 — per-status required fields (specification)', () => {
     const start = route.indexOf("router.post('/leads/:id/follow-up'");
     assert.ok(start > 0, 'the follow-up endpoint must exist');
     const handler = route.slice(start, start + 12000);
-    const enforcement = handler.indexOf('validateLeadStatusFields(');
+    // DZ-6: the endpoint enforces the DB-backed rules (StageRulesService)
+    // through the async validator — same shared table, resolved to
+    // current dictionary names at request time.
+    const enforcement = handler.indexOf('validateLeadStatusFieldsAsync(');
     const firstWrite = Math.min(
       ...['INSERT INTO lead_activities', 'UPDATE leads', 'insertLeadActivity', 'pool.query(`UPDATE']
         .map(marker => handler.indexOf(marker))
@@ -144,7 +147,10 @@ describe('F6 — per-status required fields (specification)', () => {
   it('G. client parity: the form shows exactly what the server enforces', () => {
     const form = read('src/modules/leads/pages/LeadUpdate.tsx');
     assert.ok(form.includes("from '../utils/leadStatusRules'"), 'the form must import the shared table');
-    assert.ok(form.includes('validateLeadStatusFields(effectiveStatus'), 'the form must run the shared validation');
+    // DZ-6: the form validates from the effective (DB) rules fetched
+    // from GET /leads/stage-rules, falling back to the code-default
+    // table — same shared validator, rules-parameterised.
+    assert.ok(form.includes('validateLeadStatusFieldsWithRules(effectiveStatus'), 'the form must run the shared validation');
     // The old hand-written per-status checks must be gone (they could drift).
     assert.ok(!/if \(needsProposalFields\) \{/.test(form), 'no duplicated Proposal Sent checks');
     assert.ok(!/if \(needsConvertedFields\) \{/.test(form), 'no duplicated Converted checks');

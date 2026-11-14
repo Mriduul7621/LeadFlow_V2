@@ -3,6 +3,7 @@ import {
   leadStatusViolationMessage,
   ruleForLeadStatus,
   validateLeadStatusFields,
+  validateLeadStatusFieldsWithRules,
 } from '../../src/modules/leads/utils/leadStatusRules.js';
 
 /**
@@ -26,7 +27,13 @@ import {
  * resolves Interested into the final status client-side — and, from this
  * release on, server-side too via `resolveNextActionStatus()`.
  */
-export { LEAD_STAGE_RULES, ruleForLeadStatus, validateLeadStatusFields, leadStatusViolationMessage };
+export {
+  LEAD_STAGE_RULES,
+  ruleForLeadStatus,
+  validateLeadStatusFields,
+  validateLeadStatusFieldsWithRules,
+  leadStatusViolationMessage,
+};
 
 /** Next Action choices offered once a lead is marked Interested. */
 export const NEXT_ACTION_CHOICES = [
