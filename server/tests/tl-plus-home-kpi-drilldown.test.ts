@@ -1160,14 +1160,17 @@ describe('KPI drill-down — source guards', () => {
     assert.ok(workbench.includes('getSelfPerson(callerTeam.overview'), 'the strip reads the already-loaded self row');
   });
 
-  it('the server gates the export on leads.export and never imports the sibling branches', () => {
+  it('the server gates the export on leads.export and keeps its own export service', () => {
     const users = read('server/routes/production/users.routes.ts');
     assert.ok(users.includes("router.get('/team/kpi/leads'"), 'the leaf-leads endpoint exists');
     assert.ok(users.includes("router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export')"),
       'the export endpoint is gated on the existing leads.export code');
     assert.ok(users.includes("actionCode: 'leads.export'"), 'exports are audit-logged as leads.export');
-    assert.ok(!users.includes('LeadExportService'), 'FIX-2\'s service lives on another branch — never imported here');
-    assert.ok(!users.includes('teamTree'), 'the sibling tree branch\'s builder is never imported here');
+    assert.ok(!users.includes('LeadExportService'), 'FIX-2\'s service is never imported here — the KPI export keeps its own builder');
+    // The tree branch is merged now (2026-11-14): this file
+    // legitimately imports its builder for GET /team/tree — the old
+    // "sibling branch" guard no longer applies to it.
+    assert.ok(users.includes("router.get('/team/tree'"), 'the tree endpoint lives in the same file');
     const service = read('server/services/TeamKpiExportService.ts');
     assert.ok(service.includes("from 'exceljs'"), 'the workbook builder uses exceljs (server-side, outside the src-only guard)');
   });
