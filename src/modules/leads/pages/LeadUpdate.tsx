@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, CalendarClock, FileText, Target } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CalendarClock, FileText, Search, Target } from 'lucide-react';
 import { toast } from 'sonner';
-import { leadService, FollowUpQueuedOfflineError } from '../services/leadService';
+import { leadService, FollowUpQueuedOfflineError, type MatchedPolicy } from '../services/leadService';
+import { isFaMismatch, policyMatchToConvertedFields } from '../utils/policyLookupFill';
 import WhatsAppAction from '../components/WhatsAppAction';
 import { metadataService } from '../../metadata/services/metadataService';
 import { preloadLeadStatuses, getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
@@ -27,6 +28,9 @@ import type { Lead } from '../../shared/types';
  *     the meeting is mirrored onto the Task Calendar.
  *   - Proposal Sent           → product, sum assured, projected FYCP.
  *   - Converted               → product, sum assured, collected FYCP.
+ *     The agent can enter a Proposal No / Policy No and look the policy
+ *     up in the retail sales sheet (PR sync) to auto-fill those fields
+ *     from real policy data; manual entry always stays available.
  *   - Not Interested          → a loss reason is mandatory.
  *   - Remarks                 → always available, for every update —
  *     the server appends every change (with actor & timestamp) to the
@@ -123,6 +127,16 @@ export default function LeadUpdate() {
   const [collectedNCP, setCollectedNCP] = useState('');
   const [lossReason, setLossReason] = useState('');
   const [remarks, setRemarks] = useState('');
+
+  // PR sync — policy lookup for the Converted flow. The match is live
+  // state only: it auto-fills the fields below, and is stored with the
+  // save as the matched policy reference. Editing the key after a match
+  // clears it (stale); a failed lookup never touches the fields, so
+  // manual entry keeps working exactly as before.
+  const [policyKey, setPolicyKey] = useState('');
+  const [matchedPolicy, setMatchedPolicy] = useState<MatchedPolicy | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState('');
 
   const [products, setProducts] = useState<string[]>([]);
   // Suggestions merge dictionary 'Product' values with the lead's current product;
@@ -240,7 +254,13 @@ export default function LeadUpdate() {
       collectedNCP: collectedNCP.trim() === '' ? undefined : Number(collectedNCP),
       lossReason,
     }, stageRules ?? LEAD_STAGE_RULES);
-    for (const violation of violations) {
+    // PR sync: a matched Term policy (Shanta Assurance) carries no sum
+    // assured in any sheet — the server exempts it too, so the form
+    // must not demand it either. Without a live match, the rule stands.
+    const effectiveViolations = matchedPolicy?.isTermPolicy
+      ? violations.filter((v) => v.field !== 'sumAssured')
+      : violations;
+    for (const violation of effectiveViolations) {
       const key = FORM_ERROR_KEY_BY_API_FIELD[violation.field] || violation.field;
       const messageKey = FORM_MESSAGE_KEY_BY_API_FIELD[violation.field] as TranslationKey | undefined;
       if (!e[key]) e[key] = messageKey ? t(messageKey) : violation.message;
@@ -253,6 +273,29 @@ export default function LeadUpdate() {
     if (!local) return undefined;
     const d = new Date(local);
     return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+  };
+
+  /** PR sync lookup: auto-fill the Converted fields from the sales sheet. */
+  const handlePolicyLookup = async () => {
+    const key = policyKey.trim();
+    if (!key || lookupLoading) return;
+    setLookupLoading(true);
+    setLookupError('');
+    try {
+      const matched = await leadService.lookupPolicy(key);
+      const filled = policyMatchToConvertedFields(matched);
+      setProductName(filled.productName);
+      setSumAssured(filled.sumAssured);
+      setCollectedNCP(filled.collectedNCP);
+      setMatchedPolicy(matched);
+      setErrors((prev) => ({ ...prev, productName: '', sumAssured: '', collectedNCP: '' }));
+    } catch (err: any) {
+      // Lookup failure never touches the fields: manual entry stays open.
+      setMatchedPolicy(null);
+      setLookupError(err?.message || 'Policy lookup failed. Fill in the details manually.');
+    } finally {
+      setLookupLoading(false);
+    }
   };
 
   const handleSubmit = async (ev: React.FormEvent) => {
@@ -279,6 +322,16 @@ export default function LeadUpdate() {
         needsProposalFields && projectedNCP.trim() !== '' ? Number(projectedNCP) : undefined,
         needsLossReason ? lossReason : undefined,
         needsMeeting && meetingType ? meetingType : undefined,
+        // PR sync: the matched policy reference rides with the save so
+        // the conversion is traceable to the real policy.
+        matchedPolicy
+          ? {
+              policyNo: matchedPolicy.policyNo,
+              proposalNo: matchedPolicy.proposalNo ?? undefined,
+              term: matchedPolicy.term ?? undefined,
+              payMode: matchedPolicy.payMode ?? undefined,
+            }
+          : undefined,
       );
 
       // No client-side calendar mirror any more: the follow-up write
@@ -370,6 +423,9 @@ export default function LeadUpdate() {
               onChange={(e) => {
                 setStatus(e.target.value);
                 setNextAction('');
+                // A policy match belongs to the Converted flow only.
+                setMatchedPolicy(null);
+                setLookupError('');
                 setErrors((prev) => ({ ...prev, status: '', nextAction: '' }));
               }}
               className={inputCls}
@@ -478,6 +534,84 @@ export default function LeadUpdate() {
           {/* Converted */}
           {needsConvertedFields ? (
             <div className="mt-4 space-y-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
+              {/* PR sync — look the policy up in the sales sheet and
+                  auto-fill from real policy data. Optional: manual
+                  entry below always stays available. */}
+              <div>
+                <span className={labelCls}>Proposal No / Policy No</span>
+                <div className="flex gap-2">
+                  <input
+                    value={policyKey}
+                    onChange={(e) => {
+                      setPolicyKey(e.target.value);
+                      // The key changed, so the match is stale — clear
+                      // it (the filled values stay, as manual values).
+                      if (matchedPolicy) setMatchedPolicy(null);
+                      if (lookupError) setLookupError('');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handlePolicyLookup();
+                      }
+                    }}
+                    className={inputCls}
+                    placeholder="e.g. Pro-4 or 123"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handlePolicyLookup()}
+                    disabled={lookupLoading || !policyKey.trim()}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#3C3C3B] px-3 py-2 text-[11px] font-black uppercase tracking-widest text-white transition disabled:opacity-50"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                    {lookupLoading ? 'Looking…' : 'Lookup'}
+                  </button>
+                </div>
+                <p className="mt-1.5 text-[11px] font-medium text-stone-400">
+                  Looks the policy up in the sales sheet and fills product, sum assured and collected premium. If it is not there yet, fill in the details manually.
+                </p>
+                {lookupError ? <p className={errCls}>{lookupError}</p> : null}
+              </div>
+
+              {/* Matched policy summary */}
+              {matchedPolicy ? (
+                <div className="rounded-xl border border-emerald-300 bg-white p-3 text-xs">
+                  <p className="font-black uppercase tracking-widest text-emerald-700">Matched policy</p>
+                  <dl className="mt-2 space-y-1 text-stone-600">
+                    <div className="flex justify-between gap-2"><dt className="font-semibold">Policy No</dt><dd className="font-bold text-stone-900">{matchedPolicy.policyNo}</dd></div>
+                    {matchedPolicy.proposalNo ? (
+                      <div className="flex justify-between gap-2"><dt className="font-semibold">Proposal No</dt><dd className="font-bold text-stone-900">{matchedPolicy.proposalNo}</dd></div>
+                    ) : null}
+                    <div className="flex justify-between gap-2"><dt className="font-semibold">Plan</dt><dd className="text-right font-bold text-stone-900">{matchedPolicy.productName || '—'}</dd></div>
+                    {matchedPolicy.term ? (
+                      <div className="flex justify-between gap-2"><dt className="font-semibold">Term</dt><dd className="font-bold text-stone-900">{matchedPolicy.term}</dd></div>
+                    ) : null}
+                    {matchedPolicy.payMode ? (
+                      <div className="flex justify-between gap-2"><dt className="font-semibold">Pay Mode</dt><dd className="font-bold text-stone-900">{matchedPolicy.payMode}</dd></div>
+                    ) : null}
+                    {matchedPolicy.commDate ? (
+                      <div className="flex justify-between gap-2"><dt className="font-semibold">Comm. Date</dt><dd className="font-bold text-stone-900">{matchedPolicy.commDate}</dd></div>
+                    ) : null}
+                    {matchedPolicy.faCode ? (
+                      <div className="flex justify-between gap-2"><dt className="font-semibold">FA Code</dt><dd className="font-bold text-stone-900">{matchedPolicy.faCode}</dd></div>
+                    ) : null}
+                  </dl>
+                  {isFaMismatch(matchedPolicy.faCode, lead.assignedTo) ? (
+                    <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 font-semibold text-amber-700">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      FA Code on the policy ({matchedPolicy.faCode}) differs from this lead&apos;s assignee ({lead.assignedTo}). Please check — you can still save.
+                    </p>
+                  ) : null}
+                  {matchedPolicy.isTermPolicy ? (
+                    <p className="mt-2 font-semibold text-stone-500">
+                      Term policy (Shanta Assurance) — no sum assured exists for this product, so it is not required.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div>
                 <span className={labelCls}>{t('product')} *</span>
                 <input
@@ -490,7 +624,7 @@ export default function LeadUpdate() {
                 {errors.productName ? <p className={errCls}>{errors.productName}</p> : null}
               </div>
               <div>
-                <span className={labelCls}>{t('updSumAssured')} *</span>
+                <span className={labelCls}>{t('updSumAssured')} {matchedPolicy?.isTermPolicy ? '' : '*'}</span>
                 <input type="number" min="0" inputMode="numeric" value={sumAssured} onChange={(e) => setSumAssured(e.target.value)} className={inputCls} placeholder="e.g. 1000000" />
                 {errors.sumAssured ? <p className={errCls}>{errors.sumAssured}</p> : null}
               </div>
