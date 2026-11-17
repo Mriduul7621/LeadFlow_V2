@@ -28,7 +28,7 @@ describe('Daily Workbench — source guards', () => {
   const app = () => read('src/App.tsx');
   const layout = () => read('src/layouts/AppLayout.tsx');
   const workbench = () => read('src/modules/workbench/pages/DailyWorkbench.tsx');
-  const dashboard = () => read('src/modules/dashboard/pages/Dashboard.tsx');
+  const dashboard = () => read('src/modules/workspace/pages/MemberHome.tsx');
   const scheduledSvc = () => read('src/modules/scheduledActivities/services/scheduledActivityService.ts');
   const leadSvc = () => read('src/modules/leads/services/leadService.ts');
   const permsHook = () => read('src/modules/shared/hooks/usePermissions.ts');
@@ -42,16 +42,19 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(src.includes('DailyWorkbench'), 'App must import DailyWorkbench');
   });
 
-  it('primary navigation includes My Work / Daily Workbench', () => {
-    const src = layout();
-    assert.ok(src.includes("label: 'My Work'"), 'primary tabs must contain My Work');
-    assert.ok(src.includes("path: '/workbench'"), 'My Work must route to /workbench');
-    // The workspace pages moved from More → Reports into the left sidebar
-    // (single source of truth: src/layouts/sidebarNav.ts), so the guard now
-    // asserts the sidebar carries them and More no longer duplicates them.
+  it('the role sidebar labels the member home My Work and the queue Follow-up Queue', () => {
+    // The primary tabs retired with the pill (2026-11-17): the role
+    // sidebar carries the easy names. The member home at `/` is
+    // "My Work" (WORKSPACE_HOME_LABELS) and /workbench is the
+    // member's "Follow-up Queue" / the team lead's "Follow-up
+    // Monitor".
+    const role = read('src/layouts/workspaceRole.ts');
+    assert.ok(role.includes("member: 'My Work'"), 'the member home label must be My Work');
     const sidebar = read('src/layouts/sidebarNav.ts');
+    assert.ok(sidebar.includes("{ label: 'Follow-up Queue', path: '/workbench'"), 'the member queue entry must be Follow-up Queue -> /workbench');
+    assert.ok(sidebar.includes("{ label: 'Follow-up Monitor', path: '/workbench'"), 'the team-lead queue entry must be Follow-up Monitor -> /workbench');
     for (const route of ['/activities', '/task-calendar', '/follow-up']) {
-      assert.ok(sidebar.includes(`path: '${route}'`), `left sidebar must carry ${route}`);
+      assert.ok(sidebar.includes(`path: '${route}'`), `the sidebar must carry ${route}`);
     }
     const more = read('src/modules/navigation/pages/MorePages.tsx');
     assert.ok(!more.includes("path: '/reports'"), 'More must not re-open the retired Reports directory');
@@ -60,8 +63,11 @@ describe('Daily Workbench — source guards', () => {
 
   it('permission/menu visibility remains correct', () => {
     const l = layout();
-    assert.ok(l.includes('resolveMenuVisibility'), 'primary tabs must use the shared visibility resolver');
-    assert.ok(l.includes('visiblePrimaryItems'), 'primary tabs must be filtered by visibility');
+    // The shell no longer calls resolveMenuVisibility directly: the
+    // route gate (resolveFeatureRouteAccess) delegates to it
+    // internally, so the menuAccess contract flows through the gate.
+    assert.ok(l.includes('resolveFeatureRouteAccess('), 'the sidebar must be filtered by the route Feature Access module');
+    assert.ok(l.includes('matchedPermission'), 'the caller permission profile must feed the gate');
     assert.ok(menuVis().includes('matchedPermission.menuAccess'), 'menuAccess override must remain');
     assert.ok(menuVis().includes("userRoleNormalized === 'ADMIN'"), 'menuVisibility must preserve ADMIN bypass');
 
@@ -320,15 +326,23 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(!wb.includes('fuzzy') && !wb.toLowerCase().includes('merge by lead'), 'must not heuristically merge by lead/name/timestamp');
   });
 
-  it('Dashboard keeps the personal work sections; the analysis sections moved to their own destinations', () => {
+  it('the member home keeps the personal work sections; the analysis sections live on their own destinations', () => {
     const dash = dashboard();
-    assert.ok(dash.includes('ExecutiveSnapshot'), 'Dashboard must keep ExecutiveSnapshot');
-    assert.ok(dash.includes('TodayTomorrowPanel'), 'must keep Today & Tomorrow');
-    assert.ok(dash.includes('PerformanceInsights'), 'must keep Performance Insights');
+    // ExecutiveSnapshot / TodayTomorrowPanel / PerformanceInsights
+    // retired with Dashboard.tsx (2026-11-17): Today & Tomorrow
+    // lives on the Workbench now. The member home's personal
+    // sections are Priority follow-ups, My pipeline, the 7-day
+    // chart and Recent Leads.
+    assert.ok(!dash.includes('ExecutiveSnapshot'), 'ExecutiveSnapshot retired with Dashboard.tsx');
+    assert.ok(!dash.includes('TodayTomorrowPanel'), "Today & Tomorrow moved to the Workbench");
+    assert.ok(!dash.includes('PerformanceInsights'), 'PerformanceInsights retired with Dashboard.tsx');
+    assert.ok(dash.includes('Priority follow-ups'), 'the member home must keep Priority follow-ups');
+    assert.ok(dash.includes('My pipeline'), 'the member home must keep My pipeline');
+    assert.ok(dash.includes('Recent leads'), 'the member home must keep Recent Leads');
     // Deliberate move (mobile-shell PR): the pipeline, follow-up discipline,
     // needs-attention and the embedded calendar left Home. Each one has a real
     // destination — the sidebar pipeline page and the /task-calendar route —
-    // and none of them may sneak back onto the dashboard.
+    // and none of them may sneak back onto the home.
     assert.ok(!dash.includes('SalesPipeline'), 'Sales Pipeline must not be embedded on Home');
     assert.ok(!dash.includes('FollowUpDiscipline'), 'Follow-up Discipline must not be embedded on Home');
     assert.ok(!dash.includes('NeedsAttentionSection'), 'Needs Attention must not be embedded on Home');
@@ -339,18 +353,13 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(app().includes("path: '/task-calendar'"), 'the calendar must stay reachable at /task-calendar');
   });
 
-  it('Roadshow count sits with the today/tomorrow counters on Home and My Work, permission-gated', () => {
+  it('Roadshow count sits with the today/tomorrow counters on My Work, permission-gated', () => {
+    // The home roadshow alerts retired with Dashboard.tsx
+    // (2026-11-17): the member home carries no roadshow read. The
+    // Workbench keeps both counts, gated on the shared predicate.
     const dash = dashboard();
-    // The gate is now the SHARED predicate (useRoadshowAccess) so Home and My
-    // Work can never disagree for the same user; the capability it checks is
-    // still roadshow_follow_up.view (asserted in the hook's own test file).
-    assert.ok(dash.includes('useRoadshowAccess()'), 'Home must gate the roadshow alerts through the shared predicate');
-    assert.ok(read('src/modules/shared/hooks/useRoadshowAccess.ts').includes("canAccess('roadshow_follow_up', 'view')"),
-      'the shared predicate must check roadshow_follow_up.view');
-    assert.ok(dash.includes('roadshowService.list'), 'the roadshow count must come from the server read');
-    assert.ok(dash.includes('roadshowCounts={roadshowCounts}'), 'Home must feed the roadshow row into Today & Tomorrow');
-    assert.ok(!/setRoadshowCounts\(\{\s*today: 0/.test(dash), 'a failed read must not fabricate a zero');
-
+    assert.ok(!dash.includes('useRoadshowAccess'), 'the member home must not read roadshows');
+    assert.ok(!dash.includes('roadshowService'), 'the member home must not fetch roadshows');
     const wb = workbench();
     assert.ok(wb.includes('Roadshows Today'), 'My Work must carry the today count');
     assert.ok(wb.includes('data-roadshow-count={tomorrowSummary.roadshows}'), 'My Work must carry the tomorrow count');
@@ -393,8 +402,10 @@ describe('Daily Workbench — source guards', () => {
 
   it('RBAC/menuAccess tests stay green (source guard)', () => {
     const l = read('src/layouts/AppLayout.tsx');
-    assert.ok(l.includes('resolveMenuVisibility'), 'must use resolveMenuVisibility');
+    assert.ok(l.includes('resolveFeatureRouteAccess('), 'the shell must filter the sidebar through the route gate');
+    assert.ok(l.includes('matchedPermission'), 'the caller permission profile must feed the gate');
     assert.ok(read('src/layouts/menuVisibility.ts').includes('matchedPermission.menuAccess'), 'must keep menuAccess');
+    assert.ok(read('src/layouts/featureRouteAccess.ts').includes('resolveMenuVisibility'), 'the gate must delegate to the shared visibility resolver');
   });
 
   it('docs/DAILY_WORKBENCH.md exists and documents required sections', () => {
@@ -412,8 +423,8 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(doc.includes('performance') || doc.includes('Performance'), 'doc must have performance safeguards');
   });
 
-  it('no full lead fetch regression in Dashboard still', () => {
+  it('no full lead fetch regression in the member home still', () => {
     const dash = stripComments(dashboard());
-    assert.ok(!dash.includes('leadService.getLeads'), 'Dashboard must not fetch full leads');
+    assert.ok(!dash.includes('leadService.getLeads'), 'MemberHome must not fetch full leads');
   });
 });

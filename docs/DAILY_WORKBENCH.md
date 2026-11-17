@@ -8,8 +8,8 @@ Daily Workbench is an execution workspace, not another dashboard, calendar, or f
 ## Route & Navigation
 - Route: `/workbench`
 - Protected: wrapped in `ProtectedRoute` (same auth/session/JWT as all other routes)
-- Primary navigation: My Work
-  - Order: Daily Workbench, Activities, Task Calendar, Follow-up Queue
+- Primary navigation: Follow-up Queue (member) / Follow-up Monitor (team lead) in the role sidebar's WORKSPACE section — the member home at `/` is "My Work" and the workbench is its queue page
+  - Order: Follow-up Queue, Activities, Task Calendar, My Leads
 - Menu visibility: reuses existing `menuAccess` override + static `roles.includes` fallback + ADMIN bypass via `resolveMenuVisibility`. No Admin-only hardcode; ALL_ROLES static fallback.
 - Permission: reuses existing `dashboard.view` / `leads.view` semantics via `usePermissions`. Workbench maps to `dashboard.view` for server permission sheet, and `lead_tracking.edit` for scheduled actions. Server remains security boundary.
 

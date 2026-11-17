@@ -62,7 +62,9 @@ import {
   resolveKpiLevel,
   sortKpiRows,
 } from '../../src/modules/team/utils/kpiDrilldown';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { MemberHomeContent } from '../../src/modules/workspace/pages/MemberHome';
+import { TeamLeadHomeContent } from '../../src/modules/workspace/pages/TeamLeadHome';
+import { buildNext7Days } from '../../src/modules/workspace/utils/workspaceData';
 import {
   TeamKpiDrilldownContent,
   type KpiLeadsResponse,
@@ -762,21 +764,66 @@ describe('new KPI cards — rendering (never-empty rule)', () => {
     assert.ok(html.includes('Entered 10 Nov 2026'), 'the entry date renders in Dhaka');
   });
 
-  it('Team Home renders all seven cards — No Action Alert as an alert', () => {
-    const html = renderToStaticMarkup(
+  it('the role homes render the new cards — No Action Alert as an alert; the full seven survive on the Workbench strip', () => {
+    // The 7-card row retired with TeamHome (2026-11-17). The cards
+    // split across the role homes: the team-lead home carries No
+    // Action Alert (alert-styled, red), the member home links its
+    // Assigned card to the Total Lead drill-down, and the full
+    // seven-card set survives on the Workbench "My numbers" strip.
+    const chartDays = buildNext7Days([], new Date('2026-11-17T06:00:00Z'));
+    const teamHtml = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, { people: treePeople, scope: 'Team' })
+        React.createElement(TeamLeadHomeContent, { people: treePeople, scope: 'Team', chartDays, chartTruncated: false, chartLoading: false })
       )
     );
-    for (const kpi of ['totalLeads', 'todayCollection', 'noAction']) {
-      assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
+    assert.ok(teamHtml.includes('No Action Alert'), 'the alert card is labelled on the team-lead home');
+    assert.ok(teamHtml.includes('href="/team/kpi/noAction"'), 'the alert card links to its drill-down');
+    assert.ok(teamHtml.includes('lf-kpi-card--red'), 'the alert card is styled as an alert (red)');
+
+    const memberHtml = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(MemberHomeContent, {
+          userName: 'Hana Head',
+          dateLine: 'Tuesday, 17 November 2026',
+          greeting: 'Good morning',
+          assigned: 20,
+          dueToday: 0,
+          overdue: 0,
+          convertedThisMonth: 0,
+          priority: [],
+          priorityTotal: 0,
+          dailyLoading: false,
+          chartDays,
+          chartTruncated: false,
+          pipeline: [],
+          recentLeads: [],
+          recentLeadsLoading: false,
+          canCreateLead: true,
+          hasTeam: true,
+        })
+      )
+    );
+    assert.ok(memberHtml.includes('href="/team/kpi/totalLeads"'), 'the member Assigned card links to the Total Lead drill-down');
+
+    const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
+    for (const [label, kpi] of [
+      ['Total Lead', 'totalLeads'],
+      ['Today Collection', 'todayCollection'],
+      ['Open leads', 'open'],
+      ['Due today', 'dueToday'],
+      ['Overdue', 'overdue'],
+      ['No Action Alert', 'noAction'],
+      ['Converted', 'converted'],
+    ] as const) {
+      assert.ok(
+        workbench.includes(`label="${label}"`) && workbench.includes(`to="/team/kpi/${kpi}?person=self"`),
+        `the My numbers strip keeps the ${label} card linking to its own drill-down`
+      );
     }
-    assert.ok(html.includes('No Action Alert'), 'the alert card is labelled');
-    assert.ok(html.includes('Total Lead') && html.includes('Today Lead Collection'), 'the new cards are labelled');
-    // Totals render even at 0: the all-zero member's team still shows
-    // every card (checked via the labels above, not hidden cards).
   });
 });
 

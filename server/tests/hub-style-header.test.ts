@@ -1,19 +1,20 @@
 /**
  * hub-style-header.test.ts — Learning Hub-style header for LeadFlow
  * ------------------------------------------------------------------
- * Guards for the header restyle (2026-11-04):
+ * Guards for the header restyle (2026-11-04), retargeted at the
+ * role-workspace shell (Phase 1, 2026-11-17):
  *
- *  - the utility bar carries a LIVE Asia/Dhaka date + time where the
- *    Learning Hub carries its E-BOOK link and BN|EN switcher — the
- *    formatter is pinned to Asia/Dhaka, ticks every second, and its
- *    interval is always cleaned up,
- *  - the main navigation lives in a floating rounded pill: logo left,
- *    the same five permission-filtered primary destinations centred
- *    (active = Sunset Orange underline), bell + profile chip right,
+ *  - the topbar carries a LIVE Asia/Dhaka date + time — the formatter
+ *    is pinned to Asia/Dhaka, ticks every second, and its interval is
+ *    always cleaned up,
+ *  - the shell is a fixed left sidebar (248px, 220px at <=1100px,
+ *    slide-in drawer + overlay at <=760px) with a sticky topbar
+ *    (breadcrumb, notifications button with dot, avatar) — the
+ *    floating pill + utility bar are RETIRED (2026-11-17),
  *  - the profile chip (avatar + name) leads to the Profile page
  *    (/settings), mirroring the Hub; sign-out stays in the user menu,
- *  - nothing else about the shell moved: the drawer toggle, the
- *    notification panel and the mobile bottom nav keep their hooks.
+ *  - nothing else about the shell moved: the drawer toggle and the
+ *    notification panel keep their hooks.
  */
 
 import { describe, it, mock } from 'node:test';
@@ -94,28 +95,35 @@ describe('Hub-style header — shell structure (source guards)', () => {
   const layout = () => read('src/layouts/AppLayout.tsx');
   const css = () => read('src/index.css');
 
-  it('the utility bar sits above the floating pill and carries the clock', () => {
+  it('the topbar carries the live Dhaka clock and the breadcrumb', () => {
     const l = layout();
-    const utilityIdx = l.indexOf('leadflow-utility-bar');
-    const pillIdx = l.indexOf('leadflow-nav-pill');
-    assert.ok(utilityIdx !== -1 && pillIdx !== -1 && utilityIdx < pillIdx,
-      'utility bar first, floating pill below it');
-    assert.ok(l.includes('<DhakaClock className="leadflow-utility-clock" />'),
-      'the utility bar must render the live Dhaka clock');
+    assert.ok(l.includes('<DhakaClock className="lf-topbar-clock" />'),
+      'the topbar must render the live Dhaka clock');
     assert.ok(l.includes("from './DhakaClock'"), 'the clock must come from the shared component');
+    assert.ok(l.includes('lf-breadcrumb'), 'the topbar must render the breadcrumb');
     assert.ok(!l.includes('dhakaTime'), 'the old 60-second in-header clock state must be gone');
-    assert.ok(!l.includes('layout-language-switcher'), 'no language switcher may sneak into the utility bar');
+    assert.ok(!l.includes('layout-language-switcher'), 'no language switcher may sneak into the topbar');
   });
 
-  it('the pill keeps every existing destination, gate and action', () => {
+  it('the floating pill, the utility bar and the mobile bottom nav are retired', () => {
     const l = layout();
-    // Same primary destinations, same visibility rule, same active logic.
-    assert.ok(l.includes('PRIMARY_NAV_ITEMS'), 'primary destinations unchanged');
-    assert.ok(l.includes('visiblePrimaryItems'), 'menu visibility filtering unchanged');
-    assert.ok(l.includes('leadflow-desktop-nav'), 'desktop centre nav hook kept');
-    assert.ok(l.includes('leadflow-mobile-nav'), 'mobile bottom nav kept');
+    const c = css();
+    for (const retired of ['leadflow-utility-bar', 'leadflow-nav-pill', 'leadflow-mobile-nav', 'leadflow-desktop-nav']) {
+      assert.ok(!l.includes(retired), `AppLayout must not reference the retired ${retired}`);
+      assert.ok(!c.includes(`.${retired}`), `the CSS must not style the retired ${retired}`);
+    }
+    assert.ok(!l.includes('PRIMARY_NAV_ITEMS'), 'the pill destination list is retired with the pill');
+    assert.ok(!l.includes('visiblePrimaryItems'), 'the pill visibility filter is retired with the pill');
+  });
+
+  it('the sidebar keeps every existing destination, gate and action', () => {
+    const l = layout();
+    // Role-based sidebar groups, built from the route gate.
+    assert.ok(l.includes('buildSidebarGroups('), 'the sidebar is built by the role-aware builder');
+    assert.ok(l.includes('resolveFeatureRouteAccess('), 'the route gate still filters the nav');
+    assert.ok(l.includes('sidebarGroups.map('), 'the sidebar renders the built groups');
     // Drawer toggle and notification bell untouched.
-    assert.ok(l.includes('id="leadflow-sidebar-toggle"'), 'drawer toggle kept');
+    assert.ok(l.includes('lf-sidebar-toggle'), 'drawer toggle kept');
     assert.ok(l.includes('aria-label="Notifications"'), 'notification bell kept');
     assert.ok(l.includes('unreadCount'), 'bell count kept');
     // Sign-out still lives in the user menu.
@@ -132,27 +140,25 @@ describe('Hub-style header — shell structure (source guards)', () => {
     assert.ok(chip.includes('user.avatarUrl'), 'the chip must use the user avatar when present');
   });
 
-  it('the CSS carries the Hub geometry: utility bar, floating pill, orange underline', () => {
+  it('the CSS carries the workspace geometry: 248px sidebar, 72px topbar, sample breakpoints', () => {
     const c = css();
-    assert.ok(c.includes('.leadflow-utility-bar'), 'utility bar style must exist');
-    const pill = c.slice(c.indexOf('.leadflow-nav-pill {'), c.indexOf('.leadflow-nav-pill {') + 500);
-    assert.match(pill, /height:\s*56px/, 'the pill is 56px tall like the Hub nav');
-    assert.match(pill, /border-radius:\s*16px/, 'the pill is rounded like the Hub nav');
-    assert.match(pill, /box-shadow:/, 'the pill floats on a soft shadow');
-    const desktop = c.slice(c.indexOf('@media (min-width: 1280px)'));
-    assert.ok(desktop.includes('.leadflow-desktop-nav-item.is-active::after'),
-      'the active centre link must carry an underline pseudo-element');
-    const underline = desktop.slice(desktop.indexOf('.leadflow-desktop-nav-item.is-active::after'));
-    assert.match(underline.slice(0, 400), /background:\s*#F37021/,
-      'the active underline is Sunset Orange #F37021');
+    const sidebar = c.slice(c.indexOf('.lf-sidebar {'), c.indexOf('.lf-sidebar {') + 500);
+    assert.match(sidebar, /width:\s*248px/, 'the sidebar is 248px wide');
+    const topbar = c.slice(c.indexOf('.lf-topbar {'), c.indexOf('.lf-topbar {') + 500);
+    assert.match(topbar, /height:\s*72px/, 'the topbar is 72px tall');
+    assert.match(topbar, /position:\s*sticky/, 'the topbar sticks to the top of the viewport');
+    assert.ok(c.includes('@media (max-width: 1100px)'), 'the 1100px breakpoint (220px sidebar) must exist');
+    assert.ok(c.includes('@media (max-width: 760px)'), 'the 760px breakpoint (drawer) must exist');
+    assert.match(c, /@media \(max-width: 1100px\) \{\s*\.lf-sidebar\s*\{\s*width:\s*220px/,
+      'the sidebar narrows to 220px at <=1100px');
   });
 
-  it('the mobile header rule no longer crushes the two-piece header to 58px', () => {
+  it('the topbar tightens on small screens instead of crushing the header', () => {
     const c = css();
-    const mobile = c.slice(c.indexOf('@media (max-width: 767px)'));
+    const mobile = c.slice(c.indexOf('@media (max-width: 760px)'));
     assert.ok(!/header\.sticky\s*\{\s*height:\s*58px/.test(mobile),
       'the old fixed 58px header height must not survive the restyle');
-    assert.match(mobile, /\.leadflow-nav-pill\s*\{\s*height:\s*52px/,
-      'the pill tightens to 52px on small screens instead');
+    assert.match(mobile, /\.lf-topbar\s*\{\s*height:\s*62px/,
+      'the topbar tightens to 62px on small screens instead');
   });
 });

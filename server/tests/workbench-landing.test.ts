@@ -1,38 +1,36 @@
 /**
  * workbench-landing.test.ts
  * ------------------------------------------------------------------
- * Phase 2 PR #3 — Workbench-first landing: after login (and on the
- * session's first arrival at the root), a user whose role has Workbench
- * access starts the day on the Daily Workbench (`/workbench`), not the
- * Dashboard. The Dashboard page itself, its route and the sidebar Home
- * item are unchanged; the landing fires ONCE per auth session, after
- * which `/` renders the Dashboard as before.
+ * Phase 2 PR #3 — Workbench-first landing, RETIRED by the
+ * role-workspace redesign (2026-11-17): after login (and on the
+ * session's first arrival at the root), a caller now lands on their
+ * ROLE home rendered in place at `/` — the member home (My Work)
+ * for members, the Team Lead / Manager home for callers who see a
+ * team. The Workbench is a sidebar page (Follow-up Queue), not a
+ * landing. The landing fires ONCE per auth session, after which `/`
+ * renders the member home as before (except a TL+ user who pinned
+ * the Team view).
  *
- * Recon facts these tests encode (verified against the pre-PR tree):
- *   - Post-login navigation was `activateSession -> navigate('/')` for
- *     every role (auth-flow-integration E1/E2/F1/F2 pin that exact
- *     contract), so the landing decision lives at the ROOT, not in a
- *     changed navigate target.
- *   - `/` itself rendered Dashboard in place (no redirect existed);
- *     the sidebar "Home" item targets `/`, so a blind redirector at
- *     `/` would have made the Dashboard unreachable from navigation.
- *   - Workbench access is the app's Layer B decision for `/workbench`:
- *     ANY_ROLE static fallback (sidebar "My Work" agrees), ADMIN /
- *     SUPERADMIN bypass, and an explicit dynamic
- *     `menuAccess['/workbench'] = false` as the ONLY way a role loses
- *     it. Database/custom codes (MANAGER, TEAM_LEAD, EMPLOYEE, SBE,
- *     SM, CEO) therefore land on the Workbench like everyone else.
+ * What survives from the PR #3 contract:
+ *   - Post-login navigation is still `activateSession -> navigate('/')`
+ *     for every role (auth-flow-integration E1/E2/F1/F2 pin that exact
+ *     contract), so the landing decision lives at the ROOT.
+ *   - `/` renders a home in place (no redirect exists); the sidebar
+ *     home item targets `/`, so a blind redirector at `/` would have
+ *     made the member home unreachable from navigation.
+ *   - resolveHomePath (the pure per-role decision) still exists and
+ *     its contract is unchanged — the landing simply no longer
+ *     consumes it, because the member home is always `/` now.
  *   - NO return-URL / `next` mechanism exists anywhere in the app:
  *     ProtectedRoute redirects the unauthenticated to `/login` with no
- *     location state, and Login never reads one. There is therefore no
- *     explicit target for the default landing to override — the guards
- *     in section 4 pin that this PR did not change that either.
+ *     location state, and Login never reads one.
  *
  * Sections:
- *   1. resolveHomePath — the pure landing decision per role class.
+ *   1. resolveHomePath — the pure landing decision per role class
+ *      (kept: the function still exists, uncalled by the landing).
  *   2. homeLanding marker — once-per-session lifecycle.
  *   3. HomeLanding rendering (renderToStaticMarkup, repo style).
- *   4. Source guards — wiring (root wraps Dashboard in HomeLanding,
+ *   4. Source guards — wiring (root wraps MemberHome in HomeLanding,
  *      activateSession re-arms + still navigates to `/`), and the
  *      unchanged surroundings (Workbench route, FeatureGate fallback,
  *      unauthenticated -> /login, no return-URL mechanism).
@@ -72,6 +70,10 @@ const withMenu = (menuAccess: Record<string, boolean>) => ({ menuAccess }) as an
 /* ================================================================ */
 
 describe('resolveHomePath — Workbench-first landing decision', () => {
+  // NOTE (2026-11-17): the landing no longer consumes this resolver —
+  // the member home is always `/` now. The pure function and its
+  // contract survive (the Workbench route gate still uses the same
+  // Layer B decision), so these pins stay as the function's contract.
   it('field roles land on the Workbench (no role matrix loaded)', () => {
     for (const role of ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH']) {
       assert.equal(resolveHomePath(role, undefined), WORKBENCH_HOME_PATH, `${role} -> workbench`);
@@ -157,16 +159,16 @@ describe('HomeLanding — rendering outcomes', () => {
   // Rendering note (same constraint FeatureGate's tests live with):
   // zustand's SSR snapshot is the store's INITIAL state, so a static
   // render always sees the logged-out store — the interactive outcomes
-  // (placeholder while the matrix loads, Navigate on a Workbench
+  // (placeholder while the overview loads, role home on a team
   // decision, children once consumed) are therefore pinned by the pure
   // decision tests (section 1), the marker lifecycle (section 2) and
   // the source guards (section 4), exactly how this suite covers
   // FeatureGate. What SSR CAN prove is the defensive fall-through:
-  it('falls through to the Dashboard when there is no user (unreachable above ProtectedRoute)', () => {
+  it('falls through to the member home when there is no user (unreachable above ProtectedRoute)', () => {
     const html = renderToStaticMarkup(
-      React.createElement(HomeLanding, null, React.createElement('div', null, 'DASHBOARD_BODY'))
+      React.createElement(HomeLanding, null, React.createElement('div', null, 'MEMBER_HOME_BODY'))
     );
-    assert.ok(html.includes('DASHBOARD_BODY'), 'no user -> children render verbatim');
+    assert.ok(html.includes('MEMBER_HOME_BODY'), 'no user -> children render verbatim');
     assert.ok(!html.includes('Checking access'), 'no placeholder on the fall-through');
   });
 });
@@ -176,11 +178,11 @@ describe('HomeLanding — rendering outcomes', () => {
 /* ================================================================ */
 
 describe('workbench landing — source guards', () => {
-  it('the root route wraps the Dashboard in HomeLanding; the Workbench route is unchanged', () => {
+  it('the root route wraps the member home in HomeLanding; the Workbench route is unchanged', () => {
     const app = read('src/App.tsx');
     assert.ok(
-      app.includes('<HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding>'),
-      'root route must apply the landing decision around the unchanged Dashboard element'
+      app.includes('<HomeLanding><LazyPage page={<MemberHome />} /></HomeLanding>'),
+      'root route must apply the landing decision around the unchanged member-home element'
     );
     assert.ok(
       app.includes('path: \'/workbench\'') && app.includes('<LazyPage page={<DailyWorkbench />} />'),
@@ -200,20 +202,24 @@ describe('workbench landing — source guards', () => {
     const gate = read('src/modules/auth/components/FeatureGate.tsx');
     assert.ok(gate.includes('Navigate to="/" replace'), 'denied routes still redirect to /');
     const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes('consumeHomeLanding(userId)'), 'the decision is consumed before navigating');
-    assert.ok(landing.includes('resolveHomePath('), 'the component decides through the pure resolver');
+    assert.ok(landing.includes('consumeHomeLanding(userId)'), 'the decision is consumed before rendering');
+    assert.ok(landing.includes('resolveHomeLandingDecision({'), 'the component decides through the pure TL+ resolver');
+    assert.ok(!landing.includes('resolveHomePath('), 'the Workbench-first resolver is retired from the landing');
   });
 
-  it('HomeLanding waits for the role matrix, then redirects only on a Workbench decision', () => {
+  it('HomeLanding waits for the team overview, then renders the role home in place — never a redirect', () => {
     const landing = read('src/modules/auth/components/HomeLanding.tsx');
     assert.ok(landing.includes('hasConsumedHomeLanding(userId)'), 'consumed sessions skip the decision entirely');
     assert.ok(landing.includes('<AccessResolving />'), 'undecided sessions show the neutral placeholder, not a guessed page');
+    assert.ok(landing.includes('loadTeamOverview(userId)'), 'the decision waits on the team overview, not the role matrix');
+    assert.ok(!landing.includes('adminService.getRoles()'), 'no role-matrix load in the landing any more');
     assert.ok(
-      landing.includes('decision === WORKBENCH_HOME_PATH') && landing.includes('<Navigate to={WORKBENCH_HOME_PATH} replace />'),
-      'only a Workbench decision redirects, and only to /workbench'
+      landing.includes('decision === TEAM_HOME_PATH') && landing.includes('<RoleHomePage role={teamRole} />'),
+      'a team decision renders the role home in place at /'
     );
-    assert.ok(landing.includes('decision === DASHBOARD_HOME_PATH'), 'a Dashboard decision renders the children in place');
-    assert.ok(landing.includes('adminService.getRoles()'), 'the role matrix comes from the same source FeatureGate uses');
+    assert.ok(landing.includes('decision === DASHBOARD_HOME_PATH'), 'a member decision renders the children in place');
+    assert.ok(!landing.includes('<Navigate'), 'the landing never redirects — the Workbench-first redirect is retired');
+    assert.ok(!landing.includes('WORKBENCH_HOME_PATH'), 'no workbench landing target remains');
   });
 
   it('unauthenticated users still go to /login, and no return-URL mechanism exists to override the default', () => {

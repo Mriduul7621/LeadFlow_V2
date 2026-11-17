@@ -7,11 +7,11 @@ import {
 /**
  * homeLanding.ts
  * ------------------------------------------------------------------
- * The once-per-auth-session marker for the Workbench-first landing
- * (see `resolveHomePath` in layouts/featureRouteAccess.ts and the
- * HomeLanding component). The landing redirect may fire only ONCE per
- * session: afterwards the root route `/` must render the Dashboard, or
- * the sidebar's Home item could never reach it.
+ * The once-per-auth-session marker for the role-home landing
+ * (see HomeLanding and the workspace role derivation in
+ * layouts/workspaceRole.ts). The landing decision may fire only ONCE
+ * per session: afterwards the root route `/` must render the member
+ * home, or the sidebar's home item could never reach it.
  *
  * The marker lives in the in-memory session cache, keyed by user, which
  * gives exactly the right lifetime for free:
@@ -22,7 +22,7 @@ import {
  *                             login that did not pass through a logout
  *                             still lands;
  *   - in-app navigation    -> the marker survives, Home renders the
- *                             Dashboard.
+ *                             member home.
  */
 export function homeLandingKey(userId: string): string {
   return `homeLanding:${userId}`;
@@ -64,10 +64,10 @@ export const TEAM_HOME_PATH = '/team-home';
  * logout and on a fresh login via resetHomeLanding).
  *
  *   'team' -> `/` renders the team-first home (TL+ users only);
- *   'work' -> the user opted into their own My Day: the landing falls
- *             back to the member decision (Workbench/Dashboard);
+ *   'work' -> the user opted into their own My Work home: the landing
+ *             falls back to the member home at `/`;
  *   unset  -> the default applies: TL+ users get the team home,
- *             everyone else the member decision.
+ *             everyone else the member home.
  */
 export type HomeViewPreference = 'team' | 'work';
 
@@ -99,8 +99,7 @@ export function setHomeViewPreference(userId: string, view: HomeViewPreference):
  * the session.
  *
  * Returns TEAM_HOME_PATH (render the team home at `/`), or the member
- * decision unchanged (WORKBENCH_HOME_PATH / DASHBOARD_HOME_PATH as
- * computed by `resolveHomePath`).
+ * decision unchanged (DASHBOARD_HOME_PATH — the member home at `/`).
  */
 export function resolveHomeLandingDecision(input: {
   hasTeam: boolean;

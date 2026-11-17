@@ -10,9 +10,14 @@
  *      fallback — identical to primary navigation and More directories;
  *   2. a disabled Feature Access module blocks its page route (typing the
  *      URL cannot bypass the sidebar);
- *   3. the registry, the routes wrapped in App.tsx, and the AppLayout
- *      primary navigation stay in lockstep (no drift, no ungated page route);
+ *   3. the registry, the routes wrapped in App.tsx, and the role
+ *      sidebar stay in lockstep (no drift, no ungated page route);
  *   4. FeatureGate redirects (never renders) when the decision denies.
+ *
+ * Retargeted at the role-workspace shell (2026-11-17): the primary
+ * tabs retired with the pill; the role sidebar (buildSidebarGroups)
+ * is the navigation whose paths must all carry a FEATURE_ROUTES
+ * entry.
  *
  * This is a VISIBILITY gate: the server keeps enforcing canonical Action
  * Permissions and Data Visibility on every request regardless of what a
@@ -147,26 +152,29 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   });
 });
 
-describe('primary navigation and More directories — route coverage', () => {
-  it('primary tabs keep their five entries and the secondary pages live in the left sidebar', () => {
+describe('role sidebar — route coverage', () => {
+  it('the role sidebar owns navigation; every sidebar path has a FEATURE_ROUTES entry', () => {
     const layout = read('src/layouts/AppLayout.tsx');
-    const start = layout.indexOf('const PRIMARY_NAV_ITEMS');
-    const end = layout.indexOf('const MORE_NAV_PATHS');
-    assert.ok(start >= 0 && end > start, 'primary navigation config must exist');
-    const menuPaths = Array.from(layout.slice(start, end).matchAll(/path: '([^']+)'/g), m => m[1]);
-    assert.deepEqual(menuPaths, ['/', '/workbench', '/leads/new', '/leads', '/more']);
+    assert.ok(!layout.includes('PRIMARY_NAV_ITEMS'), 'no primary-tabs list may survive the shell change');
     assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
     assert.ok(layout.includes('isSidebarOpen'), 'the left sidebar drawer owns the shell drawer state');
+    assert.ok(layout.includes('buildSidebarGroups('), 'the shell must build the sidebar from the role-aware builder');
 
     // The retired More → Reports directory is replaced by the permission-
-    // filtered left sidebar (src/layouts/sidebarNav.ts).
+    // filtered role sidebar (src/layouts/sidebarNav.ts).
     const sidebar = read('src/layouts/sidebarNav.ts');
-    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown', '/roadshows', '/sales-pipeline']) {
+    assert.ok(sidebar.includes('export function buildSidebarGroups'), 'the sidebar builder must exist');
+    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown', '/roadshows', '/sales-pipeline', '/workbench', '/leads', '/leads/all', '/notifications', '/users', '/settings', '/settings/system', '/settings/performance-diagnostics']) {
       assert.ok(sidebar.includes(`path: '${p}'`), `the sidebar must include ${p}`);
     }
 
-    for (const p of menuPaths) {
-      assert.ok(FEATURE_ROUTES[p], `menu path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
+    // Every path the sidebar can render must be a registered,
+    // gate-checked route — a sidebar entry without a FEATURE_ROUTES
+    // entry would be an ungated page route.
+    const sidebarPaths = [...new Set(Array.from(sidebar.matchAll(/path: '([^']+)'/g), m => m[1]))];
+    assert.ok(sidebarPaths.length >= 15, `the sidebar must carry a real route set, saw ${sidebarPaths.length}`);
+    for (const p of sidebarPaths) {
+      assert.ok(FEATURE_ROUTES[p], `sidebar path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
     }
     for (const [route, entry] of Object.entries(FEATURE_ROUTES)) {
       assert.ok(route, `route ${route} is registered`);

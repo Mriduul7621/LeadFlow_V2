@@ -30,7 +30,8 @@ const ROOT = process.cwd();
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 
 const PAGES = [
-  'src/modules/dashboard/pages/Dashboard.tsx',
+  'src/modules/workspace/pages/MemberHome.tsx',
+  'src/modules/workspace/pages/ManagerHome.tsx',
   'src/modules/workbench/pages/DailyWorkbench.tsx',
   'src/modules/leads/pages/AllLeads.tsx',
   'src/modules/roadshows/pages/RoadshowPage.tsx',
@@ -87,7 +88,8 @@ describe('F3 — "no access yet" empty state', () => {
 
   it('D. a real failure still shows the retry message (never "no access")', () => {
     const expectations: Record<string, string> = {
-      'src/modules/dashboard/pages/Dashboard.tsx': "setError('Dashboard data could not be loaded.')",
+      'src/modules/workspace/pages/MemberHome.tsx': "setError('Dashboard data could not be loaded.')",
+      'src/modules/workspace/pages/ManagerHome.tsx': "setError('Dashboard data could not be loaded.')",
       'src/modules/workbench/pages/DailyWorkbench.tsx': "setError('Daily work could not be loaded.')",
       'src/modules/leads/pages/AllLeads.tsx': "toast.error('Initialization matrix sync failure')",
       'src/modules/roadshows/pages/RoadshowPage.tsx': "setLoadError(error instanceof Error ? error.message : 'Roadshows could not be loaded.')",
@@ -109,10 +111,27 @@ describe('F3 — "no access yet" empty state', () => {
   it('E. the empty state never hides a page the server DID answer', () => {
     // Guard against the tempting shortcut: `forbidden` may gate content only
     // in branches that already existed for errors/loading, not the whole page.
-    const dash = read('src/modules/dashboard/pages/Dashboard.tsx');
-    assert.ok(dash.includes('{forbidden ? (\n        <NoAccessYet'), 'the dashboard swaps the error card, nothing else');
+    const member = read('src/modules/workspace/pages/MemberHome.tsx');
+    assert.ok(member.includes('{forbidden ? (\n        <NoAccessYet'), 'the member home swaps the error card, nothing else');
+    const manager = read('src/modules/workspace/pages/ManagerHome.tsx');
+    assert.ok(manager.includes('{forbidden ? (\n        <NoAccessYet'), 'the manager home swaps the error card, nothing else');
     const pipeline = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
     assert.ok(pipeline.includes('{forbidden ? (\n        <NoAccessYet'), 'the pipeline swaps the error card');
+  });
+
+  it('E2. the team-lead home deliberately has NO "no access" handling', () => {
+    // TeamLeadHome's critical read is GET /api/team/overview, which
+    // is requireAuth-only — it carries no permission code, so a 403
+    // there cannot be a module denial and the classifier genuinely
+    // does not apply. A denial there is a session problem, not a
+    // missing grant, and must keep the ordinary error path.
+    const teamLead = read('src/modules/workspace/pages/TeamLeadHome.tsx');
+    assert.ok(!teamLead.includes('NoAccessYet'), 'no empty state on the team-lead home');
+    assert.ok(!teamLead.includes('isForbiddenError'), 'no classifier on the team-lead home');
+    const users = read('server/routes/production/users.routes.ts');
+    const overview = users.slice(users.indexOf("router.get('/team/overview'"));
+    assert.ok(overview.startsWith("router.get('/team/overview', requireAuth,"), 'the overview read stays requireAuth-only');
+    assert.ok(!overview.slice(0, 200).includes('requirePermissionCode'), 'no permission code on the overview read');
   });
 
   it('F. source guard: the classifier stays dependency-free and importable', () => {

@@ -45,32 +45,44 @@ describe('Lead workflow model', () => {
   });
 
   it('keeps routes and internal feature keys while renaming visible labels', () => {
-    const layout = read('src/layouts/AppLayout.tsx');
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    const role = read('src/layouts/workspaceRole.ts');
+    const memberHome = read('src/modules/workspace/pages/MemberHome.tsx');
     const translations = read('src/modules/shared/utils/translations.ts');
     const roleEditor = read('src/modules/users/pages/UserManagement.tsx');
     const app = read('src/App.tsx');
 
     // The visible shell labels were simplified by the mobile navigation
-    // redesign (PR #52) — this guard protects the ROUTES and the internal
+    // redesign (PR #52) and again by the role-workspace redesign
+    // (2026-11-17) — this guard protects the ROUTES and the internal
     // feature keys, which are unchanged. The legacy names still live in the
     // translations and the role-editor feature catalog asserted below.
+    //
+    // The primary tabs retired with the pill: the label/route pairs
+    // now live in the role sidebar builder (sidebarNav.ts) and the
+    // home labels (workspaceRole.ts). 'My Work' is the member HOME
+    // at `/` now (the workbench is the member's "Follow-up Queue");
+    // 'Add Lead' is an action on the member home, not a tab.
+    assert.ok(role.includes("member: 'My Work'"), 'the member home label must be My Work');
+    assert.ok(sidebar.includes("const home: SidebarItem = { label: WORKSPACE_HOME_LABELS[role], path: '/', icon: LayoutDashboard }"),
+      'the home sidebar entry must carry the role home label at /');
     for (const [label, route] of [
-      ['Home', '/'],
-      ['My Work', '/workbench'],
-      ['Add Lead', '/leads/new'],
-      ['Leads', '/leads'],
-      ['More', '/more'],
+      ['My Leads', '/leads'],
+      ['Team Leads', '/leads'],
+      ['All Leads', '/leads/all'],
+      ['Follow-up Queue', '/workbench'],
+      ['Follow-up Monitor', '/workbench'],
     ] as const) {
       assert.match(
-        layout,
-        new RegExp(`label: '${label}'[^}]*path: '${route}'`),
-        `shell tab ${label} must keep route ${route}`,
+        sidebar,
+        new RegExp(`label: '${label}', path: '${route}'`),
+        `sidebar entry ${label} must keep route ${route}`,
       );
     }
-    assert.ok(
-      layout.indexOf("path: '/leads/new'") < layout.indexOf("path: '/leads'"),
-      'shell order must stay Add Lead → Leads',
-    );
+    assert.ok(memberHome.includes('to="/leads/new"'), 'the Add Lead action must navigate to /leads/new');
+    assert.ok(memberHome.includes('aria-label="Add Lead"'), 'the Add Lead action keeps its label');
+    assert.ok(sidebar.includes("'/leads/new': 'Add Lead'"), 'the Add Lead breadcrumb label must survive');
+    assert.ok(sidebar.includes("'/more': 'More'"), 'the More breadcrumb label must survive');
     assert.ok(translations.includes('navLeadTracking: "Lead Workspace"'));
     assert.ok(translations.includes('navAllLeads: "Lead Pool"'));
     assert.match(roleEditor, /key: 'lead_tracking',[\s\S]*label: 'Lead Workspace'/);

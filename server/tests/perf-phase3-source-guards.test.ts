@@ -1,7 +1,7 @@
 /**
  * perf-phase3-source-guards.test.ts
  * ------------------------------------------------------------------
- * Performance Phase 3 — reduce first-login / first-dashboard startup
+ * Performance Phase 3 — reduce first-login / first-home startup
  * contention and duplicate reference-data reads.
  *
  *   1. Source guards — critical KPI still uses GET /api/dashboard;
@@ -14,6 +14,10 @@
  *
  * PR #29 coalescing, PR #30 diagnostics, auth/RBAC/visibility remain
  * the contract of their own suites (must stay green).
+ *
+ * Retargeted at the role-workspace member home (2026-11-17):
+ * Dashboard.tsx is retired; the member home is the first-home page
+ * whose KPI loader releases the critical gate.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +31,7 @@ function read(rel: string): string {
 }
 
 function dashboardLoaders(): { kpi: string; daily: string; full: string } {
-  const full = read('src/modules/dashboard/pages/Dashboard.tsx');
+  const full = read('src/modules/workspace/pages/MemberHome.tsx');
   const kpiStart = full.indexOf('const loadDashboardData');
   const dailyStart = full.indexOf('const loadDailyExecution');
   assert.ok(kpiStart >= 0 && dailyStart > kpiStart);
@@ -43,7 +47,7 @@ function dashboardLoaders(): { kpi: string; daily: string; full: string } {
 /* ==================================================================== */
 
 describe('Performance Phase 3 — critical vs deferred startup', () => {
-  it('A. dashboard critical request still uses GET /api/dashboard', () => {
+  it('A. member-home critical request still uses GET /api/dashboard', () => {
     const { kpi } = dashboardLoaders();
     assert.ok(kpi.includes('dashboardService.getDashboard'), 'KPI loader must call dashboardService.getDashboard');
     assert.ok(!kpi.includes('localStorage'), 'KPI loader must not read localStorage');
@@ -63,40 +67,45 @@ describe('Performance Phase 3 — critical vs deferred startup', () => {
     assert.ok(kpi.includes('markCriticalStartupSettled()'), 'KPI loader must release the startup gate');
     assert.ok(daily.includes('await waitForCriticalStartup()'), 'daily execution must wait for critical readiness');
     const waitIdx = daily.indexOf('await waitForCriticalStartup()');
+    const overdueIdx = daily.indexOf("getFollowUpQueue({ bucket: 'overdue', limit: 50 })");
     const todayIdx = daily.indexOf("getFollowUpQueue({ bucket: 'today', limit: 50 })");
     const upcomingIdx = daily.indexOf("getFollowUpQueue({ bucket: 'upcoming', limit: 50 })");
-    const scheduledIdx = daily.indexOf('scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 })');
-    assert.ok(waitIdx >= 0 && todayIdx > waitIdx, 'today follow-up must start AFTER critical readiness');
+    assert.ok(waitIdx >= 0 && overdueIdx > waitIdx, 'overdue follow-up must start AFTER critical readiness');
+    assert.ok(todayIdx > waitIdx, 'today follow-up must start AFTER critical readiness');
     assert.ok(upcomingIdx > waitIdx, 'upcoming follow-up must start AFTER critical readiness');
-    assert.ok(scheduledIdx > upcomingIdx, 'scheduled activities must start AFTER the follow-up reads');
+    // Scheduled activities retired from the home with Dashboard.tsx
+    // (2026-11-17) — they live on the Task Calendar page, which does
+    // its own wait; the home must not order them here.
+    assert.ok(!daily.includes('scheduledActivityService'), 'the member home must not fetch scheduled activities');
     assert.ok(!daily.includes('setTimeout'), 'no arbitrary sleeps in daily execution');
-    assert.ok(!full.includes('setTimeout'), 'Dashboard must not introduce setTimeout delays');
+    assert.ok(!full.includes('setTimeout'), 'MemberHome must not introduce setTimeout delays');
 
     const layout = read('src/layouts/AppLayout.tsx');
-    assert.ok(layout.includes('waitForShellStartup()'), 'notification first-fetch waits on the shell gate, not first-dashboard-critical');
-    assert.ok(!layout.includes('waitForCriticalStartup'), 'AppLayout must not wait on first-dashboard-critical (that would hang on /workbench)');
-    assert.ok(layout.includes('markShellStartupSettled()'), 'non-dashboard routes release SHELL waiters so they cannot hang');
-    assert.ok(!layout.includes('markCriticalStartupSettled'), 'non-dashboard routes must NOT mark the future first Dashboard as completed');
-    assert.ok(layout.includes("location.pathname !== '/'"), 'non-dashboard routes must release the shell gate so waiters cannot hang');
+    assert.ok(layout.includes('waitForShellStartup()'), 'notification first-fetch waits on the shell gate, not first-home-critical');
+    assert.ok(!layout.includes('waitForCriticalStartup'), 'AppLayout must not wait on first-home-critical (that would hang on /workbench)');
+    assert.ok(layout.includes('markShellStartupSettled()'), 'non-home routes release SHELL waiters so they cannot hang');
+    assert.ok(!layout.includes('markCriticalStartupSettled'), 'non-home routes must NOT mark the future first home as completed');
+    assert.ok(layout.includes("location.pathname !== '/'"), 'non-home routes must release the shell gate so waiters cannot hang');
 
     const login = read('src/modules/auth/pages/Login.tsx');
     assert.ok(login.includes('waitForShellStartup()'), 'lead-status /api/options warm-up waits on the shell gate');
-    assert.ok(!login.includes('waitForCriticalStartup'), 'login warm-up must not wait on first-dashboard-critical (would hang on a non-dashboard first route)');
+    assert.ok(!login.includes('waitForCriticalStartup'), 'login warm-up must not wait on first-home-critical (would hang on a non-home first route)');
     const warm = login.slice(login.indexOf('warmUpAfterAuthentication'));
     assert.ok(warm.indexOf('localDb.createUser') < warm.indexOf('waitForShellStartup'), 'local cache write stays immediate; only the network warm-up waits');
 
     const gate = read('src/modules/shared/api/startupPriority.ts');
-    assert.ok(gate.includes('let dashboardSettled'), 'first-dashboard-critical is its own flag');
+    assert.ok(gate.includes('let dashboardSettled'), 'first-home-critical is its own flag');
     assert.ok(gate.includes('let shellSettled'), 'shell readiness is a separate flag');
     assert.ok(gate.includes('STARTUP_CRITICAL = GET /api/dashboard'));
   });
 
   it('C. follow-up bucket reads stay server-authoritative and are not replaced by bucket=all', () => {
     const { daily, full } = dashboardLoaders();
-    assert.equal((full.match(/leadService\.getFollowUpQueue\(/g) || []).length, 2);
+    assert.equal((full.match(/leadService\.getFollowUpQueue\(/g) || []).length, 3);
+    assert.ok(daily.includes("getFollowUpQueue({ bucket: 'overdue', limit: 50 })"));
     assert.ok(daily.includes("getFollowUpQueue({ bucket: 'today', limit: 50 })"));
     assert.ok(daily.includes("getFollowUpQueue({ bucket: 'upcoming', limit: 50 })"));
-    assert.ok(!daily.includes("bucket: 'all'"), 'dashboard must not switch Today/Tomorrow to bucket=all');
+    assert.ok(!daily.includes("bucket: 'all'"), 'member home must not switch follow-ups to bucket=all');
     const followUpSvc = read('src/modules/leads/services/leadService.ts');
     const qStart = followUpSvc.indexOf('async getFollowUpQueue');
     const qBody = followUpSvc.slice(qStart, followUpSvc.indexOf('async getLeadActivities'));
@@ -211,7 +220,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     return mod;
   }
 
-  it('J. login → Dashboard: sequencing applies (follow-ups wait for KPI; shell waits too)', async () => {
+  it('J. login → member home: sequencing applies (follow-ups wait for KPI; shell waits too)', async () => {
     const {
       waitForCriticalStartup,
       waitForShellStartup,
@@ -229,10 +238,10 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
     const shellP = waitForShellStartup().then(() => { shell += 1; });
     await new Promise(r => setTimeout(r, 15));
-    assert.equal(daily, 0, 'today/upcoming must not start before GET /api/dashboard settles');
-    assert.equal(shell, 0, 'notifications/options must not join the first-dashboard burst');
+    assert.equal(daily, 0, 'overdue/today/upcoming must not start before GET /api/dashboard settles');
+    assert.equal(shell, 0, 'notifications/options must not join the first-home burst');
 
-    markCriticalStartupSettled(); // Dashboard KPI finally (success)
+    markCriticalStartupSettled(); // member-home KPI finally (success)
     await Promise.all([dailyP, shellP]);
     assert.equal(daily, 1);
     assert.equal(shell, 1);
@@ -241,7 +250,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     resetStartupPriority();
   });
 
-  it('J2. login → Workbench → Dashboard: first Dashboard STILL sequences', async () => {
+  it('J2. login → Workbench → member home: first home STILL sequences', async () => {
     const {
       waitForCriticalStartup,
       waitForShellStartup,
@@ -252,19 +261,19 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
       resetStartupPriority,
     } = await loadGate();
 
-    // AppLayout on /workbench: shell may proceed, first-dashboard must not.
+    // AppLayout on /workbench: shell may proceed, first-home must not.
     markShellStartupSettled();
     assert.equal(isShellStartupSettled(), true);
-    assert.equal(isCriticalStartupSettled(), false, 'Workbench must not mark first-dashboard complete');
+    assert.equal(isCriticalStartupSettled(), false, 'Workbench must not mark first-home complete');
 
     let notif = false;
     await waitForShellStartup().then(() => { notif = true; });
-    assert.equal(notif, true, 'notifications/options must not hang on a non-dashboard first route');
+    assert.equal(notif, true, 'notifications/options must not hang on a non-home first route');
 
     let daily = 0;
     const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
     await new Promise(r => setTimeout(r, 15));
-    assert.equal(daily, 0, 'later first Dashboard load must still wait for GET /api/dashboard');
+    assert.equal(daily, 0, 'later first home load must still wait for GET /api/dashboard');
 
     markCriticalStartupSettled();
     await dailyP;
@@ -272,7 +281,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     resetStartupPriority();
   });
 
-  it('J3. cold reload on /users → Dashboard: first Dashboard STILL sequences', async () => {
+  it('J3. cold reload on /users → member home: first home STILL sequences', async () => {
     const {
       waitForCriticalStartup,
       waitForShellStartup,
@@ -289,7 +298,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     let daily = 0;
     const dailyP = waitForCriticalStartup().then(() => { daily += 1; });
     await new Promise(r => setTimeout(r, 15));
-    assert.equal(daily, 0, 'cold reload on /users must not skip first-dashboard sequencing');
+    assert.equal(daily, 0, 'cold reload on /users must not skip first-home sequencing');
 
     markCriticalStartupSettled();
     await dailyP;
@@ -297,7 +306,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     resetStartupPriority();
   });
 
-  it('J4. Dashboard → other route → Dashboard: later revisit does not deadlock', async () => {
+  it('J4. member home → other route → member home: later revisit does not deadlock', async () => {
     const {
       waitForCriticalStartup,
       waitForShellStartup,
@@ -307,18 +316,18 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
       resetStartupPriority,
     } = await loadGate();
 
-    markCriticalStartupSettled(); // first Dashboard KPI of the session
+    markCriticalStartupSettled(); // first member-home KPI of the session
     assert.equal(isCriticalStartupSettled(), true);
 
     markShellStartupSettled(); // navigate to /leads (no-op; already settled)
     await waitForShellStartup();
-    await waitForCriticalStartup(); // later Dashboard revisit: must resolve, not hang
+    await waitForCriticalStartup(); // later home revisit: must resolve, not hang
 
     const again = await Promise.race([
       waitForCriticalStartup().then(() => 'ok'),
       new Promise<string>(r => setTimeout(() => r('deadlock'), 30)),
     ]);
-    assert.equal(again, 'ok', 'a later Dashboard revisit in the same session must not re-wait');
+    assert.equal(again, 'ok', 'a later home revisit in the same session must not re-wait');
     resetStartupPriority();
   });
 
@@ -330,7 +339,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
       resetStartupPriority,
     } = await loadGate();
 
-    // Source: Dashboard KPI `finally` calls mark even after the catch.
+    // Source: member-home KPI `finally` calls mark even after the catch.
     const { kpi } = dashboardLoaders();
     const finallyIdx = kpi.indexOf('finally');
     assert.ok(finallyIdx >= 0, 'KPI loader must use finally');
@@ -343,12 +352,12 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     const shellP = waitForShellStartup().then(() => { shell += 1; });
     markCriticalStartupSettled(); // finally after catch
     await Promise.all([dailyP, shellP]);
-    assert.equal(daily, 1, 'a failed KPI must not pin today/upcoming forever');
+    assert.equal(daily, 1, 'a failed KPI must not pin overdue/today/upcoming forever');
     assert.equal(shell, 1, 'a failed KPI must not pin notifications/options forever');
     resetStartupPriority();
   });
 
-  it('J6. logout/login resets first-dashboard AND shell state', async () => {
+  it('J6. logout/login resets first-home AND shell state', async () => {
     const {
       waitForCriticalStartup,
       waitForShellStartup,
@@ -378,7 +387,7 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
     let nextDaily = 0;
     const nextP = waitForCriticalStartup().then(() => { nextDaily += 1; });
     await new Promise(r => setTimeout(r, 15));
-    assert.equal(nextDaily, 0, 'the next login must re-apply first-dashboard sequencing');
+    assert.equal(nextDaily, 0, 'the next login must re-apply first-home sequencing');
     markCriticalStartupSettled();
     await nextP;
     assert.equal(nextDaily, 1);

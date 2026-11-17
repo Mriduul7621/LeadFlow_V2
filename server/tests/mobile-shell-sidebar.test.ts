@@ -13,8 +13,11 @@
  *    workspace pages, Roadshow Follow-up and Sales Pipeline live in the
  *    sidebar and nowhere else,
  *  - Performance Diagnostics belongs to Administration,
- *  - Home no longer carries the pipeline / follow-up discipline / needs
- *    attention / embedded calendar sections,
+ *  - the member home no longer carries the pipeline / follow-up
+ *    discipline / needs attention / embedded calendar sections
+ *    (ExecutiveSnapshot and TodayTomorrowPanel retired with
+ *    Dashboard.tsx, 2026-11-17; Today/Tomorrow lives on the
+ *    Workbench),
  *  - the workbench queue is a minimal list (no type/quality chips) that
  *    can start a status update in one tap,
  *  - Lead 360's Update and Edit are icon-only (they used to overlap).
@@ -131,13 +134,21 @@ describe('Mobile shell — navigation ownership', () => {
     assert.ok(admin.includes("path: '/settings/performance-diagnostics'"), 'Administration must list Performance Diagnostics');
     assert.ok(admin.includes('DIAGNOSTICS_ADMIN_ROLES.includes(role)'), 'and keep it admin-only');
     assert.ok(admin.includes('/settings/performance-diagnostics'), 'route retained');
-    // The drawer must never expose it to non-admins.
-    assert.ok(!sidebar().includes('performance-diagnostics'), 'the sidebar must not list admin diagnostics');
+    // Phase 1: the sidebar DOES list it now — inside ADMINISTRATION,
+    // gated by the same route gate, whose Feature Access entry is
+    // ADMIN/SUPERADMIN-only. Non-admins never see it because canOpen
+    // closes the route for them, not because the builder hides it.
+    const s = sidebar();
+    assert.ok(s.includes("path: '/settings/performance-diagnostics'"), 'the sidebar lists diagnostics in ADMINISTRATION');
+    const access = read('src/layouts/featureRouteAccess.ts');
+    const entry = access.slice(access.indexOf("'/settings/performance-diagnostics': {"));
+    assert.ok(entry.startsWith("'/settings/performance-diagnostics': {"), 'the Feature Access entry must exist');
+    assert.match(entry.slice(0, 300), /roles: DIAGNOSTICS_ADMIN_ROLES/, 'the route stays ADMIN/SUPERADMIN-only');
   });
 });
 
 describe('Mobile shell — Home, My Work and Lead 360', () => {
-  const dashboard = () => read('src/modules/dashboard/pages/Dashboard.tsx');
+  const dashboard = () => read('src/modules/workspace/pages/MemberHome.tsx');
   const workbench = () => read('src/modules/workbench/pages/DailyWorkbench.tsx');
   const lead360 = () => read('src/modules/leads/pages/Lead360.tsx');
   const leadList = () => read('src/modules/leads/pages/LeadList.tsx');
@@ -147,17 +158,22 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     for (const gone of ['SalesPipeline', 'FollowUpDiscipline', 'NeedsAttentionSection', 'TaskCalendar']) {
       assert.ok(!d.includes(gone), `${gone} must not render on Home any more`);
     }
-    assert.ok(d.includes('ExecutiveSnapshot'), 'Core Performance stays');
-    assert.ok(d.includes('TodayTomorrowPanel'), "Today's Focus stays");
+    assert.ok(!d.includes('ExecutiveSnapshot'), 'the retired ExecutiveSnapshot stays retired');
+    assert.ok(!d.includes('TodayTomorrowPanel'), "Today's Focus moved to the Workbench");
     assert.ok(d.includes('lf-recent-list'), 'Recent Leads stays');
+    assert.ok(d.includes('Priority follow-ups'), 'Priority follow-ups stays');
+    assert.ok(d.includes('My pipeline'), 'My pipeline stays');
   });
 
-  it('Overdue Follow-ups is a KPI card beside Active Leads', () => {
+  it('the member home KPI row is Assigned, Due today, Overdue, Converted — in that order', () => {
     const d = dashboard();
-    const grid = d.slice(d.indexOf('grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3'));
-    const activeIdx = grid.indexOf('Active Leads');
-    const overdueIdx = grid.indexOf('Overdue Follow-ups');
-    assert.ok(overdueIdx > activeIdx && activeIdx !== -1, 'the Overdue card must follow Active Leads inside the KPI grid');
+    const order = ['Assigned leads', 'Due today', 'Overdue', 'Converted'];
+    let previous = -1;
+    for (const label of order) {
+      const index = d.indexOf(`label="${label}"`);
+      assert.ok(index > previous, `${label} must follow the previous KPI card`);
+      previous = index;
+    }
     assert.ok(!d.includes('Overdue Follow-ups shown as a compact callout'), 'the old red callout must be gone');
   });
 

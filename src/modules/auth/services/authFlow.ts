@@ -72,8 +72,8 @@ export async function activateSession(session: EstablishedSession, ctx: Activate
   useAuthStore.getState().setInitialized(true);
   // A fresh login starts a new auth session: re-arm the once-per-session
   // landing decision so the root route sends this user to their home
-  // page (Workbench-first — see HomeLanding / resolveHomePath). The
-  // navigation target itself is unchanged: `/` decides.
+  // page (role home — see HomeLanding). The navigation target itself
+  // is unchanged: `/` decides.
   resetHomeLanding(session.user.id);
   ctx.navigate('/');
 

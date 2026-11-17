@@ -31,7 +31,7 @@
  *      org totals pin, and server/client row agreement.
  *   5. Rendering (SSR, repo style) — the drill-down content at a
  *      people level, a leaf level, not-found; the Export button
- *      only with the grant; Team Home KPI cards link to the page.
+ *      only with the grant; the role-home KPI cards link to the page.
  *   6. Source guards — wiring (HomeLanding/useCallerTeam run on
  *      callerSeesTeam; the route + FeatureGate entry exist; the
  *      Workbench strip links person=self; the server never imports
@@ -78,7 +78,10 @@ import {
   treeRootsOf,
   type KpiLevel,
 } from '../../src/modules/team/utils/kpiDrilldown';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { MemberHomeContent } from '../../src/modules/workspace/pages/MemberHome';
+import { TeamLeadHomeContent } from '../../src/modules/workspace/pages/TeamLeadHome';
+import { ManagerHomeContent, type BusinessAlerts } from '../../src/modules/workspace/pages/ManagerHome';
+import { buildNext7Days } from '../../src/modules/workspace/utils/workspaceData';
 import {
   TeamKpiDrilldownContent,
   type KpiLeadsResponse,
@@ -1074,16 +1077,58 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
     assert.ok(!withoutGrant.includes('Export'), 'ungranted callers see no button at all');
   });
 
-  it('Team Home KPI cards link to the drill-down page', () => {
-    const html = renderToStaticMarkup(
+  it('the role-home KPI cards link to the drill-down page', () => {
+    // The 7-card row retired with TeamHome (2026-11-17); the links
+    // split across the three role homes, one set per role.
+    const chartDays = buildNext7Days([], new Date('2026-11-17T06:00:00Z'));
+    const teamHtml = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, { people: treePeople, scope: 'Team' })
+        React.createElement(TeamLeadHomeContent, { people: treePeople, scope: 'Team', chartDays, chartTruncated: false, chartLoading: false })
       )
     );
-    for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
-      assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
+    for (const kpi of ['open', 'overdue', 'noAction', 'converted']) {
+      assert.ok(teamHtml.includes(`href="/team/kpi/${kpi}"`), `the team-lead ${kpi} card links to its drill-down`);
+    }
+    const memberHtml = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(MemberHomeContent, {
+          userName: 'Hana Head',
+          dateLine: 'Tuesday, 17 November 2026',
+          greeting: 'Good morning',
+          assigned: 1,
+          dueToday: 0,
+          overdue: 0,
+          convertedThisMonth: 0,
+          priority: [],
+          priorityTotal: 0,
+          dailyLoading: false,
+          chartDays,
+          chartTruncated: false,
+          pipeline: [],
+          recentLeads: [],
+          recentLeadsLoading: false,
+          canCreateLead: true,
+          hasTeam: true,
+        })
+      )
+    );
+    for (const kpi of ['totalLeads', 'dueToday', 'overdue']) {
+      assert.ok(memberHtml.includes(`href="/team/kpi/${kpi}"`), `the member ${kpi} card links to its drill-down`);
+    }
+    const alerts: BusinessAlerts = { overdue: 0, noAction: 0, stalled14: 0, stalledTruncated: false, oldestOverdueDays: null };
+    const managerHtml = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(ManagerHomeContent, { people: treePeople, scope: 'Organization', metrics: null, roots: [], pipeline: [], alerts, dailyLoading: false })
+      )
+    );
+    for (const kpi of ['totalLeads', 'converted']) {
+      assert.ok(managerHtml.includes(`href="/team/kpi/${kpi}"`), `the manager ${kpi} card links to its drill-down`);
     }
   });
 
@@ -1110,20 +1155,20 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
     assert.ok(html.includes('href="/team/kpi/totalLeads"'), 'the KPI crumb links back to the top level');
   });
 
-  it('Team Home totals for an Organization caller sum the whole visible set', () => {
+  it('Manager Home totals for an Organization caller sum the whole visible set', () => {
+    const alerts: BusinessAlerts = { overdue: 0, noAction: 0, stalled14: 0, stalledTruncated: false, oldestOverdueDays: null };
     const html = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, { people: orgPeople, scope: 'Organization' })
+        React.createElement(ManagerHomeContent, { people: orgPeople, scope: 'Organization', metrics: null, roots: [], pipeline: [], alerts, dailyLoading: false })
       )
     );
     assert.ok(html.includes('Organization scope'), 'the scope is shown');
     assert.ok(html.includes('aria-label="Total Lead: 12 — view details"'),
       'Total Lead shows the org-wide 12, not the admin\'s own 1');
-    assert.ok(html.includes('aria-label="Open leads: 10 — view details"'));
-    assert.ok(html.includes('aria-label="No Action Alert: 4 — view details"'));
-    assert.ok(html.includes('aria-label="Converted: 2 — view details"'));
+    assert.ok(html.includes('aria-label="Converted: 2 — view details"'),
+      'Converted shows the org-wide 2');
   });
 });
 

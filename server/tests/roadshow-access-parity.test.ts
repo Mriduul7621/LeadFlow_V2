@@ -66,13 +66,17 @@ describe('menuVisibility — ANY_ROLE sentinel', () => {
 });
 
 describe('roadshow access — shared predicate', () => {
-  it('D. both pages ask the same hook', () => {
-    for (const file of ['src/modules/dashboard/pages/Dashboard.tsx', 'src/modules/workbench/pages/DailyWorkbench.tsx']) {
-      const src = read(file);
-      assert.ok(src.includes("from '../../shared/hooks/useRoadshowAccess'"), `${file} must import the shared hook`);
-      assert.ok(src.includes('const canViewRoadshows = useRoadshowAccess();'), `${file} must resolve roadshow access through the hook`);
-      assert.ok(!src.includes("canAccess('roadshow_follow_up'"), `${file} must not re-implement the capability check`);
-    }
+  it('D. the Workbench asks the shared hook; the member home carries no roadshow read', () => {
+    // The home roadshow alerts retired with Dashboard.tsx
+    // (2026-11-17): the member home must not reference roadshows at
+    // all. The Workbench keeps the shared predicate.
+    const memberHome = read('src/modules/workspace/pages/MemberHome.tsx');
+    assert.ok(!memberHome.includes('useRoadshowAccess'), 'the member home must not use the roadshow hook');
+    assert.ok(!memberHome.toLowerCase().includes('roadshow'), 'the member home must not reference roadshows');
+    const src = read('src/modules/workbench/pages/DailyWorkbench.tsx');
+    assert.ok(src.includes("from '../../shared/hooks/useRoadshowAccess'"), 'the Workbench must import the shared hook');
+    assert.ok(src.includes('const canViewRoadshows = useRoadshowAccess();'), 'the Workbench must resolve roadshow access through the hook');
+    assert.ok(!src.includes("canAccess('roadshow_follow_up'"), 'the Workbench must not re-implement the capability check');
   });
 
   it('E. the hook ORs the capability matrix and the menu grant, and nothing else', () => {
@@ -84,10 +88,6 @@ describe('roadshow access — shared predicate', () => {
   });
 
   it('F. a denied/failed read still hides the row (no fabricated 0)', () => {
-    const home = read('src/modules/dashboard/pages/Dashboard.tsx');
-    // Home: the counts state is null when access is absent OR the read fails.
-    assert.ok(home.includes('setRoadshowCounts(null)'), 'a failed read must clear the counts');
-    assert.ok(home.includes('canViewRoadshows'), 'the read is still gated by the predicate');
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
     assert.ok(workbench.includes('roadshowsToday: canViewRoadshows ? roadshowsToday.length : 0'),
       'My Work falls back to a hidden row, never a stale count');

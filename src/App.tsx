@@ -33,7 +33,7 @@ import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
  * area shows a compact placeholder. No full-screen spinner per
  * navigation, no route behavior change.
  */
-const Dashboard = lazy(() => import('./modules/dashboard/pages/Dashboard'));
+const MemberHome = lazy(() => import('./modules/workspace/pages/MemberHome'));
 const LeadGenerate = lazy(() => import('./modules/leads/pages/LeadGenerate'));
 const LeadList = lazy(() => import('./modules/leads/pages/LeadList'));
 const LeadUpload = lazy(() => import('./modules/leads/pages/LeadUpload'));
@@ -109,10 +109,12 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    // HomeLanding applies the once-per-session Workbench-first landing
-    // decision; the Dashboard element itself is unchanged and renders
-    // for every later visit to `/` (sidebar Home) within the session.
-    element: <ProtectedRoute><FeatureGate route="/"><HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding></FeatureGate></ProtectedRoute>,
+    // HomeLanding applies the once-per-session role-home landing
+    // decision; the MemberHome element itself is unchanged and renders
+    // for every later visit to `/` (sidebar home) within the session.
+    // Team-lead and manager callers see their role home in place
+    // instead (rendered by HomeLanding, no new route).
+    element: <ProtectedRoute><FeatureGate route="/"><HomeLanding><LazyPage page={<MemberHome />} /></HomeLanding></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/more',

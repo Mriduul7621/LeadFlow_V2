@@ -226,10 +226,16 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(p.includes("'/workbench'"), 'workbench must map to /workbench');
   });
 
-  it('primary navigation still lists Daily Workbench under My Work', () => {
-    const l = layout();
-    assert.ok(l.includes("label: 'My Work'"), 'primary navigation must keep the My Work label');
-    assert.ok(l.includes("path: '/workbench'"), 'primary navigation must keep the /workbench path');
+  it('the role sidebar still lists the Daily Workbench — as Follow-up Queue under My Work', () => {
+    // The primary tabs retired with the pill (2026-11-17): the member
+    // home at `/` is "My Work" (workspaceRole.ts) and /workbench is
+    // the member's "Follow-up Queue" / the team lead's "Follow-up
+    // Monitor" in the role sidebar.
+    const role = read('src/layouts/workspaceRole.ts');
+    assert.ok(role.includes("member: 'My Work'"), 'the member home must keep the My Work label');
+    const sidebar = read('src/layouts/sidebarNav.ts');
+    assert.ok(sidebar.includes("{ label: 'Follow-up Queue', path: '/workbench'"), 'the sidebar must keep the /workbench path as Follow-up Queue');
+    assert.ok(sidebar.includes("{ label: 'Follow-up Monitor', path: '/workbench'"), 'the sidebar must keep the /workbench path as Follow-up Monitor for team leads');
   });
 
   /* ---------- Granular canonical action control ---------- */

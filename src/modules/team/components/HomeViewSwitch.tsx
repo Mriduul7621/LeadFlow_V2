@@ -11,13 +11,15 @@ import { cn } from '../../../lib/utils';
  * HomeViewSwitch — the Team / My-work toggle (TL+ Home)
  * ------------------------------------------------------------------
  * One control, two homes, shown only to people who HAVE a team:
- * rendered by the team home (active = Team) and by the Daily
- * Workbench (active = My work). The choice is recorded in the
- * session-scoped home-view preference (see homeLanding.ts), so the
- * root landing honours it for the rest of the session:
+ * rendered by the team homes (active = Team) and by the member home
+ * (active = My work). The choice is recorded in the session-scoped
+ * home-view preference (see homeLanding.ts), so the root landing
+ * honours it for the rest of the session. Both sides navigate to
+ * `/` — the landing renders the team home or the member home from
+ * the preference:
  *
  *   Team    -> preference 'team', go to `/` (the team-first home)
- *   My work -> preference 'work', go to `/workbench` (My Day)
+ *   My work -> preference 'work', go to `/` (the member home)
  *
  * Clicking the already-active side is a no-op.
  */
@@ -28,7 +30,7 @@ export default function HomeViewSwitch({ active }: { active: HomeViewPreference 
   const choose = (view: HomeViewPreference) => {
     if (view === active) return;
     if (userId) setHomeViewPreference(userId, view);
-    navigate(view === 'team' ? '/' : '/workbench');
+    navigate('/');
   };
 
   const buttonClass = (view: HomeViewPreference) =>

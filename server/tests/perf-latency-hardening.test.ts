@@ -683,8 +683,13 @@ describe('Performance & latency hardening — client source guards', () => {
     // 5. Case handling: raw and normalized role names both match.
     assert.equal(resolveMenuVisibility('employee', undefined, itemInRoles), true);
 
-    // And the layout still delegates its single check to this function.
-    assert.ok(LAYOUT().includes('resolveMenuVisibility('), 'AppLayout must use the extracted visibility check');
+    // And the layout still delegates its single check to the route
+    // gate, which delegates to this function internally (the shell
+    // stopped calling resolveMenuVisibility directly when the pill
+    // retired, 2026-11-17).
+    assert.ok(LAYOUT().includes('resolveFeatureRouteAccess('), 'AppLayout must filter the sidebar through the route gate');
+    assert.ok(LAYOUT().includes('matchedPermission'), 'the caller permission profile must feed the gate');
+    assert.ok(read('src/layouts/featureRouteAccess.ts').includes('resolveMenuVisibility'), 'the gate must delegate to the shared visibility resolver');
   });
 
   it('E. notification mutations refresh DB-backed state + session cache (client)', () => {

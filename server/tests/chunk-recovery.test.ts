@@ -389,7 +389,10 @@ describe('Chunk recovery — wiring source guards', () => {
 
   it('N. the route-splitting contract of Phase 2 is untouched', () => {
     const app = read('src/App.tsx');
-    assert.match(app, /const\s+Dashboard\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\/modules\/dashboard\/pages\/Dashboard['"]\s*\)/,
+    // Dashboard.tsx retired with the role-workspace redesign
+    // (2026-11-17); the member home is the lazy root page now, in
+    // the same unwrapped loader shape.
+    assert.match(app, /const\s+MemberHome\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\/modules\/workspace\/pages\/MemberHome['"]\s*\)/,
       'lazy route declarations keep their exact shape (loader unwrapped)');
     assert.equal(app.split('lazy((').length - 1 >= 18, true, 'all feature pages remain lazy');
   });

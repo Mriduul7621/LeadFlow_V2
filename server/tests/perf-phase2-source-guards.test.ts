@@ -39,7 +39,7 @@ describe('Performance Phase 2 — route-level code splitting', () => {
 
   /** Every heavy feature page that must be a lazy chunk. */
   const LAZY_PAGES = [
-    ['Dashboard', 'modules/dashboard/pages/Dashboard'],
+    ['MemberHome', 'modules/workspace/pages/MemberHome'],
     ['LeadGenerate', 'modules/leads/pages/LeadGenerate'],
     ['LeadList', 'modules/leads/pages/LeadList'],
     ['LeadUpload', 'modules/leads/pages/LeadUpload'],
@@ -98,9 +98,9 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     // lazy page outside the ProtectedRoute + FeatureGate chain.
     //
     // Phase 2 PR #3 sanctioned exception: the ROOT route wraps its
-    // LazyPage in <HomeLanding> (the once-per-session Workbench-first
+    // LazyPage in <HomeLanding> (the once-per-session role-home
     // landing decision) BETWEEN FeatureGate and the LazyPage. The
-    // guarantee is unchanged — the Dashboard's LazyPage still renders
+    // guarantee is unchanged — the MemberHome's LazyPage still renders
     // below both gates inside the same Suspense boundary whenever it
     // renders at all — so the chain pattern allows that one wrapper.
     //
@@ -136,20 +136,28 @@ describe('Performance Phase 2 — route-level code splitting', () => {
 });
 
 /* ==================================================================== */
-/* 2. Dashboard: embedded Task Calendar is deferred + code-split        */
+/* 2. Member home: the Task Calendar is a route of its own              */
 /* ==================================================================== */
 
 describe('Performance Phase 2 — the Task Calendar is a route of its own', () => {
-  const DASHBOARD = () => read('src/modules/dashboard/pages/Dashboard.tsx');
+  const DASHBOARD = () => read('src/modules/workspace/pages/MemberHome.tsx');
+  const HOMES = () => [
+    read('src/modules/workspace/pages/MemberHome.tsx'),
+    read('src/modules/workspace/pages/TeamLeadHome.tsx'),
+    read('src/modules/workspace/pages/ManagerHome.tsx'),
+  ];
 
   it('E. Home no longer embeds the calendar: it is lazy, route-level only', () => {
     const d = DASHBOARD();
     // The mobile-shell change removed the embedded calendar from Home. The
-    // heavy component must now exist ONLY behind its own lazy route, so Home
-    // never pays for its chunk and cannot regress into a static import.
-    assert.doesNotMatch(d, /import\s+TaskCalendar\s+from/, 'no static TaskCalendar import in Dashboard');
-    assert.ok(!d.includes('TaskCalendar'), 'Dashboard must not reference the embedded calendar at all');
-    assert.doesNotMatch(d, /lazy\(\s*\(\s*\)\s*=>\s*import\s*\(?\s*'[^']*TaskCalendar'/, 'the calendar must not be lazy-loaded into Dashboard either');
+    // heavy component must now exist ONLY behind its own lazy route, so no
+    // role home ever pays for its chunk and cannot regress into a static
+    // import.
+    assert.doesNotMatch(d, /import\s+TaskCalendar\s+from/, 'no static TaskCalendar import in MemberHome');
+    for (const [i, home] of HOMES().entries()) {
+      assert.ok(!home.includes('TaskCalendar'), `role home ${i} must not reference the embedded calendar at all`);
+    }
+    assert.doesNotMatch(d, /lazy\(\s*\(\s*\)\s*=>\s*import\s*\(?\s*'[^']*TaskCalendar'/, 'the calendar must not be lazy-loaded into MemberHome either');
     const app = read('src/App.tsx');
     assert.match(app, /TaskCalendar\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\(\s*'\.\/modules\/auth\/pages\/TaskCalendar'\s*\)/, 'TaskCalendar must stay a lazy route chunk');
     assert.ok(app.includes("path: '/task-calendar'"), 'the /task-calendar route must remain');
@@ -160,12 +168,15 @@ describe('Performance Phase 2 — the Task Calendar is a route of its own', () =
     assert.ok(sidebar.includes("path: '/task-calendar'"), 'the sidebar must offer the Task Calendar');
     const d = DASHBOARD();
     assert.ok(!d.includes('calendarReady'), 'the deferred-mount flag is obsolete once Home stops embedding the calendar');
-    for (const marker of ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'PerformanceInsights']) {
-      assert.ok(d.includes(marker), `primary section ${marker} must remain on the dashboard`);
+    // ExecutiveSnapshot / TodayTomorrowPanel / PerformanceInsights
+    // retired with Dashboard.tsx (2026-11-17); the member home's
+    // primary sections are the role-home sections.
+    for (const marker of ['Priority follow-ups', 'My pipeline', 'Follow-ups due · next 7 days', 'Recent leads']) {
+      assert.ok(d.includes(marker), `primary section ${marker} must remain on the member home`);
     }
   });
 
-  it('G. dashboard KPI authority is untouched (no new client-side sources)', () => {
+  it('G. member-home KPI authority is untouched (no new client-side sources)', () => {
     const d = DASHBOARD();
     const start = d.indexOf('const loadDashboardData');
     const end = d.indexOf('const loadDailyExecution');

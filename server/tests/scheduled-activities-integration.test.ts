@@ -11,7 +11,8 @@
  *   - Visibility: Own, DownTeam, Organization
  *   - Validation: missing lead, invalid type/status/date, authz
  *   - Range filtering (from/to) + leadId + type + status
- *   - Client source guards (TaskCalendar + Dashboard use scheduled_activities)
+ *   - Client source guards (TaskCalendar owns scheduled_activities;
+ *     the member home carries none)
  */
 
 import { describe, it, before, after, beforeEach } from 'node:test';
@@ -317,12 +318,15 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
     }
   });
 
-  it('J. client source guards — TaskCalendar and Dashboard use scheduled_activities', async () => {
-    const dash = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+  it('J. client source guards — TaskCalendar owns scheduled_activities; the member home carries none', async () => {
+    // Scheduled activities retired from the home with Dashboard.tsx
+    // (2026-11-17): the member home must not reference them at all.
+    // TaskCalendar is their one owner.
+    const home = fs.readFileSync(path.join(process.cwd(), 'src/modules/workspace/pages/MemberHome.tsx'), 'utf-8');
+    assert.ok(!home.includes('scheduledActivityService'), 'the member home must not read scheduled activities');
+    assert.ok(!home.includes('scheduled_activities'), 'the member home must not reference scheduled_activities');
     const cal = fs.readFileSync(path.join(process.cwd(), 'src/modules/auth/pages/TaskCalendar.tsx'), 'utf-8');
     const svc = fs.readFileSync(path.join(process.cwd(), 'src/modules/scheduledActivities/services/scheduledActivityService.ts'), 'utf-8');
-    assert.ok(dash.includes('scheduledActivityService'), 'Dashboard must import scheduledActivityService');
-    assert.ok(dash.includes('scheduled_activities'), 'Dashboard must reference scheduled_activities');
     assert.ok(cal.includes('scheduledActivityService'), 'TaskCalendar must import scheduledActivityService');
     assert.ok(!cal.includes('leadService.getLeads'), 'TaskCalendar must not derive events from leadService.getLeads');
     assert.ok(svc.includes('/api/scheduled-activities'), 'service must hit /api/scheduled-activities');
@@ -580,11 +584,14 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
     assert.ok(svcText.includes('fetchScheduledPage') || svcText.includes('single-request') || svcText.includes('Single-request'), 'should use single-request helper');
   });
 
-  it('X. dashboard/calendar no getLeads — performance guard', async () => {
-    const dashPath = path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx');
-    const dashText = fs.readFileSync(dashPath, 'utf-8');
-    // Daily Execution panel should use scheduledActivityService, not getLeads for calendar
-    assert.ok(dashText.includes('scheduledActivityService'), 'Dashboard should use scheduledActivityService');
+  it('X. member-home/calendar no getLeads — performance guard', async () => {
+    const homePath = path.join(process.cwd(), 'src/modules/workspace/pages/MemberHome.tsx');
+    const homeText = fs.readFileSync(homePath, 'utf-8');
+    // The member home reads neither the full lead list nor scheduled
+    // activities: follow-ups come from the queue buckets, scheduled
+    // work lives on the Task Calendar page.
+    assert.ok(!homeText.includes('getLeads'), 'the member home must not call getLeads');
+    assert.ok(!homeText.includes('scheduledActivityService'), 'the member home must not read scheduled activities');
     // Ensure TaskCalendar does not import getLeads for calendar
     const calPath = path.join(process.cwd(), 'src/modules/auth/pages/TaskCalendar.tsx');
     const calText = fs.readFileSync(calPath, 'utf-8');

@@ -5,9 +5,11 @@
  * (owner-approved 2026-11-11: "hae etai better"). Same shell, same
  * routes: a caller WITH >= 1 report (Team Lead / Manager — the UM-1
  * derived fact, never a role label) lands on a team-first home
- * rendered in place at `/`; members keep the PR #96 My Day /
- * Workbench-first landing untouched. A Team/My-work switch persists
- * the user's choice for the session (same marker lifetime as PR #96).
+ * rendered in place at `/`; members land on their My Work home at
+ * `/` (Phase 1, 2026-11-17 — the PR #96 Workbench-first landing is
+ * retired; the Workbench stays reachable as the Follow-up Queue).
+ * A Team/My-work switch persists the user's choice for the session
+ * (same marker lifetime as PR #96).
  *
  * Sections:
  *   1. GET /api/team/overview — the `overdue` extension, against the
@@ -25,11 +27,18 @@
  *      reset on fresh login together with the landing marker).
  *   4. teamOverviewService shaping — callerHasTeam, totals,
  *      follow-ups-today ordering, stale-lead radar.
- *   5. Rendering — TeamHomeContent from an overview payload (SSR,
+ *   5. Rendering — TeamLeadHomeContent from an overview payload (SSR,
  *      repo style) and the HomeViewSwitch labels.
  *   6. Source guards — wiring (HomeLanding decides through the pure
- *      resolver + the shared overview loader; the Workbench shows
+ *      resolver + the shared overview loader; the member home shows
  *      the switch only to team holders; no new route exists).
+ *
+ * Retargeted at the role-workspace homes (2026-11-17): TeamHome.tsx
+ * is retired; the team-first home is TeamLeadHomeContent and the
+ * member home is MemberHomeContent. The 7-card KPI set retired with
+ * TeamHome — the team-lead home carries a 4-KPI row (Open, Overdue,
+ * No Action Alert, Converted) and the full 7-card set survives on
+ * the Daily Workbench "My numbers" strip.
  */
 import { describe, it, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -70,7 +79,8 @@ import {
   teamFollowUpsToday,
   type TeamOverviewPerson,
 } from '../../src/modules/team/services/teamOverviewService';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { TeamLeadHomeContent } from '../../src/modules/workspace/pages/TeamLeadHome';
+import { buildNext7Days } from '../../src/modules/workspace/utils/workspaceData';
 import HomeViewSwitch from '../../src/modules/team/components/HomeViewSwitch';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -289,6 +299,11 @@ describe('TL+ Home — GET /api/team/overview overdue counts (production leads s
 /* ================================================================ */
 
 describe('resolveHomeLandingDecision — TL+ landing decision', () => {
+  // NOTE (2026-11-17): the live caller (HomeLanding) now passes
+  // memberHomePath '/' — the member home — always. These pure tests
+  // keep the WORKBENCH/DASHBOARD inputs because the resolver itself
+  // is unchanged and its contract is "return the member decision
+  // when the caller has no team, whatever that decision is".
   it('a caller with a team lands on the team home by default', () => {
     assert.equal(
       resolveHomeLandingDecision({ hasTeam: true, preference: null, memberHomePath: WORKBENCH_HOME_PATH }),
@@ -445,43 +460,52 @@ describe('teamOverviewService — team facts and shaping', () => {
 /* 5. Rendering (SSR, repo style)                                    */
 /* ================================================================ */
 
-describe('TeamHome — rendering from the overview payload', () => {
-  it('renders totals, member rows (name + employee ID) and the radar', () => {
+describe('TeamLeadHome — rendering from the overview payload', () => {
+  const chartDays = buildNext7Days([], new Date('2026-11-17T06:00:00Z'));
+
+  it('renders totals, member rows (name + employee ID) and the at-risk list', () => {
     const html = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, { people: fixturePeople, scope: 'Team' })
+        React.createElement(TeamLeadHomeContent, { people: fixturePeople, scope: 'Team', chartDays, chartTruncated: false, chartLoading: false })
       )
     );
-    assert.ok(html.includes('Team Home'), 'team-first heading');
-    assert.ok(html.includes('Open leads') && html.includes('Due today') && html.includes('Overdue') && html.includes('Converted')
-      && html.includes('Total Lead') && html.includes('Today Lead Collection') && html.includes('No Action Alert'),
-      'the seven team totals are labelled');
-    assert.ok(html.includes('>19<') && html.includes('>11<'), 'totals are summed over the whole team (19 open, 11 overdue)');
-    assert.ok(html.includes('Team follow-ups today'), 'follow-ups section present');
+    assert.ok(html.includes('Team Overview'), 'team-first heading');
+    assert.ok(html.includes('Open leads') && html.includes('Overdue') && html.includes('Converted') && html.includes('No Action Alert'),
+      'the four team totals are labelled');
+    assert.ok(html.includes('aria-label="Open leads: 19 — view details"'), 'open total is summed over the whole team (19)');
+    assert.ok(html.includes('aria-label="Overdue: 11 — view details"'), 'overdue total is summed over the whole team (11)');
+    assert.ok(html.includes('Member performance'), 'member performance section present');
+    assert.ok(html.includes('Follow-up health'), 'follow-up health section present');
+    assert.ok(html.includes('3 of 5 people have overdue follow-ups.'), 'follow-up health foot counts the members with overdue work');
     assert.ok(html.includes('Arif Member') && html.includes('EMP-002'), 'member rows carry name + employee ID');
     assert.ok(html.includes('href="/team"'), 'member rows link through to My Team');
-    assert.ok(html.includes('Stale-lead radar'), 'radar section present');
-    assert.ok(!html.includes('Dina Member'), 'a member with nothing due/overdue appears in neither list');
-    const followUpOrder = ['Arif Member', 'Bina Member', 'Lena Lead', 'Chad Member'].map(n => html.indexOf(n));
-    assert.ok(followUpOrder.every((v, i) => v >= 0 && (i === 0 || followUpOrder[i - 1] < v)),
-      'follow-up rows render worst-first');
+    assert.ok(html.includes('At-risk leads'), 'at-risk section present');
+    const atRisk = html.slice(html.indexOf('At-risk leads'));
+    assert.ok(atRisk.includes('Arif Member') && atRisk.includes('2 no action'), 'the worst at-risk member leads the list');
+    assert.ok(!atRisk.includes('Dina Member'), 'a member with no no-action leads is absent from the at-risk list');
+    const performanceOrder = ['Dina Member', 'Arif Member', 'Lena Lead', 'Bina Member', 'Chad Member'].map(n => html.indexOf(n));
+    assert.ok(performanceOrder.every((v, i) => v >= 0 && (i === 0 || performanceOrder[i - 1] < v)),
+      'member performance renders best-first (converted desc)');
   });
 
-  it('renders the all-clear states when nothing is due or overdue', () => {
+  it('renders the all-clear states when nothing is overdue or at risk', () => {
     const html = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, {
+        React.createElement(TeamLeadHomeContent, {
           people: [person({ isSelf: true, directReports: 1, name: 'Solo Lead', employeeId: 'EMP-100' })],
           scope: 'Team',
+          chartDays,
+          chartTruncated: false,
+          chartLoading: false,
         })
       )
     );
-    assert.ok(html.includes('Nothing due today'), 'follow-ups all-clear');
-    assert.ok(html.includes('No overdue follow-ups'), 'radar all-clear');
+    assert.ok(html.includes('Nobody has an overdue follow-up right now.'), 'follow-up health all-clear');
+    assert.ok(html.includes('No at-risk leads — every lead had a first action within 48 hours.'), 'at-risk all-clear');
   });
 
   it('the switch offers Team and My work', () => {
@@ -514,17 +538,18 @@ describe('TL+ Home — source guards', () => {
     const app = read('src/App.tsx');
     assert.ok(!app.includes("path: '/team-home'"), 'no new route was invented for the team home');
     assert.ok(
-      app.includes('<HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding>'),
-      'the root still wraps the unchanged Dashboard in HomeLanding'
+      app.includes('<HomeLanding><LazyPage page={<MemberHome />} /></HomeLanding>'),
+      'the root still wraps the unchanged member home in HomeLanding'
     );
   });
 
-  it('the Workbench shows the switch only to callers with a team; the My Team page is untouched by this feature', () => {
-    const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
-    assert.ok(workbench.includes('callerTeam.hasTeam && <HomeViewSwitch active="work" />'),
-      'the Team toggle on My Day is gated on having a team');
+  it('the member home shows the switch only to callers with a team; the My Team page is untouched by this feature', () => {
+    const memberHome = read('src/modules/workspace/pages/MemberHome.tsx');
+    assert.ok(memberHome.includes('{props.hasTeam && <HomeViewSwitch active="work" />'),
+      'the Team toggle on My Work is gated on having a team');
     const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes("import('../../team/pages/TeamHome')"), 'the team home is the landing\'s lazy TeamHome page');
+    assert.ok(landing.includes("import('../../workspace/pages/TeamLeadHome')"), 'the team home is the landing\'s lazy TeamLeadHome page');
+    assert.ok(landing.includes("import('../../workspace/pages/ManagerHome')"), 'the manager home is the landing\'s lazy ManagerHome page');
   });
 
   it('the server extension is one field on the existing endpoint, in both data paths', () => {

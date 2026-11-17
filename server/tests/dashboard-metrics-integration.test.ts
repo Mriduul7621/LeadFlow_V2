@@ -501,8 +501,8 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.ok(!svc.includes('getLeads'));
   });
 
-  it('T. dashboard client/page does not derive authoritative totals from localStorage/localDb/getLeads()', async () => {
-    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+  it('T. member-home client/page does not derive authoritative totals from localStorage/localDb/getLeads()', async () => {
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/workspace/pages/MemberHome.tsx'), 'utf-8');
     assert.ok(page.includes('dashboardService.getDashboard'));
     assert.ok(page.includes('Authoritative metrics from GET /api/dashboard') || page.includes('getDashboard'));
     // loadDashboardData must call dashboardService, not compute from getLeads first
@@ -595,7 +595,10 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.ok(Array.isArray(res.body.data.trendData));
     assert.equal(res.body.data.trendData.length, 0);
 
-    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+    // The trend section retired with Dashboard.tsx (2026-11-17): the
+    // member home shows a 7-day follow-up chart instead, and no trend
+    // copy, series, or empty state may come back.
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/workspace/pages/MemberHome.tsx'), 'utf-8');
     const loadStart = page.indexOf('const loadDashboardData');
     // The end marker must be a declaration that still exists: it used to be
     // 'const formattedDateRange' (removed by the dashboard redesign), which
@@ -606,6 +609,8 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.ok(loadStart >= 0 && loadEnd > loadStart, 'loadDashboardData boundary markers must exist');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
-    assert.ok(page.includes('No trend data available') || loadBody.includes('setTrendData([])') || loadBody.includes('metrics.trendData'));
+    assert.ok(!page.includes('trendData'), 'no trend section on the member home');
+    assert.ok(!page.includes('No trend data available'), 'no trend empty state on the member home');
+    assert.ok(!page.includes('CAMPAIGN_TREND_DATA'), 'must not ship a hardcoded trend series');
   });
 });
