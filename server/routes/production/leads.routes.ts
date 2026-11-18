@@ -1334,6 +1334,9 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         if (!resolved) {
           return sendJson(res, 400, { success: false, message: `Assigned user "${requestedAssignee}" not found.` });
         }
+        if (resolved.isAdministrationRole) {
+          return sendJson(res, 400, { success: false, message: 'Administration accounts cannot be assigned as lead owners.' });
+        }
         if (!resolved.isActive) {
           // Mirror the bulk-import rule (an assignee must be an ACTIVE
           // user): a manual create / reassign / transfer may not route a
@@ -1816,8 +1819,8 @@ function importRowPayload(p: PlannedImportRow): any {
  * query against the authoritative users table. The returned map is keyed
  * by UPPER(employee_id), UPPER(email) and raw uuid.
  */
-export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, { userId: string; employeeId: string; isActive: boolean }>> {
-  const map = new Map<string, { userId: string; employeeId: string; isActive: boolean }>();
+export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, { userId: string; employeeId: string; isActive: boolean; isAdministrationRole: boolean }>> {
+  const map = new Map<string, { userId: string; employeeId: string; isActive: boolean; isAdministrationRole: boolean }>();
   const values = Array.from(new Set(refs.map(r => String(r).trim()).filter(Boolean)));
   if (values.length === 0) return map;
   if (!useDb()) {
@@ -1829,7 +1832,13 @@ export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, {
       );
       if (user) {
         const statusText = String((user as any).status ?? (user as any).employmentStatus ?? 'Active');
-        const entry = { userId: user.id, employeeId: String(user.employeeId || ''), isActive: statusText.toLowerCase() !== 'inactive' };
+        const role = normalizeRole((user as any).roleCode || (user as any).role || (user as any).roleName);
+        const entry = {
+          userId: user.id,
+          employeeId: String(user.employeeId || ''),
+          isActive: statusText.toLowerCase() !== 'inactive',
+          isAdministrationRole: role === 'ADMIN' || role === 'SUPERADMIN',
+        };
         map.set(value.toUpperCase(), entry);
       }
     }
@@ -1849,7 +1858,13 @@ export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, {
     [upper, uuids.length ? uuids : null]
   );
   for (const row of result.rows) {
-    const entry = { userId: String(row.id), employeeId: String(row.employee_id || ''), isActive: row.is_active === true };
+    const role = normalizeRole(row.role_code);
+    const entry = {
+      userId: String(row.id),
+      employeeId: String(row.employee_id || ''),
+      isActive: row.is_active === true,
+      isAdministrationRole: role === 'ADMIN' || role === 'SUPERADMIN',
+    };
     if (row.employee_id) map.set(String(row.employee_id).toUpperCase(), entry);
     if (row.email) map.set(String(row.email).toUpperCase(), entry);
     map.set(String(row.id), entry);
@@ -2037,6 +2052,8 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
         const entry = userMap.get(row.assignedTo.toUpperCase()) || userMap.get(row.assignedTo);
         if (!entry || !entry.isActive) {
           rowErrors.push(`Assigned To "${row.assignedTo}" does not match an active user`);
+        } else if (entry.isAdministrationRole) {
+          rowErrors.push(`Assigned To "${row.assignedTo}" is an Administration account and cannot own leads`);
         } else {
           assigned = { userId: entry.userId, employeeId: entry.employeeId };
         }
