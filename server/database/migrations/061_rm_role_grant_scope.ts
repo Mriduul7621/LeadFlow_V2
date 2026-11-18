@@ -22,7 +22,7 @@ async function replaceExactMatrix(fromCodes: string[], toCodes: string[]): Promi
   await query(
     `WITH current_matrix AS (
        SELECT r.id AS role_id,
-              array_agg(p.permission_code ORDER BY p.permission_code) AS codes,
+              array_agg(p.permission_code::text ORDER BY p.permission_code::text) AS codes,
               bool_and(rp.is_allowed) AS all_allowed,
               count(*)::int AS total
          FROM roles r

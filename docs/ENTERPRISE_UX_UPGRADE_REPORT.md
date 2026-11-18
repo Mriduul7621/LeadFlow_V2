@@ -54,3 +54,11 @@
 
 ## Verification status
 The changed files and branch commit were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.
+
+
+## CI validation fix — migration 061
+
+- Corrected the RM permission migration's PostgreSQL array comparison by normalising the aggregated permission codes to `text[]` before comparing with the parameter array. This avoids the `character varying[] = text[]` operator error observed in the PGlite integration suite.
+- Updated historical migration tests to assert that migration 061 is the current registered tail while continuing to assert that their respective earlier migrations remain registered.
+- The integration test for migration 061 exercises the real migration against PGlite, including exact legacy-matrix narrowing and preservation of manually curated matrices.
+- CI must be rerun on this commit; no passing result is claimed until GitHub Actions completes.
