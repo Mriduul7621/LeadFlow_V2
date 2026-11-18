@@ -705,7 +705,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
+        <main data-route={location.pathname} className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
         </main>
       </div>
