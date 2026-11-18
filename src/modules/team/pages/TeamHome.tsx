@@ -14,7 +14,10 @@ import {
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useCallerTeam } from '../hooks/useCallerTeam';
-import HomeViewSwitch from '../components/HomeViewSwitch';
+import { useAuthStore } from '../../auth/store/authStore';
+import type { RolePermission } from '../../shared/types';
+import { readSessionCache } from '../../shared/api/sessionCache';
+import { resolveFeatureRouteAccess } from '../../../layouts/featureRouteAccess';
 import {
   staleLeadRadar,
   summarizeTeamTotals,
@@ -40,6 +43,44 @@ import {
  * No Action Alert is styled as an alert (red, like Overdue): leads
  * with no first action within 48 hours of entry.
  */
+
+
+function getWorkspaceMeta(roleName?: string) {
+  const role = String(roleName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (role === 'ADMIN' || role === 'SUPERADMIN') return {
+    title: 'Admin Workspace',
+    subtitle: 'Organization-wide visibility, people and operational control',
+    followUpTitle: 'Organization follow-ups today',
+    quickLinks: [
+      { label: 'User Management', description: 'People, roles and access', to: '/users' },
+      { label: 'Administration', description: 'System settings and governance', to: '/administration' },
+      { label: 'Performance', description: 'Organization-level insights', to: '/execution-intelligence' },
+      { label: 'Team Overview', description: 'Review the reporting structure', to: '/team' },
+    ],
+  };
+  if (role === 'MANAGER') return {
+    title: 'Manager Workspace',
+    subtitle: 'Manage team execution, lead movement and performance',
+    followUpTitle: 'Managed-team follow-ups today',
+    quickLinks: [
+      { label: 'Team Overview', description: 'Review team activity and ownership', to: '/team' },
+      { label: 'Lead Workspace', description: 'Review and progress leads', to: '/leads' },
+      { label: 'Follow-up Queue', description: 'Prioritize due and overdue work', to: '/follow-up' },
+      { label: 'Performance', description: 'Track team execution trends', to: '/execution-intelligence' },
+    ],
+  };
+  return {
+    title: 'Team Lead Workspace',
+    subtitle: 'Keep your team aligned on leads, follow-ups and daily execution',
+    followUpTitle: 'Team follow-ups today',
+    quickLinks: [
+      { label: 'My Team', description: 'Review team members and progress', to: '/team' },
+      { label: 'Follow-up Queue', description: 'Prioritize due and overdue work', to: '/follow-up' },
+      { label: 'Lead Workspace', description: 'Review assigned team leads', to: '/leads' },
+      { label: 'Activities', description: 'Review recent execution history', to: '/activities' },
+    ],
+  };
+}
 
 function StatCard({
   label,
@@ -118,6 +159,16 @@ export function TeamHomeContent({
   scope: string;
   onRefresh?: () => void;
 }) {
+  const user = useAuthStore(state => state.user);
+  const workspace = getWorkspaceMeta(user?.role);
+  const rolePermissions = user ? readSessionCache<RolePermission[]>(`roles:${user.id}`)?.value ?? [] : [];
+  const normalizedRole = String(user?.role || '').toUpperCase();
+  const matchedPermission = rolePermissions.find(item =>
+    item.roleId === user?.role || item.roleId === normalizedRole
+  );
+  const visibleQuickLinks = workspace.quickLinks.filter(item =>
+    resolveFeatureRouteAccess(item.to, user?.role || '', matchedPermission)
+  );
   const totals = summarizeTeamTotals(people);
   const followUps = teamFollowUpsToday(people);
   const radar = staleLeadRadar(people);
@@ -130,14 +181,13 @@ export function TeamHomeContent({
             <Users className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-xl font-black text-stone-800 tracking-tight">Team Home</h1>
+            <h1 className="text-xl font-black text-stone-800 tracking-tight">{workspace.title}</h1>
             <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400">
-              {people.length} people in your team{scope ? ` · ${scope} scope` : ''}
+              {people.length} people in your view · {scope || 'Assigned scope'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <HomeViewSwitch active="team" />
           {onRefresh && (
             <button
               type="button"
@@ -149,6 +199,17 @@ export function TeamHomeContent({
           )}
         </div>
       </div>
+
+      <p className="-mt-3 text-sm text-stone-500">{workspace.subtitle}</p>
+
+      <section className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Role workspace shortcuts">
+        {visibleQuickLinks.map(item => (
+          <Link key={item.to} to={item.to} className="group rounded-xl border border-stone-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-[#978C21]/50 hover:bg-[#FFFCF8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]">
+            <span className="block text-sm font-bold text-stone-800 group-hover:text-[#756c1b]">{item.label}</span>
+            <span className="mt-1 block text-xs leading-5 text-stone-500">{item.description}</span>
+          </Link>
+        ))}
+      </section>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
         <StatCard label="Total Lead" value={totals.totalLeads} icon={Layers} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/totalLeads" />
@@ -162,7 +223,7 @@ export function TeamHomeContent({
 
       <section className="space-y-3">
         <div className="flex items-baseline gap-3">
-          <h2 className="text-sm font-black uppercase tracking-widest text-stone-700">Team follow-ups today</h2>
+          <h2 className="text-sm font-black uppercase tracking-widest text-stone-700">{workspace.followUpTitle}</h2>
           <span className="text-[10px] font-bold text-stone-400">Due and overdue, by member</span>
         </div>
         {followUps.length === 0 ? (
@@ -253,13 +314,10 @@ export default function TeamHome() {
     // the switch and a plain explanation instead of an empty view.
     return (
       <div className="space-y-4 text-left">
-        <div className="flex justify-end">
-          <HomeViewSwitch active="team" />
-        </div>
         <div className="bg-white border border-stone-200/80 rounded-2xl p-10 text-center space-y-2">
-          <p className="text-sm font-black text-stone-700">No team to show right now</p>
+          <p className="text-sm font-black text-stone-700">No team data available right now</p>
           <p className="text-xs text-stone-400">
-            When people report to you — or your role can see the wider team — your day will start with their follow-ups here.
+            Your role-based workspace is ready. Team metrics will appear here when your reporting scope contains team members.
           </p>
         </div>
       </div>

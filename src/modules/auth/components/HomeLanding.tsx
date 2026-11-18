@@ -13,10 +13,8 @@ import {
 import {
   TEAM_HOME_PATH,
   consumeHomeLanding,
-  getHomeViewPreference,
   hasConsumedHomeLanding,
   resolveHomeLandingDecision,
-  setHomeViewPreference,
 } from '../services/homeLanding';
 import {
   callerSeesTeam,
@@ -106,10 +104,9 @@ export default function HomeLanding({ children }: { children: React.ReactNode })
   // read the same way (the Team/My-work switch writes it, then
   // navigates, so the next mount of this wrapper sees the new value).
   const alreadyLanded = userId ? hasConsumedHomeLanding(userId) : false;
-  const preference = userId ? getHomeViewPreference(userId) : null;
-  // Later arrivals only need the team overview when the user pinned
-  // the Team view; the first arrival always needs it (TL+ default).
-  const needsOverview = Boolean(userId) && (!alreadyLanded || preference === 'team');
+  const roleKey = String(user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const isLeadershipRole = ['ADMIN', 'SUPERADMIN', 'MANAGER', 'TEAMLEAD', 'TL'].includes(roleKey);
+  const needsOverview = Boolean(userId) && !alreadyLanded;
 
   const [roles, setRoles] = useState<RolePermission[]>(() => {
     if (!userId || alreadyLanded) return [];
@@ -183,14 +180,10 @@ export default function HomeLanding({ children }: { children: React.ReactNode })
     if (decision !== null || !settled || !overviewSettled || !user || !userId || alreadyLanded) return;
     const memberHome = resolveHomePath(user.role, matchRole(roles, user));
     const home = resolveHomeLandingDecision({
-      hasTeam: callerSeesTeam(overview),
-      preference: getHomeViewPreference(userId),
+      hasTeam: isLeadershipRole || callerSeesTeam(overview),
+      preference: null,
       memberHomePath: memberHome,
     });
-    // A team decision also pins the session view preference to Team:
-    // later arrivals at `/` then keep showing the team home until the
-    // user actively switches to My work (which sets 'work').
-    if (home === TEAM_HOME_PATH) setHomeViewPreference(userId, 'team');
     // Consume BEFORE navigating/rendering so any bounce back to `/`
     // (e.g. a FeatureGate denial elsewhere) renders the Dashboard
     // instead of deciding again.
@@ -204,12 +197,9 @@ export default function HomeLanding({ children }: { children: React.ReactNode })
     return <>{children}</>;
   }
   if (alreadyLanded) {
-    // Later arrivals: the Dashboard — except a TL+ user who pinned
-    // the Team view, whose home IS the team home.
-    if (preference === 'team') {
-      if (!overviewSettled) return <AccessResolving />;
-      if (callerSeesTeam(overview)) return <TeamHomePage />;
-    }
+    // Leadership roles always return to their own role workspace.
+    // Individual contributors return to their personal landing.
+    if (isLeadershipRole) return <TeamHomePage />;
     return <>{children}</>;
   }
   if (decision === TEAM_HOME_PATH) {

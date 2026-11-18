@@ -505,7 +505,7 @@ describe('TL+ Home — source guards', () => {
     const landing = read('src/modules/auth/components/HomeLanding.tsx');
     assert.ok(landing.includes('resolveHomeLandingDecision({'), 'landing decision goes through the pure TL+ resolver');
     assert.ok(landing.includes('loadTeamOverview(userId)'), 'team fact comes from the ONE overview data path');
-    assert.ok(landing.includes("setHomeViewPreference(userId, 'team')"), 'a team landing pins the session Team preference');
+    assert.ok(landing.includes('isLeadershipRole || callerSeesTeam(overview)'), 'Admin, Manager and Team Lead land in a role workspace');
     assert.ok(landing.includes('decision === TEAM_HOME_PATH'), 'the team decision renders the team home in place');
     assert.ok(!landing.includes("to={TEAM_HOME_PATH}"), 'the team home is NOT a redirect target — TEAM_HOME_PATH is a decision token, not a route');
   });
@@ -519,10 +519,16 @@ describe('TL+ Home — source guards', () => {
     );
   });
 
-  it('the Workbench shows the switch only to callers with a team; the My Team page is untouched by this feature', () => {
+  it('role-specific workspaces replace the old Team/My Work toggle', () => {
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
-    assert.ok(workbench.includes('callerTeam.hasTeam && <HomeViewSwitch active="work" />'),
-      'the Team toggle on My Day is gated on having a team');
+    const teamHome = read('src/modules/team/pages/TeamHome.tsx');
+    const shell = read('src/layouts/AppLayout.tsx');
+    assert.ok(!workbench.includes('HomeViewSwitch'), 'personal workbench has no Team/My Work toggle');
+    assert.ok(!teamHome.includes('HomeViewSwitch'), 'leadership workspace has no Team/My Work toggle');
+    assert.ok(shell.includes("primaryItem('Users', Users, '/users')"), 'Admin receives a role-specific primary menu');
+    assert.ok(shell.includes("primaryItem('Team', Users, '/team')"), 'Manager receives a team-focused primary menu');
+    assert.ok(shell.includes("primaryItem('My Team', Users, '/team')"), 'Team Lead receives a team execution menu');
+    assert.ok(shell.includes("primaryItem('Calendar', CalendarDays, '/task-calendar')"), 'Agent keeps a direct calendar destination');
     const landing = read('src/modules/auth/components/HomeLanding.tsx');
     assert.ok(landing.includes("import('../../team/pages/TeamHome')"), 'the team home is the landing\'s lazy TeamHome page');
   });

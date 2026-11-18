@@ -77,7 +77,7 @@ const FIELD_ITEMS: SidebarItem[] = [
   { label: 'Sales Pipeline', description: 'Every lead across each sales stage', path: '/sales-pipeline', icon: FileText },
 ];
 
-export function buildSidebarGroups(access: SidebarAccess): SidebarGroup[] {
+export function buildSidebarGroups(access: SidebarAccess, roleName = ''): SidebarGroup[] {
   const analytics = ANALYTICS_ITEMS.filter(item =>
     access.canAccess(item.permission, 'view') && access.canOpen(item.path)
   ).map(({ permission: _permission, ...item }) => item);
@@ -85,10 +85,21 @@ export function buildSidebarGroups(access: SidebarAccess): SidebarGroup[] {
   const workspace = WORKSPACE_ITEMS.filter(item => access.canOpen(item.path));
   const field = FIELD_ITEMS.filter(item => access.canOpen(item.path));
 
+  const role = String(roleName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const titles: Record<string, Record<string, string>> = {
+    ADMIN: { Analytics: 'Organization Insights', Workspace: 'Administration & People', Field: 'Operations' },
+    SUPERADMIN: { Analytics: 'Organization Insights', Workspace: 'Administration & People', Field: 'Operations' },
+    MANAGER: { Analytics: 'Team Performance', Workspace: 'Team Operations', Field: 'Field Operations' },
+    TEAMLEAD: { Analytics: 'Team Insights', Workspace: 'Daily Execution', Field: 'Field Work' },
+    TL: { Analytics: 'Team Insights', Workspace: 'Daily Execution', Field: 'Field Work' },
+    AGENT: { Analytics: 'My Performance', Workspace: 'My Workspace', Field: 'Field Activities' },
+    EMPLOYEE: { Analytics: 'My Performance', Workspace: 'My Workspace', Field: 'Field Activities' },
+  };
+  const roleTitles = titles[role] || {};
   const groups: SidebarGroup[] = [
-    { title: 'Analytics', items: analytics },
-    { title: 'Workspace', items: workspace },
-    { title: 'Field', items: field },
+    { title: roleTitles.Analytics || 'Analytics', items: analytics },
+    { title: roleTitles.Workspace || 'Workspace', items: workspace },
+    { title: roleTitles.Field || 'Field', items: field },
   ];
   return groups.filter(group => group.items.length > 0);
 }

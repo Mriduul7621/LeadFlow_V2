@@ -8,7 +8,7 @@
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
 **Phase 8 branch:** `ux/phase-8-roadshow-workspace`
 **Phase 9 branch:** `ux/phase-9-profile-settings`
-**Status:** Phases 1–13 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Status:** Phases 1–14 implemented across stacked review branches; integration verification remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -25,6 +25,20 @@
 - Improved unavailable-record wording so it clearly communicates either missing access or a missing record without exposing internal terminology.
 - Replaced implementation-focused calendar copy with user-oriented scheduling instructions.
 - Renamed **Lead Timeline** to **Lead history** for consistency with the activity/history experience.
+
+
+## Phase 14 — Role-Based Workspaces
+
+- Replaced the shared primary navigation preset with distinct Admin, Manager, Team Lead and Agent navigation layouts.
+- Updated sidebar group labels to reflect each role's operational context while continuing to filter every destination through the existing route-level Feature Access resolver.
+- Reworked the leadership landing into distinct Admin Workspace, Manager Workspace and Team Lead Workspace experiences, with role-specific shortcut cards and context labels.
+- Kept Agent landing focused on the personal Daily Workbench.
+- Removed the old Team / My Work toggle from the leadership home and personal workbench; role determines the default workspace instead.
+- Quick links on leadership workspaces use the same route-access resolver as the application shell.
+- Task Calendar source and UI were not changed. Existing Task Calendar route and behavior remain intact.
+- Preserved the separate Data Visibility, Feature Access and Action Permission layers; no API, database, migration, server authorization or business-rule changes were made.
+- Added source-guard assertions for role-specific navigation and the absence of the old home toggle.
+- Verification: tests, TypeScript lint and production build have not yet been run for this phase. No passing result is claimed.
 
 ## Safety and behavior preserved
 - No database schema, API contract, endpoint, or business rule changes in this UX phase.
