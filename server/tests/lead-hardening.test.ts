@@ -364,3 +364,42 @@ describe('Lead Hardening - Auth & Persistence', () => {
     assert.ok(file.includes('FORBIDDEN_CUSTOM_KEYS'), 'Must have forbidden keys set');
   });
 });
+
+
+describe('Administration users are excluded from lead ownership', () => {
+  it('keeps the role-specific HTML navigation and does not add an Admin Leads shortcut', () => {
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    const shell = fs.readFileSync(path.join(process.cwd(), 'src/layouts/AppLayout.tsx'), 'utf-8');
+    assert.ok(sidebar.includes("item('Lead Pool'"));
+    assert.ok(sidebar.includes("item('Lead Intake'"));
+    assert.ok(sidebar.includes("title: 'WORKSPACE'"));
+    assert.ok(shell.includes("primaryItem('Users & Roles', Users, '/users')"));
+    const adminNav = shell.slice(shell.indexOf("if (role === 'ADMIN'"), shell.indexOf("if (role === 'MANAGER'"));
+    assert.ok(!adminNav.includes("primaryItem('Leads'"));
+  });
+
+  it('filters Administration accounts out of lead assignee pickers', () => {
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/leads/pages/AllLeads.tsx'), 'utf-8');
+    assert.ok(page.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+  });
+
+  it('rejects Administration accounts in manual assignment and bulk import', () => {
+    const shared = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/shared.ts'), 'utf-8');
+    const leads = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
+    assert.ok(shared.includes('isAdministrationRole: role === \'ADMIN\' || role === \'SUPERADMIN\''));
+    assert.ok(leads.includes('if (resolved.isAdministrationRole)'));
+    assert.ok(leads.includes('entry.isAdministrationRole'));
+  });
+
+  it('does not select Administration accounts for automatic assignment', () => {
+    const service = fs.readFileSync(path.join(process.cwd(), 'server/services/AutoAssignmentService.ts'), 'utf-8');
+    assert.ok(service.includes("NOT IN ('ADMIN', 'SUPERADMIN')"));
+  });
+
+  it('keeps the existing Task Calendar route and implementation outside the role sidebar change', () => {
+    const app = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    assert.ok(app.includes("import('./modules/auth/pages/TaskCalendar')"));
+    assert.ok(sidebar.includes("'/task-calendar'"));
+  });
+});
