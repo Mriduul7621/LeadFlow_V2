@@ -73,7 +73,7 @@ export default function Settings() {
   const isSystemAdmin = ['ADMIN', 'SUPERADMIN'].includes(userRoleNormalized);
   const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>(() => {
     const tab = searchParams.get('tab');
-    return tab === 'assignment' || tab === 'workflow' ? 'workflow' : tab === 'dropdowns' || tab === 'formbuilder' ? tab : 'overview';
+    return tab === 'assignment' ? 'overview' : tab === 'workflow' ? 'workflow' : tab === 'dropdowns' || tab === 'formbuilder' ? tab : 'overview';
   });
   const [options, setOptions] = useState<DropdownOption[]>([]);
   const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
