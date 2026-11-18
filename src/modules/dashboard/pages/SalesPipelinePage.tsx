@@ -132,7 +132,7 @@ export default function SalesPipelinePage() {
           <div className="mb-4 flex items-end justify-between gap-4">
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Stage board</h2>
-              <p className="mt-1.5 text-[12px] text-stone-500">New → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted</p>
+              <p className="mt-1.5 max-w-4xl text-xs leading-5 text-stone-500">New → Contacted → Interested → Meeting Fixed → Meeting Completed → Pipeline Locked → Converted</p>
             </div>
             <TrendingUp className="hidden h-5 w-5 shrink-0 text-[#978C21] md:block" />
           </div>
@@ -163,11 +163,11 @@ export default function SalesPipelinePage() {
             <span className="text-xs font-semibold text-stone-700">Lead workspace</span>
             <ChevronRight className="h-4 w-4 text-stone-400" />
           </Link>
-          <Link to="/follow-up" className="flex items-center justify-between rounded-[12px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 transition-colors hover:border-[#978C21]/30 hover:bg-white">
+          <Link to="/follow-up" className="flex min-h-12 items-center justify-between gap-3 rounded-[12px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 transition-colors hover:border-[#978C21]/30 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
             <span className="text-xs font-semibold text-stone-700">Follow-up queue</span>
             <ChevronRight className="h-4 w-4 text-stone-400" />
           </Link>
-          <Link to="/workbench" className="flex items-center justify-between rounded-[12px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 transition-colors hover:border-[#978C21]/30 hover:bg-white">
+          <Link to="/workbench" className="flex min-h-12 items-center justify-between gap-3 rounded-[12px] border border-stone-100 bg-[#FFFCF8] px-4 py-3 transition-colors hover:border-[#978C21]/30 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
             <span className="text-xs font-semibold text-stone-700">My Work</span>
             <ChevronRight className="h-4 w-4 text-stone-400" />
           </Link>
