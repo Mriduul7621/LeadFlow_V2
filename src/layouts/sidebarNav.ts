@@ -83,7 +83,7 @@ const ROLE_GROUPS: Record<string, SidebarGroup[]> = {
       item('Teams & Hierarchy', 'Manage the organization structure', '/team/organogram', GitBranch),
       item('Lead Intake', 'Import and validate incoming leads', '/leads/upload', UserPlus),
       item('Lead Pool', 'Review and manage the unassigned lead pool', '/leads/all', ClipboardList),
-      item('Assignment Rules', 'Configure lead routing and assignment', '/settings/system', ListChecks),
+      item('Assignment Rules', 'Configure lead routing and assignment', '/settings/system?tab=assignment', ListChecks),
     ] },
     { title: 'INSIGHTS', items: [
       item('Analytics', 'Organization-wide performance insights', '/execution-intelligence', BarChart3),
