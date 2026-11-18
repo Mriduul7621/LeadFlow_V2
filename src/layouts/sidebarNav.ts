@@ -5,7 +5,6 @@ import {
   Bell,
   CalendarDays,
   ClipboardList,
-  FileText,
   FolderKanban,
   GitBranch,
   HelpCircle,
