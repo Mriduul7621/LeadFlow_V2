@@ -73,7 +73,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
       primaryItem('More', MoreHorizontal, '/more'),
     ];
   }
-  if (role === 'TEAMLEAD' || role === 'TL') {
+  if (role === 'TEAMLEAD' || role === 'TL' || role === 'RM') {
     return [
       primaryItem('Overview', LayoutDashboard, '/'),
       primaryItem('My Team', Users, '/team'),
