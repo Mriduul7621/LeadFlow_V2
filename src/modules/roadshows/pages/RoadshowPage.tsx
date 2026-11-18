@@ -260,31 +260,31 @@ export default function RoadshowPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-10">
+    <div className="mx-auto w-full max-w-5xl space-y-6 pb-10">
       <BackButton fallback="/" />
-      <header>
-        <h1 className="text-2xl font-bold tracking-tight text-brand-text">Roadshow Follow-up</h1>
+      <header className="border-b border-stone-200 pb-5">
+        <h1 className="text-2xl font-bold tracking-tight text-stone-900">Roadshow Follow-up</h1>
         <p className="mt-1 text-sm text-stone-500">Schedule field events, assign your team, and track leads by roadshow.</p>
       </header>
 
       <nav className="flex gap-2 overflow-x-auto border-b border-stone-200" aria-label="Roadshow sections">
-        <button type="button" onClick={() => { setActiveTab('status'); resetForm(); }} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold ${activeTab === 'status' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500'}`}>
+        <button type="button" onClick={() => { setActiveTab('status'); resetForm(); }} aria-pressed={activeTab === 'status'} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] ${activeTab === 'status' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500 hover:text-stone-800'}`}>
           Roadshow Status
         </button>
         {canCreate && (
-          <button type="button" onClick={() => { setActiveTab('add'); resetForm(); }} className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold ${activeTab === 'add' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500'}`}>
+          <button type="button" onClick={() => { setActiveTab('add'); resetForm(); }} aria-pressed={activeTab === 'add'} className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] ${activeTab === 'add' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500 hover:text-stone-800'}`}>
             <Plus className="h-4 w-4" /> Add Roadshow
           </button>
         )}
         {canReport && (
-          <button type="button" onClick={() => { setActiveTab('performance'); resetForm(); }} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold ${activeTab === 'performance' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500'}`}>
+          <button type="button" onClick={() => { setActiveTab('performance'); resetForm(); }} aria-pressed={activeTab === 'performance'} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] ${activeTab === 'performance' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500 hover:text-stone-800'}`}>
             Performance
           </button>
         )}
       </nav>
 
       {(activeTab === 'add' || editingId) && (
-        <form onSubmit={submit} className="space-y-5 border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
+        <form onSubmit={submit} className="space-y-5 rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-stone-800">{editingId ? 'Update Roadshow' : 'Add Roadshow'}</h2>
@@ -368,7 +368,7 @@ export default function RoadshowPage() {
           {loading ? (
             <p className="py-12 text-center text-sm text-stone-500">Loading Roadshows…</p>
           ) : forbidden || loadError ? null : roadshows.length === 0 ? (
-            <div className="border-y border-stone-100 bg-white px-4 py-12 text-center">
+            <div className="rounded-xl border border-dashed border-stone-300 bg-white px-4 py-12 text-center">
               <MapPinned className="mx-auto h-7 w-7 text-stone-400" />
               <p className="mt-3 text-sm font-semibold text-stone-700">No Roadshows added</p>
               <p className="mt-1 text-xs text-stone-500">Roadshows created for your team will appear here.</p>
@@ -378,8 +378,8 @@ export default function RoadshowPage() {
             const locked = roadshow.status === 'execute' || roadshow.status === 'cancel';
             const canManage = canEdit && (!locked || isAdmin);
             return (
-              <article key={roadshow.id} className="border-y border-stone-100 bg-white">
-                <button type="button" onClick={() => setSelectedId(isSelected ? null : roadshow.id)} aria-expanded={isSelected} className="flex min-h-[76px] w-full items-center gap-3 px-4 py-3 text-left sm:px-5">
+              <article key={roadshow.id} className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
+                <button type="button" onClick={() => setSelectedId(isSelected ? null : roadshow.id)} aria-expanded={isSelected} className="flex min-h-[76px] w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-[#FDFBF7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#978C21] sm:px-5">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#978C21]/10 text-[#756c1b]"><MapPinned className="h-[18px] w-[18px]" /></span>
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -395,7 +395,7 @@ export default function RoadshowPage() {
                   <ChevronDown className={`h-4 w-4 shrink-0 text-stone-400 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
                 </button>
                 {isSelected && (
-                  <div className="space-y-4 border-t border-stone-100 px-4 py-4 sm:px-5">
+                  <div className="space-y-4 border-t border-stone-100 bg-[#FDFBF7] px-4 py-4 sm:px-5">
                     <div className="grid gap-3 text-sm sm:grid-cols-2">
                       <p><span className="text-xs text-stone-500">Organization</span><span className="mt-0.5 block font-medium text-stone-800">{roadshow.organization}</span></p>
                       <p><span className="text-xs text-stone-500">Location</span><span className="mt-0.5 block font-medium text-stone-800">{roadshow.location}</span></p>
@@ -414,12 +414,12 @@ export default function RoadshowPage() {
                         </button>
                       )}
                       {roadshow.status !== 'execute' && roadshow.status !== 'cancel' && canEdit && (
-                        <button type="button" onClick={() => void changeStatus(roadshow, 'execute')} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800">
+                        <button type="button" onClick={() => void changeStatus(roadshow, 'execute')} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-2">
                           <Check className="h-4 w-4" /> Execute
                         </button>
                       )}
                       {roadshow.status !== 'execute' && roadshow.status !== 'cancel' && canCancel && (
-                        <button type="button" onClick={() => void changeStatus(roadshow, 'cancel')} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-stone-200 px-4 text-sm font-semibold text-stone-600 hover:bg-stone-50">
+                        <button type="button" onClick={() => void changeStatus(roadshow, 'cancel')} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
                           <X className="h-4 w-4" /> Cancel
                         </button>
                       )}
@@ -449,7 +449,7 @@ export default function RoadshowPage() {
           ) : performance.length === 0 ? (
             <p className="border-y border-stone-100 bg-white px-4 py-10 text-center text-sm text-stone-500">No executed Roadshows have performance data yet.</p>
           ) : performance.map(roadshow => (
-            <article key={roadshow.id} className="border-y border-stone-100 bg-white px-4 py-4 sm:px-5">
+            <article key={roadshow.id} className="rounded-xl border border-stone-200 bg-white px-4 py-4 shadow-sm sm:px-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-stone-800">{roadshow.organization}</h3>
