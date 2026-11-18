@@ -461,6 +461,75 @@ function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date
   );
 }
 
+// Role-specific dashboard summaries use only the server-authoritative
+// GET /api/dashboard payload. Missing platform metrics stay visibly unavailable.
+function RoleWorkspaceSnapshot({ role, metrics, followUpCounts }: {
+  role: string;
+  metrics: DashboardMetrics | null;
+  followUpCounts: DashboardMetrics['followUpCounts'];
+}) {
+  const admin = role === 'ADMIN' || role === 'SUPERADMIN';
+  const manager = role === 'MANAGER';
+  const teamLead = ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(role);
+  const value = (n: number | null | undefined) => n == null ? '—' : formatCount(n);
+  if (admin) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="Active Users" value={value(metrics?.userCount)} icon={Users} variant="blue" />
+      <KpiCard label="Lead Records" value={value(metrics?.leadCount ?? metrics?.totalLeads)} icon={Layers} variant="slate" />
+      <KpiCard label="New Intake" value={value(metrics?.newLeads)} icon={CalendarDays} variant="olive" sub="Selected date range" />
+      <KpiCard label="Operational Alerts" value={value(metrics?.alerts)} icon={AlertTriangle} variant="orange" />
+    </div>
+  );
+  if (manager) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+      <KpiCard label="Managed Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Conversion Rate" value={metrics?.conversionRate ?? '—'} icon={Percent} variant="slate" />
+      <KpiCard label="Collected NCP" value={metrics ? formatMoney(metrics.collected) : '—'} icon={Banknote} variant="emerald" />
+      <KpiCard label="Projected NCP" value={metrics ? formatMoney(metrics.projected) : '—'} icon={TrendingUp} variant="olive" />
+      <KpiCard label="At-risk / Alerts" value={value(metrics?.alerts)} icon={AlertTriangle} variant="red" />
+    </div>
+  );
+  if (teamLead) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="Team Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Due Today" value={value(followUpCounts.today)} icon={CalendarDays} variant="orange" />
+      <KpiCard label="Overdue" value={value(followUpCounts.overdue)} icon={AlertTriangle} variant="red" />
+      <KpiCard label="Team Conversion" value={metrics?.conversionRate ?? '—'} icon={TrendingUp} variant="olive" />
+    </div>
+  );
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="My Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Due Today" value={value(followUpCounts.today)} icon={CalendarDays} variant="orange" />
+      <KpiCard label="Overdue" value={value(followUpCounts.overdue)} icon={AlertTriangle} variant="red" />
+      <KpiCard label="Collected NCP" value={metrics ? formatMoney(metrics.collected) : '—'} icon={Banknote} variant="emerald" />
+    </div>
+  );
+}
+
+function AdminWorkspaceActions() {
+  const actions = [
+    { label: 'Users & Roles', description: 'Manage accounts and effective access', href: '/users' },
+    { label: 'Teams & Hierarchy', description: 'Review reporting lines and structure', href: '/team/organogram' },
+    { label: 'Lead Intake', description: 'Import and validate incoming records', href: '/leads/upload' },
+    { label: 'Audit Log', description: 'Review sensitive administrative events', href: '/audit-log' },
+  ];
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Governance & Operations" desc="Administrative workspaces and platform controls" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {actions.map(action => (
+          <Link key={action.href} to={action.href} className="group rounded-[10px] border border-stone-100 bg-[#F8F7F2] p-4 transition-colors hover:border-[#858515]/40 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#858515]">
+            <strong className="block text-sm font-bold text-stone-800">{action.label}</strong>
+            <span className="mt-1 block text-xs leading-5 text-stone-500">{action.description}</span>
+            <span className="mt-3 inline-flex items-center gap-1 text-[11px] font-bold text-[#596B35]">Open workspace <ChevronRight className="h-3.5 w-3.5" /></span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ============================================================
 // Dashboard main component
 // ============================================================
@@ -468,6 +537,15 @@ export default function Dashboard() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
   const canCreateLead = canAccess('lead_generate', 'create');
+  const roleCode = String(user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const isAdminRole = roleCode === 'ADMIN' || roleCode === 'SUPERADMIN';
+  const workspaceHeader = isAdminRole
+    ? { title: 'Admin Overview', subtitle: 'Governance, configuration and operational health', section: 'Platform Health' }
+    : roleCode === 'MANAGER'
+      ? { title: 'Business Overview', subtitle: 'Managed-team performance, pipeline health and recovery priorities', section: 'Business Performance' }
+      : ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(roleCode)
+        ? { title: 'Team Overview', subtitle: 'Team workload, follow-up health and daily execution', section: 'Team Performance' }
+        : { title: 'My Work', subtitle: 'Your assigned leads, next actions and personal progress', section: 'My Performance' };
   // Roadshow alerts are only rendered for users who may open the roadshow
   // page at all. Shared predicate with My Work (useRoadshowAccess) so the
   // two views can never disagree about the same user.
@@ -727,8 +805,8 @@ export default function Dashboard() {
     <div className="space-y-6 pb-12 font-sans">
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div>
-          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">Hello, {user?.name?.trim().split(/\s+/)[0] || 'there'}</h1>
-          <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">Sales performance and daily execution overview</p>
+          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">{workspaceHeader.title}</h1>
+          <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">{workspaceHeader.subtitle}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -905,21 +983,13 @@ export default function Dashboard() {
 
           <section className="lf-dashboard-kpis">
             <div className="lf-section-title">
-              <div><h2>Core Performance</h2></div>
+              <div><h2>{workspaceHeader.section}</h2></div>
               <span className="lf-period-chip">{resolved.display}</span>
             </div>
-            <ExecutiveSnapshot
-              totalLeads={totalLeads}
-              conversionRate={metrics?.conversionRate || '0.0%'}
-              collectedNCP={formatMoney(metrics?.collected ?? 0)}
-              projectedNCP={formatMoney(metrics?.projected ?? 0)}
-              activeLeads={metrics?.activeLeads ?? 0}
-              pipelineLocked={metrics?.pipelineLocked ?? 0}
-              overdueFollowUps={followUpCounts.overdue}
-            />
+            <RoleWorkspaceSnapshot role={roleCode} metrics={metrics} followUpCounts={followUpCounts} />
           </section>
 
-          <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
+          {!isAdminRole && <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
             <div className="lf-section-title">
               <div>
                 <h2>Today's Focus</h2>
@@ -940,9 +1010,9 @@ export default function Dashboard() {
               dailyLoading={dailyLoading}
               roadshowCounts={roadshowCounts}
             />
-          </section>
+          </section>}
 
-          <section className="lf-recent-leads">
+          {!isAdminRole && <section className="lf-recent-leads">
             <div className="lf-section-title">
               <div><h2>Recent Leads</h2><p className="lf-section-subtitle">Your five most recently added leads</p></div>
               <Link to="/leads" className="lf-view-all">View all <ChevronRight size={16} /></Link>
@@ -974,7 +1044,9 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
-          </section>
+          </section>}
+
+          {isAdminRole && <AdminWorkspaceActions />}
 
           {/* Remaining analysis — the same GET /api/dashboard payload that
               already loaded (trendData, teamStats). Sales Pipeline, Follow-up
