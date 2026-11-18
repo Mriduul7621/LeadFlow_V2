@@ -296,15 +296,15 @@ export default function TeamHierarchy() {
   };
 
   return (
-    <div className="space-y-6 pb-24 bg-white font-sans min-h-screen">
+    <div className="min-h-screen space-y-6 pb-16 font-sans">
       <BackButton fallback="/" />
       {/* 1. Header Section */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
+      <div className="flex flex-col gap-5 rounded-[14px] border border-stone-200 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-800">
             {t('teamHierarchyTitle')}
           </h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5 italic">
+          <p className="mt-2 max-w-2xl text-sm text-stone-500">
             Establish dynamic department levels, designations, and employee routing maps
           </p>
         </div>
@@ -312,13 +312,14 @@ export default function TeamHierarchy() {
         {/* Top Control Bar */}
         <div className="flex flex-wrap items-center gap-3">
           {/* Tab Selection toggle */}
-          <div className="flex p-1 bg-slate-100 rounded-lg border border-slate-200">
+          <div className="flex rounded-[10px] border border-stone-200 bg-[#FFFCF8] p-1">
             <button
               onClick={() => setActiveTab('chart')}
+              aria-pressed={activeTab === 'chart'}
               className={cn(
-                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
+                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'chart' 
-                  ? "bg-white text-[#978C21] shadow-xs" 
+                  ? "bg-white text-[#817719] shadow-sm" 
                   : "text-slate-600 hover:text-slate-900"
               )}
             >
@@ -327,10 +328,11 @@ export default function TeamHierarchy() {
             </button>
             <button
               onClick={() => setActiveTab('list')}
+              aria-pressed={activeTab === 'list'}
               className={cn(
-                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
+                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'list' 
-                  ? "bg-white text-[#978C21] shadow-xs" 
+                  ? "bg-white text-[#817719] shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
               )}
             >
@@ -363,7 +365,7 @@ export default function TeamHierarchy() {
             <button
               type="button"
               onClick={() => loadAllData()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#857b1c] text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all"
+              className="inline-flex min-h-10 items-center gap-2 rounded-[10px] bg-[#978C21] px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#817719]"
               title="The chart is generated automatically from reporting links"
             >
               <RotateCcw className="w-4 h-4" />

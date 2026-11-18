@@ -195,9 +195,10 @@ process.env.JWT_SECRET = JWT_SECRET;
     return request(app).get(`/api/calendar/config${qs}`).set('Authorization', `Bearer ${tokenFor(user)}`);
   }
 
-  it('migration 056 is the registered tail and seeds exactly 57 holidays (28 in 2026, 29 in 2027)', async () => {
+  it('migration 056 is registered and seeds exactly 57 holidays (28 in 2026, 29 in 2027; 060 is the tail — preview variant: 061 held out)', async () => {
     assert.ok(MIGRATION_IDS.includes('056_calendar_settings_holidays'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the migration tail');
+    // Preview variant: 061 held out — 060 is the tail here; the merge candidate restores 061.
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the current migration tail');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('060_stage_rules_terminal'), 'runner names migration 060');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('056_calendar_settings_holidays'), 'runner names migration 056');
 

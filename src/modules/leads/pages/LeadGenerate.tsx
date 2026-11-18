@@ -235,14 +235,14 @@ export default function LeadGenerate() {
   };
 
   return (
-    <div className="lead-generate-page max-w-5xl mx-auto pb-24 space-y-12">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-slate-100 pb-10">
+    <div className="lead-generate-page mx-auto max-w-5xl space-y-6 pb-16">
+      <div className="flex flex-col gap-5 rounded-[14px] border border-stone-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between md:p-6">
         <div className="flex items-center gap-6">
-          <div className="w-16 h-16 bg-slate-900 rounded-sm flex items-center justify-center text-[#978C21] shadow-xl">
-            <Zap className="w-8 h-8 fill-[#978C21]" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-[12px] bg-[#978C21]/10 text-[#817719]">
+            <Zap className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Add New Lead</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-brand-text leading-none">Add New Lead</h1>
             <p className="text-sm font-normal text-stone-500 mt-2">{t("leadFormSubtitle")}</p>
           </div>
         </div>
@@ -253,19 +253,19 @@ export default function LeadGenerate() {
         <motion.section 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm"
+          className="rounded-[14px] border border-stone-200 bg-white p-5 shadow-sm md:p-8"
         >
-          <div className="flex items-center gap-4 mb-12 border-b border-slate-50 pb-6">
+          <div className="flex items-center gap-3 mb-6 border-b border-stone-100 pb-4">
             <UserIcon className="w-6 h-6 text-[#978C21]" />
             <h2 className="font-semibold text-base text-slate-800">{t("customerInfo")}</h2>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div className="space-y-3">
               <label className="text-sm font-medium text-slate-700">{t("customerName")} *</label>
               <input 
                 {...register('prospectName')}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                className="w-full rounded-[10px] border border-stone-200 bg-[#FFFCF8] px-4 py-3 text-sm text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/10" 
                 placeholder={t("customerNamePh")}
               />
               {errors.prospectName && <p className="text-xs text-red-500">{errors.prospectName.message}</p>}
@@ -284,7 +284,7 @@ export default function LeadGenerate() {
                     e.target.value = e.target.value.replace(/\D/g, '');
                   }
                 })}
-                className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none" 
+                className="w-full rounded-[10px] border border-stone-200 bg-[#FFFCF8] px-4 py-3 text-sm text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/10" 
                 placeholder={t("mobileNumberPh")}
               />
               {errors.mobile && <p className="text-xs text-red-500">{errors.mobile.message}</p>}
@@ -303,7 +303,7 @@ export default function LeadGenerate() {
                       options={options.Profession || []}
                       placeholder={t("selectProfession")}
                       onCreateOption={raw => handleAddOption('Profession', raw)}
-                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                      selectClassName="w-full rounded-[10px] border border-stone-200 bg-[#FFFCF8] px-4 py-3 text-sm text-stone-800 outline-none transition-all focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/10"
                     />
                   )}
                 />
@@ -633,7 +633,7 @@ export default function LeadGenerate() {
           <button 
             type="submit" 
             disabled={isSubmitting}
-            className="w-64 py-5 bg-slate-900 hover:bg-black text-white text-sm font-semibold tracking-normal transition-all rounded-sm shadow-2xl flex items-center justify-center gap-4 group disabled:opacity-50"
+            className="min-h-12 w-full rounded-[10px] bg-[#978C21] px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#817719] flex items-center justify-center gap-3 group disabled:opacity-50 sm:w-64"
           >
             {isSubmitting ? t('loading') : (
               <>

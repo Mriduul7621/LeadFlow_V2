@@ -39,7 +39,7 @@ function PageHeading({ title, backTo = '/more' }: { title: string; backTo?: stri
       <Link
         to={backTo}
         aria-label="Back"
-        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition-colors hover:bg-stone-50"
+        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
       >
         <ArrowLeft className="h-4 w-4" />
       </Link>
@@ -55,7 +55,7 @@ function DirectoryList({ items }: { items: DirectoryItem[] }) {
         <Link
           key={item.path}
           to={item.path}
-          className="group flex min-h-[68px] items-center gap-4 px-4 py-3 transition-colors hover:bg-stone-50 sm:px-5"
+          className="group flex min-h-[68px] items-center gap-4 px-4 py-3 transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#978C21] sm:px-5"
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-stone-50 text-stone-600 group-hover:bg-[#978C21]/10 group-hover:text-[#756c1b]">
             <item.icon className="h-[18px] w-[18px]" strokeWidth={1.8} />
@@ -119,7 +119,7 @@ export function MorePage() {
       <button
         type="button"
         onClick={() => { logout(); navigate('/login'); }}
-        className="flex min-h-12 w-full items-center gap-3 border-b border-stone-100 px-4 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50"
+        className="flex min-h-12 w-full items-center gap-3 border-b border-stone-100 px-4 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red-500"
       >
         <LogOut className="h-[18px] w-[18px]" strokeWidth={1.8} />
         Log out
@@ -213,7 +213,7 @@ export function NotificationsPage() {
           type="button"
           onClick={() => void markAllRead()}
           disabled={!notifications.some(item => !item.read)}
-          className="mb-6 shrink-0 text-xs font-semibold text-[#756c1b] disabled:cursor-not-allowed disabled:text-stone-400"
+          className="mb-6 min-h-10 shrink-0 rounded-lg px-3 text-xs font-semibold text-[#756c1b] transition-colors hover:bg-[#978C21]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-stone-400"
         >
           Mark all read
         </button>
@@ -248,7 +248,7 @@ export function NotificationsPage() {
                   void markRead(notification);
                   navigate(`/leads/${encodeURIComponent(notification.leadId)}`);
                 }}
-                className="flex w-full items-start gap-3 px-4 py-4 text-left hover:bg-stone-50 sm:px-5"
+                className="flex min-h-[72px] w-full items-start gap-3 px-4 py-4 text-left hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#978C21] sm:px-5"
               >
                 {content}
               </button>
@@ -256,7 +256,7 @@ export function NotificationsPage() {
               <div key={notification.id} className="flex items-start gap-3 px-4 py-4 sm:px-5">
                 {content}
                 {!notification.read ? (
-                  <button type="button" onClick={() => void markRead(notification)} className="shrink-0 text-[11px] font-semibold text-[#756c1b]">
+                  <button type="button" onClick={() => void markRead(notification)} className="min-h-10 shrink-0 rounded-md px-2 text-[11px] font-semibold text-[#756c1b] hover:bg-[#978C21]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
                     Mark read
                   </button>
                 ) : null}

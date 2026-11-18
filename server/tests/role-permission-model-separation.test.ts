@@ -182,12 +182,14 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     for (const code of enforcedViaHasPermissionCode) {
       assert.ok(prodSrc.includes(`hasPermissionCode(caller, '${code}')`), `${code} must be enforced via hasPermissionCode`);
     }
-    // leads.export gates the UI export action; export itself is a
-    // client-side download over visibility-filtered data (no dedicated
-    // server export endpoint exists — documented in the model docs).
+    // leads.export is enforced server-side: POST /leads/export (and
+    // GET /leads/export/options) sit behind requirePermissionCode —
+    // the server-built .xlsx export added by FIX-2 (PR #123). The model
+    // docs must describe the server endpoint, not a client-side download.
     const docs = read('docs/ROLE_PERMISSION_MODEL.md');
-    assert.ok(/[Ee]xport[^\n]*client-side/.test(docs), 'leads.export client-side nature must be documented');
+    assert.ok(docs.includes('`POST /leads/export`'), 'leads.export server endpoint must be documented');
     const enforcedViaRequirePermissionCode: Array<[string, string]> = [
+      ["leads.export", "router.post('/leads/export', requireAuth, requirePermissionCode('leads.export')"],
       ["users.create", "router.post('/users', requireAuth, requirePermissionCode('users.create')"],
       ["users.edit", "requirePermissionCode('users.edit')"],
       ["users.delete", "requirePermissionCode('users.delete')"],
