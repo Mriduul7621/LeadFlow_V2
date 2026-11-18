@@ -44,7 +44,6 @@ import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { getSelfPerson } from '../../team/services/teamOverviewService';
-import HomeViewSwitch from '../../team/components/HomeViewSwitch';
 
 /** ------------------------------------------------------------
  * Daily Workbench — focused daily lead execution workspace.
@@ -663,7 +662,6 @@ export default function DailyWorkbench() {
           <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {callerTeam.hasTeam && <HomeViewSwitch active="work" />}
           <OutboxIndicator />
           <button
             type="button"
