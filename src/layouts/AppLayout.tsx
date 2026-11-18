@@ -100,7 +100,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
   ];
 }
 const MORE_NAV_PATHS = [
-  '/more', '/notifications', '/help', '/about', '/administration',
+  '/more', '/notifications', '/help', '/about', '/administration', '/audit-log',
   '/settings', '/settings/system', '/settings/performance-diagnostics',
   '/users', '/leads/upload', '/leads/all', '/activities', '/task-calendar',
   '/follow-up', '/team', '/execution-intelligence', '/ncp-progress',
