@@ -4,7 +4,8 @@
 **Phase 3 branch:** `ux/phase-3-lead-update-workflow`
 **Phase 4 branch:** `ux/phase-4-follow-up-queue`
 **Phase 5 branch:** `ux/phase-5-task-calendar`
-**Status:** Phases 1–5 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 6 branch:** `ux/phase-6-user-admin`
+**Status:** Phases 1–6 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -74,11 +75,18 @@
 - Preserved server-backed activity/roadshow queries, calendar ranges, filters, event forms, attendee/RSVP flows, completion/cancellation actions, and permission checks.
 - No API, database, permission, or business-rule changes.
 
+## Phase 6 — User Management Workspace
+
+- Refined the page header, action buttons, section navigation, employee filters, and table surfaces with the shared warm-neutral design system.
+- Improved mobile horizontal scrolling for the section selector and keyboard focus visibility on primary controls.
+- Added explicit pressed-state semantics to section toggle buttons without changing the active-tab state model.
+- Preserved employee, department, role, hierarchy and bulk-import handlers; the three permission layers (Data Visibility, Feature Access and Action Permissions) remain separate and unchanged.
+- Preserved server-side permission enforcement and access-review restrictions. No API, database, permission or business-rule changes.
+
 ## Next UX phases
 1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
-2. Refine User Management, Roles & Access, hierarchy and team administration.
-3. Review analytics, campaigns, roadshows and settings.
-4. Run automated tests, build, responsive checks and accessibility review before requesting merge.
+2. Review analytics, campaigns, roadshows and settings.
+3. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
 The changed files and branch commits were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.
