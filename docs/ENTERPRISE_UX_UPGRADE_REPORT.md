@@ -6,7 +6,8 @@
 **Phase 5 branch:** `ux/phase-5-task-calendar`
 **Phase 6 branch:** `ux/phase-6-user-admin`
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
-**Status:** Phases 1–7 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 8 branch:** `ux/phase-8-roadshow-workspace`
+**Status:** Phases 1–8 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -93,8 +94,8 @@
 - No API, database, permission or business-rule changes.
 
 ## Next UX phases
-1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
-2. Review roadshow workflows and settings.
+1. Review system Settings and profile preferences without changing security-sensitive behavior.
+2. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
 3. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
