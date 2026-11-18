@@ -127,18 +127,18 @@ export default function ProfileSettings() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 pb-10">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-brand-text">Profile & settings</h1>
+    <div className="mx-auto w-full max-w-3xl space-y-6 pb-10">
+      <header className="border-b border-stone-200 pb-5">
+        <h1 className="text-2xl font-bold tracking-tight text-stone-900">Profile & settings</h1>
         <p className="mt-1 text-sm text-stone-500">Keep your contact details and sign-in information current.</p>
-      </div>
+      </header>
 
-      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
+      <section className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-base font-semibold text-stone-800">Personal details</h2>
         <form onSubmit={saveProfile} className="mt-5 space-y-4">
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Name</span>
-            <input autoComplete="name" value={name} onChange={event => setName(event.target.value)} className="input-standard" required />
+            <input autoComplete="name" value={name} onChange={event => setName(event.target.value)} className="input-standard min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-1" required />
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Mobile number</span>
@@ -148,13 +148,13 @@ export default function ProfileSettings() {
             <span className="text-xs font-medium text-stone-600">Email address</span>
             <input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} className="input-standard" required />
           </label>
-          <button type="submit" disabled={savingProfile} className="btn-primary min-h-11 normal-case tracking-normal">
+          <button type="submit" disabled={savingProfile} className="btn-primary min-h-11 normal-case tracking-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
             {savingProfile ? 'Saving…' : 'Save changes'}
           </button>
         </form>
       </section>
 
-      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
+      <section className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-base font-semibold text-stone-800">Password</h2>
         <form onSubmit={savePassword} className="mt-5 space-y-4">
           <label className="block space-y-1.5">
@@ -169,7 +169,7 @@ export default function ProfileSettings() {
             <span className="text-xs font-medium text-stone-600">Confirm new password</span>
             <input type="password" autoComplete="new-password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className="input-standard" minLength={6} required />
           </label>
-          <button type="submit" disabled={savingPassword} className="btn-secondary min-h-11 normal-case tracking-normal">
+          <button type="submit" disabled={savingPassword} className="btn-secondary min-h-11 normal-case tracking-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
             {savingPassword ? 'Updating…' : 'Update password'}
           </button>
         </form>
@@ -195,12 +195,13 @@ export default function ProfileSettings() {
             </p>
           ) : (
             <>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3">
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-stone-200 bg-[#FDFBF7] px-3 py-2.5">
                 <input
                   type="checkbox"
                   checked={pushState === 'subscribed'}
                   disabled={pushBusy}
                   onChange={event => togglePushReminders(event.target.checked)}
+                  className="h-4 w-4 accent-[#978C21] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
                 />
                 <span className="text-sm font-medium text-stone-700">
                   Daily follow-up reminder on this device
