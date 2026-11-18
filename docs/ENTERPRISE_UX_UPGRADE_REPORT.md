@@ -26,6 +26,25 @@
 - Lead Quality remains server-computed; scheduled activities remain server-authoritative.
 - Existing responsive mobile row layout and Lead 360 mobile section tabs are retained.
 
+## Phase 2 — Lead Intake, Lead Pool, and Team Hierarchy
+
+### Add New Lead (`/leads/new`)
+- Reworked the page header and section cards to use consistent warm-neutral surfaces, softer borders, and the shared rounded control language.
+- Reduced oversized vertical spacing and improved the two-column form rhythm for desktop while retaining the single-column mobile layout.
+- Updated common inputs and the primary action to use consistent sizing and accessible focus treatment.
+- Preserved dynamic form fields, field visibility/required rules, validation, and the existing submit handler.
+
+### Lead Pool (`/leads/all`)
+- Replaced internal terminology such as **Demographic Name**, **Mobile Connection**, and **Control Actions** with clear operational labels.
+- Simplified the page introduction and search prompt.
+- Reframed summary-card descriptions in plain business English.
+- Standardized the intake tabs, summary cards, search control, and table container to the shared card system.
+- Preserved bulk assignment, inline owner changes, export/delete flows, and their existing permission gates.
+
+### Team Hierarchy
+- Updated the page header, chart/list switcher, and refresh control to match the shared visual language.
+- Kept the existing reporting-tree and data behavior unchanged.
+
 ## Next UX phases
 1. Audit and refine Add Lead, Lead Pool, and lead update forms.
 2. Refine daily workbench, dashboard and role-specific team/manager views.
