@@ -1812,3 +1812,24 @@
   width: 4px; height: 4px; border-radius: 999px; background: #978C21;
 }
 .lf-mini-dot.is-holiday { background: #E11D48; }
+
+/* HTML blueprint palette is scoped to workspace content. Task Calendar is
+   deliberately excluded so its existing page styling remains unchanged. */
+main.leadflow-main:not([data-route="/task-calendar"]) {
+  --color-primary: #858515;
+  --color-brand-olive: #858515;
+  --color-brand-orange: #f36b21;
+  --color-brand-deep: #596b35;
+  --color-surface: #f7f7f2;
+  --color-surface-warm: #f7f7f2;
+  --color-border: #e7e7df;
+  --color-brand-text: #263238;
+  --color-muted: #788078;
+  --radius-card: 14px;
+  --shadow-card: 0 2px 8px rgba(40, 48, 30, 0.06);
+  background-color: #f7f7f2;
+  color: #263238;
+}
+main.leadflow-main:not([data-route="/task-calendar"]) :focus-visible {
+  outline-color: #858515;
+}
