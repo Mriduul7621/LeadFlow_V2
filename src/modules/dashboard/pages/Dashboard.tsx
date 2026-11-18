@@ -629,7 +629,15 @@ export default function Dashboard() {
   }, [user, period, customStart, customEnd]);
 
   const loadDailyExecution = useCallback(async () => {
-    if (!user) return;
+    if (!user || isAdminRole) {
+      setTodayFollowUps([]);
+      setTomorrowFollowUps([]);
+      setTodayScheduled([]);
+      setTomorrowScheduled([]);
+      setRoadshowCounts(null);
+      setDailyLoading(false);
+      return;
+    }
     setDailyLoading(true);
     try {
       // Tier 2/3 must not start until the critical KPI request has
@@ -706,7 +714,7 @@ export default function Dashboard() {
     } finally {
       setDailyLoading(false);
     }
-  }, [user, canViewRoadshows]);
+  }, [user, canViewRoadshows, isAdminRole]);
 
   /**
    * Recent Leads — the five most recent rows from the LOCAL MIRROR of server
@@ -718,6 +726,11 @@ export default function Dashboard() {
    */
   useEffect(() => {
     if (!user) return;
+    if (isAdminRole) {
+      setRecentLeads([]);
+      setRecentLeadsLoading(false);
+      return;
+    }
     let cancelled = false;
 
     const readMirror = () => {
@@ -762,7 +775,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, isAdminRole]);
 
   useEffect(() => {
     void loadDashboardData();
