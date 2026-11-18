@@ -1120,13 +1120,12 @@ export default function UserManagement() {
       </div>
 
       {/* Tab navigation */}
-      <div className="flex gap-1 overflow-x-auto rounded-xl border border-stone-200 bg-[#F7F5EF] p-1" role="tablist" aria-label="User management sections">
+      <div className="flex gap-1 overflow-x-auto rounded-xl border border-stone-200 bg-[#F7F5EF] p-1" aria-label="User management sections">
         {tabs.map(tab => (
           <button
             key={tab.key}
             onClick={() => { setActiveTab(tab.key); if (tab.key === 'roles') setShowRoleForm(false); }}
-            role="tab"
-            aria-selected={activeTab === tab.key}
+            aria-pressed={activeTab === tab.key}
             className={cn(
               "flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]",
               activeTab === tab.key
