@@ -2,7 +2,8 @@
 
 **Foundation branch:** `ux/enterprise-role-based-redesign`
 **Phase 3 branch:** `ux/phase-3-lead-update-workflow`
-**Status:** Phases 1–3 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 4 branch:** `ux/phase-4-follow-up-queue`
+**Status:** Phases 1–4 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -55,10 +56,19 @@
 - Preserved status vocabulary, dynamic fields, validation rules, stage-rule fallback, submit payload, offline queue behavior, and server-owned calendar synchronization.
 - No API, database, permission, or business-rule changes.
 
+## Phase 4 — Follow-up Queue
+
+- Replaced the old square, high-contrast queue surfaces with the shared warm-neutral card and control styles.
+- Improved the bucket selector's pressed state, keyboard focus, spacing, and count typography.
+- Counts now show an em dash until authoritative server counts arrive instead of implying zero during loading.
+- Added an explicit retry state when the queue request fails before any data is available, so a network/API failure is not presented as an empty queue.
+- Preserved the existing server query, bucket selection, URL synchronization, row navigation, result limit, and server-side visibility rules.
+- No API, database, permission, or business-rule changes.
+
 ## Next UX phases
 1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
 2. Refine User Management, Roles & Access, hierarchy and team administration.
-3. Review analytics, campaigns, roadshows, follow-up queue, task calendar and settings.
+3. Review analytics, campaigns, roadshows, task calendar and settings.
 4. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
