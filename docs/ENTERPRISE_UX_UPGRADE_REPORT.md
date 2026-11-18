@@ -1,7 +1,8 @@
 # LeadFlow Enterprise UX Upgrade — Progress Report
 
-**Branch:** `ux/enterprise-role-based-redesign`
-**Status:** Phase 1 implemented; broader page-by-page upgrade remains in progress.
+**Foundation branch:** `ux/enterprise-role-based-redesign`
+**Phase 3 branch:** `ux/phase-3-lead-update-workflow`
+**Status:** Phases 1–3 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -45,15 +46,23 @@
 - Updated the page header, chart/list switcher, and refresh control to match the shared visual language.
 - Kept the existing reporting-tree and data behavior unchanged.
 
+## Phase 3 — Lead Status Update (`/leads/:id/update`)
+
+- Increased the form content width modestly on desktop while retaining a single-column mobile flow.
+- Standardized the page card surfaces, borders, and spacing with the shared warm-neutral design system.
+- Improved field-label readability and Next Action button sizing.
+- Added an explicit pressed state and visible keyboard focus treatment to Next Action choices.
+- Preserved status vocabulary, dynamic fields, validation rules, stage-rule fallback, submit payload, offline queue behavior, and server-owned calendar synchronization.
+- No API, database, permission, or business-rule changes.
+
 ## Next UX phases
-1. Audit and refine Add Lead, Lead Pool, and lead update forms.
-2. Refine daily workbench, dashboard and role-specific team/manager views.
-3. Refine User Management, Roles & Access, hierarchy and team administration.
-4. Review analytics, campaigns, roadshows, follow-up queue, task calendar and settings.
-5. Run automated tests, build, responsive checks and accessibility review before requesting merge.
+1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
+2. Refine User Management, Roles & Access, hierarchy and team administration.
+3. Review analytics, campaigns, roadshows, follow-up queue, task calendar and settings.
+4. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
-The changed files and branch commit were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.
+The changed files and branch commits were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.
 
 
 ## CI validation fix — migration 061
