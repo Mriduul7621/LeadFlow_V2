@@ -474,10 +474,10 @@ function RoleWorkspaceSnapshot({ role, metrics, followUpCounts }: {
   const value = (n: number | null | undefined) => n == null ? '—' : formatCount(n);
   if (admin) return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <KpiCard label="Active Users" value={value(metrics?.userCount)} icon={Users} variant="blue" />
+      <KpiCard label="Agents with Leads" value={value(metrics?.userCount)} icon={Users} variant="blue" />
       <KpiCard label="Lead Records" value={value(metrics?.leadCount ?? metrics?.totalLeads)} icon={Layers} variant="slate" />
-      <KpiCard label="New Intake" value={value(metrics?.newLeads)} icon={CalendarDays} variant="olive" sub="Selected date range" />
-      <KpiCard label="Operational Alerts" value={value(metrics?.alerts)} icon={AlertTriangle} variant="orange" />
+      <KpiCard label="Active Leads" value={value(metrics?.activeLeads)} icon={Layers} variant="olive" />
+      <KpiCard label="New Leads" value={value(metrics?.newLeads)} icon={CalendarDays} variant="orange" sub="Selected date range" />
     </div>
   );
   if (manager) return (
@@ -486,12 +486,12 @@ function RoleWorkspaceSnapshot({ role, metrics, followUpCounts }: {
       <KpiCard label="Conversion Rate" value={metrics?.conversionRate ?? '—'} icon={Percent} variant="slate" />
       <KpiCard label="Collected NCP" value={metrics ? formatMoney(metrics.collected) : '—'} icon={Banknote} variant="emerald" />
       <KpiCard label="Projected NCP" value={metrics ? formatMoney(metrics.projected) : '—'} icon={TrendingUp} variant="olive" />
-      <KpiCard label="At-risk / Alerts" value={value(metrics?.alerts)} icon={AlertTriangle} variant="red" />
+      <KpiCard label="New Leads" value={value(metrics?.newLeads)} icon={AlertTriangle} variant="red" />
     </div>
   );
   if (teamLead) return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <KpiCard label="Team Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Open Team Leads" value={value(metrics?.activeLeads)} icon={Users} variant="blue" />
       <KpiCard label="Due Today" value={value(followUpCounts.today)} icon={CalendarDays} variant="orange" />
       <KpiCard label="Overdue" value={value(followUpCounts.overdue)} icon={AlertTriangle} variant="red" />
       <KpiCard label="Team Conversion" value={metrics?.conversionRate ?? '—'} icon={TrendingUp} variant="olive" />
@@ -1066,7 +1066,7 @@ export default function Dashboard() {
               Discipline, Needs Attention and the Task Calendar moved off Home:
               the pipeline board is its own sidebar page (/sales-pipeline) and
               the calendar lives at /task-calendar (sidebar → Workspace). */}
-          <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} />
+          {(metrics?.trendData?.length || metrics?.teamStats?.length) ? <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} /> : null}
 
         </>
       )}
