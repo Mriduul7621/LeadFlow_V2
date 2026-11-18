@@ -232,14 +232,17 @@ export async function runMigrations(): Promise<MigrationRunResult> {
     if (ledger.createdNow && ledger.applied.size === 0) {
         // First boot with the ledger: adopt an already-current legacy
         // database instead of replaying 226 round trips of DDL.
-        result.adopted = await tryAdoptLegacySchema(MIGRATION_IDS);
+        // Migration 061 is a data-only permission correction: it has no
+        // schema sentinel, so legacy adoption must leave it pending and run it
+        // once after adopting the pre-existing schema baseline.
+        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope");
+        result.adopted = await tryAdoptLegacySchema(adoptionIds);
         if (result.adopted) {
             console.log(
-                `✅ Schema ledger adopted ${MIGRATION_IDS.length} existing migrations (no DDL replayed)`
+                `✅ Schema ledger adopted ${adoptionIds.length} existing migrations; pending post-adoption migrations will now run`
             );
-            result.upToDate = true;
-            result.durationMs = Date.now() - startedAt;
-            return result;
+            // Do not return: migration 061 intentionally remains unrecorded.
+            // The locked pending pass below re-reads the ledger and runs it.
         }
     }
 
