@@ -5,7 +5,8 @@
 **Phase 4 branch:** `ux/phase-4-follow-up-queue`
 **Phase 5 branch:** `ux/phase-5-task-calendar`
 **Phase 6 branch:** `ux/phase-6-user-admin`
-**Status:** Phases 1–6 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 7 branch:** `ux/phase-7-analytics-suite`
+**Status:** Phases 1–7 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -83,9 +84,17 @@
 - Preserved employee, department, role, hierarchy and bulk-import handlers; the three permission layers (Data Visibility, Feature Access and Action Permissions) remain separate and unchanged.
 - Preserved server-side permission enforcement and access-review restrictions. No API, database, permission or business-rule changes.
 
+## Phase 7 — Analytics Suite
+
+- Updated the Execution Intelligence, Trend Analysis, Campaign Breakdown and NCP Progress report pages to use consistent warm-neutral surfaces, card borders, spacing and table treatments.
+- Replaced the dark charcoal period-filter strip with a softer deep-neutral surface and improved custom date controls.
+- Improved report refresh controls and added explicit pressed-state and keyboard-focus semantics to period selectors.
+- Preserved the existing date-range calculations, lead-service queries and effective server-enforced data visibility scope, KPI calculations, drilldowns, exports and chart data.
+- No API, database, permission or business-rule changes.
+
 ## Next UX phases
 1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
-2. Review analytics, campaigns, roadshows and settings.
+2. Review roadshow workflows and settings.
 3. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status

@@ -113,7 +113,7 @@ export default function CampaignBreakdown() {
   return (
     <div className="space-y-8 pb-24 bg-white font-sans text-slate-800 animate-fade-in">
       <BackButton fallback="/" />
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-stone-200 pb-8">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Campaign Breakdown</h1>
           <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Campaign distributions, statuses, conversion rates and shares</p>
@@ -121,7 +121,7 @@ export default function CampaignBreakdown() {
         <div className="flex items-center gap-3">
           <button 
             onClick={loadData}
-            className="p-3 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm"
+            className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-600 shadow-sm transition hover:border-[#978C21]/40 hover:text-[#706817] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]" aria-label="Refresh report"
           >
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
@@ -129,7 +129,7 @@ export default function CampaignBreakdown() {
       </div>
 
       {/* Period Selection */}
-      <div className="bg-[#3C3C3C] p-6 rounded-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-[#29291F] p-5 sm:p-6 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
            <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center">
               <Database className="w-5 h-5 text-[#978C21]" />
@@ -144,8 +144,9 @@ export default function CampaignBreakdown() {
              <button 
                key={p}
                onClick={() => setPeriod(p)}
+               aria-pressed={period === p}
                className={cn(
-                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
+                 "min-h-9 px-3 py-2 text-xs font-semibold rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-1",
                  period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
                )}
              >
@@ -153,31 +154,31 @@ export default function CampaignBreakdown() {
              </button>
            ))}
            <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
-           <div className="flex items-center gap-2 px-2">
+           <div className="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2">
               <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
+              <span className="text-xs font-medium text-stone-200">{formattedDateRange()}</span>
            </div>
         </div>
       </div>
 
       {period === 'CUSTOM' && (
-        <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4">
+        <div className="bg-[#FDFBF7] px-4 py-4 border border-stone-200 rounded-xl flex items-center gap-4">
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
+              <span className="text-xs font-medium text-stone-600">Start:</span>
               <input 
                 type="date" 
                 value={customDates.start}
                 onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="min-h-10 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 outline-none focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/15"
               />
            </div>
            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
+              <span className="text-xs font-medium text-stone-600">End Date:</span>
               <input 
                 type="date" 
                 value={customDates.end}
                 onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="min-h-10 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 outline-none focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/15"
               />
            </div>
         </div>
@@ -188,7 +189,7 @@ export default function CampaignBreakdown() {
           <div className="w-12 h-12 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin"></div>
         </div>
       ) : (
-        <div className="bg-white rounded-sm border border-slate-100 p-8 md:p-10 shadow-sm">
+        <div className="bg-white rounded-xl border border-stone-200 p-5 sm:p-6 lg:p-8 shadow-sm">
            <div className="flex flex-col lg:flex-row items-center justify-between gap-16">
               {/* Left Side: Interactive Pie Chart Dial */}
               <div className="h-80 w-80 relative flex-shrink-0 flex items-center justify-center">
@@ -218,7 +219,7 @@ export default function CampaignBreakdown() {
 
               {/* Right Side: Legend breakout list */}
               <div className="w-full flex-1 max-w-xl">
-                 <div className="flex justify-between border-b border-slate-100 pb-3 mb-6">
+                 <div className="flex justify-between border-b border-stone-200 pb-3 mb-6">
                     <p className="text-[11px] font-black text-slate-400 uppercase italic">Call Status Group</p>
                     <p className="text-[11px] font-black text-slate-400 uppercase italic">Distribution Volume</p>
                  </div>
