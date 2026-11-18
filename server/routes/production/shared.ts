@@ -954,21 +954,33 @@ export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<
   if (!isTeamLeadRole(caller)) return new Set<string>();
   if (!useDb()) {
     const callerKeys = new Set([String(caller.id), String(caller.employee_id).toUpperCase()]);
+    const users = fallbackStore.users as any[];
+    const hasReports = new Set(
+      users
+        .filter(user => user.isActive !== false && String(user.status || user.employmentStatus || 'Active').toLowerCase() !== 'inactive')
+        .map(user => String(user.managerId || user.manager_id || ''))
+    );
     return new Set(
-      (fallbackStore.users as any[])
+      users
         .filter(user => {
           const manager = String(user.managerId || user.manager_id || '');
           const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
-          return callerKeys.has(manager) && user.isActive !== false && status !== 'inactive';
+          return callerKeys.has(manager) && user.isActive !== false && status !== 'inactive'
+            && !hasReports.has(String(user.id));
         })
         .map(user => String(user.id))
     );
   }
   const result = await getPool().query(
-    `SELECT id
-       FROM users
-      WHERE manager_id = $1
-        AND COALESCE(is_active, TRUE) = TRUE`,
+    `SELECT member.id
+       FROM users member
+      WHERE member.manager_id = $1
+        AND COALESCE(member.is_active, TRUE) = TRUE
+        AND NOT EXISTS (
+          SELECT 1 FROM users report
+           WHERE report.manager_id = member.id
+             AND COALESCE(report.is_active, TRUE) = TRUE
+        )`,
     [caller.id]
   );
   return new Set((result.rows || []).map((row: any) => String(row.id)));
