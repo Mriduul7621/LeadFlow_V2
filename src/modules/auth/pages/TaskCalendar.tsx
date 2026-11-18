@@ -196,6 +196,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const canEditScheduled = canAccess('lead_tracking', 'edit');
 
   const [loading, setLoading] = useState(true);
+  const [eventLoadError, setEventLoadError] = useState(false);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -282,12 +283,15 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     if (!user) return;
     let cancelled = false;
     setLoading(true);
+    setEventLoadError(false);
+    let requestFailed = false;
     Promise.all([
-      scheduledActivityService.list({ from: fetchRange.from, to: fetchRange.to, limit: 500 }).catch(() => [] as ScheduledActivity[]),
-      roadshowService.list({ from: fetchRange.from, to: fetchRange.to }).catch(() => [] as Roadshow[]),
+      scheduledActivityService.list({ from: fetchRange.from, to: fetchRange.to, limit: 500 }).catch(() => { requestFailed = true; return [] as ScheduledActivity[]; }),
+      roadshowService.list({ from: fetchRange.from, to: fetchRange.to }).catch(() => { requestFailed = true; return [] as Roadshow[]; }),
     ])
       .then(([activities, roadshows]) => {
         if (cancelled) return;
+        setEventLoadError(requestFailed);
         const mapped = [
           ...(activities || []).map(mapScheduled),
           ...(roadshows || []).filter(r => String(r.status) !== 'cancel').map(mapRoadshow),
@@ -297,7 +301,10 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       })
       .catch(err => {
         console.error('Error fetching calendar events:', err);
-        if (!cancelled) setEvents([]);
+        if (!cancelled) {
+          setEvents([]);
+          setEventLoadError(true);
+        }
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -918,20 +925,20 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     <div className="max-w-[1440px] mx-auto pb-24 space-y-4">
       <BackButton fallback="/" />
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-100 bg-[#F9F9F4] text-[#978C21] shadow-sm">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-stone-200 bg-white text-[#978C21] shadow-sm">
             <CalendarIcon className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-2xl font-black tracking-tight text-slate-900 leading-none">Task Calendar</h1>
-            <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5">Follow-ups · Meetings · Tasks · Roadshows</p>
+            <h1 className="text-2xl font-bold tracking-tight text-stone-900 leading-none">Task Calendar</h1>
+            <p className="text-sm text-stone-500 mt-1">Plan follow-ups, meetings, tasks and roadshows</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => openCreate()}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-[11px] font-black uppercase tracking-widest rounded-lg shadow-md shadow-[#978C21]/20 cursor-pointer"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#978C21] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#83781C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
         >
           <Plus className="w-4 h-4" /> New event
         </button>
@@ -977,9 +984,10 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   key={mode}
                   type="button"
                   onClick={() => setViewMode(mode)}
+                  aria-pressed={viewMode === mode}
                   className={cn(
-                    'px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider cursor-pointer rounded-md transition-all',
-                    viewMode === mode ? 'bg-[#978C21] text-white shadow' : 'text-slate-400 hover:text-slate-800 hover:bg-slate-100',
+                    'min-h-9 px-3 py-1.5 text-xs font-semibold cursor-pointer rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-1',
+                    viewMode === mode ? 'bg-[#978C21] text-white shadow-sm' : 'text-stone-500 hover:text-stone-900 hover:bg-stone-100',
                   )}
                 >
                   {label}
@@ -989,6 +997,15 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           </div>
 
           {/* Body */}
+          {!loading && eventLoadError && (
+            <div role="alert" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-amber-900">Some calendar data could not be loaded.</p>
+                <p className="mt-1 text-xs text-amber-800">The calendar may be incomplete. Check your connection and try refreshing.</p>
+              </div>
+              <button type="button" onClick={refresh} className="min-h-9 shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]">Retry</button>
+            </div>
+          )}
           {loading ? (
             <div className="py-32 flex flex-col justify-center items-center gap-4">
               <div className="w-10 h-10 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin" />
