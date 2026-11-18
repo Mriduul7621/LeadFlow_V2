@@ -532,7 +532,7 @@ export default function AllLeads() {
                   </span>
                   <div>
                      <p className="text-[11px] font-black uppercase tracking-widest text-slate-900 italic">Bulk Routing Workflow</p>
-                     <p className="text-[10px] text-slate-500 font-medium">Select a system team handler to propagate immediate assignments to all selected lead registries.</p>
+                     <p className="text-[10px] text-slate-500 font-medium">{isTeamLeadRole ? "Keep leads with yourself or route them to a direct member of your team." : "Select a system team handler to propagate immediate assignments to all selected lead registries."}</p>
                   </div>
                </div>
                <div className="flex items-center gap-3">
@@ -943,7 +943,7 @@ export default function AllLeads() {
                         <UserCheck className="w-4 h-4 text-[#978C21]" />
                         Assignee Router Control
                      </p>
-                     <p className="text-[11px] text-slate-500">Route or transfer matching ownership. Assigning to any RM propagates instant alerts to their interface feed.</p>
+                     <p className="text-[11px] text-slate-500">{isTeamLeadRole ? "Keep this lead with yourself or route it to one of your own team members." : "Route or transfer matching ownership. Assignment notifications are sent automatically."}</p>
                      <select
                        value={editAssignee}
                        disabled={!canAssign || (isTeamLeadRole && teamOverviewLoading)}
