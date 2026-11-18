@@ -1094,24 +1094,24 @@ export default function UserManagement() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 pb-12">
+    <div className="mx-auto w-full max-w-7xl space-y-6 pb-12">
       {/* Page header */}
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 border-b border-stone-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">User Management</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage employees, departments, roles and organizational hierarchy.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-stone-900">User Management</h1>
+          <p className="mt-1 text-sm text-stone-500">Manage employees, departments, roles and organizational hierarchy.</p>
         </div>
         {activeTab === 'employees' && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowBulkImport(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-medium rounded-lg transition-colors shadow-sm"
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-stone-200 bg-white px-4 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
             >
               <Upload className="w-4 h-4" /> Bulk Import Users
             </button>
             <button
               onClick={openCreateUser}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-semibold rounded-lg transition-colors shadow-sm"
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#978C21] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#83781C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
             >
               <UserPlus className="w-4 h-4" /> Add Employee
             </button>
@@ -1120,16 +1120,18 @@ export default function UserManagement() {
       </div>
 
       {/* Tab navigation */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+      <div className="flex gap-1 overflow-x-auto rounded-xl border border-stone-200 bg-[#F7F5EF] p-1" role="tablist" aria-label="User management sections">
         {tabs.map(tab => (
           <button
             key={tab.key}
             onClick={() => { setActiveTab(tab.key); if (tab.key === 'roles') setShowRoleForm(false); }}
+            role="tab"
+            aria-selected={activeTab === tab.key}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all",
+              "flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]",
               activeTab === tab.key
-                ? "bg-white text-[#978C21] shadow-sm border border-slate-200"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
+                ? "border border-stone-200 bg-white text-[#706817] shadow-sm"
+                : "text-stone-500 hover:bg-white/70 hover:text-stone-800"
             )}
           >
             {tab.icon}
@@ -1152,21 +1154,21 @@ export default function UserManagement() {
       {activeTab === 'employees' && (
         <div className="space-y-4">
           {/* Filters */}
-          <div className="flex flex-col md:flex-row gap-3 bg-white border border-slate-200 rounded-xl p-4">
-            <div className="flex-1 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <div className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-4 md:flex-row">
+            <div className="flex min-h-10 flex-1 items-center gap-2 rounded-lg border border-stone-200 bg-[#FDFBF7] px-3 py-2 focus-within:border-[#978C21] focus-within:ring-2 focus-within:ring-[#978C21]/15">
               <Search className="w-4 h-4 text-slate-400" />
               <input
                 type="text"
                 value={userQuery}
                 onChange={e => setUserQuery(e.target.value)}
                 placeholder="Search by name, ID, email..."
-                className="flex-1 bg-transparent outline-none text-sm text-slate-700 placeholder:text-slate-400"
+                className="min-w-0 flex-1 bg-transparent text-sm text-stone-800 outline-none placeholder:text-stone-400"
               />
             </div>
             <select
               value={filterDeptId}
               onChange={e => setFilterDeptId(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
+              className="min-h-10 rounded-lg border border-stone-200 bg-[#FDFBF7] px-3 py-2 text-sm text-stone-700 outline-none transition focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/15"
             >
               <option value="">All Departments</option>
               {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -1182,11 +1184,11 @@ export default function UserManagement() {
           </div>
 
           {/* Employee table */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
+                  <tr className="border-b border-stone-200 bg-[#F7F5EF]">
                     <th className="px-4 py-3 text-xs font-semibold text-slate-500">Employee</th>
                     <th className="px-4 py-3 text-xs font-semibold text-slate-500">Role & Department</th>
                     <th className="px-4 py-3 text-xs font-semibold text-slate-500">Status</th>
@@ -1194,7 +1196,7 @@ export default function UserManagement() {
                     <th className="px-4 py-3 text-xs font-semibold text-slate-500 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-stone-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="py-16 text-center text-sm text-slate-400">
@@ -1205,7 +1207,7 @@ export default function UserManagement() {
                     filteredUsers.map(u => {
                       const dept = departments.find(d => d.id === (u as any).departmentId);
                       return (
-                        <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                        <tr key={u.id} className="transition-colors hover:bg-[#FDFBF7]">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
                               <div className="w-9 h-9 rounded-full bg-slate-800 text-white flex items-center justify-center text-sm font-semibold">
