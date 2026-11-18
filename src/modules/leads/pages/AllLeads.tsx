@@ -345,20 +345,20 @@ export default function AllLeads() {
   const uniqueCampaignsCount = Array.from(new Set(leads.map(l => l.campaignName).filter(Boolean))).length;
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto">
+    <div className="mx-auto max-w-7xl space-y-6 pb-16">
       {/* Title & Top Meta Row */}
-      <div className="border-b border-slate-100 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="rounded-[14px] border border-stone-200 bg-white p-5 shadow-sm flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Lead intake and routing console</span>
-           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">Lead Pool</h1>
-           <p className="text-xs text-slate-500 mt-1">Route intake, review server-visible lead records, correct permitted details, and open the operational workspace.</p>
+           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Lead intake and assignment</span>
+           <h1 className="mt-1 text-2xl font-bold tracking-tight text-brand-text">Lead Pool</h1>
+           <p className="text-xs text-slate-500 mt-1">Review incoming leads, assign owners, and manage the shared lead register.</p>
         </div>
         <div className="flex gap-3">
           <button 
              onClick={loadData}
-             className="px-5 py-3 border border-slate-200 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-700 bg-white shadow-sm rounded-sm transition-all flex items-center gap-2"
+             className="inline-flex min-h-10 items-center gap-2 rounded-[10px] border border-stone-200 bg-white px-4 py-2.5 text-xs font-semibold text-stone-700 shadow-sm transition-colors hover:bg-[#FFFCF8]"
           >
-             🔄 Reload Data
+             Refresh
           </button>
         </div>
       </div>
@@ -366,19 +366,19 @@ export default function AllLeads() {
       {/* Canonical intake tabs. Classification is based only on assignedTo. */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {([
-          { id: 'unassigned' as const, label: 'Unassigned', count: poolCounts.unassigned, hint: 'Needs routing' },
-          { id: 'assigned' as const, label: 'Assigned', count: poolCounts.assigned, hint: 'In active ownership' },
-          { id: 'all' as const, label: 'All', count: poolCounts.total, hint: 'Server-visible pool' },
+          { id: 'unassigned' as const, label: 'Unassigned', count: poolCounts.unassigned, hint: 'Needs an owner' },
+          { id: 'assigned' as const, label: 'Assigned', count: poolCounts.assigned, hint: 'Has an assigned owner' },
+          { id: 'all' as const, label: 'All leads', count: poolCounts.total, hint: 'All visible leads' },
         ]).map(tab => (
           <button
             key={tab.id}
             type="button"
             onClick={() => { setPoolTab(tab.id); setSelectedLeadIds([]); }}
             className={cn(
-              'text-left p-4 border rounded-sm transition-all',
+              'text-left rounded-[12px] border p-4 transition-all',
               poolTab === tab.id
-                ? 'border-[#978C21] bg-[#978C21]/5 shadow-sm'
-                : 'border-slate-100 bg-white hover:border-slate-300'
+                ? 'border-[#978C21] bg-[#FFFCF8] shadow-sm'
+                : 'border-stone-200 bg-white hover:border-[#978C21]/40'
             )}
           >
             <div className="flex items-center justify-between gap-3">
@@ -392,40 +392,40 @@ export default function AllLeads() {
 
       {/* Lead Pool summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-         <div className="p-6 bg-[#FBFAF8] border border-slate-100 rounded-sm shadow-sm relative overflow-hidden group">
+         <div className="p-5 rounded-[14px] border border-stone-200 bg-white shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-slate-900 group-hover:scale-110 transition-transform">
                <Database className="w-16 h-16" />
             </div>
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Pool Records</p>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Total leads</p>
             <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{totalLeadsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">uploaded entities cataloged</span>
+            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">Leads in this pool</span>
          </div>
 
-         <div className="p-6 bg-amber-50/50 border border-amber-100 rounded-sm shadow-sm relative overflow-hidden group">
+         <div className="p-5 rounded-[14px] border border-amber-100 bg-amber-50/50 shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-amber-500">
                <Inbox className="w-16 h-16" />
             </div>
             <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest italic">Pending Assignment</p>
             <p className="text-3xl font-black text-amber-800 italic tracking-tighter leading-none mt-2">{unassignedLeadsCount}</p>
-            <span className="text-[9px] text-amber-600 font-bold mt-2 block lowercase italic">requires operator routing</span>
+            <span className="text-[9px] text-amber-600 font-bold mt-2 block lowercase italic">Awaiting an owner</span>
          </div>
 
-         <div className="p-6 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm shadow-sm relative overflow-hidden group">
+         <div className="p-5 rounded-[14px] border border-[#978C21]/10 bg-[#FFFCF8] shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-[#978C21]">
                <Sliders className="w-16 h-16" />
             </div>
             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest italic">Live Campaign Channels</p>
             <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{uniqueCampaignsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">active generation funnels</span>
+            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">Campaigns represented</span>
          </div>
 
-         <div className="p-6 bg-emerald-50/50 border border-emerald-100 rounded-sm shadow-sm relative overflow-hidden group">
+         <div className="p-5 rounded-[14px] border border-emerald-100 bg-emerald-50/50 shadow-sm relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-4 opacity-5 text-emerald-500">
                <TrendingUp className="w-16 h-16" />
             </div>
             <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest italic">Converted Acquisitions</p>
             <p className="text-3xl font-black text-emerald-900 italic tracking-tighter leading-none mt-2">{conversionRateCount}</p>
-            <span className="text-[9px] text-emerald-600 font-bold mt-2 block lowercase italic">converted pipeline targets</span>
+            <span className="text-[9px] text-emerald-600 font-bold mt-2 block lowercase italic">Converted leads</span>
          </div>
       </div>
 
@@ -479,17 +479,17 @@ export default function AllLeads() {
       />
 
       {/* Main Grid Workspace */}
-      <div className="bg-white border border-slate-100/80 rounded-sm shadow-sm overflow-hidden">
+      <div className="overflow-hidden rounded-[14px] border border-stone-200 bg-white shadow-sm">
          {/* Live Search and Control Panel */}
          <div className="p-6 border-b border-slate-55 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
             <div className="relative flex-1 max-w-md">
                <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                <input 
                  type="text"
-                 placeholder="Search by candidate name, mobile, active assignee, or campaign name..."
+                 placeholder="Search name, phone, campaign, owner, or area..."
                  value={searchQuery}
                  onChange={(e) => setSearchQuery(e.target.value)}
-                 className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200/85 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] rounded-sm placeholder:opacity-50 outline-none"
+                 className="w-full rounded-[10px] border border-stone-200 bg-white py-3 pl-12 pr-4 text-sm text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-[#978C21] focus:ring-2 focus:ring-[#978C21]/10"
                />
             </div>
             <div className="text-[10px] text-slate-400 font-extrabold uppercase italic tracking-widest">
@@ -561,13 +561,13 @@ export default function AllLeads() {
                           className="cursor-pointer accent-[#978C21] h-3.5 w-3.5 rounded border-slate-300 focus:ring-0 disabled:cursor-not-allowed disabled:opacity-40"
                         />
                      </th>
-                     <th className="p-4 px-6 text-slate-900">Demographic Name</th>
-                     <th className="p-4 px-6 text-slate-900">Mobile Connection</th>
+                     <th className="p-4 px-6 text-slate-900">Lead</th>
+                     <th className="p-4 px-6 text-slate-900">Phone</th>
                      <th className="p-4 px-6 text-slate-900">Campaign</th>
-                     <th className="p-4 px-6 text-slate-[#978C21]">Assignee ID / Status (Tab)</th>
+                     <th className="p-4 px-6 text-slate-[#978C21]">Owner</th>
                      <th className="p-4 px-6 text-slate-900">Current Status</th>
-                     <th className="p-4 px-6 text-slate-900">Upload Date</th>
-                     <th className="p-4 px-6 text-center text-slate-900">Control Actions</th>
+                     <th className="p-4 px-6 text-slate-900">Added</th>
+                     <th className="p-4 px-6 text-center text-slate-900">Actions</th>
                   </tr>
                </thead>
                <tbody className="divide-y divide-slate-50 text-[11px] text-slate-700 font-medium">
@@ -586,7 +586,7 @@ export default function AllLeads() {
                   ) : filteredLeads.length === 0 ? (
                      <tr>
                         <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
-                           📭 No matching lead registers discovered
+                           📭 No leads match your filters.
                         </td>
                      </tr>
                   ) : (
@@ -613,13 +613,13 @@ export default function AllLeads() {
                            {/* Demographics Name */}
                            <td className="p-4 px-6 text-slate-950 font-black uppercase tracking-tight select-all">
                               <div className="flex items-center gap-2">
-                                 <span>{lead.prospectName || 'Anonymous Candidate'}</span>
+                                 <span>{lead.prospectName || 'Unnamed lead'}</span>
                                  <button
                                     onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
                                     title="View full timeline"
                                     className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0"
                                  >
-                                    Timeline
+                                    View history
                                  </button>
                               </div>
                               {lead.email && <div className="text-[9px] text-slate-400 font-normal lowercase tracking-normal mt-0.5">{lead.email}</div>}
