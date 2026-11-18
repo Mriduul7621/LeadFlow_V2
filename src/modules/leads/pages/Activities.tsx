@@ -50,11 +50,11 @@ export default function Activities() {
   const grouped = useMemo(() => groupByCategory(activities), [activities]);
 
   return (
-    <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
+    <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6 lg:p-8">
       <BackButton fallback="/" />
       <div>
         <h1 className="text-xl font-bold text-slate-800">Activities</h1>
-        <p className="text-[11px] text-slate-400 uppercase tracking-widest mt-1">
+        <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500 sm:text-sm">
           Every pending follow-up, call, and meeting across your visible leads, organized by urgency.
         </p>
       </div>
@@ -67,9 +67,11 @@ export default function Activities() {
           return (
             <button
               key={cat}
+              type="button"
+              aria-pressed={activeCategory === cat}
               onClick={() => setActiveCategory(cat)}
               className={cn(
-                "p-4 rounded-sm border text-left transition-all",
+                "min-h-[112px] rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeCategory === cat ? "border-[#978C21] bg-white shadow-md" : "border-slate-100 bg-slate-50 hover:bg-white"
               )}
             >
@@ -83,11 +85,11 @@ export default function Activities() {
         })}
       </div>
 
-      <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-50 bg-[#FBFAF8]">
+      <div className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm">
+        <div className="border-b border-stone-100 bg-[#FFFCF8] px-4 py-4 sm:px-5">
           <h3 className="text-sm font-semibold text-slate-700">{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
         </div>
-        <div className="divide-y divide-slate-50">
+        <div className="divide-y divide-stone-100">
           {loading ? (
             <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">Loading activities...</div>
           ) : grouped[activeCategory].length === 0 ? (
@@ -96,14 +98,16 @@ export default function Activities() {
             grouped[activeCategory].map(activity => {
               const TypeIcon = TYPE_ICON[activity.type];
               return (
-                <motion.div
+                <motion.button
+                  type="button"
                   key={activity.id}
+                  aria-label={`Open ${activity.type} for ${activity.prospectName}`}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   onClick={() => navigate(`/leads/${activity.leadId}`)}
-                  className="px-6 py-4 flex items-center justify-between gap-4 hover:bg-slate-50 cursor-pointer transition-all group"
+                  className="group flex min-h-[76px] w-full items-center justify-between gap-3 px-4 py-4 text-left transition-colors hover:bg-[#FFFCF8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#978C21] sm:gap-4 sm:px-5"
                 >
-                  <div className="flex items-center gap-4 min-w-0">
+                  <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                     <div className="w-9 h-9 rounded-sm bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
                       <TypeIcon className="w-4 h-4 text-slate-400" />
                     </div>
@@ -112,13 +116,13 @@ export default function Activities() {
                       <p className="text-[10px] text-slate-400 uppercase tracking-widest">{activity.type} &middot; {new Date(activity.dueDate).toLocaleDateString()}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex shrink-0 items-center gap-2 sm:gap-3">
                     <span className={cn("px-2 py-1 rounded-sm text-[9px] font-black uppercase tracking-widest border", getLeadStatusColorClasses(activity.status))}>
                       {activity.status}
                     </span>
                     <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-[#978C21] transition-all" />
                   </div>
-                </motion.div>
+                </motion.button>
               );
             })
           )}
