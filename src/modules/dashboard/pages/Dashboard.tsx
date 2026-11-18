@@ -512,6 +512,8 @@ function AdminWorkspaceActions() {
     { label: 'Users & Roles', description: 'Manage accounts and effective access', href: '/users' },
     { label: 'Teams & Hierarchy', description: 'Review reporting lines and structure', href: '/team/organogram' },
     { label: 'Lead Intake', description: 'Import and validate incoming records', href: '/leads/upload' },
+    { label: 'Lead Pool', description: 'Review unassigned leads and distribution', href: '/leads/all' },
+    { label: 'Assignment Rules', description: 'Review lead routing and assignment settings', href: '/settings/system?tab=assignment' },
     { label: 'Audit Log', description: 'Review sensitive administrative events', href: '/audit-log' },
   ];
   return (
