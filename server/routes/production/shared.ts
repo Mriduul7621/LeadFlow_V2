@@ -962,6 +962,8 @@ export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<
     }
     const hasReports = new Set<string>();
     for (const user of users) {
+      const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
+      if (user.isActive === false || status === 'inactive') continue;
       const managerRef = String(user.managerId || user.manager_id || '');
       const manager = byKey.get(managerRef) || byKey.get(managerRef.toUpperCase());
       if (manager) hasReports.add(String(manager.id));
@@ -971,11 +973,10 @@ export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<
         .filter(user => {
           const manager = String(user.managerId || user.manager_id || '');
           const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
-          return callerKeys.has(manager) || (
-            manager && manager.toUpperCase() === String(caller.employee_id).toUpperCase()
-          )
-            ? user.isActive !== false && status !== 'inactive' && !hasReports.has(String(user.id))
-            : false;
+          const reportsToCaller = callerKeys.has(manager)
+            || manager.toUpperCase() === String(caller.employee_id).toUpperCase();
+          return reportsToCaller && user.isActive !== false
+            && status !== 'inactive' && !hasReports.has(String(user.id));
         })
         .map(user => String(user.id))
     );
