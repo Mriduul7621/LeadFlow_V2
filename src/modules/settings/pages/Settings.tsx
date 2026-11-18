@@ -1134,7 +1134,7 @@ export default function Settings() {
           <button 
             onClick={() => setActiveTab('overview')}
             className={cn(
-              "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+              "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
               activeTab === 'overview' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
             )}
           >
@@ -1144,7 +1144,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('dropdowns')}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'dropdowns' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -1155,7 +1155,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('formbuilder')}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -1166,7 +1166,7 @@ export default function Settings() {
             <button 
               onClick={() => setActiveTab('workflow')}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
