@@ -662,7 +662,7 @@ export default function DailyWorkbench() {
           <p className="hidden md:block text-[13px] text-stone-500 mt-2 leading-relaxed">Manage today's calls, meetings, follow-ups and tasks from one place.</p>
           <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {callerTeam.hasTeam && <HomeViewSwitch active="work" />}
           <OutboxIndicator />
           <button
@@ -776,12 +776,12 @@ export default function DailyWorkbench() {
       ) : (
         <>
           {/* Daily Summary */}
-          <section className="hidden rounded-xl border border-stone-200/80 bg-white p-5 shadow-sm md:block lg:p-6">
+          <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-5 lg:p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Daily Summary</h2>
               <span className="text-[11px] font-semibold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{todayYmd}</span>
             </div>
-            <div className={cn('grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3', canViewRoadshows ? 'lg:grid-cols-7' : 'lg:grid-cols-6')}>
+            <div className={cn('grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-3', canViewRoadshows ? 'lg:grid-cols-7' : 'lg:grid-cols-6')}>
               <SummaryCard label="Overdue Follow-ups" value={String(summary.overdue)} icon={AlertTriangle} variant="red" sub="Due before today" />
               <SummaryCard label="Calls Today" value={String(summary.callsToday)} icon={Phone} variant="blue" />
               <SummaryCard label="Meetings Today" value={String(summary.meetingsToday)} icon={Video} variant="orange" />
