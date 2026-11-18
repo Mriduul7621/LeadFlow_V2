@@ -478,8 +478,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
     canAccess,
   }, userRoleName);
-  const isSidebarItemActive = (path: string) =>
-    location.pathname === path || location.pathname.startsWith(`${path}/`);
+  const isSidebarItemActive = (path: string) => {
+    const [basePath, query] = path.split('?');
+    if (location.pathname === basePath) {
+      return query ? location.search.includes(query) : !location.search.includes('tab=');
+    }
+    return location.pathname.startsWith(`${basePath}/`);
+  };
 
   const handleLogout = () => {
     logout();
