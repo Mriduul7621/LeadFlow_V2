@@ -53,7 +53,7 @@ export default function AllLeads() {
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[] | null>(null);
-  const [poolTab, setPoolTab] = useState<LeadPoolTab>('unassigned');
+  const [poolTab, setPoolTab] = useState<LeadPoolTab>(isTeamLeadRole ? 'assigned' : 'unassigned');
   const [allUsers, setAllUsers] = useState<any[]>([]);
   // Admins / Managers retain their existing authorized routing pool.
   // Team Leads receive a narrower picker: self + ACTIVE direct reports only,
