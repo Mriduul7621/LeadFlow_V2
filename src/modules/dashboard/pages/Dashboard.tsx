@@ -530,6 +530,76 @@ function AdminWorkspaceActions() {
   );
 }
 
+function PipelineSnapshot({ metrics }: { metrics: DashboardMetrics | null }) {
+  const stages = ['New', 'Contacted', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted'];
+  const counts = metrics?.statusCounts;
+  const total = metrics?.totalLeads ?? 0;
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Pipeline Snapshot" desc="Lead distribution across the current sales stages" action={<Link to="/sales-pipeline" className="text-xs font-bold text-[#596B35] hover:underline">Open pipeline</Link>} />
+      <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+        {stages.map(stage => {
+          const count = Number(counts?.[stage] || 0);
+          const percent = total > 0 ? Math.min(100, Math.round((count / total) * 100)) : 0;
+          return (
+            <div key={stage} className="min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-xs font-semibold text-stone-600">{stage}</span>
+                <span className="shrink-0 text-xs font-black tabular-nums text-stone-800">{formatCount(count)}</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-stone-100">
+                <div className="h-full rounded-full bg-[#858515] transition-all" style={{ width: percent + '%' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-4 text-[10px] text-stone-400">{formatCount(total)} leads in your authorized visibility scope</p>
+    </section>
+  );
+}
+
+function AgentPerformanceTable({ rows, title, subtitle }: {
+  rows: DashboardMetrics['agentStats'];
+  title: string;
+  subtitle: string;
+}) {
+  if (!rows.length) return null;
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title={title} desc={subtitle} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-xs">
+          <thead className="bg-[#F8F7F2] text-[10px] font-black uppercase tracking-wider text-stone-500">
+            <tr>
+              <th className="px-3 py-3">Team member</th>
+              <th className="px-3 py-3 text-right">Assigned</th>
+              <th className="px-3 py-3 text-right">No call</th>
+              <th className="px-3 py-3 text-right">Follow-ups</th>
+              <th className="px-3 py-3 text-right">Converted</th>
+              <th className="px-3 py-3 text-right">Conversion</th>
+              <th className="px-3 py-3 text-right">Collected NCP</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {rows.map(row => (
+              <tr key={row.employeeId || row.name} className="hover:bg-[#F8F7F2]/70">
+                <td className="px-3 py-3 font-semibold text-stone-700">{row.name}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.assigned)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.noCall)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.followUp)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.converted)}</td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-[#596B35]">{row.conversion}</td>
+                <td className="px-3 py-3 text-right font-semibold tabular-nums text-stone-700">{formatMoney(row.collected)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 // ============================================================
 // Dashboard main component
 // ============================================================
@@ -539,11 +609,13 @@ export default function Dashboard() {
   const canCreateLead = canAccess('lead_generate', 'create');
   const roleCode = String(user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const isAdminRole = roleCode === 'ADMIN' || roleCode === 'SUPERADMIN';
+  const isManagerRole = roleCode === 'MANAGER';
+  const isTeamLeadRole = ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(roleCode);
   const workspaceHeader = isAdminRole
     ? { title: 'Admin Overview', subtitle: 'Governance, configuration and operational health', section: 'Platform Health' }
-    : roleCode === 'MANAGER'
+    : isManagerRole
       ? { title: 'Business Overview', subtitle: 'Managed-team performance, pipeline health and recovery priorities', section: 'Business Performance' }
-      : ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(roleCode)
+      : isTeamLeadRole
         ? { title: 'Team Overview', subtitle: 'Team workload, follow-up health and daily execution', section: 'Team Performance' }
         : { title: 'My Work', subtitle: 'Your assigned leads, next actions and personal progress', section: 'My Performance' };
   // Roadshow alerts are only rendered for users who may open the roadshow
@@ -1024,6 +1096,13 @@ export default function Dashboard() {
               roadshowCounts={roadshowCounts}
             />
           </section>}
+
+          {!isAdminRole && <PipelineSnapshot metrics={metrics} />}
+          {(isManagerRole || isTeamLeadRole) && <AgentPerformanceTable
+            rows={metrics?.agentStats ?? []}
+            title={isManagerRole ? 'Agent Performance' : 'Team Member Performance'}
+            subtitle={isManagerRole ? 'Execution and NCP contribution across your managed visibility scope' : 'Workload and conversion within your own team'}
+          />}
 
           {!isAdminRole && <section className="lf-recent-leads">
             <div className="lf-section-title">
