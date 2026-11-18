@@ -67,7 +67,7 @@ const ROLE_GROUPS: Record<string, SidebarGroup[]> = {
     ] },
     { title: 'INSIGHTS', items: [
       item('Analytics', 'Organization-wide performance insights', '/execution-intelligence', BarChart3),
-      item('Audit Log', 'Review administrative activity records', '/administration', ShieldCheck),
+      item('Audit Log', 'Review administrative activity records', '/audit-log', ShieldCheck),
     ] },
     { title: 'CONFIGURATION', items: [
       item('Status & Pipeline', 'Manage pipeline and status configuration', '/sales-pipeline', GitBranch),
