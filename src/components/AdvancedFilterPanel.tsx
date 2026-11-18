@@ -84,11 +84,16 @@ export default function AdvancedFilterPanel({ onFilterChange, allLeads, classNam
       // Load Users for assignedTo dropdown options
       try {
         const usersList = await userService.getAllUsers();
-        setUsers(usersList.map(u => ({
-          employeeId: u.employeeId,
-          name: u.name,
-          role: u.role
-        })));
+        setUsers(usersList
+          .filter(u => {
+            const role = String(u.roleName || u.roleCode || u.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            return role !== 'ADMIN' && role !== 'SUPERADMIN';
+          })
+          .map(u => ({
+            employeeId: u.employeeId,
+            name: u.name,
+            role: u.role
+          })));
       } catch (err) {
         console.error('Failed to load users for filter suggestions', err);
       }
