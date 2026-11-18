@@ -8,7 +8,7 @@
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
 **Phase 8 branch:** `ux/phase-8-roadshow-workspace`
 **Phase 9 branch:** `ux/phase-9-profile-settings`
-**Status:** Phases 1–9 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Status:** Phases 1–11 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -130,4 +130,16 @@ The changed files and branch commits were confirmed through GitHub. Automated te
 - Preserved all existing role/permission gates, server-side authorization, password re-verification and 10-minute Danger Zone lock lifecycle.
 - Preserved all destructive-action confirmation requirements, including the explicit `CLEAR_ALL` confirmation text, and retained existing service calls, validation, security policy values, workflow rules and operational limits.
 - No API, database, permission, security-policy or business-rule changes.
+
+
+## Phase 11 — Daily Workbench & Role-aware Workflow
+
+- Refined the Daily Workbench header, action layout, summary surfaces and execution queue with responsive spacing, warm-neutral borders and consistent rounded cards.
+- Kept Daily Summary visible on mobile instead of hiding it below the desktop breakpoint; summary metrics now use a compact two-column mobile layout.
+- Improved narrow-screen wrapping for the header actions while retaining the existing Team/My Work switch and outbox indicator.
+- Added visible keyboard-focus treatment to the refresh/calendar actions, KPI drill-down links, execution-queue controls and selected-item close control.
+- Improved touch target sizing for the queue's expandable work-item control and made the refresh action's purpose explicit to assistive technology.
+- Preserved the existing role-aware Team/My Work switch, team overview-derived self KPIs, feature/action permission gates, server-authoritative queue sources, Asia/Dhaka date handling, SLA/Lead Quality values, and scheduled activity/roadshow visibility.
+- Did not duplicate or alter the separate dashboard work in PR #144.
+- No API, database, permission, data-visibility, workflow or business-rule changes.
 
