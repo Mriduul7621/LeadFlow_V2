@@ -435,4 +435,17 @@ describe('HTML blueprint role workspaces', () => {
     assert.ok(api.includes('actor.full_name AS actor_name'));
     assert.ok(api.includes('target.full_name AS target_name'));
   });
+  it('deep-links Admin configuration and scopes the new palette away from Task Calendar', () => {
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    const shell = fs.readFileSync(path.join(process.cwd(), 'src/layouts/AppLayout.tsx'), 'utf-8');
+    const settings = fs.readFileSync(path.join(process.cwd(), 'src/modules/settings/pages/Settings.tsx'), 'utf-8');
+    const styles = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+    assert.ok(sidebar.includes("'/settings/system?tab=workflow'"));
+    assert.ok(sidebar.includes("'/settings/system?tab=dropdowns'"));
+    assert.ok(sidebar.includes("'/settings/system?tab=assignment'"));
+    assert.ok(settings.includes('useSearchParams'));
+    assert.ok(shell.includes('data-route={location.pathname}'));
+    assert.ok(styles.includes('main.leadflow-main:not([data-route="/task-calendar"])'));
+  });
+
 });
