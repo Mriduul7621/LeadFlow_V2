@@ -26,6 +26,7 @@ import path from 'node:path';
 import { _setTestPoolForTest, _resetPoolsForTest, closePool } from '../database/connection.js';
 import { getPGliteInstanceAsync, createPGlitePoolAsync } from '../database/pglitePool.js';
 import { up as defaultRoleAccess, down as revertDefaultRoleAccess } from '../database/migrations/045_default_role_access.js';
+import { up as narrowRmRoleGrants } from '../database/migrations/061_rm_role_grant_scope.js';
 import { applyDefaultRoleAccess } from '../database/roleAccessDefaults.js';
 
 const ROOT = process.cwd();
@@ -51,6 +52,7 @@ const ROLE_ROWS: Array<[string, number]> = [
   ['ADMIN', 1],
   ['CEO', 1],
   ['MANAGER', 2],
+  ['RM', 2],
   ['SM', 2],
   ['TEAM_LEAD', 3],
   ['BDM', 3],
@@ -188,6 +190,43 @@ describe('migration 045 — default role access', () => {
 
     // Unknown custom codes stay fail-closed.
     assert.deepEqual(await grantedCodes('MKTH'), [], 'a custom role receives no default grants');
+  });
+
+  it('A2. RM receives the Team Lead default, not Manager-only grants', async () => {
+    const rm = await grantedCodes('RM');
+    const teamLead = await grantedCodes('TEAM_LEAD');
+    assert.deepEqual(rm, teamLead, 'RM defaults must match TEAM_LEAD');
+    for (const forbidden of ['leads.transfer', 'leads.export', 'audit.view']) {
+      assert.ok(!rm.includes(forbidden), `RM must not receive ${forbidden} by default`);
+    }
+  });
+
+  it('A3. migration 061 narrows only an untouched legacy RM Manager matrix', async () => {
+    // Recreate the exact pre-061 state that migration 045 shipped for RM.
+    await pool.query(`DELETE FROM role_permissions rp USING roles r
+      WHERE rp.role_id = r.id AND UPPER(r.role_code) = 'RM'`);
+    await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed)
+      SELECT r.id, p.id, TRUE FROM roles r CROSS JOIN permissions p
+      WHERE UPPER(r.role_code) = 'RM' AND p.permission_code = ANY($1)`, [
+        // Previous RM default was the Manager set.
+        [
+          'dashboard.view','leads.view','leads.create','leads.edit','campaigns.view','products.view',
+          'roadshows.view','notifications.view','leads.assign','roadshows.create','roadshows.edit',
+          'teams.view','reports.view','leads.transfer','leads.export','users.view','departments.view',
+          'roadshows.report','audit.view'
+        ]
+      ]);
+    await narrowRmRoleGrants();
+    assert.deepEqual(await grantedCodes('RM'), await grantedCodes('TEAM_LEAD'));
+
+    // A manually curated matrix is not rewritten.
+    await pool.query(`DELETE FROM role_permissions rp USING roles r
+      WHERE rp.role_id = r.id AND UPPER(r.role_code) = 'RM'`);
+    await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed)
+      SELECT r.id, p.id, TRUE FROM roles r CROSS JOIN permissions p
+      WHERE UPPER(r.role_code) = 'RM' AND p.permission_code = 'leads.view'`);
+    await narrowRmRoleGrants();
+    assert.deepEqual(await grantedCodes('RM'), ['leads.view']);
   });
 
   it('B. an already-curated matrix is never overwritten', async () => {

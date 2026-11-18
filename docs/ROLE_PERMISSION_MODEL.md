@@ -270,3 +270,23 @@ admin-only.
 - Audit log reads (`GET /api/audit-logs`) remain authenticated-user on the
   mounted router; `audit.view` exists in the catalog for tightening later.
 - Manager Attention / Lead Quality — out of scope.
+
+
+## 8. RM default action scope review (migration 061)
+
+RM (Relationship Manager) is a first-line supervisor whose data visibility
+is `DownTeam` (self + reporting subtree), not department-wide. Its action
+defaults now match `TEAM_LEAD`, rather than inheriting the broader
+`MANAGER` set.
+
+RM keeps the field-execution capabilities plus lead assignment, team/report
+view and roadshow create/edit. It does not receive the Manager-only
+lead-transfer, lead-export or audit-log grants by default. This is a
+least-privilege default; an administrator can explicitly grant a capability
+where a particular RM job requires it.
+
+Migration 061 updates an existing RM role only when its complete current
+grant matrix exactly matches the previous shipped Manager default (all rows
+allowed, no extra or denied rows). Any manually curated or otherwise
+different RM matrix is left untouched. The migration does not alter
+MANAGER, SM, TEAM_LEAD, custom roles, user-level overrides or Data Visibility.
