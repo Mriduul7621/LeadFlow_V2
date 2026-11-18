@@ -7,7 +7,8 @@
 **Phase 6 branch:** `ux/phase-6-user-admin`
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
 **Phase 8 branch:** `ux/phase-8-roadshow-workspace`
-**Status:** Phases 1–8 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 9 branch:** `ux/phase-9-profile-settings`
+**Status:** Phases 1–9 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -93,8 +94,17 @@
 - Preserved the existing date-range calculations, lead-service queries and effective server-enforced data visibility scope, KPI calculations, drilldowns, exports and chart data.
 - No API, database, permission or business-rule changes.
 
+## Phase 9 — Profile & Personal Settings
+
+- Refined the page heading and personal settings cards with the shared warm-neutral surface system.
+- Improved input sizing and visible keyboard focus for profile and password forms.
+- Clarified the push reminder toggle as a distinct, keyboard-accessible setting control.
+- Preserved profile validation, password policy checks, existing API calls, authentication state updates and push subscription behavior.
+- Did not change administrator-only System Settings, security policies, data operations or permission configuration.
+- No API, database, permission or business-rule changes.
+
 ## Next UX phases
-1. Review system Settings and profile preferences without changing security-sensitive behavior.
+1. Review administrator-only System Settings with extra care around destructive actions, security policies and operational limits.
 2. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
 3. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
