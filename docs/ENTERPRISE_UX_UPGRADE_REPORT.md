@@ -118,3 +118,16 @@ The changed files and branch commits were confirmed through GitHub. Automated te
 - Updated historical migration tests to assert that migration 061 is the current registered tail while continuing to assert that their respective earlier migrations remain registered.
 - The integration test for migration 061 exercises the real migration against PGlite, including exact legacy-matrix narrowing and preservation of manually curated matrices.
 - CI must be rerun on this commit; no passing result is claimed until GitHub Actions completes.
+
+
+## Phase 10 — Admin System Settings
+
+- Refined the System Settings page header and tab navigation for narrow screens, with clearer spacing, wrapping and visible keyboard-focus treatment.
+- Added selected-state semantics to the Overview, Strategy Parameters, Form Builder and Workflow tabs.
+- Converted the settings-section overview cards into keyboard-operable controls while retaining their existing destinations and click behavior.
+- Standardised the overview section cards and critical-operation panels with responsive spacing, warm-neutral surfaces and clearer red warning boundaries.
+- Improved the responsive layout of the Danger Zone entry, password re-verification panel and read-only rule summary surfaces.
+- Preserved all existing role/permission gates, server-side authorization, password re-verification and 10-minute Danger Zone lock lifecycle.
+- Preserved all destructive-action confirmation requirements, including the explicit `CLEAR_ALL` confirmation text, and retained existing service calls, validation, security policy values, workflow rules and operational limits.
+- No API, database, permission, security-policy or business-rule changes.
+
