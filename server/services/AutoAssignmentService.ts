@@ -218,9 +218,13 @@ export function buildDemoAutoAssignCandidates(
   const pool = poolUserIds === null ? null : new Set(poolUserIds);
   // DZ-6: demo mirror of the dictionary terminal set.
   const terminal = new Set(getTerminalStatusNamesFallback().map(s => s.toLowerCase()));
-  const users = (fallbackStore.users as any[]).filter(
-    u => (pool === null || pool.has(u.id)) && demoUserIsActive(u)
-  );
+  const users = (fallbackStore.users as any[]).filter((u) => {
+    const role = String(u.roleCode || u.role || u.roleName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return (pool === null || pool.has(u.id))
+      && demoUserIsActive(u)
+      && role !== 'ADMIN'
+      && role !== 'SUPERADMIN';
+  });
   return users.map((u: any) => {
     const mine = (fallbackStore.leads as any[]).filter((l: any) => {
       const owner = String(l.assignedTo || '');
