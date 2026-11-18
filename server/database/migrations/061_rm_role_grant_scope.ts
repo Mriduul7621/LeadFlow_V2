@@ -57,7 +57,7 @@ async function replaceExactMatrix(fromCodes: string[], toCodes: string[]): Promi
        RETURNING role_id
      )
      SELECT count(DISTINCT role_id)::int AS updated_roles FROM inserted`,
-    [fromCodes, toCodes]
+    [[...fromCodes].sort(), [...toCodes].sort()]
   );
 }
 
