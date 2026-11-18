@@ -13,6 +13,9 @@ import {
   Plus,
   MoreHorizontal,
   Menu,
+  Users,
+  TrendingUp,
+  CalendarDays,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -42,20 +45,61 @@ interface MenuItem {
 }
 
 /**
- * The five primary destinations are organization-wide: `ANY_ROLE` ('*')
- * mirrors the route registry (featureRouteAccess.ts) so the menu and the
- * page gate can never disagree, and the role codes that live in the
- * database (EMPLOYEE, TEAM_LEAD, MANAGER, SBE, SM, CEO, custom codes) are
- * not silently locked out by a stale enum list. A configured
- * `menuAccess[path]` still wins over this default.
+ * Role-specific primary workspaces. These are navigation presets only:
+ * every item still passes through resolveMenuVisibility and the route's
+ * FeatureGate; server-side Action Permissions and Data Visibility remain
+ * authoritative.
  */
-const PRIMARY_NAV_ITEMS: MenuItem[] = [
-  { label: 'Home', icon: LayoutDashboard, path: '/', roles: [ANY_ROLE] },
-  { label: 'My Work', icon: Target, path: '/workbench', roles: [ANY_ROLE] },
-  { label: 'Add Lead', icon: Plus, path: '/leads/new', roles: [ANY_ROLE] },
-  { label: 'Leads', icon: ClipboardList, path: '/leads', roles: [ANY_ROLE] },
-  { label: 'More', icon: MoreHorizontal, path: '/more', roles: [ANY_ROLE] },
-];
+const sharedRole = [ANY_ROLE];
+const primaryItem = (label: string, icon: any, path: string): MenuItem => ({
+  label, icon, path, roles: sharedRole,
+});
+function getPrimaryNavItems(roleName: string): MenuItem[] {
+  const role = String(roleName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (role === 'ADMIN' || role === 'SUPERADMIN') {
+    return [
+      primaryItem('Overview', LayoutDashboard, '/'),
+      primaryItem('Leads', ClipboardList, '/leads'),
+      primaryItem('Users', Users, '/users'),
+      primaryItem('Analytics', TrendingUp, '/execution-intelligence'),
+      primaryItem('More', MoreHorizontal, '/more'),
+    ];
+  }
+  if (role === 'MANAGER') {
+    return [
+      primaryItem('Overview', LayoutDashboard, '/'),
+      primaryItem('Team', Users, '/team'),
+      primaryItem('Leads', ClipboardList, '/leads'),
+      primaryItem('Follow-up', Target, '/follow-up'),
+      primaryItem('More', MoreHorizontal, '/more'),
+    ];
+  }
+  if (role === 'TEAMLEAD' || role === 'TL') {
+    return [
+      primaryItem('Overview', LayoutDashboard, '/'),
+      primaryItem('My Team', Users, '/team'),
+      primaryItem('Follow-up', Target, '/follow-up'),
+      primaryItem('Add Lead', Plus, '/leads/new'),
+      primaryItem('More', MoreHorizontal, '/more'),
+    ];
+  }
+  if (role === 'AGENT' || role === 'EMPLOYEE') {
+    return [
+      primaryItem('My Work', Target, '/workbench'),
+      primaryItem('Add Lead', Plus, '/leads/new'),
+      primaryItem('Leads', ClipboardList, '/leads'),
+      primaryItem('Calendar', CalendarDays, '/task-calendar'),
+      primaryItem('More', MoreHorizontal, '/more'),
+    ];
+  }
+  return [
+    primaryItem('Home', LayoutDashboard, '/'),
+    primaryItem('My Work', Target, '/workbench'),
+    primaryItem('Add Lead', Plus, '/leads/new'),
+    primaryItem('Leads', ClipboardList, '/leads'),
+    primaryItem('More', MoreHorizontal, '/more'),
+  ];
+}
 const MORE_NAV_PATHS = [
   '/more', '/notifications', '/help', '/about', '/administration',
   '/settings', '/settings/system', '/settings/performance-diagnostics',
@@ -410,7 +454,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
   const isItemVisible = (item: MenuItem): boolean =>
     resolveMenuVisibility(userRoleName, matchedPermission, item);
-  const visiblePrimaryItems = PRIMARY_NAV_ITEMS.filter(isItemVisible);
+  const visiblePrimaryItems = getPrimaryNavItems(userRoleName).filter(isItemVisible);
   const isPrimaryItemActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
     if (path === '/workbench') return location.pathname === '/workbench';
@@ -434,7 +478,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const sidebarGroups = buildSidebarGroups({
     canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
     canAccess,
-  });
+  }, userRoleName);
   const isSidebarItemActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(`${path}/`);
 
