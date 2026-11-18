@@ -76,7 +76,12 @@ export default function AllLeads() {
   ] : directTeamMembers;
   const assignableUsers = isTeamLeadRole
     ? teamLeadAssignees
-    : allUsers.filter((u: any) => u.status !== 'Inactive');
+    : allUsers.filter((u: any) => {
+      const role = String(u.roleName || u.roleCode || u.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // Administration accounts are governance users, never lead owners or
+      // assignment targets. Keep this exclusion even when a user is active.
+      return u.status !== 'Inactive' && role !== 'ADMIN' && role !== 'SUPERADMIN';
+    });
   const pickerUsersFor = (currentEmployeeId: string) => {
     if (isTeamLeadRole) return assignableUsers;
     return currentEmployeeId && !assignableUsers.some((u: any) => u.employeeId === currentEmployeeId)
