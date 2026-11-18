@@ -939,6 +939,52 @@ export async function resolveAssignedTo(ref: any): Promise<{ userId: string; emp
   }
 }
 
+/**
+ * Team Lead routing is deliberately narrower than general Data Visibility:
+ * a Team Lead may keep a lead for themself or route it to an ACTIVE direct
+ * report only. RM is the legacy first-line Team Lead role code.
+ */
+export function isTeamLeadRole(caller: CallerDbInfo): boolean {
+  const role = String(caller.role_code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return role === 'TEAMLEAD' || role === 'RM' || role === 'TL';
+}
+
+/** Load the authenticated Team Lead's active direct reports once per write. */
+export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<Set<string>> {
+  if (!isTeamLeadRole(caller)) return new Set<string>();
+  if (!useDb()) {
+    const callerKeys = new Set([String(caller.id), String(caller.employee_id).toUpperCase()]);
+    return new Set(
+      (fallbackStore.users as any[])
+        .filter(user => {
+          const manager = String(user.managerId || user.manager_id || '');
+          const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
+          return callerKeys.has(manager) && user.isActive !== false && status !== 'inactive';
+        })
+        .map(user => String(user.id))
+    );
+  }
+  const result = await getPool().query(
+    `SELECT id
+       FROM users
+      WHERE manager_id = $1
+        AND COALESCE(is_active, TRUE) = TRUE`,
+    [caller.id]
+  );
+  return new Set((result.rows || []).map((row: any) => String(row.id)));
+}
+
+/** Extra ownership rule layered on top of the caller's normal visibility. */
+export function isTeamLeadAssignmentTargetAllowed(
+  target: { userId: string; employeeId: string } | null,
+  caller: CallerDbInfo,
+  directReportIds: ReadonlySet<string>
+): boolean {
+  if (!isTeamLeadRole(caller)) return true;
+  if (!target) return false; // Team Leads cannot unassign; choose self or a direct report.
+  return target.userId === caller.id || directReportIds.has(target.userId);
+}
+
 /** Check if caller is allowed to assign a lead to target user. */
 export function isAssignedToAllowed(target: { userId: string; employeeId: string } | null, visibility: any, caller: CallerDbInfo): boolean {
   if (!target) return true;
