@@ -61,6 +61,7 @@ export default function AllLeads() {
   const directTeamMembers = (teamOverview?.people || [])
     .filter(person =>
       !person.isSelf &&
+      person.tier === 'teamMember' &&
       String(person.managerEmployeeId || '').toUpperCase() === String(user?.employeeId || '').toUpperCase()
     )
     .map(person => ({
