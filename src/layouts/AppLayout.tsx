@@ -59,8 +59,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
   if (role === 'ADMIN' || role === 'SUPERADMIN') {
     return [
       primaryItem('Overview', LayoutDashboard, '/'),
-      primaryItem('Leads', ClipboardList, '/leads'),
-      primaryItem('Users', Users, '/users'),
+      primaryItem('Users & Roles', Users, '/users'),
       primaryItem('Analytics', TrendingUp, '/execution-intelligence'),
       primaryItem('More', MoreHorizontal, '/more'),
     ];
