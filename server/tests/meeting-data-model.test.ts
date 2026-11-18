@@ -297,9 +297,10 @@ describe('Meeting data model (PR B) — lead-less events, attendees, RSVP, remin
     return res.body.data || [];
   }
 
-  it('migration 055 is the registered tail: lead_id nullable, attendees table, reminder column; re-run is a no-op', async () => {
+  it('migration 055 is registered: lead_id nullable, attendees table, reminder column; re-run is a no-op (060 is the tail — preview variant: 061 held out)', async () => {
     assert.ok(MIGRATION_IDS.includes('055_meeting_data_model'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the migration tail (056 stays registered)');
+    // Preview variant: 061 held out — 060 is the tail here; the merge candidate restores 061.
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal', '060 is the current migration tail (056 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('055_meeting_data_model'), 'runner names migration 055');
     const col: any = await pool.query(
       `SELECT is_nullable FROM information_schema.columns WHERE table_name = 'scheduled_activities' AND column_name = 'lead_id'`

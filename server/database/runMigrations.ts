@@ -70,6 +70,9 @@ import { up as dangerZoneUnlocks } from "./migrations/057_danger_zone_unlocks.js
 import { up as userDesignationBackfill } from "./migrations/058_user_designation_backfill.js";
 import { up as formFieldsTimestamps } from "./migrations/059_form_fields_timestamps.js";
 import { up as stageRulesTerminal } from "./migrations/060_stage_rules_terminal.js";
+// PREVIEW VARIANT: 061_rm_role_grant_scope is intentionally NOT imported or
+// registered on this branch — the preview boot must not narrow any production
+// RM role. The merge candidate (release/ux-enterprise-rc1) registers it.
 
 import {
   loadLedger,
@@ -191,6 +194,7 @@ const migrations: Migration[] = [
 
     { id: "059_form_fields_timestamps", name: "Form Fields Timestamps (schema drift repair)", run: formFieldsTimestamps },
     { id: "060_stage_rules_terminal", name: "DZ-6 Stage Rules + Terminal Unification", run: stageRulesTerminal },
+    // PREVIEW VARIANT: 061_rm_role_grant_scope held out (see import note above).
 
 ];
 
@@ -230,15 +234,32 @@ export async function runMigrations(): Promise<MigrationRunResult> {
     if (ledger.createdNow && ledger.applied.size === 0) {
         // First boot with the ledger: adopt an already-current legacy
         // database instead of replaying 226 round trips of DDL.
-        result.adopted = await tryAdoptLegacySchema(MIGRATION_IDS);
+        // PREVIEW VARIANT: migration 061 is unregistered on this branch, so
+        // the exclusion below is currently a no-op and adoption records the
+        // full registered set. The merge candidate restores 061, which has
+        // no schema sentinel and must stay pending until after adoption.
+        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope");
+        result.adopted = await tryAdoptLegacySchema(adoptionIds);
         if (result.adopted) {
             console.log(
-                `✅ Schema ledger adopted ${MIGRATION_IDS.length} existing migrations (no DDL replayed)`
+                `✅ Schema ledger adopted ${adoptionIds.length} existing migrations; the pending pass below runs anything still unrecorded`
             );
-            result.upToDate = true;
-            result.durationMs = Date.now() - startedAt;
-            return result;
+            // No early return: the locked pending pass below re-reads the
+            // ledger and runs anything genuinely unrecorded (nothing after
+            // a clean adoption on this variant).
         }
+    }
+
+    if (result.adopted) {
+        // Refresh the applied set after adoption: `ledger` was snapshotted
+        // BEFORE adoption, so computing `pending` from it would list every
+        // adopted migration as pending again (the "Applying N pending" log
+        // would claim a full replay while the locked pass below only runs
+        // what is genuinely unrecorded — nothing after a clean adoption on
+        // this preview variant).
+        // The refresh mutates the ledger snapshot so the `pending` line
+        // below keeps its exact ledger-gated form (source-guarded by D2).
+        ledger.applied = await readAppliedIds();
     }
 
     const pending = migrations.filter(m => !ledger.applied.has(m.id));

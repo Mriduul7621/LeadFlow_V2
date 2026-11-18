@@ -76,6 +76,7 @@ export default function FollowUpStrategy() {
   const bucketFromUrl = searchParams.get('bucket');
   const [active, setActive] = useState<Bucket>(isValidBucket(bucketFromUrl) ? bucketFromUrl : 'overdue');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [data, setData] = useState<FollowUpQueueResult | null>(null);
 
   // Keep the selected bucket in the URL so dashboard deep links
@@ -94,10 +95,17 @@ export default function FollowUpStrategy() {
 
   const load = useCallback(async (bucket: Bucket) => {
     setLoading(true);
+    setLoadError(false);
     try {
       const result = await leadService.getFollowUpQueue({ bucket, limit: 100 });
       setData(result);
     } catch (err: any) {
+      setLoadError(true);
+      // Clear stale data: without this, a failed bucket switch (or refresh)
+      // leaves the previous bucket's items on screen under the newly selected
+      // tab, with only a transient toast as signal. Clearing makes the error
+      // banner (rendered when loadError && !data) show with its retry action.
+      setData(null);
       toast.error(err?.message || 'Could not load follow-up queue');
     } finally {
       setLoading(false);
@@ -108,24 +116,24 @@ export default function FollowUpStrategy() {
     void load(active);
   }, [active, load]);
 
-  const counts = data?.counts || { overdue: 0, today: 0, upcoming: 0, all: 0 };
-  const tabs: Array<{ id: Bucket; label: string; icon: typeof Clock; count: number }> = [
-    { id: 'overdue', label: 'Overdue', icon: AlertTriangle, count: counts.overdue },
-    { id: 'today', label: 'Due Today', icon: Clock, count: counts.today },
-    { id: 'upcoming', label: 'Upcoming', icon: Calendar, count: counts.upcoming },
+  const counts = data?.counts || null;
+  const tabs: Array<{ id: Bucket; label: string; icon: typeof Clock; count: number | null }> = [
+    { id: 'overdue', label: 'Overdue', icon: AlertTriangle, count: counts?.overdue ?? null },
+    { id: 'today', label: 'Due Today', icon: Clock, count: counts?.today ?? null },
+    { id: 'upcoming', label: 'Upcoming', icon: Calendar, count: counts?.upcoming ?? null },
   ];
 
   return (
-    <div className="space-y-8 pb-24 bg-white font-sans">
+    <div className="space-y-6 pb-24 bg-[#FDFBF7] font-sans">
       <BackButton fallback="/" />
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-5 border-b border-stone-200 pb-6">
         <div className="flex items-center gap-5">
-          <div className="w-14 h-14 bg-[#F9F9F4] rounded-sm flex items-center justify-center text-[#978C21] border border-slate-100">
+          <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-[#978C21] border border-stone-200">
             <History className="w-7 h-7" />
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-800">Follow-up Queue</h1>
-            <p className="text-slate-400 text-[10px] uppercase tracking-[0.25em] mt-2 italic">
+            <p className="text-stone-500 text-xs mt-1">
               Asia/Dhaka · server visibility · {data?.todayDate || '—'}
             </p>
           </div>
@@ -133,7 +141,7 @@ export default function FollowUpStrategy() {
         <button
           type="button"
           onClick={() => void load(active)}
-          className="inline-flex items-center gap-2 px-4 py-2 border border-slate-100 text-[11px] font-semibold uppercase tracking-widest text-slate-500 hover:text-[#978C21]"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm font-semibold text-stone-600 transition hover:border-[#978C21]/50 hover:text-[#706817] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]"
         >
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
@@ -145,31 +153,38 @@ export default function FollowUpStrategy() {
             key={tab.id}
             type="button"
             onClick={() => selectBucket(tab.id)}
+            aria-pressed={active === tab.id}
             className={cn(
-              'p-5 border text-left transition-all',
-              active === tab.id ? 'border-[#978C21] bg-[#978C21]/5' : 'border-slate-100 hover:border-slate-200'
+              'rounded-xl border bg-white p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2',
+              active === tab.id ? 'border-[#978C21] bg-[#978C21]/5 shadow-sm' : 'border-stone-200 hover:border-[#978C21]/40'
             )}
           >
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+              <span className="text-xs font-semibold text-stone-600 flex items-center gap-2">
                 <tab.icon className="w-4 h-4 text-[#978C21]" />
                 {tab.label}
               </span>
-              <span className="text-2xl font-black italic text-slate-800">{tab.count}</span>
+              <span className="text-2xl font-bold tabular-nums text-stone-900">{tab.count ?? '—'}</span>
             </div>
           </button>
         ))}
       </div>
 
-      {loading ? (
-        <div className="flex justify-center py-16">
+      {loadError && !data ? (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center">
+          <p className="text-sm font-semibold text-amber-900">We could not load your follow-up queue.</p>
+          <p className="mt-1 text-xs text-amber-800">Your follow-up counts are unavailable. Try again to refresh the queue.</p>
+          <button type="button" onClick={() => void load(active)} className="mt-4 rounded-lg bg-[#978C21] px-4 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">Try again</button>
+        </div>
+      ) : loading ? (
+        <div className="flex justify-center py-16" aria-label="Loading follow-up queue" role="status">
           <div className="w-10 h-10 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin" />
         </div>
       ) : (
         <div className="space-y-3">
           {(data?.items || []).length === 0 ? (
-            <div className="text-center py-16 text-slate-400 text-[11px] uppercase tracking-widest border border-dashed border-slate-200">
-              No {active} follow-ups in your visibility
+            <div className="rounded-xl border border-dashed border-stone-300 bg-white py-16 text-center text-sm text-stone-500">
+              No {active} follow-ups found
             </div>
           ) : (
             (data?.items || []).map(item => (

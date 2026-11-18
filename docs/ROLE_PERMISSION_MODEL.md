@@ -83,7 +83,7 @@ every code below is enforced server-side on the mounted router.
 | Leads | Assign | `leads.assign` | Normal assignment, reassignment, and explicit unassignment on `POST /leads`; assigned rows in bulk import; scheduled-activity assignee |
 | Leads | Transfer | `leads.transfer` | Alternative gate for an existing-owner reassignment on `POST /leads` and bulk-import updates; server Data Visibility/target-scope checks still apply, so it never creates cross-scope access |
 | Leads | Import | `leads.import` | `POST /leads/bulk` (bulk upload) |
-| Leads | Export | `leads.export` | UI export gating — export is a **client-side download** over visibility-filtered data; no dedicated server export endpoint exists |
+| Leads | Export | `leads.export` | `POST /leads/export` (server-built .xlsx workbook; scope `own`/`team`/`teamwise`, 10,000-row cap) and `GET /leads/export/options`; every successful export is audit-logged |
 | Users | Create | `users.create` | `POST /api/users` |
 | Users | Edit | `users.edit` | `PUT /api/users/:id` (employee details, activate/deactivate via status; inline password changes are rejected for non-admin callers) |
 | Users | Delete | `users.delete` | `DELETE /api/users/:id` |
@@ -159,9 +159,14 @@ Other preserved behavior:
   (`upload_raw_csv_xlsx`, `delete_destroy_leads`, `reassign_global_leads`,
   …) to canonical codes.
 
-## 6. Role migration behavior (no DB migration required)
+## 6. Role migration behavior
 
-**No schema or data migration ships with this PR**, because:
+**One data migration ships with the enterprise UX release:** migration 061
+narrows the RM default action grants from the MANAGER set to the TEAM_LEAD
+set (see §11). It rewrites an existing RM role matrix only when it exactly
+matches the old MANAGER defaults; manually curated matrices are untouched.
+No *new* permission code was invented for this release, and no schema
+migration ships with it:
 
 - Every exposed code already exists (`permissions` is seeded by migration
   025, re-applied idempotently on boot). No new codes were invented.
@@ -206,14 +211,14 @@ toggling one action never mutates its siblings. `Edit` never auto-grants
 (`Organization`), every action. Role permission matrix editing stays
 admin-only.
 
-**Manager (e.g. `MANAGER`, DownTeam)** — typical grants:
+**Manager (e.g. `MANAGER`, FullTeam)** — typical grants:
 
 - Feature Access: Dashboard, Daily Workbench, Activities, Task Calendar,
   Follow-up Queue, Lead Tracking, Add New Lead, All Leads, Team.
-- Data Visibility: `DownTeam`.
+- Data Visibility: `FullTeam`.
 - Actions: `dashboard.view`, `leads.view/create/edit/assign/import/export`;
   typically NOT `leads.delete`, `users.*`, `roles.*`, `settings.manage`.
-- Effect: manages the team's pipeline, sees team data, cannot administer
+- Effect: manages the team's pipeline, sees department-wide data, cannot administer
   users/roles/departments even with the Users module visible.
 
 **Relationship Officer / Agent (e.g. `EMPLOYEE`, Own)** — typical grants:
@@ -262,11 +267,35 @@ admin-only.
 - Attach `users.view` / `roles.view` / `departments.view` / `teams.view` /
   `users.activate` / `users.lock` to the mounted API once the shared lookup
   reads get role-scoped variants.
-- `leads.export`: consider a server-side export endpoint so the export
-  action is enforced where the bytes are produced.
 - Introduce a dedicated canonical password-reset / credential-management
   permission (new migration) so the admin reset can move off
   `requireAdmin` onto an explicitly grantable code.
 - Audit log reads (`GET /api/audit-logs`) remain authenticated-user on the
   mounted router; `audit.view` exists in the catalog for tightening later.
 - Manager Attention / Lead Quality — out of scope.
+
+
+## 11. RM default action scope review (migration 061)
+
+RM (Relationship Manager) is a first-line supervisor whose data visibility
+is `DownTeam` (self + reporting subtree), not department-wide. Its action
+defaults now match `TEAM_LEAD`, rather than inheriting the broader
+`MANAGER` set.
+
+RM keeps the field-execution capabilities plus lead assignment, team/report
+view and roadshow create/edit. It does not receive the six Manager-only
+grants by default: `leads.transfer`, `leads.export`, `users.view`,
+`departments.view`, `roadshows.report`, `audit.view`. Of these,
+`leads.transfer`, `leads.export`, and `roadshows.report` are enforced
+server-side on the mounted router, so losing them has immediate effect;
+`users.view`, `departments.view`, and `audit.view` are currently unenforced
+on the mounted router (see §4 and §10) but remain in the catalog for the
+identity API and future tightening. This is a least-privilege default; an
+administrator can explicitly grant a capability where a particular RM job
+requires it.
+
+Migration 061 updates an existing RM role only when its complete current
+grant matrix exactly matches the previous shipped Manager default (all rows
+allowed, no extra or denied rows). Any manually curated or otherwise
+different RM matrix is left untouched. The migration does not alter
+MANAGER, SM, TEAM_LEAD, custom roles, user-level overrides or Data Visibility.

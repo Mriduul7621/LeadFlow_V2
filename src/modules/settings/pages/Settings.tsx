@@ -1118,8 +1118,8 @@ export default function Settings() {
   ].filter(section => section.allowed);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 pb-20">
-      <div className="flex items-center justify-between">
+    <div className="max-w-6xl mx-auto space-y-6 sm:space-y-8 pb-16 sm:pb-20">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 bg-[#978C21]/5 rounded-sm border border-[#978C21]/10 flex items-center justify-center text-[#978C21]">
             <SettingsIcon className="w-6 h-6" />
@@ -1130,11 +1130,12 @@ export default function Settings() {
           </div>
         </div>
 
-        <div className="flex gap-2 bg-slate-50 p-1 rounded-sm border border-slate-100 italic">
+        <div className="flex flex-wrap gap-1.5 bg-[#FBFAF8] p-1.5 rounded-xl border border-slate-200/80">
           <button 
             onClick={() => setActiveTab('overview')}
+            aria-pressed={activeTab === 'overview'}
             className={cn(
-              "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+              "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
               activeTab === 'overview' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
             )}
           >
@@ -1143,8 +1144,9 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('dropdowns')}
+            aria-pressed={activeTab === 'dropdowns'}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'dropdowns' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -1154,8 +1156,9 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('formbuilder')}
+            aria-pressed={activeTab === 'formbuilder'}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -1165,8 +1168,9 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('workflow')}
+            aria-pressed={activeTab === 'workflow'}
               className={cn(
-                "px-5 py-2.5 text-sm font-medium rounded-lg transition-all",
+                "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
               )}
             >
@@ -1210,8 +1214,16 @@ export default function Settings() {
                   {sections.map((section, idx) => (
                     <div 
                       key={section.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setActiveSection(section.id)}
-                      className="bg-white p-8 rounded-sm border border-slate-100 flex items-center justify-between group cursor-pointer hover:border-[#978C21]/30 transition-all shadow-sm italic"
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setActiveSection(section.id);
+                        }
+                      }}
+                      className="bg-white p-5 sm:p-7 rounded-xl border border-slate-200/80 flex items-center justify-between group cursor-pointer hover:border-[#978C21]/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2 transition-all"
                     >
                       <div className="flex items-center gap-5">
                         <div className="p-4 bg-slate-50 rounded-sm group-hover:bg-[#978C21]/5 transition-colors border border-slate-50">
@@ -1228,7 +1240,7 @@ export default function Settings() {
                   
                   {isSystemAdmin && (
                     <div className="pt-6 space-y-4">
-                      <div className="bg-white rounded-[12px] border border-stone-100 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                      <div className="bg-white rounded-xl border border-slate-200/80 p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                         <div className="flex items-center gap-4">
                           <div className="w-10 h-10 rounded-[10px] bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600">
                             <Globe className="w-5 h-5" />
@@ -1317,7 +1329,7 @@ export default function Settings() {
                           {slaEnabled ? 'On' : 'Off'}
                         </label>
                       </div>
-                      <div className="bg-red-50/20 rounded-sm border border-red-100 p-8 italic">
+                      <div className="bg-red-50/30 rounded-xl border border-red-200 p-5 sm:p-7">
                         <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                            <div className="p-4 bg-red-50 text-red-500 rounded-sm border border-red-100">
@@ -2265,7 +2277,7 @@ export default function Settings() {
                 <motion.div
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  className="bg-white p-10 rounded-sm border border-red-100 shadow-sm space-y-8 italic text-left"
+                  className="bg-white p-5 sm:p-8 rounded-xl border border-red-200 shadow-sm space-y-6 sm:space-y-8 text-left"
                 >
                   <div className="flex items-center justify-between border-b border-slate-50 pb-8">
                     <div className="flex items-center gap-4">
@@ -2312,7 +2324,7 @@ export default function Settings() {
                       </button>
                     </div>
                   ) : dzState === 'locked' ? (
-                    <div className="p-8 bg-red-50/50 rounded-sm border border-red-100 space-y-6">
+                    <div className="p-5 sm:p-7 bg-red-50/50 rounded-xl border border-red-200 space-y-5 sm:space-y-6">
                       <div className="flex items-start gap-3">
                         <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
                         <div>
@@ -2346,7 +2358,7 @@ export default function Settings() {
                     </div>
                   ) : dzOverview ? (
                     <div className="space-y-8">
-                      <div className="p-8 bg-[#3C3C3C] rounded-sm space-y-4">
+                      <div className="p-5 sm:p-7 bg-[#3C3C3C] rounded-xl space-y-4">
                         <h4 className="text-[11px] font-black uppercase tracking-widest text-red-300">These never change — not even here</h4>
                         <ul className="space-y-2">
                           {dzOverview.invariants.map((line, i) => (
@@ -2451,7 +2463,7 @@ export default function Settings() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
+            className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden"
           >
             <div className="p-10 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div className="space-y-4 flex-1 max-w-md">
@@ -2727,7 +2739,7 @@ export default function Settings() {
               </div>
             )}
 
-            <div className="p-10 space-y-8">
+            <div className="p-5 sm:p-8 space-y-8">
               {['Identity', 'Location', 'Business', 'Additional'].map(section => {
                 const fields = formFields
                   .filter(f => f.section === section)
@@ -2799,7 +2811,7 @@ export default function Settings() {
             exit={{ opacity: 0, y: -10 }}
             className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
           >
-            <div className="p-10 border-b border-slate-50 bg-[#FBFAF8]">
+            <div className="p-5 sm:p-8 border-b border-slate-200/70 bg-[#FBFAF8]">
               <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Status Pipeline & Workflow Rules</h5>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
                 For each status, control which statuses a lead can move to next, and what information is required to enter that status.
@@ -2807,7 +2819,7 @@ export default function Settings() {
               </p>
             </div>
 
-            <div className="p-10 space-y-6">
+            <div className="p-5 sm:p-8 space-y-6">
               {allStatuses.map(status => {
                 const rule = getRuleForStatus(status);
                 const isRestricted = !!(rule?.allowedNextStatuses && rule.allowedNextStatuses.length > 0);
