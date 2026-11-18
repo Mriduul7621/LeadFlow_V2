@@ -220,7 +220,7 @@ export default function LeadUpload() {
       };
       reader.readAsArrayBuffer(file);
     } else {
-      toast.error('Invalid protocol. Please inject Excel or CSV format.');
+      toast.error('Please choose an .xlsx or .csv file.');
     }
   };
 
@@ -513,7 +513,7 @@ export default function LeadUpload() {
                     onClick={handleUpload}
                     disabled={processing || validating || fullData.length === 0}
                     className={cn(
-                      'w-full py-6 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-[0.4em] transition-all rounded-sm shadow-xl flex items-center justify-center gap-4 group italic',
+                      'flex min-h-12 w-full items-center justify-center gap-3 rounded-lg bg-slate-900 px-4 py-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2',
                       (processing || validating || fullData.length === 0) && 'opacity-60 cursor-not-allowed'
                     )}
                   >
@@ -525,20 +525,20 @@ export default function LeadUpload() {
          </div>
 
          <div className="space-y-6">
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm group">
+            <div className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
                <div className="flex items-center gap-4 mb-8">
                   <div className="w-10 h-10 rounded-sm bg-slate-50 flex items-center justify-center text-slate-400 group-hover:text-amber-500 transition-colors">
                      <AlertCircle className="w-6 h-6" />
                   </div>
-                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">Injection Constraints</h4>
+                  <h4 className="text-sm font-semibold text-brand-text">Upload requirements</h4>
                </div>
                 <ul className="space-y-6">
                   {[
-                     { label: 'Protocols', val: 'XLSX, CSV' },
-                     { label: 'Max Payload', val: '5,000 Entities' },
-                     { label: 'Mandatory', val: 'Name, Phone' },
+                     { label: 'File types', val: 'XLSX, CSV' },
+                     { label: 'Maximum rows', val: '5,000 leads' },
+                     { label: 'Required fields', val: 'Name, Phone' },
                      { label: 'Assigned To', val: 'Active Employee ID' },
-                     { label: 'Statuses', val: 'Configured Options' }
+                     { label: 'Statuses', val: 'Configured options' }
                   ].map((item, i) => (
                      <li key={i} className="flex justify-between items-end border-b border-slate-50 pb-2">
                         <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{item.label}</span>
@@ -548,11 +548,11 @@ export default function LeadUpload() {
                </ul>
             </div>
 
-            <div className="bg-[#3C3C3C] rounded-sm p-8 shadow-xl relative overflow-hidden">
+            <div className="relative overflow-hidden rounded-xl bg-[#3C3C3C] p-5 shadow-sm sm:p-6">
                <div className="relative z-10">
                   <div className="flex items-center gap-4 mb-8">
                      <ShieldCheck className="w-6 h-6 text-[#978C21]" />
-                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Snapshot Integrity</h4>
+                     <h4 className="text-sm font-semibold text-white">How imports work</h4>
                   </div>
                   <p className="text-[11px] font-black text-slate-400 leading-relaxed italic uppercase tracking-tighter">
                      Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
@@ -561,9 +561,9 @@ export default function LeadUpload() {
                <BarChart3 className="absolute -bottom-6 -right-6 w-32 h-32 text-white/5 rotate-12" />
             </div>
 
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm">
+            <div className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
                <div className="flex items-center justify-between mb-6">
-                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Database Sync</span>
+                  <span className="text-xs font-semibold text-stone-600">Database save</span>
                   <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
                </div>
                <p className="text-[11px] font-black text-slate-500 leading-relaxed italic uppercase tracking-tight">
