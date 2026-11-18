@@ -133,6 +133,9 @@ import {
   getCallerDbInfo,
   getFollowUpStatusValues,
   hasPermissionCode,
+  getTeamLeadDirectReportIds,
+  isTeamLeadAssignmentTargetAllowed,
+  isTeamLeadRole,
   isAssignedToAllowed,
   isCanonicalLowerUuid,
   isLeadAccessible,
@@ -1319,6 +1322,9 @@ router.post('/leads', requireAuth, async (req: any, res) => {
     // marker distinguishes an ownership action from a demographic edit.
     const preserveExistingAssignment = existingLead && payload._preserveAssignment === true;
     const assignmentRequested = !preserveExistingAssignment && Object.prototype.hasOwnProperty.call(payload, 'assignedTo');
+    const teamLeadDirectReportIds = isTeamLeadRole(caller) && (!existingLead || assignmentRequested)
+      ? await getTeamLeadDirectReportIds(caller)
+      : new Set<string>();
     const existingLeadIsDbRow = Boolean(existingLead && Object.prototype.hasOwnProperty.call(existingLead, 'assigned_to'));
     let targetAssigned: { userId: string; employeeId: string } | null = null;
     if (assignmentRequested) {
@@ -1383,10 +1389,15 @@ router.post('/leads', requireAuth, async (req: any, res) => {
     const explicitAssigneeSupplied = assignmentRequested && clean(payload.assignedTo) !== '';
     if (!existingLead && !explicitAssigneeSupplied) {
       const pick = await resolveAutoAssignment(caller, visibility);
-      if (pick && pick.userId !== caller.id && isAssignedToAllowed(pick, visibility, caller)) {
+      if (pick && pick.userId !== caller.id && isAssignedToAllowed(pick, visibility, caller)
+        && isTeamLeadAssignmentTargetAllowed(pick, caller, teamLeadDirectReportIds)) {
         autoAssignPick = pick;
         targetAssigned = { userId: pick.userId, employeeId: pick.employeeId };
       }
+    }
+
+    if (assignmentRequested && !isTeamLeadAssignmentTargetAllowed(targetAssigned, caller, teamLeadDirectReportIds)) {
+      return sendJson(res, 403, { success: false, message: 'Team Leads can assign leads only to themselves or their own active direct team members.' });
     }
 
     if (assignmentRequested && !isAssignedToAllowed(targetAssigned, visibility, caller)) {
@@ -1940,6 +1951,10 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       return sendJson(res, 403, { success: false, message: 'Your account was not found.' });
     }
     const visibility = await resolveCallerVisibility(caller);
+    // Resolve the Team Lead's direct reports once for the whole import batch.
+    const teamLeadDirectReportIds = isTeamLeadRole(caller)
+      ? await getTeamLeadDirectReportIds(caller)
+      : new Set<string>();
 
     // Permission checks: fetched ONCE for the whole request (never per row)
     // and in ONE parallel batch — the five codes are independent, so this is
@@ -2032,6 +2047,9 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       // Assignment authorization is finalized after duplicate/existing-lead
       // planning below: a transfer of an existing owner may use
       // leads.transfer, while new assignment still requires leads.assign.
+      if (assigned && !isTeamLeadAssignmentTargetAllowed(assigned, caller, teamLeadDirectReportIds)) {
+        rowErrors.push(`Cannot assign to "${row.assignedTo}" - Team Leads may assign only to themselves or their own active direct team members`);
+      }
       if (assigned && !isAssignedToAllowed(assigned, visibility, caller)) {
         rowErrors.push(`Cannot assign to "${row.assignedTo}" - outside your authorized scope`);
       }
