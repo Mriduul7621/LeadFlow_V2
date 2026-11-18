@@ -381,6 +381,10 @@ describe('Administration users are excluded from lead ownership', () => {
   it('filters Administration accounts out of lead assignee pickers', () => {
     const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/leads/pages/AllLeads.tsx'), 'utf-8');
     assert.ok(page.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+    const sharedFilter = fs.readFileSync(path.join(process.cwd(), 'src/modules/shared/components/AdvancedFilterPanel.tsx'), 'utf-8');
+    const legacyFilter = fs.readFileSync(path.join(process.cwd(), 'src/components/AdvancedFilterPanel.tsx'), 'utf-8');
+    assert.ok(sharedFilter.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+    assert.ok(legacyFilter.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
   });
 
   it('rejects Administration accounts in manual assignment and bulk import', () => {
