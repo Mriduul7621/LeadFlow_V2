@@ -3,7 +3,8 @@
 **Foundation branch:** `ux/enterprise-role-based-redesign`
 **Phase 3 branch:** `ux/phase-3-lead-update-workflow`
 **Phase 4 branch:** `ux/phase-4-follow-up-queue`
-**Status:** Phases 1–4 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Phase 5 branch:** `ux/phase-5-task-calendar`
+**Status:** Phases 1–5 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -65,10 +66,18 @@
 - Preserved the existing server query, bucket selection, URL synchronization, row navigation, result limit, and server-side visibility rules.
 - No API, database, permission, or business-rule changes.
 
+## Phase 5 — Task Calendar
+
+- Updated the calendar page heading and primary action to use clearer, more consistent warm-neutral styling.
+- Improved view-mode control sizing, selected-state semantics, and visible keyboard focus.
+- Distinguished partial calendar-data failures from a genuinely empty calendar: when either scheduled activities or roadshows cannot be loaded, the page now shows a warning that the calendar may be incomplete and offers a retry action.
+- Preserved server-backed activity/roadshow queries, calendar ranges, filters, event forms, attendee/RSVP flows, completion/cancellation actions, and permission checks.
+- No API, database, permission, or business-rule changes.
+
 ## Next UX phases
 1. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
 2. Refine User Management, Roles & Access, hierarchy and team administration.
-3. Review analytics, campaigns, roadshows, task calendar and settings.
+3. Review analytics, campaigns, roadshows and settings.
 4. Run automated tests, build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
