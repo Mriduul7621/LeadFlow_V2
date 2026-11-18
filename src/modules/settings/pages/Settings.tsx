@@ -1133,6 +1133,7 @@ export default function Settings() {
         <div className="flex flex-wrap gap-1.5 bg-[#FBFAF8] p-1.5 rounded-xl border border-slate-200/80">
           <button 
             onClick={() => setActiveTab('overview')}
+            aria-pressed={activeTab === 'overview'}
             className={cn(
               "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
               activeTab === 'overview' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
@@ -1143,6 +1144,7 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('dropdowns')}
+            aria-pressed={activeTab === 'dropdowns'}
               className={cn(
                 "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'dropdowns' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
@@ -1154,6 +1156,7 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('formbuilder')}
+            aria-pressed={activeTab === 'formbuilder'}
               className={cn(
                 "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'formbuilder' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
@@ -1165,6 +1168,7 @@ export default function Settings() {
           {(isSystemAdmin || canAccess('admin_settings', 'configure_global_metadata')) && (
             <button 
               onClick={() => setActiveTab('workflow')}
+            aria-pressed={activeTab === 'workflow'}
               className={cn(
                 "px-4 py-2.5 text-sm font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2",
                 activeTab === 'workflow' ? "bg-white text-brand-text shadow-sm" : "text-slate-400 hover:text-slate-600"
