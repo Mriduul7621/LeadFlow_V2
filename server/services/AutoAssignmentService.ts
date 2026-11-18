@@ -177,10 +177,12 @@ export async function loadAutoAssignCandidates(
               (COUNT(l.id) FILTER (WHERE l.current_status <> ALL($2::text[])))::int AS open_leads,
               MAX(l.assigned_at) AS last_assigned_at
          FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
          LEFT JOIN leads l
            ON l.assigned_to = u.id AND l.is_deleted = FALSE
         WHERE ($1::uuid[] IS NULL OR u.id = ANY($1::uuid[]))
           AND COALESCE(u.is_active, TRUE) = TRUE
+          AND UPPER(COALESCE(r.role_code, '')) NOT IN ('ADMIN', 'SUPERADMIN')
         GROUP BY u.id, u.employee_id`,
       [poolUserIds, terminal]
     );
