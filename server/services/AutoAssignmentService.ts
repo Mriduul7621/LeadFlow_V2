@@ -177,10 +177,12 @@ export async function loadAutoAssignCandidates(
               (COUNT(l.id) FILTER (WHERE l.current_status <> ALL($2::text[])))::int AS open_leads,
               MAX(l.assigned_at) AS last_assigned_at
          FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
          LEFT JOIN leads l
            ON l.assigned_to = u.id AND l.is_deleted = FALSE
         WHERE ($1::uuid[] IS NULL OR u.id = ANY($1::uuid[]))
           AND COALESCE(u.is_active, TRUE) = TRUE
+          AND UPPER(COALESCE(r.role_code, '')) NOT IN ('ADMIN', 'SUPERADMIN')
         GROUP BY u.id, u.employee_id`,
       [poolUserIds, terminal]
     );
@@ -218,9 +220,13 @@ export function buildDemoAutoAssignCandidates(
   const pool = poolUserIds === null ? null : new Set(poolUserIds);
   // DZ-6: demo mirror of the dictionary terminal set.
   const terminal = new Set(getTerminalStatusNamesFallback().map(s => s.toLowerCase()));
-  const users = (fallbackStore.users as any[]).filter(
-    u => (pool === null || pool.has(u.id)) && demoUserIsActive(u)
-  );
+  const users = (fallbackStore.users as any[]).filter((u) => {
+    const role = String(u.roleCode || u.role || u.roleName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return (pool === null || pool.has(u.id))
+      && demoUserIsActive(u)
+      && role !== 'ADMIN'
+      && role !== 'SUPERADMIN';
+  });
   return users.map((u: any) => {
     const mine = (fallbackStore.leads as any[]).filter((l: any) => {
       const owner = String(l.assignedTo || '');

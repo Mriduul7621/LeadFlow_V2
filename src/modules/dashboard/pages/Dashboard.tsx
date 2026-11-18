@@ -461,6 +461,147 @@ function PerformanceInsights({ trendData, teamStats }: { trendData: Array<{ date
   );
 }
 
+// Role-specific dashboard summaries use only the server-authoritative
+// GET /api/dashboard payload. Missing platform metrics stay visibly unavailable.
+function RoleWorkspaceSnapshot({ role, metrics, followUpCounts }: {
+  role: string;
+  metrics: DashboardMetrics | null;
+  followUpCounts: DashboardMetrics['followUpCounts'];
+}) {
+  const admin = role === 'ADMIN' || role === 'SUPERADMIN';
+  const manager = role === 'MANAGER';
+  const teamLead = ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(role);
+  const value = (n: number | null | undefined) => n == null ? '—' : formatCount(n);
+  if (admin) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="Agents with Leads" value={value(metrics?.userCount)} icon={Users} variant="blue" />
+      <KpiCard label="Lead Records" value={value(metrics?.leadCount ?? metrics?.totalLeads)} icon={Layers} variant="slate" />
+      <KpiCard label="Active Leads" value={value(metrics?.activeLeads)} icon={Layers} variant="olive" />
+      <KpiCard label="New Leads" value={value(metrics?.newLeads)} icon={CalendarDays} variant="orange" sub="Selected date range" />
+    </div>
+  );
+  if (manager) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+      <KpiCard label="Managed Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Conversion Rate" value={metrics?.conversionRate ?? '—'} icon={Percent} variant="slate" />
+      <KpiCard label="Collected NCP" value={metrics ? formatMoney(metrics.collected) : '—'} icon={Banknote} variant="emerald" />
+      <KpiCard label="Projected NCP" value={metrics ? formatMoney(metrics.projected) : '—'} icon={TrendingUp} variant="olive" />
+      <KpiCard label="New Leads" value={value(metrics?.newLeads)} icon={AlertTriangle} variant="red" />
+    </div>
+  );
+  if (teamLead) return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="Open Team Leads" value={value(metrics?.activeLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Due Today" value={value(followUpCounts.today)} icon={CalendarDays} variant="orange" />
+      <KpiCard label="Overdue" value={value(followUpCounts.overdue)} icon={AlertTriangle} variant="red" />
+      <KpiCard label="Team Conversion" value={metrics?.conversionRate ?? '—'} icon={TrendingUp} variant="olive" />
+    </div>
+  );
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard label="My Leads" value={value(metrics?.totalLeads)} icon={Users} variant="blue" />
+      <KpiCard label="Due Today" value={value(followUpCounts.today)} icon={CalendarDays} variant="orange" />
+      <KpiCard label="Overdue" value={value(followUpCounts.overdue)} icon={AlertTriangle} variant="red" />
+      <KpiCard label="Collected NCP" value={metrics ? formatMoney(metrics.collected) : '—'} icon={Banknote} variant="emerald" />
+    </div>
+  );
+}
+
+function AdminWorkspaceActions() {
+  const actions = [
+    { label: 'Users & Roles', description: 'Manage accounts and effective access', href: '/users' },
+    { label: 'Teams & Hierarchy', description: 'Review reporting lines and structure', href: '/team/organogram' },
+    { label: 'Lead Intake', description: 'Import and validate incoming records', href: '/leads/upload' },
+    { label: 'Lead Pool', description: 'Review unassigned leads and distribution', href: '/leads/all' },
+    { label: 'Assignment Rules', description: 'Review lead routing and assignment settings', href: '/settings/system?tab=assignment' },
+    { label: 'Audit Log', description: 'Review sensitive administrative events', href: '/audit-log' },
+  ];
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Governance & Operations" desc="Administrative workspaces and platform controls" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {actions.map(action => (
+          <Link key={action.href} to={action.href} className="group rounded-[10px] border border-stone-100 bg-[#F8F7F2] p-4 transition-colors hover:border-[#858515]/40 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#858515]">
+            <strong className="block text-sm font-bold text-stone-800">{action.label}</strong>
+            <span className="mt-1 block text-xs leading-5 text-stone-500">{action.description}</span>
+            <span className="mt-3 inline-flex items-center gap-1 text-[11px] font-bold text-[#596B35]">Open workspace <ChevronRight className="h-3.5 w-3.5" /></span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PipelineSnapshot({ metrics }: { metrics: DashboardMetrics | null }) {
+  const stages = ['New', 'Contacted', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted'];
+  const counts = metrics?.statusCounts;
+  const total = metrics?.totalLeads ?? 0;
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title="Pipeline Snapshot" desc="Lead distribution across the current sales stages" action={<Link to="/sales-pipeline" className="text-xs font-bold text-[#596B35] hover:underline">Open pipeline</Link>} />
+      <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+        {stages.map(stage => {
+          const count = Number(counts?.[stage] || 0);
+          const percent = total > 0 ? Math.min(100, Math.round((count / total) * 100)) : 0;
+          return (
+            <div key={stage} className="min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-xs font-semibold text-stone-600">{stage}</span>
+                <span className="shrink-0 text-xs font-black tabular-nums text-stone-800">{formatCount(count)}</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-stone-100">
+                <div className="h-full rounded-full bg-[#858515] transition-all" style={{ width: percent + '%' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-4 text-[10px] text-stone-400">{formatCount(total)} leads in your authorized visibility scope</p>
+    </section>
+  );
+}
+
+function AgentPerformanceTable({ rows, title, subtitle }: {
+  rows: DashboardMetrics['agentStats'];
+  title: string;
+  subtitle: string;
+}) {
+  if (!rows.length) return null;
+  return (
+    <section className="rounded-[12px] border border-stone-100 bg-white p-5 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <SectionHeading title={title} desc={subtitle} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-xs">
+          <thead className="bg-[#F8F7F2] text-[10px] font-black uppercase tracking-wider text-stone-500">
+            <tr>
+              <th className="px-3 py-3">Team member</th>
+              <th className="px-3 py-3 text-right">Assigned</th>
+              <th className="px-3 py-3 text-right">No call</th>
+              <th className="px-3 py-3 text-right">Follow-ups</th>
+              <th className="px-3 py-3 text-right">Converted</th>
+              <th className="px-3 py-3 text-right">Conversion</th>
+              <th className="px-3 py-3 text-right">Collected NCP</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {rows.map(row => (
+              <tr key={row.employeeId || row.name} className="hover:bg-[#F8F7F2]/70">
+                <td className="px-3 py-3 font-semibold text-stone-700">{row.name}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.assigned)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.noCall)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.followUp)}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-stone-600">{formatCount(row.converted)}</td>
+                <td className="px-3 py-3 text-right font-bold tabular-nums text-[#596B35]">{row.conversion}</td>
+                <td className="px-3 py-3 text-right font-semibold tabular-nums text-stone-700">{formatMoney(row.collected)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 // ============================================================
 // Dashboard main component
 // ============================================================
@@ -468,6 +609,17 @@ export default function Dashboard() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
   const canCreateLead = canAccess('lead_generate', 'create');
+  const roleCode = String(user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const isAdminRole = roleCode === 'ADMIN' || roleCode === 'SUPERADMIN';
+  const isManagerRole = roleCode === 'MANAGER';
+  const isTeamLeadRole = ['TEAMLEAD', 'TEAM_LEAD', 'TL', 'RM'].includes(roleCode);
+  const workspaceHeader = isAdminRole
+    ? { title: 'Admin Overview', subtitle: 'Governance, configuration and operational health', section: 'Platform Health' }
+    : isManagerRole
+      ? { title: 'Business Overview', subtitle: 'Managed-team performance, pipeline health and recovery priorities', section: 'Business Performance' }
+      : isTeamLeadRole
+        ? { title: 'Team Overview', subtitle: 'Team workload, follow-up health and daily execution', section: 'Team Performance' }
+        : { title: 'My Work', subtitle: 'Your assigned leads, next actions and personal progress', section: 'My Performance' };
   // Roadshow alerts are only rendered for users who may open the roadshow
   // page at all. Shared predicate with My Work (useRoadshowAccess) so the
   // two views can never disagree about the same user.
@@ -551,7 +703,15 @@ export default function Dashboard() {
   }, [user, period, customStart, customEnd]);
 
   const loadDailyExecution = useCallback(async () => {
-    if (!user) return;
+    if (!user || isAdminRole) {
+      setTodayFollowUps([]);
+      setTomorrowFollowUps([]);
+      setTodayScheduled([]);
+      setTomorrowScheduled([]);
+      setRoadshowCounts(null);
+      setDailyLoading(false);
+      return;
+    }
     setDailyLoading(true);
     try {
       // Tier 2/3 must not start until the critical KPI request has
@@ -628,7 +788,7 @@ export default function Dashboard() {
     } finally {
       setDailyLoading(false);
     }
-  }, [user, canViewRoadshows]);
+  }, [user, canViewRoadshows, isAdminRole]);
 
   /**
    * Recent Leads — the five most recent rows from the LOCAL MIRROR of server
@@ -640,6 +800,11 @@ export default function Dashboard() {
    */
   useEffect(() => {
     if (!user) return;
+    if (isAdminRole) {
+      setRecentLeads([]);
+      setRecentLeadsLoading(false);
+      return;
+    }
     let cancelled = false;
 
     const readMirror = () => {
@@ -684,7 +849,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, isAdminRole]);
 
   useEffect(() => {
     void loadDashboardData();
@@ -727,8 +892,8 @@ export default function Dashboard() {
     <div className="space-y-6 pb-12 font-sans">
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div>
-          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">Hello, {user?.name?.trim().split(/\s+/)[0] || 'there'}</h1>
-          <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">Sales performance and daily execution overview</p>
+          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text">{workspaceHeader.title}</h1>
+          <p className="text-[13px] text-stone-500 mt-2 leading-relaxed">{workspaceHeader.subtitle}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -905,21 +1070,13 @@ export default function Dashboard() {
 
           <section className="lf-dashboard-kpis">
             <div className="lf-section-title">
-              <div><h2>Core Performance</h2></div>
+              <div><h2>{workspaceHeader.section}</h2></div>
               <span className="lf-period-chip">{resolved.display}</span>
             </div>
-            <ExecutiveSnapshot
-              totalLeads={totalLeads}
-              conversionRate={metrics?.conversionRate || '0.0%'}
-              collectedNCP={formatMoney(metrics?.collected ?? 0)}
-              projectedNCP={formatMoney(metrics?.projected ?? 0)}
-              activeLeads={metrics?.activeLeads ?? 0}
-              pipelineLocked={metrics?.pipelineLocked ?? 0}
-              overdueFollowUps={followUpCounts.overdue}
-            />
+            <RoleWorkspaceSnapshot role={roleCode} metrics={metrics} followUpCounts={followUpCounts} />
           </section>
 
-          <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
+          {!isAdminRole && <section className="lf-mobile-day-snapshot" aria-busy={dailyLoading}>
             <div className="lf-section-title">
               <div>
                 <h2>Today's Focus</h2>
@@ -940,9 +1097,16 @@ export default function Dashboard() {
               dailyLoading={dailyLoading}
               roadshowCounts={roadshowCounts}
             />
-          </section>
+          </section>}
 
-          <section className="lf-recent-leads">
+          {!isAdminRole && <PipelineSnapshot metrics={metrics} />}
+          {(isManagerRole || isTeamLeadRole) && <AgentPerformanceTable
+            rows={metrics?.agentStats ?? []}
+            title={isManagerRole ? 'Agent Performance' : 'Team Member Performance'}
+            subtitle={isManagerRole ? 'Execution and NCP contribution across your managed visibility scope' : 'Workload and conversion within your own team'}
+          />}
+
+          {!isAdminRole && <section className="lf-recent-leads">
             <div className="lf-section-title">
               <div><h2>Recent Leads</h2><p className="lf-section-subtitle">Your five most recently added leads</p></div>
               <Link to="/leads" className="lf-view-all">View all <ChevronRight size={16} /></Link>
@@ -974,14 +1138,16 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
-          </section>
+          </section>}
+
+          {isAdminRole && <AdminWorkspaceActions />}
 
           {/* Remaining analysis — the same GET /api/dashboard payload that
               already loaded (trendData, teamStats). Sales Pipeline, Follow-up
               Discipline, Needs Attention and the Task Calendar moved off Home:
               the pipeline board is its own sidebar page (/sales-pipeline) and
               the calendar lives at /task-calendar (sidebar → Workspace). */}
-          <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} />
+          {(metrics?.trendData?.length || metrics?.teamStats?.length) ? <PerformanceInsights trendData={metrics?.trendData} teamStats={metrics?.teamStats} /> : null}
 
         </>
       )}

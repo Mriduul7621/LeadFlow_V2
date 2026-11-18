@@ -364,3 +364,88 @@ describe('Lead Hardening - Auth & Persistence', () => {
     assert.ok(file.includes('FORBIDDEN_CUSTOM_KEYS'), 'Must have forbidden keys set');
   });
 });
+
+
+describe('Administration users are excluded from lead ownership', () => {
+  it('keeps the role-specific HTML navigation and does not add an Admin Leads shortcut', () => {
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    const shell = fs.readFileSync(path.join(process.cwd(), 'src/layouts/AppLayout.tsx'), 'utf-8');
+    assert.ok(sidebar.includes("item('Lead Pool'"));
+    assert.ok(sidebar.includes("item('Lead Intake'"));
+    assert.ok(sidebar.includes("title: 'WORKSPACE'"));
+    assert.ok(shell.includes("primaryItem('Users & Roles', Users, '/users')"));
+    const adminNav = shell.slice(shell.indexOf("if (role === 'ADMIN'"), shell.indexOf("if (role === 'MANAGER'"));
+    assert.ok(!adminNav.includes("primaryItem('Leads'"));
+  });
+
+  it('filters Administration accounts out of lead assignee pickers', () => {
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/leads/pages/AllLeads.tsx'), 'utf-8');
+    assert.ok(page.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+    const sharedFilter = fs.readFileSync(path.join(process.cwd(), 'src/modules/shared/components/AdvancedFilterPanel.tsx'), 'utf-8');
+    const legacyFilter = fs.readFileSync(path.join(process.cwd(), 'src/components/AdvancedFilterPanel.tsx'), 'utf-8');
+    assert.ok(sharedFilter.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+    assert.ok(legacyFilter.includes("role !== 'ADMIN' && role !== 'SUPERADMIN'"));
+  });
+
+  it('rejects Administration accounts in manual assignment and bulk import', () => {
+    const shared = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/shared.ts'), 'utf-8');
+    const leads = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
+    assert.ok(shared.includes('isAdministrationRole: role === \'ADMIN\' || role === \'SUPERADMIN\''));
+    assert.ok(leads.includes('if (resolved.isAdministrationRole)'));
+    assert.ok(leads.includes('entry.isAdministrationRole'));
+  });
+
+  it('does not select Administration accounts for automatic assignment', () => {
+    const service = fs.readFileSync(path.join(process.cwd(), 'server/services/AutoAssignmentService.ts'), 'utf-8');
+    assert.ok(service.includes("NOT IN ('ADMIN', 'SUPERADMIN')"));
+  });
+
+  it('keeps the existing Task Calendar route and implementation outside the role sidebar change', () => {
+    const app = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    assert.ok(app.includes("import('./modules/auth/pages/TaskCalendar')"));
+    assert.ok(sidebar.includes("'/task-calendar'"));
+  });
+});
+
+describe('HTML blueprint role workspaces', () => {
+  it('renders role-specific dashboard workspaces without demo data', () => {
+    const dashboard = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+    assert.ok(dashboard.includes("title: 'Admin Overview'"));
+    assert.ok(dashboard.includes("title: 'Business Overview'"));
+    assert.ok(dashboard.includes("title: 'Team Overview'"));
+    assert.ok(dashboard.includes("title: 'My Work'"));
+    assert.ok(dashboard.includes('RoleWorkspaceSnapshot'));
+    assert.ok(dashboard.includes('!isAdminRole && <section className="lf-recent-leads">'));
+    assert.ok(dashboard.includes('if (!user || isAdminRole)'));
+  });
+
+  it('routes the Admin Audit Log through the existing server permission gate', () => {
+    const app = fs.readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf-8');
+    const access = fs.readFileSync(path.join(process.cwd(), 'src/layouts/featureRouteAccess.ts'), 'utf-8');
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/admin/pages/AuditLogPage.tsx'), 'utf-8');
+    const api = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/users.routes.ts'), 'utf-8');
+    assert.ok(app.includes("path: '/audit-log'"));
+    assert.ok(app.includes('<AdminRoute><AuditLogPage /></AdminRoute>'));
+    assert.ok(access.includes("'/audit-log': { route: '/audit-log', path: '/audit-log', roles: DIAGNOSTICS_ADMIN_ROLES }"));
+    assert.ok(sidebar.includes("item('Audit Log', 'Review administrative activity records', '/audit-log'"));
+    assert.ok(page.includes("apiRequest<AuditLogEntry[]>('/api/audit-logs?limit=200')"));
+    assert.ok(api.includes("router.get('/audit-logs', requireAuth, requirePermissionCode('audit.view'"));
+    assert.ok(api.includes('actor.full_name AS actor_name'));
+    assert.ok(api.includes('target.full_name AS target_name'));
+  });
+  it('deep-links Admin configuration and scopes the new palette away from Task Calendar', () => {
+    const sidebar = fs.readFileSync(path.join(process.cwd(), 'src/layouts/sidebarNav.ts'), 'utf-8');
+    const shell = fs.readFileSync(path.join(process.cwd(), 'src/layouts/AppLayout.tsx'), 'utf-8');
+    const settings = fs.readFileSync(path.join(process.cwd(), 'src/modules/settings/pages/Settings.tsx'), 'utf-8');
+    const styles = fs.readFileSync(path.join(process.cwd(), 'src/index.css'), 'utf-8');
+    assert.ok(sidebar.includes("'/settings/system?tab=workflow'"));
+    assert.ok(sidebar.includes("'/settings/system?tab=dropdowns'"));
+    assert.ok(sidebar.includes("'/settings/system?tab=assignment'"));
+    assert.ok(settings.includes('useSearchParams'));
+    assert.ok(shell.includes('data-route={location.pathname}'));
+    assert.ok(styles.includes('main.leadflow-main:not([data-route="/task-calendar"])'));
+  });
+
+});

@@ -59,8 +59,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
   if (role === 'ADMIN' || role === 'SUPERADMIN') {
     return [
       primaryItem('Overview', LayoutDashboard, '/'),
-      primaryItem('Leads', ClipboardList, '/leads'),
-      primaryItem('Users', Users, '/users'),
+      primaryItem('Users & Roles', Users, '/users'),
       primaryItem('Analytics', TrendingUp, '/execution-intelligence'),
       primaryItem('More', MoreHorizontal, '/more'),
     ];
@@ -74,7 +73,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
       primaryItem('More', MoreHorizontal, '/more'),
     ];
   }
-  if (role === 'TEAMLEAD' || role === 'TL') {
+  if (role === 'TEAMLEAD' || role === 'TL' || role === 'RM') {
     return [
       primaryItem('Overview', LayoutDashboard, '/'),
       primaryItem('My Team', Users, '/team'),
@@ -101,7 +100,7 @@ function getPrimaryNavItems(roleName: string): MenuItem[] {
   ];
 }
 const MORE_NAV_PATHS = [
-  '/more', '/notifications', '/help', '/about', '/administration',
+  '/more', '/notifications', '/help', '/about', '/administration', '/audit-log',
   '/settings', '/settings/system', '/settings/performance-diagnostics',
   '/users', '/leads/upload', '/leads/all', '/activities', '/task-calendar',
   '/follow-up', '/team', '/execution-intelligence', '/ncp-progress',
@@ -479,8 +478,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
     canAccess,
   }, userRoleName);
-  const isSidebarItemActive = (path: string) =>
-    location.pathname === path || location.pathname.startsWith(`${path}/`);
+  const isSidebarItemActive = (path: string) => {
+    const [basePath, query] = path.split('?');
+    if (location.pathname === basePath) {
+      return query ? location.search.includes(query) : !location.search.includes('tab=');
+    }
+    return location.pathname.startsWith(`${basePath}/`);
+  };
 
   const handleLogout = () => {
     logout();
@@ -701,7 +705,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
+        <main data-route={location.pathname} className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
         </main>
       </div>

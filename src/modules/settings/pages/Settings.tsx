@@ -30,7 +30,7 @@ import {
   SlidersHorizontal,
   MessageCircle
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -68,9 +68,20 @@ export default function Settings() {
   const { user, logout, login, isOfflineMode } = useAuthStore();
   const { canAccess } = usePermissions();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const userRoleNormalized = (user?.role || '').toUpperCase();
   const isSystemAdmin = ['ADMIN', 'SUPERADMIN'].includes(userRoleNormalized);
-  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>(() => {
+    const tab = searchParams.get('tab');
+    return tab === 'assignment' ? 'overview' : tab === 'workflow' ? 'workflow' : tab === 'dropdowns' || tab === 'formbuilder' ? tab : 'overview';
+  });
+  const requestedSettingsTab = searchParams.get('tab');
+  useEffect(() => {
+    if (requestedSettingsTab === 'workflow') setActiveTab('workflow');
+    else if (requestedSettingsTab === 'dropdowns') setActiveTab('dropdowns');
+    else if (requestedSettingsTab === 'formbuilder') setActiveTab('formbuilder');
+    else setActiveTab('overview');
+  }, [requestedSettingsTab]);
   const [options, setOptions] = useState<DropdownOption[]>([]);
   const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
   const [editingOption, setEditingOption] = useState<{type: string, value: string}>({ type: 'Area', value: '' });
