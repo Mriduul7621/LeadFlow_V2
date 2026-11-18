@@ -290,3 +290,13 @@ grant matrix exactly matches the previous shipped Manager default (all rows
 allowed, no extra or denied rows). Any manually curated or otherwise
 different RM matrix is left untouched. The migration does not alter
 MANAGER, SM, TEAM_LEAD, custom roles, user-level overrides or Data Visibility.
+
+
+## Team Lead lead ownership and reassignment
+
+- Admins and Managers may continue to assign leads to a Team Lead through the existing single-lead and bulk-import workflows, subject to their existing Action Permissions and Data Visibility.
+- A lead assigned to a Team Lead remains owned by that Team Lead until the Team Lead explicitly routes it to an eligible team member. The Team Lead can also keep the lead and perform follow-ups personally.
+- A Team Lead may reassign only to themself or an ACTIVE direct-report team member (a leaf member with no active reports). The assignment picker is populated from the caller's server-scoped team overview; it does not use the organization-wide user list.
+- Team Leads cannot unassign leads or route them to another Team Lead, a Manager, or a member outside their own direct team.
+- The same restriction is enforced in the server's single-lead save and bulk-import paths. It is an additional target constraint layered on top of `leads.assign`, lead Data Visibility, and existing assignment validation; it does not replace or broaden any of them.
+- Manager/Admin assignment rules, existing transfer permission semantics, audit history, and assignment notifications remain unchanged.
