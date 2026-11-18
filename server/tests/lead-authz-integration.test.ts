@@ -441,4 +441,82 @@ describe('Lead API Authorization - Route Level', () => {
     // Actor should be ADMIN1, not EMPB
     assert.equal(returned.assignedBy, 'ADMIN1', 'Admin reassignment actor must be session admin, not payload');
   });
+  it('Admin bulk upload can assign to a Team Lead; Team Lead can keep or route only to own leaf members', async () => {
+    const admin = makeUser({ employeeId: 'ADMIN-TL', role: 'ADMIN' });
+    const teamLead = makeUser({ employeeId: 'TL-OWN', role: 'TEAM_LEAD' });
+    const directMember = makeUser({ employeeId: 'TL-MEMBER', role: 'EMPLOYEE', managerId: teamLead.employeeId });
+    const directSupervisor = makeUser({ employeeId: 'TL-SUPERVISOR', role: 'TEAM_LEAD', managerId: teamLead.employeeId });
+    const nestedMember = makeUser({ employeeId: 'TL-NESTED', role: 'EMPLOYEE', managerId: directSupervisor.employeeId });
+    const outsideMember = makeUser({ employeeId: 'OTHER-MEMBER', role: 'EMPLOYEE' });
+    fallbackStore.users.push(admin, teamLead, directMember, directSupervisor, nestedMember, outsideMember);
+
+    const adminToken = signToken({ id: admin.id, employeeId: admin.employeeId, role: admin.role, email: admin.email, name: admin.fullName });
+    const teamLeadToken = signToken({ id: teamLead.id, employeeId: teamLead.employeeId, role: teamLead.role, email: teamLead.email, name: teamLead.fullName });
+
+    const bulkRes = await request(app)
+      .post('/api/leads/bulk')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        leads: [{
+          customerName: 'Bulk assigned to Team Lead',
+          mobile: '01700000091',
+          assignedTo: teamLead.employeeId,
+        }],
+      });
+
+    assert.equal(bulkRes.status, 200, `Admin bulk upload should succeed: ${JSON.stringify(bulkRes.body)}`);
+    assert.equal(bulkRes.body.data.failed, 0);
+    assert.equal(bulkRes.body.data.inserted, 1);
+
+    const stored = fallbackStore.leads.find((lead: any) => lead.mobile === '01700000091');
+    assert.ok(stored, 'bulk lead should be persisted');
+    assert.equal(stored.assignedTo, teamLead.employeeId, 'bulk upload keeps the Team Lead as initial owner');
+
+    const assignToMember = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${teamLeadToken}`)
+      .send({
+        id: stored.id,
+        customerName: stored.customerName,
+        mobile: stored.mobile,
+        assignedTo: directMember.employeeId,
+      });
+    assert.equal(assignToMember.status, 200, `Team Lead should route to own leaf member: ${JSON.stringify(assignToMember.body)}`);
+    assert.equal(fallbackStore.leads.find((lead: any) => lead.id === stored.id)?.assignedTo, directMember.employeeId);
+
+    const assignToNestedSupervisor = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${teamLeadToken}`)
+      .send({
+        id: stored.id,
+        customerName: stored.customerName,
+        mobile: stored.mobile,
+        assignedTo: directSupervisor.employeeId,
+      });
+    assert.equal(assignToNestedSupervisor.status, 403, 'Team Lead cannot route to another lead/supervisor');
+
+    const assignOutsideTeam = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${teamLeadToken}`)
+      .send({
+        id: stored.id,
+        customerName: stored.customerName,
+        mobile: stored.mobile,
+        assignedTo: outsideMember.employeeId,
+      });
+    assert.equal(assignOutsideTeam.status, 403, 'Team Lead cannot route outside their own team');
+
+    const keepForSelf = await request(app)
+      .post('/api/leads')
+      .set('Authorization', `Bearer ${teamLeadToken}`)
+      .send({
+        id: stored.id,
+        customerName: stored.customerName,
+        mobile: stored.mobile,
+        assignedTo: teamLead.employeeId,
+      });
+    assert.equal(keepForSelf.status, 200, `Team Lead should be able to keep the lead: ${JSON.stringify(keepForSelf.body)}`);
+    assert.equal(fallbackStore.leads.find((lead: any) => lead.id === stored.id)?.assignedTo, teamLead.employeeId);
+  });
+
 });
