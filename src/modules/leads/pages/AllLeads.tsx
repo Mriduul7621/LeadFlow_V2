@@ -34,10 +34,14 @@ import { toast } from 'sonner';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 
 export default function AllLeads() {
   const { user } = useAuthStore();
   const { canAccess, userRole } = usePermissions();
+  const { overview: teamOverview, loading: teamOverviewLoading } = useCallerTeam();
+  const normalizedRole = String(userRole || user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const isTeamLeadRole = ['TEAMLEAD', 'RM', 'TL'].includes(normalizedRole);
   const canAssign = canAccess('all_leads', 'assign');
   const canEdit = canAccess('all_leads', 'edit');
   const canDelete = canAccess('all_leads', 'delete');
@@ -49,18 +53,36 @@ export default function AllLeads() {
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[] | null>(null);
-  const [poolTab, setPoolTab] = useState<LeadPoolTab>('unassigned');
+  const [poolTab, setPoolTab] = useState<LeadPoolTab>(isTeamLeadRole ? 'assigned' : 'unassigned');
   const [allUsers, setAllUsers] = useState<any[]>([]);
-  // Routing targets are ACTIVE users only — the server refuses a manual
-  // assignment to an inactive user (mirroring the bulk-import rule), so
-  // the pickers stop offering them. A per-lead picker keeps the lead's
-  // current handler visible even when that handler has since been
-  // deactivated: re-saving must not silently unassign the lead.
-  const assignableUsers = allUsers.filter((u: any) => u.status !== 'Inactive');
-  const pickerUsersFor = (currentEmployeeId: string) =>
-    currentEmployeeId && !assignableUsers.some((u: any) => u.employeeId === currentEmployeeId)
+  // Admins / Managers retain their existing authorized routing pool.
+  // Team Leads receive a narrower picker: self + ACTIVE direct reports only,
+  // sourced from the server-scoped team overview (never the global user list).
+  const directTeamMembers = (teamOverview?.people || [])
+    .filter(person =>
+      !person.isSelf &&
+      person.tier === 'teamMember' &&
+      String(person.managerEmployeeId || '').toUpperCase() === String(user?.employeeId || '').toUpperCase()
+    )
+    .map(person => ({
+      employeeId: person.employeeId,
+      name: person.name,
+      role: person.roleName || 'Team Member',
+      status: 'Active',
+    }));
+  const teamLeadAssignees = user ? [
+    { employeeId: user.employeeId, name: user.fullName || user.name, role: 'You', status: 'Active' },
+    ...directTeamMembers,
+  ] : directTeamMembers;
+  const assignableUsers = isTeamLeadRole
+    ? teamLeadAssignees
+    : allUsers.filter((u: any) => u.status !== 'Inactive');
+  const pickerUsersFor = (currentEmployeeId: string) => {
+    if (isTeamLeadRole) return assignableUsers;
+    return currentEmployeeId && !assignableUsers.some((u: any) => u.employeeId === currentEmployeeId)
       ? [...assignableUsers, ...allUsers.filter((u: any) => u.employeeId === currentEmployeeId)]
       : assignableUsers;
+  };
   const [campaignOptions, setCampaignOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   // F3: GET /api/leads answering 403 means the role holds no leads.view yet —
@@ -104,7 +126,11 @@ export default function AllLeads() {
       return;
     }
     if (!bulkAssigneeId) {
-      toast.error('Please choose a bulk assignee or Unassign option');
+      toast.error('Please choose an assignee');
+      return;
+    }
+    if (isTeamLeadRole && bulkAssigneeId === 'unassign') {
+      toast.error('Team Leads can assign only to themselves or their own team members.');
       return;
     }
     setBulkAssigning(true);
@@ -142,7 +168,7 @@ export default function AllLeads() {
 
       // Assignee references are only needed when the canonical assign action
       // is available. userService itself remains session-cached/coalesced.
-      if (canAssign) {
+      if (canAssign && !isTeamLeadRole) {
         const usersList = await userService.getAllUsers();
         setAllUsers(usersList);
       } else {
@@ -282,7 +308,7 @@ export default function AllLeads() {
         productName: editProduct,
         profession: editProfession
       };
-      if (canAssign) {
+      if (canAssign && (!isTeamLeadRole || editAssignee)) {
         updatePayload.assignedTo = editAssignee;
       }
 
@@ -302,7 +328,7 @@ export default function AllLeads() {
       return;
     }
     if (!inlineAssigneeId) {
-      toast.error('Select an assignee or choose Unassigned');
+      toast.error('Select yourself or a member of your own team.');
       return;
     }
     try {
@@ -506,17 +532,18 @@ export default function AllLeads() {
                   </span>
                   <div>
                      <p className="text-[11px] font-black uppercase tracking-widest text-slate-900 italic">Bulk Routing Workflow</p>
-                     <p className="text-[10px] text-slate-500 font-medium">Select a system team handler to propagate immediate assignments to all selected lead registries.</p>
+                     <p className="text-[10px] text-slate-500 font-medium">{isTeamLeadRole ? "Keep leads with yourself or route them to a direct member of your team." : "Select a system team handler to propagate immediate assignments to all selected lead registries."}</p>
                   </div>
                </div>
                <div className="flex items-center gap-3">
                   <select
                     value={bulkAssigneeId}
+                    disabled={isTeamLeadRole && teamOverviewLoading}
                     onChange={(e) => setBulkAssigneeId(e.target.value)}
                     className="bg-white border border-slate-200 text-[10px] font-black uppercase py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21] cursor-pointer"
                   >
                      <option value="">-- SELECT RE-ROUTE HANDLER --</option>
-                     <option value="unassign">-- MARK AS UNASSIGNED --</option>
+                     {!isTeamLeadRole && <option value="unassign">-- MARK AS UNASSIGNED --</option>}
                      {assignableUsers.map(u => (
                         <option key={u.employeeId} value={u.employeeId}>
                            {u.role}: {u.name} (ID: {u.employeeId})
@@ -641,10 +668,12 @@ export default function AllLeads() {
                                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                     <select
                                       value={inlineAssigneeId}
+                                      disabled={isTeamLeadRole && teamOverviewLoading}
                                       onChange={(e) => setInlineAssigneeId(e.target.value)}
                                       className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                                     >
-                                       <option value="unassign">-- UNASSIGNED --</option>
+                                       {!isTeamLeadRole && <option value="unassign">-- UNASSIGNED --</option>}
+                                       {isTeamLeadRole && <option value="" disabled>-- SELECT SELF OR TEAM MEMBER --</option>}
                                        {pickerUsersFor(inlineAssigneeId).map(u => (
                                           <option key={u.employeeId} value={u.employeeId}>
                                              {u.role}: {u.name} (ID: {u.employeeId})
@@ -679,7 +708,7 @@ export default function AllLeads() {
                                     {canAssign && (
                                       <button
                                         onClick={() => {
-                                          setInlineAssigneeId(lead.assignedTo || 'unassign');
+                                          setInlineAssigneeId(lead.assignedTo || (isTeamLeadRole ? '' : 'unassign'));
                                           setInlineAssignmentLeadId(lead.id);
                                         }}
                                         className="opacity-0 group-hover:opacity-100 text-[9px] font-black px-1.5 py-0.5 uppercase tracking-widest italic hover:text-[#978C21] text-slate-400 bg-slate-50 transition-opacity ml-2"
@@ -914,14 +943,15 @@ export default function AllLeads() {
                         <UserCheck className="w-4 h-4 text-[#978C21]" />
                         Assignee Router Control
                      </p>
-                     <p className="text-[11px] text-slate-500">Route or transfer matching ownership. Assigning to any RM propagates instant alerts to their interface feed.</p>
+                     <p className="text-[11px] text-slate-500">{isTeamLeadRole ? "Keep this lead with yourself or route it to one of your own team members." : "Route or transfer matching ownership. Assignment notifications are sent automatically."}</p>
                      <select
                        value={editAssignee}
-                       disabled={!canAssign}
+                       disabled={!canAssign || (isTeamLeadRole && teamOverviewLoading)}
                        onChange={(e) => setEditAssignee(e.target.value)}
                        className="w-full bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider p-3 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                      >
-                        <option value="">-- UNASSIGNED (BLANK) --</option>
+                        {!isTeamLeadRole && <option value="">-- UNASSIGNED (BLANK) --</option>}
+                        {isTeamLeadRole && <option value="" disabled>-- SELECT SELF OR TEAM MEMBER --</option>}
                         {pickerUsersFor(editAssignee).map((u) => (
                            <option key={u.employeeId} value={u.employeeId}>
                               {u.role.toUpperCase()}: {u.name} (Employee ID: {u.employeeId})

@@ -939,6 +939,74 @@ export async function resolveAssignedTo(ref: any): Promise<{ userId: string; emp
   }
 }
 
+/**
+ * Team Lead routing is deliberately narrower than general Data Visibility:
+ * a Team Lead may keep a lead for themself or route it to an ACTIVE direct
+ * report only. RM is the legacy first-line Team Lead role code.
+ */
+export function isTeamLeadRole(caller: CallerDbInfo): boolean {
+  const role = String(caller.role_code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return role === 'TEAMLEAD' || role === 'RM' || role === 'TL';
+}
+
+/** Load the authenticated Team Lead's active direct reports once per write. */
+export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<Set<string>> {
+  if (!isTeamLeadRole(caller)) return new Set<string>();
+  if (!useDb()) {
+    const callerKeys = new Set([String(caller.id), String(caller.employee_id).toUpperCase()]);
+    const users = fallbackStore.users as any[];
+    const byKey = new Map<string, any>();
+    for (const user of users) {
+      byKey.set(String(user.id), user);
+      byKey.set(String(user.employeeId || '').toUpperCase(), user);
+    }
+    const hasReports = new Set<string>();
+    for (const user of users) {
+      const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
+      if (user.isActive === false || status === 'inactive') continue;
+      const managerRef = String(user.managerId || user.manager_id || '');
+      const manager = byKey.get(managerRef) || byKey.get(managerRef.toUpperCase());
+      if (manager) hasReports.add(String(manager.id));
+    }
+    return new Set(
+      users
+        .filter(user => {
+          const manager = String(user.managerId || user.manager_id || '');
+          const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
+          const reportsToCaller = callerKeys.has(manager)
+            || manager.toUpperCase() === String(caller.employee_id).toUpperCase();
+          return reportsToCaller && user.isActive !== false
+            && status !== 'inactive' && !hasReports.has(String(user.id));
+        })
+        .map(user => String(user.id))
+    );
+  }
+  const result = await getPool().query(
+    `SELECT member.id
+       FROM users member
+      WHERE member.manager_id = $1
+        AND COALESCE(member.is_active, TRUE) = TRUE
+        AND NOT EXISTS (
+          SELECT 1 FROM users report
+           WHERE report.manager_id = member.id
+             AND COALESCE(report.is_active, TRUE) = TRUE
+        )`,
+    [caller.id]
+  );
+  return new Set((result.rows || []).map((row: any) => String(row.id)));
+}
+
+/** Extra ownership rule layered on top of the caller's normal visibility. */
+export function isTeamLeadAssignmentTargetAllowed(
+  target: { userId: string; employeeId: string } | null,
+  caller: CallerDbInfo,
+  directReportIds: ReadonlySet<string>
+): boolean {
+  if (!isTeamLeadRole(caller)) return true;
+  if (!target) return false; // Team Leads cannot unassign; choose self or a direct report.
+  return target.userId === caller.id || directReportIds.has(target.userId);
+}
+
 /** Check if caller is allowed to assign a lead to target user. */
 export function isAssignedToAllowed(target: { userId: string; employeeId: string } | null, visibility: any, caller: CallerDbInfo): boolean {
   if (!target) return true;

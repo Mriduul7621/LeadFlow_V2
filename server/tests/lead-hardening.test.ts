@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Import hardened helpers directly (they are exported from production.routes.ts)
+import { isTeamLeadAssignmentTargetAllowed, isTeamLeadRole } from '../routes/production/shared.js';
 import {
   isLeadAccessible,
   isAssignedToAllowed,
@@ -25,6 +26,87 @@ function makeCaller(overrides: Partial<CallerDbInfo> = {}): CallerDbInfo {
     ...overrides,
   };
 }
+
+describe('Team Lead assignment boundaries', () => {
+  const teamLead: CallerDbInfo = {
+    id: 'team-lead-id',
+    employee_id: 'TL001',
+    email: 'tl@example.com',
+    role_id: 'role-team-lead',
+    role_code: 'TEAM_LEAD',
+    department_id: 'dept-1',
+  };
+
+  it('allows a Team Lead to keep a lead assigned to themself', () => {
+    assert.equal(isTeamLeadRole(teamLead), true);
+    assert.equal(
+      isTeamLeadAssignmentTargetAllowed(
+        { userId: teamLead.id, employeeId: teamLead.employee_id },
+        teamLead,
+        new Set(['member-1'])
+      ),
+      true
+    );
+  });
+
+  it('allows assignment only to an explicitly resolved direct team member', () => {
+    assert.equal(
+      isTeamLeadAssignmentTargetAllowed(
+        { userId: 'member-1', employeeId: 'EMP001' },
+        teamLead,
+        new Set(['member-1'])
+      ),
+      true
+    );
+    assert.equal(
+      isTeamLeadAssignmentTargetAllowed(
+        { userId: 'other-team-member', employeeId: 'EMP999' },
+        teamLead,
+        new Set(['member-1'])
+      ),
+      false
+    );
+  });
+
+  it('does not allow Team Leads to unassign or route to another team lead', () => {
+    assert.equal(isTeamLeadAssignmentTargetAllowed(null, teamLead, new Set(['member-1'])), false);
+    assert.equal(
+      isTeamLeadAssignmentTargetAllowed(
+        { userId: 'another-lead', employeeId: 'TL002' },
+        teamLead,
+        new Set(['member-1'])
+      ),
+      false
+    );
+  });
+
+  it('keeps Manager and Admin routing rules governed by their existing visibility checks', () => {
+    const manager = { ...teamLead, role_code: 'MANAGER' };
+    const outsideTarget = { userId: 'another-team-member', employeeId: 'EMP999' };
+    assert.equal(isTeamLeadRole(manager), false);
+    assert.equal(isTeamLeadAssignmentTargetAllowed(outsideTarget, manager, new Set()), true);
+  });
+
+  it('recognizes the legacy RM first-line supervisor role as Team Lead', () => {
+    const legacyLead = { ...teamLead, role_code: 'RM' };
+    assert.equal(isTeamLeadRole(legacyLead), true);
+    assert.equal(
+      isTeamLeadAssignmentTargetAllowed(
+        { userId: 'outside', employeeId: 'EMP999' },
+        legacyLead,
+        new Set(['member-1'])
+      ),
+      false
+    );
+  });
+
+  it('enforces the Team Lead restriction in both single-lead and bulk-import write paths', () => {
+    const leads = fs.readFileSync(path.join(process.cwd(), 'server/routes/production/leads.routes.ts'), 'utf-8');
+    assert.ok(leads.includes('isTeamLeadAssignmentTargetAllowed(targetAssigned, caller, teamLeadDirectReportIds)'));
+    assert.ok(leads.includes('isTeamLeadAssignmentTargetAllowed(assigned, caller, teamLeadDirectReportIds)'));
+    assert.ok(leads.includes('getTeamLeadDirectReportIds(caller)'));
+  });
+});
 
 describe('Lead Hardening - Spoofing Prevention', () => {
   it('FORBIDDEN_CUSTOM_KEYS contains critical authz fields', () => {
