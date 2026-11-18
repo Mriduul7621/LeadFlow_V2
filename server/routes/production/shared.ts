@@ -955,18 +955,27 @@ export async function getTeamLeadDirectReportIds(caller: CallerDbInfo): Promise<
   if (!useDb()) {
     const callerKeys = new Set([String(caller.id), String(caller.employee_id).toUpperCase()]);
     const users = fallbackStore.users as any[];
-    const hasReports = new Set(
-      users
-        .filter(user => user.isActive !== false && String(user.status || user.employmentStatus || 'Active').toLowerCase() !== 'inactive')
-        .map(user => String(user.managerId || user.manager_id || ''))
-    );
+    const byKey = new Map<string, any>();
+    for (const user of users) {
+      byKey.set(String(user.id), user);
+      byKey.set(String(user.employeeId || '').toUpperCase(), user);
+    }
+    const hasReports = new Set<string>();
+    for (const user of users) {
+      const managerRef = String(user.managerId || user.manager_id || '');
+      const manager = byKey.get(managerRef) || byKey.get(managerRef.toUpperCase());
+      if (manager) hasReports.add(String(manager.id));
+    }
     return new Set(
       users
         .filter(user => {
           const manager = String(user.managerId || user.manager_id || '');
           const status = String(user.status || user.employmentStatus || 'Active').toLowerCase();
-          return callerKeys.has(manager) && user.isActive !== false && status !== 'inactive'
-            && !hasReports.has(String(user.id));
+          return callerKeys.has(manager) || (
+            manager && manager.toUpperCase() === String(caller.employee_id).toUpperCase()
+          )
+            ? user.isActive !== false && status !== 'inactive' && !hasReports.has(String(user.id))
+            : false;
         })
         .map(user => String(user.id))
     );
