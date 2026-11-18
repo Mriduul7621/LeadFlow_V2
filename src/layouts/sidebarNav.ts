@@ -63,15 +63,15 @@ const ROLE_GROUPS: Record<string, SidebarGroup[]> = {
       item('Teams & Hierarchy', 'Manage the organization structure', '/team/organogram', GitBranch),
       item('Lead Intake', 'Import and validate incoming leads', '/leads/upload', UserPlus),
       item('Lead Pool', 'Review and manage the unassigned lead pool', '/leads/all', ClipboardList),
-      item('Assignment Rules', 'Configure lead routing and assignment', '/settings/system', ListChecks),
+      item('Assignment Rules', 'Configure lead routing and assignment', '/settings/system'),
     ] },
     { title: 'INSIGHTS', items: [
       item('Analytics', 'Organization-wide performance insights', '/execution-intelligence', BarChart3),
       item('Audit Log', 'Review administrative activity records', '/audit-log', ShieldCheck),
     ] },
     { title: 'CONFIGURATION', items: [
-      item('Status & Pipeline', 'Manage pipeline and status configuration', '/sales-pipeline', GitBranch),
-      item('Products & Campaigns', 'Review products and campaign performance', '/campaign-breakdown', FolderKanban),
+      item('Status & Pipeline', 'Manage pipeline and status configuration', '/settings/system?tab=workflow', GitBranch),
+      item('Products & Campaigns', 'Manage product and campaign metadata', '/settings/system?tab=dropdowns', FolderKanban),
       item('System Settings', 'Configure LeadFlow system settings', '/settings/system', Settings),
     ] },
     { title: 'ACCOUNT', items: ACCOUNT },
@@ -203,7 +203,7 @@ export function buildSidebarGroups(access: SidebarAccess, roleName = ''): Sideba
     .map((group) => ({
       ...group,
       items: group.items.filter((entry) => {
-        if (!access.canOpen(entry.path)) return false;
+        if (!access.canOpen(entry.path.split('?')[0])) return false;
         // Analytics/report pages must continue to honor their functional
         // view permission as well as the route-level Feature Access gate.
         if (['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'].includes(entry.path)) {
