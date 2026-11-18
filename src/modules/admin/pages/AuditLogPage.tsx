@@ -9,6 +9,11 @@ interface AuditLogEntry {
   entity_type: string | null;
   entity_id: string | null;
   actor_user_id: string | null;
+  actor_name?: string | null;
+  actor_employee_id?: string | null;
+  target_user_id?: string | null;
+  target_name?: string | null;
+  target_employee_id?: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
 }
@@ -33,6 +38,12 @@ function searchableText(row: AuditLogEntry): string {
     row.entity_type,
     row.entity_id,
     row.actor_user_id,
+    row.actor_name,
+    row.actor_employee_id,
+    row.target_user_id,
+    row.target_name,
+    row.target_employee_id,
+    row.created_at,
     JSON.stringify(row.metadata || {}),
   ].join(' ').toLowerCase();
 }
@@ -136,12 +147,13 @@ export default function AuditLogPage() {
             </div>
             <div className="mt-3 overflow-hidden rounded-[10px] border border-stone-100">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] border-collapse text-left">
+                <table className="w-full min-w-[940px] border-collapse text-left">
                   <thead className="bg-[#F8F7F2] text-[10px] font-black uppercase tracking-wider text-stone-500">
                     <tr>
                       <th className="px-4 py-3">Date & time</th>
                       <th className="px-4 py-3">Action</th>
-                      <th className="px-4 py-3">Actor ID</th>
+                      <th className="px-4 py-3">Actor</th>
+                      <th className="px-4 py-3">Target</th>
                       <th className="px-4 py-3">Record</th>
                       <th className="px-4 py-3">Details</th>
                     </tr>
@@ -153,7 +165,14 @@ export default function AuditLogPage() {
                         <td className="px-4 py-4">
                           <span className="inline-flex rounded-full border border-[#858515]/20 bg-[#858515]/10 px-2.5 py-1 text-[10px] font-bold text-[#596B35]">{row.action_code || 'Unknown action'}</span>
                         </td>
-                        <td className="max-w-[180px] break-all px-4 py-4 font-mono text-[10px] text-stone-500">{row.actor_user_id || '—'}</td>
+                        <td className="px-4 py-4 text-xs text-stone-700">
+                          <span className="font-semibold">{row.actor_name || 'Unknown actor'}</span>
+                          <span className="mt-1 block break-all font-mono text-[10px] text-stone-400">{row.actor_employee_id || row.actor_user_id || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4 text-xs text-stone-700">
+                          <span className="font-semibold">{row.target_name || (row.target_user_id ? 'Unavailable user' : '—')}</span>
+                          {row.target_user_id && <span className="mt-1 block break-all font-mono text-[10px] text-stone-400">{row.target_employee_id || row.target_user_id}</span>}
+                        </td>
                         <td className="px-4 py-4 text-xs text-stone-600">
                           <span className="font-semibold text-stone-700">{row.entity_type || '—'}</span>
                           {row.entity_id && <span className="mt-1 block max-w-[180px] break-all font-mono text-[10px] text-stone-400">{row.entity_id}</span>}
