@@ -8,7 +8,7 @@
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
 **Phase 8 branch:** `ux/phase-8-roadshow-workspace`
 **Phase 9 branch:** `ux/phase-9-profile-settings`
-**Status:** Phases 1–12 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Status:** Phases 1–13 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -122,6 +122,23 @@
 ## Next UX phases
 1. Continue auditing any remaining routed pages not covered by the earlier phases.
 2. Run automated tests, production build, responsive checks and accessibility review before requesting merge.
+
+## Phase 13 — Final UX Consistency & Accessibility Audit
+
+### Bulk Lead Upload
+- Reworked the page container, heading, upload drop zone and validation panel spacing for small screens and larger viewports.
+- Made the file picker explicitly labelled for assistive technology and added a visible focus-within treatment to the upload surface.
+- Improved file-name wrapping, remove-file control sizing, template-download and import action focus states.
+- Replaced internal/technical wording such as “Drop Logic File”, “Remove Entity” and “Injection Constraints” with plain operational language.
+- Clarified the supported file-format error message and made upload requirements easier to scan.
+- Preserved accepted file types, parsing, server-side dry-run validation, row mapping, duplicate handling, import payload, transaction behavior and the existing permission gate.
+
+### More, Administration & Notifications
+- Added visible keyboard-focus treatment to directory navigation, back navigation, logout, notification rows and read controls.
+- Improved minimum touch targets for notification actions while retaining existing role-aware directory construction and notification service calls.
+- Preserved route access resolution, role checks, notification read behavior and navigation destinations.
+
+- No API, database, permission, data-visibility, workflow or business-rule changes.
 
 ## Verification status
 The changed files and branch commits were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.

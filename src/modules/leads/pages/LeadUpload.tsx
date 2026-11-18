@@ -220,7 +220,7 @@ export default function LeadUpload() {
       };
       reader.readAsArrayBuffer(file);
     } else {
-      toast.error('Invalid protocol. Please inject Excel or CSV format.');
+      toast.error('Please choose an .xlsx or .csv file.');
     }
   };
 
@@ -270,27 +270,28 @@ export default function LeadUpload() {
   ];
 
   return (
-    <div className="max-w-5xl mx-auto space-y-12 pb-24">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-slate-100 pb-10">
-        <div className="flex items-center gap-6">
-          <div className="w-16 h-16 bg-[#F9F9F4] rounded-sm flex items-center justify-center text-[#978C21] shadow-sm border border-slate-100">
+    <div className="mx-auto max-w-5xl space-y-8 px-4 pb-16 sm:px-6 lg:space-y-10 lg:px-8">
+      <div className="flex flex-col gap-5 border-b border-stone-100 pb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:pb-8">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-stone-100 bg-[#F9F9F4] text-[#978C21] shadow-sm sm:h-14 sm:w-14">
             <Database className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Bulk Lead Upload</h1>
+            <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">Bulk Lead Upload</h1>
             <p className="text-sm text-slate-500 mt-2">Upload leads from Excel files</p>
           </div>
         </div>
         <button
+          type="button"
           onClick={downloadTemplate}
-          className="flex items-center gap-3 px-6 py-3 bg-[#978C21]/10 hover:bg-[#978C21]/20 border border-[#978C21]/30 text-[#978C21] text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm active:scale-95 group animate-bounce-slow"
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#978C21]/30 bg-[#978C21]/10 px-4 py-3 text-xs font-semibold text-[#756c1b] shadow-sm transition-colors hover:bg-[#978C21]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2 sm:w-auto"
         >
           <Download className="w-4 h-4 text-[#978C21] transition-transform group-hover:translate-y-0.5" />
           Download Sample Format
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:gap-8">
          <div className="lg:col-span-2 space-y-8">
             <div
                onDragEnter={handleDrag}
@@ -298,13 +299,14 @@ export default function LeadUpload() {
                onDragLeave={handleDrag}
                onDrop={handleDrop}
                className={cn(
-                  "relative h-96 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden rounded-sm border-2 border-dashed",
+                  "relative flex min-h-[18rem] flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed px-4 py-10 text-center transition-all focus-within:ring-2 focus-within:ring-[#978C21] focus-within:ring-offset-2 sm:min-h-[20rem]",
                   dragActive ? "border-[#978C21] bg-[#978C21]/5 scale-[1.01]" : "border-slate-200 hover:border-[#978C21]/50 bg-[#FBFAF8]"
                )}
             >
                <input
                   type="file"
-                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                  className="absolute inset-0 z-10 cursor-pointer opacity-0"
+                  aria-label="Choose an Excel or CSV file to upload"
                   onChange={handleChange}
                   accept=".xlsx, .csv"
                />
@@ -320,27 +322,28 @@ export default function LeadUpload() {
                         animate={{ opacity: 1, scale: 1 }}
                         className="space-y-4"
                      >
-                        <p className="text-xl font-bold text-slate-800">{file.name}</p>
+                        <p className="max-w-full break-all text-base font-bold text-slate-800 sm:text-lg">{file.name}</p>
                         <div className="flex items-center justify-center gap-4">
                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{(file.size / 1024).toFixed(2)} KB</span>
                            <div className="w-1 h-1 rounded-full bg-slate-300" />
                            <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest italic">{fullData.length} row(s) parsed</span>
                         </div>
                         <button
+                           type="button"
                            onClick={(e) => { e.stopPropagation(); resetFileState(); }}
-                           className="text-red-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 mx-auto hover:bg-red-50 px-4 py-2 rounded-sm mt-8 z-20 transition-all border border-transparent hover:border-red-100"
+                           className="mx-auto mt-5 flex min-h-10 items-center gap-2 rounded-lg border border-transparent px-4 py-2 text-xs font-semibold text-red-600 transition-colors hover:border-red-100 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
                         >
-                        <X className="w-4 h-4" /> Remove Entity
+                        <X className="w-4 h-4" /> Remove file
                         </button>
                      </motion.div>
                   ) : (
                      <div className="space-y-4">
-                        <p className="text-3xl font-black text-brand-text tracking-tighter italic serif uppercase">Drop Logic File Here</p>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic leading-relaxed">System awaiting bulk intelligence payload</p>
+                        <p className="text-xl font-bold tracking-tight text-brand-text sm:text-2xl">Drop your file here</p>
+                        <p className="text-xs leading-5 text-slate-500">Choose an Excel (.xlsx) or CSV file to preview and validate your leads.</p>
                         <div className="pt-10">
                            <div className="inline-flex items-center gap-3 px-6 py-3 bg-white border border-slate-100 shadow-sm rounded-sm">
                               <Plus className="w-4 h-4 text-[#978C21]" />
-                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Select Local Source</span>
+                              <span className="text-xs font-semibold text-slate-700">Choose a file</span>
                            </div>
                         </div>
                      </div>
@@ -352,7 +355,7 @@ export default function LeadUpload() {
                <motion.div
                   initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm space-y-10"
+                  className="space-y-7 rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6 lg:p-8"
                >
                   <div className="flex items-center justify-between border-b border-slate-50 pb-8">
                     <div className="flex items-center gap-4">
@@ -510,7 +513,7 @@ export default function LeadUpload() {
                     onClick={handleUpload}
                     disabled={processing || validating || fullData.length === 0}
                     className={cn(
-                      'w-full py-6 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-[0.4em] transition-all rounded-sm shadow-xl flex items-center justify-center gap-4 group italic',
+                      'flex min-h-12 w-full items-center justify-center gap-3 rounded-lg bg-slate-900 px-4 py-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2',
                       (processing || validating || fullData.length === 0) && 'opacity-60 cursor-not-allowed'
                     )}
                   >
@@ -522,20 +525,20 @@ export default function LeadUpload() {
          </div>
 
          <div className="space-y-6">
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm group">
+            <div className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
                <div className="flex items-center gap-4 mb-8">
                   <div className="w-10 h-10 rounded-sm bg-slate-50 flex items-center justify-center text-slate-400 group-hover:text-amber-500 transition-colors">
                      <AlertCircle className="w-6 h-6" />
                   </div>
-                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">Injection Constraints</h4>
+                  <h4 className="text-sm font-semibold text-brand-text">Upload requirements</h4>
                </div>
                 <ul className="space-y-6">
                   {[
-                     { label: 'Protocols', val: 'XLSX, CSV' },
-                     { label: 'Max Payload', val: '5,000 Entities' },
-                     { label: 'Mandatory', val: 'Name, Phone' },
+                     { label: 'File types', val: 'XLSX, CSV' },
+                     { label: 'Maximum rows', val: '5,000 leads' },
+                     { label: 'Required fields', val: 'Name, Phone' },
                      { label: 'Assigned To', val: 'Active Employee ID' },
-                     { label: 'Statuses', val: 'Configured Options' }
+                     { label: 'Statuses', val: 'Configured options' }
                   ].map((item, i) => (
                      <li key={i} className="flex justify-between items-end border-b border-slate-50 pb-2">
                         <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">{item.label}</span>
@@ -545,11 +548,11 @@ export default function LeadUpload() {
                </ul>
             </div>
 
-            <div className="bg-[#3C3C3C] rounded-sm p-8 shadow-xl relative overflow-hidden">
+            <div className="relative overflow-hidden rounded-xl bg-[#3C3C3C] p-5 shadow-sm sm:p-6">
                <div className="relative z-10">
                   <div className="flex items-center gap-4 mb-8">
                      <ShieldCheck className="w-6 h-6 text-[#978C21]" />
-                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Snapshot Integrity</h4>
+                     <h4 className="text-sm font-semibold text-white">How imports work</h4>
                   </div>
                   <p className="text-[11px] font-black text-slate-400 leading-relaxed italic uppercase tracking-tighter">
                      Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
@@ -558,9 +561,9 @@ export default function LeadUpload() {
                <BarChart3 className="absolute -bottom-6 -right-6 w-32 h-32 text-white/5 rotate-12" />
             </div>
 
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm">
+            <div className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
                <div className="flex items-center justify-between mb-6">
-                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Database Sync</span>
+                  <span className="text-xs font-semibold text-stone-600">Database save</span>
                   <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
                </div>
                <p className="text-[11px] font-black text-slate-500 leading-relaxed italic uppercase tracking-tight">
