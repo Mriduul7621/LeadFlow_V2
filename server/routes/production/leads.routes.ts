@@ -60,6 +60,7 @@ import {
   dhakaYmd,
   dhakaStartUtc,
   addCalendarDays,
+  storedTimestampIso,
 } from '../../utils/businessTime.js';
 import {
   fetchActivityQualitySignals,
@@ -71,8 +72,10 @@ import {
 } from '../../utils/leadQualitySignals.js';
 import type { LeadQualityBand } from '../../utils/leadQuality.js';
 import {
+  buildIdempotencyKey,
   createAssignmentNotifications,
   createAssignmentNotificationsDemo,
+  insertNotificationWithIdempotency,
 } from '../../services/NotificationService.js';
 import { getLeadBulkImportMaxRows } from '../../services/OperationsSettingsService.js';
 import {
@@ -636,7 +639,7 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       undefined,
       qualityConfig
     );
-    const scored = visible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)) }));
+    const scored = visible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)), deleteRequested: false }));
     return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
   }
   const perf = createPerf('leads.list');
@@ -715,11 +718,14 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     // Scoring runs in memory over rows the visibility scope already
     // allowed; the score itself grants no access.
     const ids = (result.rows || []).map((r: any) => String(r.id));
-    const [activityMap, scheduledMap, qualityConfig] = await Promise.all([
+    const [activityMap, scheduledMap, qualityConfig, pendingMap] = await Promise.all([
       fetchActivityQualitySignals(pool, ids),
       fetchScheduledQualitySignals(pool, ids),
       // DZ-3: the stored Lead Quality config (code defaults when unset).
       getLeadQualityConfig(),
+      // Delete-request pending flags (migration 062) — one bulk
+      // query for the whole page, failure-tolerant (see the helper).
+      fetchPendingDeleteRequests(pool, ids),
     ]);
     perf.span('db.qualitySignals');
     const scored = (result.rows || []).map((row: any) => {
@@ -731,6 +737,7 @@ router.get('/leads', requireAuth, async (req: any, res) => {
         undefined,
         qualityConfig
       );
+      mapped.deleteRequested = pendingMap.has(String(row.id));
       return mapped;
     });
     perf.finish(res);
@@ -3155,6 +3162,346 @@ router.get('/leads/follow-ups', requireAuth, async (req: any, res) => {
 /* ------------------------------------------------------------------
    GET /leads/:id — direct single-lead retrieval (visibility enforced)
 ------------------------------------------------------------------- */
+/* ====================================================================
+   LEAD DELETE REQUESTS (migration 062, owner decision 2026-11-18)
+   ------------------------------------------------------------------
+   Deleting a lead from the Leads page no longer deletes it at once:
+   the user files a DELETE REQUEST, every ACTIVE ADMIN gets an
+   in-app notification naming the lead + the requester (NO email —
+   the owner has ruled email out), and an admin approves or rejects
+   from the Delete Requests review page. ONLY an approval actually
+   soft-deletes the lead, through the EXISTING soft-delete path
+   (is_deleted + deleted_at + deleted_by, the approving admin's
+   authority) — counts change only after approval ("admin check
+   kore submit korle then main count hobe"). A rejected request
+   leaves the lead untouched. While a request is pending the lead
+   shows a "delete requested" marker and no second request can be
+   filed for it (checked here AND enforced by the partial unique
+   index in migration 062, so two simultaneous requests cannot
+   both land). Request + approve + reject are all audit-logged.
+
+   Who may request: anyone who can SEE the lead (leads.view +
+   in-scope visibility, the PR #104 predicate) — the approval IS
+   the control, so no leads.delete grant is needed to ask. Who may
+   review: ADMIN/SUPERADMIN only (requireAdmin), and an approval
+   also requires the approver to hold leads.delete or be an admin
+   — the same bar as the direct DELETE endpoint.
+
+   These endpoints REQUIRE the database (the requests table only
+   exists after migration 062): demo mode answers 503, like the
+   other DB-only flows. The pending-flag enrichment on the list
+   and detail reads is deliberately failure-TOLERANT (see
+   fetchPendingDeleteRequests): a missing table must never break
+   Lead360 or the list — the missing migration is loud enough at
+   the request endpoint, which is the action point.
+
+   GET /leads/delete-requests MUST be registered BEFORE /leads/:id
+   so "delete-requests" is never captured as a lead id.
+==================================================================== */
+
+/** Notification event type for a filed delete request. */
+export const DELETE_REQUEST_EVENT = 'lead-delete-request';
+
+/**
+ * Pending delete requests for a set of leads (lead id → pending row).
+ * Failure-tolerant by design: on ANY error (the usual case is a
+ * database whose migrations predate 062, or a test schema without
+ * the table) it returns an empty map instead of breaking the read.
+ * The pending flag is UI enrichment; the authoritative duplicate
+ * guard is the request endpoint's check + the partial unique index,
+ * which fail loudly if the table is missing.
+ */
+async function fetchPendingDeleteRequests(
+  pool: { query: Function },
+  leadIds: string[]
+): Promise<Map<string, { id: string; requestedBy: string; requestedAt: string | null }>> {
+  const out = new Map<string, { id: string; requestedBy: string; requestedAt: string | null }>();
+  if (leadIds.length === 0) return out;
+  try {
+    const res = await pool.query(
+      `SELECT id, lead_id, requested_by, requested_at
+       FROM lead_delete_requests
+       WHERE status = 'pending' AND lead_id = ANY($1::uuid[])`,
+      [leadIds]
+    );
+    for (const r of res.rows || []) {
+      out.set(String(r.lead_id), {
+        id: String(r.id),
+        requestedBy: String(r.requested_by),
+        requestedAt: storedTimestampIso(r.requested_at),
+      });
+    }
+  } catch {
+    // See the doc comment above — enrichment must never break a read.
+  }
+  return out;
+}
+
+/** Active admins (ADMIN/SUPERADMIN role, is_active) — the ONLY
+ *  recipients of a delete-request notification. */
+async function fetchActiveAdmins(client: { query: Function }): Promise<Array<{ id: string; employeeId: string }>> {
+  const res = await client.query(
+    `SELECT u.id, u.employee_id FROM users u
+     JOIN roles r ON r.id = u.role_id
+     WHERE UPPER(r.role_code) IN ('ADMIN','SUPERADMIN') AND u.is_active = TRUE`
+  );
+  return (res.rows || []).map((r: any) => ({ id: String(r.id), employeeId: String(r.employee_id || '') }));
+}
+
+/* POST /leads/:id/delete-request — file a delete request for one
+   lead. 201 + the request on success; 404 when the lead does not
+   exist or is outside the caller's scope (same "not found" as the
+   detail read — never leaks that an out-of-scope lead exists); 409
+   when a request for this lead is already pending. The lead is NOT
+   deleted by this call — counts are unchanged until an admin
+   approves. Demo mode: 503 (requires migration 062). */
+router.post('/leads/:id/delete-request', requireAuth, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Delete requests require the database.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+    const row = await findLeadByIdRaw(param, false);
+    if (!row) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    const visibility = await resolveCallerVisibility(caller);
+    if (!isLeadAccessible(row, visibility, caller)) {
+      return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    }
+    const leadId = String(row.id);
+    const pool = getPool();
+    const reason = clean(req.body?.reason || '').slice(0, 500) || null;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query(
+        `SELECT id FROM lead_delete_requests WHERE lead_id = $1 AND status = 'pending' LIMIT 1`,
+        [leadId]
+      );
+      if (existing.rows[0]) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 409, { success: false, message: 'A delete request for this lead is already pending.' });
+      }
+      const inserted = await client.query(
+        `INSERT INTO lead_delete_requests (lead_id, requested_by, reason)
+         VALUES ($1, $2, $3) RETURNING id, requested_at`,
+        [leadId, caller.id, reason]
+      );
+      const requestRow = inserted.rows[0];
+      // Admins are notified in the SAME transaction as the request
+      // (Option A — transactional atomicity, like the assignment
+      // notifications): a request whose notification failed would
+      // sit invisible to every reviewer, so the whole request
+      // fails instead. Idempotency keys make a retry safe.
+      const [admins, requesterRow] = await Promise.all([
+        fetchActiveAdmins(client),
+        client.query(`SELECT full_name FROM users WHERE id = $1 LIMIT 1`, [caller.id]),
+      ]);
+      const requesterName = String(requesterRow.rows[0]?.full_name || caller.employee_id || 'A user');
+      const leadName = String(row.customer_name || 'Unknown');
+      const leadCode = String(row.lead_code || leadId);
+      for (const admin of admins) {
+        await insertNotificationWithIdempotency(client, {
+          userId: admin.id,
+          recipientKey: admin.employeeId,
+          title: `Delete request: ${leadName}`,
+          message: `${requesterName} (${caller.employee_id}) requested deletion of lead ${leadName} (${leadCode})${reason ? ` — "${reason}"` : ''}. Please review it in Delete Requests.`,
+          eventType: DELETE_REQUEST_EVENT,
+          idempotencyKey: buildIdempotencyKey(DELETE_REQUEST_EVENT, String(requestRow.id), admin.id),
+          leadId,
+          leadCode,
+          referenceType: 'lead_delete_request',
+        });
+      }
+      await client.query('COMMIT');
+      await logAccessChange({
+        actorId: caller.id,
+        actionCode: 'leads.delete.request',
+        entityType: 'lead',
+        entityId: leadId,
+        metadata: { requestId: String(requestRow.id), leadCode, reason },
+      });
+      return sendJson(res, 201, {
+        success: true,
+        request: {
+          id: String(requestRow.id),
+          leadId,
+          status: 'pending',
+          requestedAt: storedTimestampIso(requestRow.requested_at),
+        },
+      });
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      // The partial unique index is the second line of defence
+      // against a duplicate pending request (two requests racing
+      // past the check above): answer 409, not 500.
+      if (String(error?.code || '') === '23505') {
+        return sendJson(res, 409, { success: false, message: 'A delete request for this lead is already pending.' });
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Delete request failed' });
+  }
+});
+
+/* GET /leads/delete-requests — the admin review list: pending
+   requests first (newest first), then reviewed ones. ADMIN /
+   SUPERADMIN only. Optional ?status=pending|approved|rejected
+   filter. Demo mode: 503 (requires migration 062). */
+router.get('/leads/delete-requests', requireAuth, requireAdmin, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Delete requests require the database.' });
+  }
+  try {
+    const statusRaw = String(req.query?.status || '').trim().toLowerCase();
+    if (statusRaw && !['pending', 'approved', 'rejected'].includes(statusRaw)) {
+      return sendJson(res, 400, { success: false, message: 'Unknown status filter. Use pending, approved or rejected.' });
+    }
+    const params: any[] = [];
+    const where = statusRaw ? `WHERE r.status = $1` : '';
+    if (statusRaw) params.push(statusRaw);
+    const result = await getPool().query(
+      `SELECT r.id, r.lead_id, r.requested_by, r.reason, r.status,
+              r.requested_at, r.reviewed_by, r.reviewed_at, r.review_note,
+              l.customer_name, l.mobile, l.lead_code, l.current_status, l.is_deleted,
+              req.full_name AS requested_by_name, req.employee_id AS requested_by_employee_id,
+              rev.full_name AS reviewed_by_name
+       FROM lead_delete_requests r
+       JOIN leads l ON l.id = r.lead_id
+       JOIN users req ON req.id = r.requested_by
+       LEFT JOIN users rev ON rev.id = r.reviewed_by
+       ${where}
+       ORDER BY (r.status = 'pending') DESC, r.requested_at DESC`,
+      params
+    );
+    const requests = (result.rows || []).map((r: any) => ({
+      id: String(r.id),
+      leadId: String(r.lead_id),
+      leadName: r.customer_name || 'Unknown',
+      leadMobile: r.mobile || '',
+      leadCode: r.lead_code || null,
+      leadStatus: r.current_status || '',
+      leadDeleted: r.is_deleted === true,
+      requestedBy: String(r.requested_by),
+      requestedByName: r.requested_by_name || '',
+      requestedByEmployeeId: r.requested_by_employee_id || '',
+      reason: r.reason || null,
+      status: r.status,
+      requestedAt: storedTimestampIso(r.requested_at),
+      reviewedBy: r.reviewed_by ? String(r.reviewed_by) : null,
+      reviewedByName: r.reviewed_by_name || null,
+      reviewedAt: storedTimestampIso(r.reviewed_at),
+      reviewNote: r.review_note || null,
+    }));
+    return sendJson(res, 200, { success: true, requests });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Delete requests failed' });
+  }
+});
+
+/* POST /leads/delete-requests/:requestId/review — approve or
+   reject one pending request. ADMIN / SUPERADMIN only, and an
+   approval additionally requires the approver to hold leads.delete
+   or be an admin — the same bar as the direct DELETE endpoint, so
+   the approval really is the admin's authority deleting the lead.
+   Approve = the lead is soft-deleted NOW through the existing path
+   (is_deleted + deleted_at + deleted_by); reject = the lead is
+   untouched. A request that is no longer pending answers 409.
+   Demo mode: 503 (requires migration 062). */
+router.post('/leads/delete-requests/:requestId/review', requireAuth, requireAdmin, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Delete requests require the database.' });
+  }
+  try {
+    const actionRaw = String(req.body?.action || '').trim().toLowerCase();
+    if (actionRaw !== 'approve' && actionRaw !== 'reject') {
+      return sendJson(res, 400, { success: false, message: 'Action must be "approve" or "reject".' });
+    }
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const requestId = String(req.params.requestId || '').trim();
+    if (!requestId) return sendJson(res, 400, { success: false, message: 'Request id is required.' });
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const found = await client.query(
+        `SELECT r.id, r.lead_id, r.status, l.is_deleted, l.lead_code
+         FROM lead_delete_requests r JOIN leads l ON l.id = r.lead_id
+         WHERE r.id = $1 LIMIT 1`,
+        [requestId]
+      );
+      const requestRow = found.rows[0];
+      if (!requestRow) {
+        await client.query('ROLLBACK');
+        return sendJson(res, 404, { success: false, message: 'Delete request not found.' });
+      }
+      if (requestRow.status !== 'pending') {
+        await client.query('ROLLBACK');
+        return sendJson(res, 409, { success: false, message: `This request was already ${requestRow.status}.` });
+      }
+      const note = clean(req.body?.note || '').slice(0, 500) || null;
+      const leadId = String(requestRow.lead_id);
+      let leadAlreadyDeleted = false;
+      if (actionRaw === 'approve') {
+        // The approver's authority deletes the lead: same bar as
+        // the direct DELETE endpoint (admin role, or leads.delete).
+        const role = normalizeRole(caller.role_code);
+        const isAdmin = role === 'ADMIN' || role === 'SUPERADMIN';
+        if (!isAdmin && !(await hasPermissionCode(caller, 'leads.delete'))) {
+          await client.query('ROLLBACK');
+          return sendJson(res, 403, { success: false, message: 'You do not have permission to delete leads.' });
+        }
+        const deleted = await client.query(
+          `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
+           WHERE id = $1 AND is_deleted = FALSE RETURNING id`,
+          [leadId, caller.id]
+        );
+        leadAlreadyDeleted = !deleted.rows[0];
+      }
+      await client.query(
+        `UPDATE lead_delete_requests
+         SET status = $2, reviewed_by = $3, reviewed_at = NOW(), review_note = $4
+         WHERE id = $1`,
+        [requestId, actionRaw === 'approve' ? 'approved' : 'rejected', caller.id, note]
+      );
+      await client.query('COMMIT');
+      await logAccessChange({
+        actorId: caller.id,
+        actionCode: actionRaw === 'approve' ? 'leads.delete.approve' : 'leads.delete.reject',
+        entityType: 'lead',
+        entityId: leadId,
+        metadata: { requestId, leadCode: String(requestRow.lead_code || ''), leadAlreadyDeleted, note },
+      });
+      return sendJson(res, 200, {
+        success: true,
+        status: actionRaw === 'approve' ? 'approved' : 'rejected',
+        leadAlreadyDeleted: actionRaw === 'approve' ? leadAlreadyDeleted : false,
+      });
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Delete request review failed' });
+  }
+});
+
 router.get('/leads/:id', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   try {
@@ -3179,6 +3526,7 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
       }
       return sendJson(res, 200, {
         ...lead,
+        deleteRequest: null,
         leadQuality: scoreFallbackLead(
           lead,
           (fallbackStore as any).leadActivities || [],
@@ -3197,12 +3545,15 @@ router.get('/leads/:id', requireAuth, async (req: any, res) => {
       return sendJson(res, 404, { success: false, message: 'Lead not found.' });
     }
     const mappedSingle: any = mapLeadRow(row);
-    const [singleActivity, singleScheduled, singleQualityConfig] = await Promise.all([
+    const [singleActivity, singleScheduled, singleQualityConfig, singlePending] = await Promise.all([
       fetchActivityQualitySignals(getPool(), [String(row.id)]),
       fetchScheduledQualitySignals(getPool(), [String(row.id)]),
       // DZ-3: the stored Lead Quality config (code defaults when unset).
       getLeadQualityConfig(),
+      // Pending delete request (migration 062) — failure-tolerant.
+      fetchPendingDeleteRequests(getPool(), [String(row.id)]),
     ]);
+    mappedSingle.deleteRequest = singlePending.get(String(row.id)) || null;
     mappedSingle.leadQuality = scoreLeadRow(
       row,
       singleActivity.get(String(row.id)),

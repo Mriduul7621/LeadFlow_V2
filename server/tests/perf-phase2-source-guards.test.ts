@@ -49,6 +49,7 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     ['Activities', 'modules/leads/pages/Activities'],
     ['DailyWorkbench', 'modules/workbench/pages/DailyWorkbench'],
     ['Lead360', 'modules/leads/pages/Lead360'],
+    ['DeleteRequests', 'modules/leads/pages/DeleteRequests'],
     ['UserManagement', 'modules/users/pages/UserManagement'],
     ['TeamHierarchy', 'modules/hierarchy/pages/TeamHierarchy'],
     ['ExecutionIntelligence', 'modules/dashboard/pages/ExecutionIntelligence'],

@@ -334,11 +334,11 @@ describe('kpiDrilldown helpers — levels, chains, URLs', () => {
   it('summarizeTeamTotals sums the WHOLE visible set (the org totals an admin sees)', () => {
     assert.deepEqual(summarizeTeamTotals(orgPeople), {
       open: 10, dueToday: 3, overdue: 3, converted: 2,
-      totalLeads: 12, todayCollection: 6, noAction: 4,
+      totalLeads: 12, todayCollection: 6, noAction: 4, dueTomorrow: 0,
     });
     assert.deepEqual(summarizeTeamTotals([]), {
       open: 0, dueToday: 0, overdue: 0, converted: 0,
-      totalLeads: 0, todayCollection: 0, noAction: 0,
+      totalLeads: 0, todayCollection: 0, noAction: 0, dueTomorrow: 0,
     });
   });
 
@@ -1150,14 +1150,24 @@ describe('KPI drill-down — source guards', () => {
       'the route is in the access table as a Team sub-page, open to everyone (scoping is server-side)');
   });
 
-  it('the Workbench strip links the caller\'s own leads for all seven KPIs', () => {
+  it('the Workbench KPI row links the caller\'s own leads for all seven KPIs (shared HomeKpiRow)', () => {
+    // Mirror rule (2026-11-18): My Work and Team Home render the SAME
+    // row from the shared HomeKpiRow component — the old per-page
+    // "My numbers" strip is gone. My Work passes personParam="self"
+    // so every card opens the caller's own leads; the component
+    // builds the ?person=self links from the shared HOME_KPI_ORDER.
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
-    assert.ok(workbench.includes('My numbers'), 'the strip is headed My numbers');
-    for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
-      assert.ok(workbench.includes(`to="/team/kpi/${kpi}?person=self"`),
-        `the ${kpi} strip card opens the caller's own leads`);
-    }
-    assert.ok(workbench.includes('getSelfPerson(callerTeam.overview'), 'the strip reads the already-loaded self row');
+    assert.ok(!workbench.includes('KpiStripCard'), 'the old per-page strip component is gone');
+    assert.ok(workbench.includes("from '../../team/components/HomeKpiRow'"), 'My Work renders the shared row');
+    assert.ok(workbench.includes('personParam="self"'), 'My Work cards link the caller\'s own leads');
+    assert.ok(workbench.includes('getSelfPerson(callerTeam.overview'), 'the row reads the already-loaded self row');
+    const row = read('src/modules/team/components/HomeKpiRow.tsx');
+    assert.ok(row.includes('HOME_KPI_ORDER'), 'the row renders the shared seven-card order');
+    assert.ok(row.includes('`/team/kpi/${kpi}${suffix}`'), 'each card links to its drill-down');
+    assert.ok(row.includes("personParam ? `?person=${encodeURIComponent(personParam)}` : ''"),
+      'the self suffix is appended only when a person param is passed');
+    const teamHome = read('src/modules/team/pages/TeamHome.tsx');
+    assert.ok(teamHome.includes('<HomeKpiRow values={totals} />'), 'Team Home renders the same row without a person param (team drill-down)');
   });
 
   it('the server gates the export on leads.export and keeps its own export service', () => {

@@ -411,6 +411,14 @@ export default function Lead360() {
             )}
           </div>
         </div>
+        {lead.deleteRequest && (
+          <div className="mt-6 flex items-center gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
+            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+            <p className="text-xs font-semibold text-amber-800">
+              Delete requested — waiting for admin review. The lead stays in place until an admin approves the request.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-50">
           <div>
             <p className="text-xs font-medium text-slate-500">Assigned To</p>
@@ -503,6 +511,14 @@ export default function Lead360() {
             <span>Lead quality</span>
             <span className="flex items-center gap-2"><LeadQualityBadge quality={lead.leadQuality} /><ChevronRight className="h-3.5 w-3.5" /></span>
           </button>
+          {lead.deleteRequest && (
+            <div className="mt-4 flex items-center gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+              <p className="text-xs font-semibold text-amber-800">
+                Delete requested — waiting for admin review. The lead stays in place until an admin approves the request.
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Lead details sections">
           {([

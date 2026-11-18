@@ -70,6 +70,7 @@ import { up as dangerZoneUnlocks } from "./migrations/057_danger_zone_unlocks.js
 import { up as userDesignationBackfill } from "./migrations/058_user_designation_backfill.js";
 import { up as formFieldsTimestamps } from "./migrations/059_form_fields_timestamps.js";
 import { up as stageRulesTerminal } from "./migrations/060_stage_rules_terminal.js";
+import { up as leadDeleteRequests } from "./migrations/062_lead_delete_requests.js";
 
 import {
   loadLedger,
@@ -191,6 +192,7 @@ const migrations: Migration[] = [
 
     { id: "059_form_fields_timestamps", name: "Form Fields Timestamps (schema drift repair)", run: formFieldsTimestamps },
     { id: "060_stage_rules_terminal", name: "DZ-6 Stage Rules + Terminal Unification", run: stageRulesTerminal },
+    { id: "062_lead_delete_requests", name: "Lead Delete Requests (admin approval)", run: leadDeleteRequests },
 
 ];
 

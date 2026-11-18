@@ -55,6 +55,7 @@ import {
   type TeamOverviewResponse,
 } from '../../src/modules/team/services/teamOverviewService';
 import {
+  HOME_KPI_ORDER,
   KPI_KEYS,
   KPI_META,
   isKpiKey,
@@ -125,16 +126,23 @@ const teamOverview = (people: TeamOverviewPerson[], scope: string): TeamOverview
 /* ================================================================ */
 
 describe('new KPI cards — pure helpers', () => {
-  it('there are seven KPI keys, with the owner\'s labels', () => {
-    assert.deepEqual([...KPI_KEYS], ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']);
+  it('there are eight KPI keys, with the owner\'s labels — and the home row shows seven cards', () => {
+    assert.deepEqual([...KPI_KEYS], ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction', 'dueTomorrow']);
     assert.equal(KPI_META.totalLeads.label, 'Total Lead');
     assert.equal(KPI_META.todayCollection.label, 'Today Lead Collection');
     assert.equal(KPI_META.noAction.label, 'No Action Alert');
+    assert.equal(KPI_META.dueTomorrow.label, 'Due tomorrow');
     assert.equal(isKpiKey('totalLeads'), true);
     assert.equal(isKpiKey('todayCollection'), true);
     assert.equal(isKpiKey('noAction'), true);
+    assert.equal(isKpiKey('dueTomorrow'), true, 'the eighth key exists only for the Tomorrow Preview drill-in');
     assert.equal(isKpiKey('Total'), false, 'keys are the exact camelCase codes');
     assert.equal(isKpiKey('no_action'), false);
+    // The home row is still the owner's seven cards, in the owner's
+    // order (2026-11-18 mirror) — dueTomorrow is deliberately NOT a
+    // card.
+    assert.deepEqual([...HOME_KPI_ORDER], ['totalLeads', 'todayCollection', 'open', 'dueToday', 'overdue', 'noAction', 'converted']);
+    assert.ok(!HOME_KPI_ORDER.includes('dueTomorrow' as any), 'dueTomorrow never renders as a card');
   });
 
   it('kpiValueFor reads the new overview counts', () => {

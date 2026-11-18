@@ -35,6 +35,10 @@ export interface TeamOverviewPerson {
   convertedLeads: number;
   dueToday: number;
   overdue: number;
+  /** Follow-ups due tomorrow (Dhaka day) — the Tomorrow Preview.
+   *  Optional for payloads that predate the field (older cached
+   *  shapes): readers treat undefined as 0. */
+  dueTomorrow?: number;
   totalLeads: number;
   todayLeads: number;
   noActionLeads: number;
@@ -144,6 +148,7 @@ export interface TeamTotals {
   totalLeads: number;
   todayCollection: number;
   noAction: number;
+  dueTomorrow: number;
 }
 
 /** Whole-team totals — the same sums the My Team page header shows. */
@@ -157,8 +162,9 @@ export function summarizeTeamTotals(people: TeamOverviewPerson[]): TeamTotals {
       totalLeads: acc.totalLeads + p.totalLeads,
       todayCollection: acc.todayCollection + p.todayLeads,
       noAction: acc.noAction + p.noActionLeads,
+      dueTomorrow: acc.dueTomorrow + (p.dueTomorrow ?? 0),
     }),
-    { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 }
+    { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0, dueTomorrow: 0 }
   );
 }
 
@@ -182,4 +188,64 @@ export function staleLeadRadar(people: TeamOverviewPerson[], limit = 5): TeamOve
     .filter(p => p.overdue > 0)
     .sort((a, b) => b.overdue - a.overdue || b.openLeads - a.openLeads || a.name.localeCompare(b.name))
     .slice(0, limit);
+}
+
+/**
+ * Execution Queue overview (team, 2026-11-18): EVERY in-scope
+ * member with their queue counts, busiest first (most overdue,
+ * then most due today, then most open, then name). Never-empty:
+ * zero-count members are listed too — the section never renders
+ * blank, and clicking a member shows their executions.
+ */
+export function teamExecutionOverview(people: TeamOverviewPerson[]): TeamOverviewPerson[] {
+  return [...people].sort((a, b) =>
+    b.overdue - a.overdue || b.dueToday - a.dueToday || b.openLeads - a.openLeads || a.name.localeCompare(b.name)
+  );
+}
+
+/**
+ * Tomorrow Preview (team, 2026-11-18): members with follow-ups due
+ * tomorrow, most first. The section itself still renders with a
+ * "nothing scheduled" line when this list is empty (never-empty
+ * rule); this helper only returns the members who have work.
+ */
+export function teamTomorrowPreview(people: TeamOverviewPerson[]): TeamOverviewPerson[] {
+  return people
+    .filter(p => (p.dueTomorrow ?? 0) > 0)
+    .sort((a, b) => (b.dueTomorrow ?? 0) - (a.dueTomorrow ?? 0) || a.name.localeCompare(b.name));
+}
+
+export type ExecutionDueState = 'overdue' | 'today' | 'upcoming';
+
+export interface ExecutionLead {
+  id: string;
+  leadCode: string | null;
+  customerName: string;
+  mobile: string;
+  currentStatus: string;
+  nextFollowUpAt: string | null;
+  createdAt: string | null;
+  dueState: ExecutionDueState;
+}
+
+export interface ExecutionsResponse {
+  success: boolean;
+  person: { name: string; employeeId: string; designation: string | null };
+  total: number;
+  items: ExecutionLead[];
+}
+
+/**
+ * One visible person's execution queue (GET /api/team/executions).
+ * `person` is an employee ID, or 'self' for the caller. The server
+ * 404s for anyone outside the caller's visible set.
+ */
+export async function fetchExecutions(person: string): Promise<ExecutionsResponse> {
+  const res = await apiRequest<ExecutionsResponse>(`/api/team/executions?person=${encodeURIComponent(person)}`);
+  return {
+    success: Boolean(res?.success),
+    person: res?.person ?? { name: '', employeeId: person, designation: null },
+    total: typeof res?.total === 'number' ? res.total : 0,
+    items: Array.isArray(res?.items) ? res.items : [],
+  };
 }

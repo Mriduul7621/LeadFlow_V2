@@ -422,8 +422,8 @@ describe('teamOverviewService — team facts and shaping', () => {
   });
 
   it('summarizeTeamTotals sums the whole team', () => {
-    assert.deepEqual(summarizeTeamTotals(fixturePeople), { open: 19, dueToday: 6, overdue: 11, converted: 13, totalLeads: 44, todayCollection: 4, noAction: 3 });
-    assert.deepEqual(summarizeTeamTotals([]), { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 });
+    assert.deepEqual(summarizeTeamTotals(fixturePeople), { open: 19, dueToday: 6, overdue: 11, converted: 13, totalLeads: 44, todayCollection: 4, noAction: 3, dueTomorrow: 0 });
+    assert.deepEqual(summarizeTeamTotals([]), { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0, dueTomorrow: 0 });
   });
 
   it('teamFollowUpsToday lists only members with due/overdue work, worst first', () => {
@@ -463,7 +463,15 @@ describe('TeamHome — rendering from the overview payload', () => {
     assert.ok(html.includes('Arif Member') && html.includes('EMP-002'), 'member rows carry name + employee ID');
     assert.ok(html.includes('href="/team"'), 'member rows link through to My Team');
     assert.ok(html.includes('Stale-lead radar'), 'radar section present');
-    assert.ok(!html.includes('Dina Member'), 'a member with nothing due/overdue appears in neither list');
+    // Dina has nothing due/overdue: she appears in NEITHER the
+    // follow-ups list NOR the radar — but the Execution Queue lists
+    // EVERY member (never-empty), so she is there with zero counts.
+    const followUpsSection = html.slice(html.indexOf('Team follow-ups today'), html.indexOf('Tomorrow Preview'));
+    assert.ok(!followUpsSection.includes('Dina Member'), 'a member with nothing due/overdue is absent from the follow-ups list');
+    const radarSection = html.slice(html.indexOf('Stale-lead radar'));
+    assert.ok(!radarSection.includes('Dina Member'), 'a member with nothing overdue is absent from the radar');
+    const queueSection = html.slice(html.indexOf('Execution Queue'), html.indexOf('Team follow-ups today'));
+    assert.ok(queueSection.includes('Dina Member'), 'the Execution Queue still lists every member, zero counts included');
     const followUpOrder = ['Arif Member', 'Bina Member', 'Lena Lead', 'Chad Member'].map(n => html.indexOf(n));
     assert.ok(followUpOrder.every((v, i) => v >= 0 && (i === 0 || followUpOrder[i - 1] < v)),
       'follow-up rows render worst-first');

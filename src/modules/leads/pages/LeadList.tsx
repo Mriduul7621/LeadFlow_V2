@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Edit2,
   Target,
+  Trash2,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -59,6 +60,14 @@ export default function LeadList() {
   const [exportFrom, setExportFrom] = useState('');
   const [exportTo, setExportTo] = useState('');
   const [exportBusy, setExportBusy] = useState(false);
+  // Delete request (migration 062, 2026-11-18): clicking the trash
+  // icon files a REQUEST for admin review — it never deletes at
+  // once. The dialog below confirms it; the row then shows the
+  // "Delete requested" marker and the icon is disabled until the
+  // request is decided.
+  const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // FIX-1c — deep links (?leadId=, used by notifications and the Task
   // Calendar) land on the Lead 360 workspace, the same full-page format
@@ -98,6 +107,36 @@ export default function LeadList() {
       toast.error('Failed to sync lead intelligence');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const markDeleteRequested = (leadId: string) => {
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, deleteRequested: true } : l)));
+  };
+
+  const submitDeleteRequest = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await leadService.requestDelete(deleteTarget.id, deleteReason.trim() || undefined);
+      toast.success('Delete request sent — an admin will review it.');
+      markDeleteRequested(deleteTarget.id);
+      setDeleteTarget(null);
+      setDeleteReason('');
+    } catch (err: any) {
+      // 409 = a request is already pending (e.g. filed from another
+      // device, or from Lead360) — mark it pending and say so
+      // instead of showing an error.
+      if (err?.status === 409) {
+        markDeleteRequested(deleteTarget.id);
+        toast.info('A delete request for this lead is already pending.');
+        setDeleteTarget(null);
+        setDeleteReason('');
+      } else {
+        toast.error(err?.message || 'Could not send the delete request. Please try again.');
+      }
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -476,6 +515,9 @@ export default function LeadList() {
           <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
           <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
           <span className="lf-mobile-lead-status">{lead.currentStatus || 'New'}</span>
+          {lead.deleteRequested && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-sm self-start">Delete requested</span>
+          )}
         </span>
       </button>
       {/* Quick status update straight from the list (same rule as Lead 360:
@@ -489,6 +531,27 @@ export default function LeadList() {
           title="Update status"
         >
           <Target size={17} />
+        </button>
+      )}
+      {lead.deleteRequested ? (
+        <button
+          type="button"
+          disabled
+          className="lf-row-action"
+          aria-label="Delete requested — waiting for admin review"
+          title="Delete requested"
+        >
+          <Trash2 size={17} className="text-amber-500" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="lf-row-action"
+          onClick={() => { setDeleteTarget(lead); setDeleteReason(''); }}
+          aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
+          title="Request deletion"
+        >
+          <Trash2 size={17} />
         </button>
       )}
       <button
@@ -553,6 +616,11 @@ export default function LeadList() {
                                 Update
                              </button>
                            )}
+                           {lead.deleteRequested && (
+                             <span className="text-[8px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0 normal-case not-italic">
+                               Delete requested
+                             </span>
+                           )}
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold flex items-center gap-1 uppercase tracking-tight mt-1 opacity-60">
                           <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || 'No Mobile'} • {lead.area || 'No Area'}
@@ -607,6 +675,25 @@ export default function LeadList() {
                        >
                         <Edit2 className="w-3.5 h-3.5" />
                        </button>
+                       {lead.deleteRequested ? (
+                         <button
+                           disabled
+                           className="p-2 border border-amber-200 bg-amber-50 text-amber-500 rounded-sm shadow-xs transition-all cursor-not-allowed opacity-80"
+                           title="Delete requested — waiting for admin review"
+                           aria-label={'Delete requested for ' + (lead.prospectName || 'lead')}
+                         >
+                          <Trash2 className="w-3.5 h-3.5" />
+                         </button>
+                       ) : (
+                         <button
+                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); setDeleteReason(''); }}
+                           className="p-2 border border-slate-100 hover:border-red-300 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
+                           title="Request deletion — an admin reviews it"
+                           aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
+                         >
+                          <Trash2 className="w-3.5 h-3.5" />
+                         </button>
+                       )}
                        <button 
                          onClick={(e) => { e.stopPropagation(); handleCall(lead.prospectName || 'Prospect'); }}
                          className="p-2 border border-slate-100 hover:border-blue-300 text-blue-700 hover:text-blue-700 hover:bg-blue-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
@@ -788,6 +875,77 @@ export default function LeadList() {
                 >
                   <Download className="w-3.5 h-3.5 text-[#978C21]" />
                   {exportBusy ? 'Preparing…' : 'Download Excel'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete-request dialog (migration 062): files a REQUEST for
+          admin review — it never deletes the lead at once. */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !deleteBusy && setDeleteTarget(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
+            >
+              <div className="bg-[#3C3C3C] px-6 py-5 flex items-center justify-between">
+                <div>
+                  <h3 className="text-white text-lg font-black uppercase tracking-tight">Request Deletion</h3>
+                  <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">{deleteTarget.prospectName || 'Unknown Prospect'} · {deleteTarget.mobile || 'No mobile'}</p>
+                </div>
+                <button
+                  onClick={() => !deleteBusy && setDeleteTarget(null)}
+                  className="p-2 hover:bg-white/5 rounded-sm text-slate-400 hover:text-white transition-all"
+                >
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  This does <span className="font-bold text-slate-800">not</span> delete the lead right away.
+                  An admin will review your request — only their approval deletes the lead.
+                </p>
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Reason (optional)</p>
+                  <input
+                    type="text"
+                    value={deleteReason}
+                    onChange={e => setDeleteReason(e.target.value)}
+                    maxLength={500}
+                    placeholder="Why should this lead be deleted?"
+                    className="w-full border border-slate-200 rounded-sm px-3 py-2 text-sm text-slate-700"
+                  />
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={deleteBusy}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitDeleteRequest}
+                  disabled={deleteBusy}
+                  className="flex items-center gap-2 px-5 py-2 bg-red-600 hover:bg-red-700 text-white text-[11px] font-black uppercase tracking-widest rounded-sm shadow-md transition-all disabled:opacity-60"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {deleteBusy ? 'Sending…' : 'Send request'}
                 </button>
               </div>
             </motion.div>

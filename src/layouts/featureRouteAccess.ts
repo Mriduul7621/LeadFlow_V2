@@ -115,6 +115,13 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY },
   '/leads/all': { route: '/leads/all', path: '/leads/all', roles: ADMIN_ONLY },
   '/leads/:id/update': { route: '/leads/:id/update', path: '/leads', roles: EVERYONE },
+  // Lead edit (LeadGenerate in edit mode) — same module as Lead 360;
+  // the page gates on lead_tracking.edit and the server enforces
+  // leads.edit + visibility on the save.
+  '/leads/:id/edit': { route: '/leads/:id/edit', path: '/leads', roles: EVERYONE },
+  // Delete Requests review — admin-only (ADMIN/SUPERADMIN bypass
+  // above covers both; the server re-checks requireAdmin).
+  '/leads/delete-requests': { route: '/leads/delete-requests', path: '/leads/delete-requests', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/execution-intelligence': { route: '/execution-intelligence', path: '/execution-intelligence', roles: INSIGHT_ROLES },
   '/ncp-progress': { route: '/ncp-progress', path: '/ncp-progress', roles: INSIGHT_ROLES },
   '/trend-charts': { route: '/trend-charts', path: '/trend-charts', roles: INSIGHT_ROLES },

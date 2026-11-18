@@ -38,6 +38,13 @@
  *                     non-empty legacy leads.status_history JSONB
  *                     array (the pre-037 history, still appended by
  *                     the follow-up route for backward compat).
+ *   dueTomorrow     = next_follow_up_at within TOMORROW's Dhaka
+ *                     business day — NO terminal filter, mirroring
+ *                     dueToday (a scheduling count, not an
+ *                     open-leads count; the list must contain
+ *                     exactly the leads it counted). Feeds the
+ *                     Tomorrow Preview on the team home
+ *                     (2026-11-18); there is no eighth KPI card.
  *
  * The 48-hour boundary is timezone-correct by construction: the
  * cutoff is computed in JS (UTC) and compared as a UTC wall-clock
@@ -75,6 +82,7 @@ export const KPI_KEYS = [
   'totalLeads',
   'todayCollection',
   'noAction',
+  'dueTomorrow',
 ] as const;
 export type KpiKey = (typeof KPI_KEYS)[number];
 
@@ -86,6 +94,7 @@ export const KPI_LABELS: Record<KpiKey, string> = {
   totalLeads: 'Total Lead',
   todayCollection: 'Today Lead Collection',
   noAction: 'No Action Alert',
+  dueTomorrow: 'Due tomorrow',
 };
 
 /** The no-action window: no first action within 48 hours of entry. */
@@ -144,6 +153,11 @@ export interface KpiPredicateContext {
   /** Dhaka day bounds, ISO instants (getDhakaBusinessDayBounds). */
   todayStartIso: string;
   tomorrowStartIso: string;
+  /** Start of the day after tomorrow (tomorrowStart + 24h) — the
+   *  dueTomorrow upper bound. Optional: when a caller does not
+   *  supply it, the predicate derives it from tomorrowStartIso,
+   *  so older call sites keep working unchanged. */
+  dayAfterTomorrowStartIso?: string;
   /** noActionCutoffIso() for the same `now` as the bounds. */
   noActionCutoffIso: string;
   /** DZ-6: current terminal status names, resolved by the caller
@@ -187,6 +201,14 @@ export function kpiLeadPredicate(kpi: KpiKey, ctx: KpiPredicateContext): string 
     case 'dueToday':
       // Deliberately NO terminal filter — see the module header.
       return `${a}.next_follow_up_at >= ${ctx.pushParam(ctx.todayStartIso)} AND ${a}.next_follow_up_at < ${ctx.pushParam(ctx.tomorrowStartIso)}`;
+    case 'dueTomorrow': {
+      // Deliberately NO terminal filter — see the module header
+      // (mirrors dueToday: a scheduling count). The upper bound is
+      // the day after tomorrow's Dhaka start.
+      const dayAfter = ctx.dayAfterTomorrowStartIso
+        ?? new Date(new Date(ctx.tomorrowStartIso).getTime() + 86400000).toISOString();
+      return `${a}.next_follow_up_at >= ${ctx.pushParam(ctx.tomorrowStartIso)} AND ${a}.next_follow_up_at < ${ctx.pushParam(dayAfter)}`;
+    }
     case 'overdue':
       return `${notTerminal()} AND ${a}.next_follow_up_at < ${ctx.pushParam(ctx.todayStartIso)}`;
     case 'totalLeads':

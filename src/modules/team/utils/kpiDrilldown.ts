@@ -37,7 +37,7 @@ import { getSelfPerson } from '../services/teamOverviewService';
  *     hand-crafted URL cannot widen the scope.
  */
 
-export const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction'] as const;
+export const KPI_KEYS = ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction', 'dueTomorrow'] as const;
 export type KpiKey = (typeof KPI_KEYS)[number];
 
 export const KPI_META: Record<KpiKey, { label: string; shortLabel: string }> = {
@@ -48,7 +48,26 @@ export const KPI_META: Record<KpiKey, { label: string; shortLabel: string }> = {
   totalLeads: { label: 'Total Lead', shortLabel: 'Total lead' },
   todayCollection: { label: 'Today Lead Collection', shortLabel: 'Today collection' },
   noAction: { label: 'No Action Alert', shortLabel: 'No action' },
+  dueTomorrow: { label: 'Due tomorrow', shortLabel: 'Due tomorrow' },
 };
+
+/**
+ * The seven KPI cards on the home pages (My Work + Team), in the
+ * owner's order (2026-11-18): Total Lead, Today Lead Collection,
+ * Open leads, Due today, Overdue, No Action Alert, Converted.
+ * Both pages render the SAME row from this ONE order — the mirror
+ * rule. `dueTomorrow` is deliberately NOT a card: it exists only
+ * so the Tomorrow Preview can drill into /team/kpi/dueTomorrow.
+ */
+export const HOME_KPI_ORDER = [
+  'totalLeads',
+  'todayCollection',
+  'open',
+  'dueToday',
+  'overdue',
+  'noAction',
+  'converted',
+] as const;
 
 /** `person=self` = the caller's own leads, even if they have reports. */
 export const SELF_PERSON_PARAM = 'self';
@@ -67,6 +86,7 @@ export function kpiValueFor(person: TeamOverviewPerson, kpi: KpiKey): number {
     case 'totalLeads': return person.totalLeads;
     case 'todayCollection': return person.todayLeads;
     case 'noAction': return person.noActionLeads;
+    case 'dueTomorrow': return person.dueTomorrow ?? 0;
   }
 }
 

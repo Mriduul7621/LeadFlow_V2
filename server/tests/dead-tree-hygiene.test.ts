@@ -11,6 +11,12 @@
  *         the unreachable `/leads/:id/edit` page) is gone; only
  *         `src/utils/chunkRecovery.ts` survives because the chunk boundary
  *         imports it for real.
+ *         UPDATE (owner, 2026-11-18): the /leads/:id/edit ROUTE is back —
+ *         as a real route rendering LeadGenerate in edit mode, because
+ *         Lead360's Edit button navigated there and the missing route
+ *         sent the user home. What stays gone is the separate
+ *         LeadEdit.tsx page: there is ONE edit form (LeadGenerate),
+ *         not two. The F14 test below pins that split.
  *   F15 — POST /users/bulk/validate and /users/bulk/commit validated the
  *         payload BEFORE checking the caller's permission, so an unprivileged
  *         caller got `400 No rows supplied` for an empty body and only got the
@@ -73,12 +79,21 @@ describe('Dead code hygiene — F14', () => {
     }
   });
 
-  it('F14. the unreachable /leads/:id/edit page and route are gone', () => {
-    assert.equal(exists('src/modules/leads/pages/LeadEdit.tsx'), false, 'LeadEdit.tsx must be deleted');
+  it('F14. no separate LeadEdit page exists — the /leads/:id/edit route renders LeadGenerate in edit mode', () => {
+    // F14 deleted the unreachable LeadEdit.tsx page. The ROUTE came
+    // back in 2026-11-18 (owner: Lead360's Edit button navigated
+    // there and the missing route sent the user home) — but as
+    // LeadGenerate in edit mode, NOT as a second edit page. A
+    // separate LeadEdit.tsx would be the same dead-copy bug F14
+    // removed: an edit landing in the file the app never renders.
+    assert.equal(exists('src/modules/leads/pages/LeadEdit.tsx'), false, 'LeadEdit.tsx must stay deleted — edit mode lives in LeadGenerate');
     for (const rel of ['src/App.tsx', 'src/layouts/featureRouteAccess.ts']) {
       assert.ok(!read(rel).includes('LeadEdit'), `${rel} must not reference LeadEdit`);
-      assert.ok(!read(rel).includes("/leads/:id/edit"), `${rel} must not define the edit route`);
     }
+    assert.ok(read('src/App.tsx').includes("path: '/leads/:id/edit'"), 'the edit route exists and is reachable');
+    assert.ok(read('src/App.tsx').includes('<LazyPage page={<LeadGenerate />} />') || read('src/App.tsx').includes('page={<LeadGenerate />}'),
+      'the edit route renders LeadGenerate');
+    assert.ok(read('src/layouts/featureRouteAccess.ts').includes("'/leads/:id/edit'"), 'the edit route is access-registered');
     // The canonical entry point survives.
     assert.ok(read('src/App.tsx').includes("path: '/leads/:id/update'"), 'the update route must still exist');
   });

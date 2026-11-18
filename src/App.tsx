@@ -44,6 +44,7 @@ const Activities = lazy(() => import('./modules/leads/pages/Activities'));
 const DailyWorkbench = lazy(() => import('./modules/workbench/pages/DailyWorkbench'));
 const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
 const LeadUpdate = lazy(() => import('./modules/leads/pages/LeadUpdate'));
+const DeleteRequests = lazy(() => import('./modules/leads/pages/DeleteRequests'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
 const TeamOverview = lazy(() => import('./modules/team/pages/TeamOverview'));
@@ -172,6 +173,19 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/leads/:id/update"><LazyPage page={<LeadUpdate />} /></FeatureGate></ProtectedRoute>,
   },
   {
+    // Lead edit — LeadGenerate in edit mode (2026-11-18). This route
+    // did NOT exist before: Lead360's Edit button navigated here and
+    // the catch-all sent the user home. (The empty route object that
+    // used to sit here was a leftover — removed with this fix.)
+    path: '/leads/:id/edit',
+    element: <ProtectedRoute><FeatureGate route="/leads/:id/edit"><LazyPage page={<LeadGenerate />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    // Delete Requests review — admin-only (AdminRoute + the
+    // admin-only FEATURE_ROUTES entry; the server re-checks
+    // requireAdmin). Static segment, so it outranks /leads/:id.
+    path: '/leads/delete-requests',
+    element: <ProtectedRoute><FeatureGate route="/leads/delete-requests"><LazyPage page={<AdminRoute><DeleteRequests /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/leads/:id',

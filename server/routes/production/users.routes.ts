@@ -592,6 +592,8 @@ export interface TeamOverviewPersonPayload {
   convertedLeads: number;
   dueToday: number;
   overdue: number;
+  /** Follow-ups due tomorrow (Dhaka day) — the Tomorrow Preview. */
+  dueTomorrow: number;
   totalLeads: number;
   todayLeads: number;
   noActionLeads: number;
@@ -655,6 +657,12 @@ async function loadTeamOverviewForCaller(
         const t = new Date(l.nextFollowUpDate).getTime();
         return t >= new Date(todayBounds.todayStartIso).getTime() && t < new Date(todayBounds.tomorrowStartIso).getTime();
       }).length;
+      const dueTomorrow = mine.filter(l => {
+        if (!l.nextFollowUpDate) return false;
+        const t = new Date(l.nextFollowUpDate).getTime();
+        const tomorrowStart = new Date(todayBounds.tomorrowStartIso).getTime();
+        return t >= tomorrowStart && t < tomorrowStart + 86400000;
+      }).length;
       const overdue = mine.filter(l => {
         if (!l.nextFollowUpDate) return false;
         if (demoTerminalSet.has(String(l.currentStatus || '').toLowerCase())) return false;
@@ -692,6 +700,7 @@ async function loadTeamOverviewForCaller(
         convertedLeads: mine.filter(l => demoWonSet.has(String(l.currentStatus || '').toLowerCase())).length,
         dueToday,
         overdue,
+        dueTomorrow,
         totalLeads: mine.length,
         todayLeads,
         noActionLeads,
@@ -743,6 +752,7 @@ async function loadTeamOverviewForCaller(
     support,
     todayStartIso: bounds.todayStartIso,
     tomorrowStartIso: bounds.tomorrowStartIso,
+    dayAfterTomorrowStartIso: new Date(bounds.tomorrowStart.getTime() + 86400000).toISOString(),
     noActionCutoffIso: noActionCutoffIso(new Date()),
     terminalNames: terminalInfo.names,
     wonNames: terminalInfo.wonNames,
@@ -756,6 +766,7 @@ async function loadTeamOverviewForCaller(
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('converted', predCtx)})::int AS converted_count,
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('dueToday', predCtx)})::int AS due_today_count,
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('overdue', predCtx)})::int AS overdue_count,
+            COUNT(*) FILTER (WHERE ${kpiLeadPredicate('dueTomorrow', predCtx)})::int AS due_tomorrow_count,
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('totalLeads', predCtx)})::int AS total_count,
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('todayCollection', predCtx)})::int AS today_count,
             COUNT(*) FILTER (WHERE ${kpiLeadPredicate('noAction', predCtx)})::int AS no_action_count
@@ -797,6 +808,7 @@ async function loadTeamOverviewForCaller(
       convertedLeads: c.converted_count || 0,
       dueToday: c.due_today_count || 0,
       overdue: c.overdue_count || 0,
+      dueTomorrow: c.due_tomorrow_count || 0,
       totalLeads: c.total_count || 0,
       todayLeads: c.today_count || 0,
       noActionLeads: c.no_action_count || 0,
@@ -845,6 +857,7 @@ function kpiValueOfPerson(person: TeamOverviewPersonPayload, kpi: KpiKey): numbe
     case 'totalLeads': return person.totalLeads;
     case 'todayCollection': return person.todayLeads;
     case 'noAction': return person.noActionLeads;
+    case 'dueTomorrow': return person.dueTomorrow;
   }
 }
 
@@ -905,6 +918,10 @@ async function loadKpiLeadsForPerson(
         case 'converted': return won.has(st.toLowerCase());
         case 'dueToday':
           return Number.isFinite(t) && t >= bounds.todayStart.getTime() && t < bounds.tomorrowStart.getTime();
+        case 'dueTomorrow': {
+          const tomorrowStart = bounds.tomorrowStart.getTime();
+          return Number.isFinite(t) && t >= tomorrowStart && t < tomorrowStart + 86400000;
+        }
         case 'overdue':
           return !terminal.has(st.toLowerCase()) && Number.isFinite(t) && t < bounds.todayStart.getTime();
         case 'totalLeads': return true;
@@ -925,7 +942,7 @@ async function loadKpiLeadsForPerson(
     };
     const rows = (fallbackStore.leads as any[]).filter(matches);
     rows.sort((a, b) => {
-      if (kpi === 'dueToday' || kpi === 'overdue') {
+      if (kpi === 'dueToday' || kpi === 'overdue' || kpi === 'dueTomorrow') {
         return new Date(a.nextFollowUpDate || a.next_follow_up_at || 0).getTime()
           - new Date(b.nextFollowUpDate || b.next_follow_up_at || 0).getTime();
       }
@@ -975,7 +992,7 @@ async function loadKpiLeadsForPerson(
     terminalNames: terminalInfo.names,
     wonNames: terminalInfo.wonNames,
   }));
-  const orderBy = (kpi === 'dueToday' || kpi === 'overdue')
+  const orderBy = (kpi === 'dueToday' || kpi === 'overdue' || kpi === 'dueTomorrow')
     ? 'ORDER BY l.next_follow_up_at ASC NULLS LAST, l.created_at DESC'
     : kpi === 'noAction'
       ? 'ORDER BY l.created_at ASC'
@@ -997,6 +1014,118 @@ async function loadKpiLeadsForPerson(
     nextFollowUpAt: storedTimestampIso(row.next_follow_up_at),
     createdAt: storedTimestampIso(row.created_at),
   }));
+  return { total: Number(countRes.rows[0]?.total || 0), items };
+}
+
+export type ExecutionDueState = 'overdue' | 'today' | 'upcoming';
+
+export interface ExecutionRow extends KpiLeadRow {
+  dueState: ExecutionDueState;
+}
+
+/**
+ * One visible person's execution queue — their OPEN leads with a
+ * scheduled next follow-up, most urgent first. One ORDER BY
+ * next_follow_up_at ASC gives exactly the workbench's order
+ * (overdue first, then due today, then upcoming), because the
+ * earliest date is always the most overdue. Terminal leads are
+ * excluded (DZ-6 dictionary names, resolved per request like the
+ * KPI loader); leads with no next follow-up set are excluded too
+ * — the queue is scheduled work, not the whole open book.
+ * Callers must already have proven the target is inside the
+ * caller's visible set (membership in the overview people array);
+ * combined with the assigned_to filter, that is the lead-visibility
+ * predicate (assignee in scope), so no second visibility clause
+ * is needed. Production column shapes: current_status,
+ * is_deleted, next_follow_up_at; assigned_to is the assignee's
+ * USER id (UUID FK → users.id, migration 014) — uuid = uuid,
+ * never compared to an employee ID (the 2026-11-13 hotfix).
+ */
+async function loadExecutionsForPerson(
+  person: { userId: string; employeeId: string }
+): Promise<{ total: number; items: ExecutionRow[] }> {
+  const now = new Date();
+  const bounds = getDhakaBusinessDayBounds(now);
+  const classify = (iso: string | null): ExecutionDueState => {
+    const t = iso ? new Date(iso).getTime() : NaN;
+    if (!Number.isFinite(t)) return 'upcoming';
+    if (t < bounds.todayStart.getTime()) return 'overdue';
+    if (t < bounds.tomorrowStart.getTime()) return 'today';
+    return 'upcoming';
+  };
+  if (!useDb()) {
+    // DZ-6: terminal names from the dictionary fallback. The demo
+    // fallback's in-memory leads carry the employee ID, so that
+    // path still matches on person.employeeId.
+    const demoTerminal = getTerminalStatusInfoFallback();
+    const terminal = new Set(demoTerminal.names.map(s => s.toLowerCase()));
+    const rows = (fallbackStore.leads as any[]).filter(l => {
+      if (l.is_deleted === true) return false;
+      if (String(l.assignedTo || '').toUpperCase() !== person.employeeId.toUpperCase()) return false;
+      if (terminal.has(String(l.currentStatus || '').toLowerCase())) return false;
+      const nfd = l.nextFollowUpDate || l.next_follow_up_at;
+      return Boolean(nfd) && Number.isFinite(new Date(nfd).getTime());
+    });
+    rows.sort((a, b) =>
+      new Date(a.nextFollowUpDate || a.next_follow_up_at).getTime()
+      - new Date(b.nextFollowUpDate || b.next_follow_up_at).getTime()
+    );
+    const items = rows.slice(0, KPI_LEADS_MAX).map((l: any) => {
+      const nextIso = storedTimestampIso(l.nextFollowUpDate || l.next_follow_up_at);
+      return {
+        id: String(l.id),
+        leadCode: (l as any).leadCode || null,
+        customerName: l.customerName || l.prospectName || '',
+        mobile: l.mobile || '',
+        currentStatus: l.currentStatus || 'New',
+        nextFollowUpAt: nextIso,
+        createdAt: storedTimestampIso(l.created_at || l.creationDate),
+        dueState: classify(nextIso),
+      };
+    });
+    return { total: rows.length, items };
+  }
+
+  const pool = getPool();
+  const terminalInfo = await getTerminalStatusInfo(pool);
+  const params: any[] = [person.userId];
+  const pushParam = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  // DZ-6: no terminal names (a dictionary that flags nothing
+  // terminal) means nothing is terminal — NOT IN () is invalid
+  // SQL, so the clause is just TRUE.
+  const terminalClause = terminalInfo.names.length === 0
+    ? 'TRUE'
+    : `l.current_status NOT IN (${terminalInfo.names.map(s => pushParam(s)).join(', ')})`;
+  const where = [
+    'l.is_deleted = FALSE',
+    'l.assigned_to = $1',
+    'l.next_follow_up_at IS NOT NULL',
+    terminalClause,
+  ];
+  const [countRes, rowsRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS total FROM leads l WHERE ${where.join(' AND ')}`, params),
+    pool.query(
+      `SELECT l.id, l.lead_code, l.customer_name, l.mobile, l.current_status, l.next_follow_up_at, l.created_at
+       FROM leads l WHERE ${where.join(' AND ')} ORDER BY l.next_follow_up_at ASC LIMIT ${KPI_LEADS_MAX}`,
+      params
+    ),
+  ]);
+  const items: ExecutionRow[] = (rowsRes.rows as any[]).map(row => {
+    const nextIso = storedTimestampIso(row.next_follow_up_at);
+    return {
+      id: String(row.id),
+      leadCode: row.lead_code || null,
+      customerName: row.customer_name || '',
+      mobile: row.mobile || '',
+      currentStatus: row.current_status || 'New',
+      nextFollowUpAt: nextIso,
+      createdAt: storedTimestampIso(row.created_at),
+      dueState: classify(nextIso),
+    };
+  });
   return { total: Number(countRes.rows[0]?.total || 0), items };
 }
 
@@ -1415,6 +1544,49 @@ router.get('/team/kpi/export', requireAuth, requirePermissionCode('leads.export'
     return res.send(workbook);
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'KPI export failed' });
+  }
+});
+
+/* GET /team/executions — one visible person's execution queue
+   (their open leads with a scheduled next follow-up, overdue
+   first). Powers the team home's Execution Queue section: a team
+   holder expands a member and sees that member's executions. The
+   person must be inside the caller's scoped overview set (else
+   404, the same "not found" pattern as leads); `person=self` (or
+   absent) = the caller themself. Requires leads.view. */
+router.get('/team/executions', requireAuth, async (req, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const personParam = req.query?.person ? String(req.query.person).trim() : '';
+    const caller = await getCallerDbInfo(req as any);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const [canViewLeads, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller as any),
+    ]);
+    if (!canViewLeads) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const { people } = await loadTeamOverviewForCaller(caller, visibility);
+    const resolved = resolveKpiPerson(people, personParam);
+    if (!resolved) {
+      return sendJson(res, 404, { success: false, message: 'Person not found.' });
+    }
+    const { total, items } = await loadExecutionsForPerson(resolved.person);
+    return sendJson(res, 200, {
+      success: true,
+      person: {
+        name: resolved.person.name,
+        employeeId: resolved.person.employeeId,
+        designation: resolved.person.designation,
+      },
+      total,
+      items,
+    });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Team executions failed' });
   }
 });
 

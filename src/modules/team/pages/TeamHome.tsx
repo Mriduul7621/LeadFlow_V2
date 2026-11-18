@@ -1,24 +1,28 @@
+import { Fragment, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle,
-  BellRing,
   CalendarClock,
-  CalendarPlus,
   CheckCircle2,
-  FolderOpen,
-  Layers,
+  ChevronDown,
+  ChevronRight,
+  ListChecks,
   Radar,
   RefreshCcw,
-  TrendingUp,
   Users,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useCallerTeam } from '../hooks/useCallerTeam';
 import HomeViewSwitch from '../components/HomeViewSwitch';
+import HomeKpiRow from '../components/HomeKpiRow';
 import {
+  fetchExecutions,
   staleLeadRadar,
   summarizeTeamTotals,
+  teamExecutionOverview,
   teamFollowUpsToday,
+  teamTomorrowPreview,
+  type ExecutionLead,
+  type ExecutionsResponse,
   type TeamOverviewPerson,
 } from '../services/teamOverviewService';
 
@@ -39,36 +43,25 @@ import {
  * render — a 0 is shown, never hidden (never-empty rule, 2026-11-13).
  * No Action Alert is styled as an alert (red, like Overdue): leads
  * with no first action within 48 hours of entry.
+ *
+ * Mirror rule (owner, 2026-11-18): this page and My Work
+ * (DailyWorkbench) render the SAME KPI row from the shared
+ * HomeKpiRow component — same seven cards, same order, same look;
+ * only the data differs (team totals here, own numbers there).
+ * The Execution Queue below is the team mirror of the workbench's
+ * own queue: a member-wise overview first, then that member's
+ * executions on tap (overdue first, then due today, then
+ * upcoming — each row to Lead360). The Tomorrow Preview is the
+ * team mirror of the workbench's tomorrow grouping: the whole
+ * team's combined tomorrow follow-ups, grouped by member.
  */
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  tone,
-  iconTone,
-  to,
-}: {
-  label: string;
-  value: number;
-  icon: typeof FolderOpen;
-  tone: string;
-  iconTone: string;
-  to: string;
-}) {
-  return (
-    <Link
-      to={to}
-      className={cn('rounded-2xl py-3 px-4 text-center block hover:ring-2 hover:ring-[#978C21]/40 transition-shadow', tone)}
-      aria-label={`${label}: ${value} — view details`}
-    >
-      <p className="text-xl font-black text-stone-800 flex items-center justify-center gap-1.5">
-        <Icon className={cn('w-4 h-4', iconTone)} />
-        {value}
-      </p>
-      <p className="text-[8px] font-black uppercase tracking-widest text-stone-400 mt-0.5">{label}</p>
-    </Link>
-  );
+/** Dhaka calendar date for a stored timestamp (same shape as the drill-down). */
+function dhakaDate(iso: string | null): string {
+  if (!iso) return 'No next action set';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'No next action set';
+  return d.toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function MemberRow({ person, variant }: { person: TeamOverviewPerson; variant: 'followUp' | 'radar' }) {
@@ -109,6 +102,40 @@ function MemberRow({ person, variant }: { person: TeamOverviewPerson; variant: '
   );
 }
 
+/** One execution in a member's queue — same row shape as the KPI
+ *  drill-down's leaf rows, plus a due-state pill (overdue / due
+ *  today / the scheduled date). Links to Lead360. */
+function ExecutionRow({ lead }: { lead: ExecutionLead }) {
+  const pill =
+    lead.dueState === 'overdue'
+      ? { text: 'Overdue', cls: 'bg-red-50 text-red-600' }
+      : lead.dueState === 'today'
+        ? { text: 'Due today', cls: 'bg-amber-50 text-amber-700' }
+        : { text: dhakaDate(lead.nextFollowUpAt), cls: 'bg-stone-100 text-stone-500' };
+  return (
+    <Link
+      to={`/leads/${lead.id}`}
+      className="flex items-center justify-between gap-3 bg-stone-50/60 border border-stone-200/60 rounded-2xl px-4 py-3 hover:border-[#978C21]/50 transition-colors"
+    >
+      <div className="min-w-0">
+        <p className="text-sm font-black text-stone-800 truncate">{lead.customerName}</p>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
+          {[lead.leadCode, lead.mobile].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="text-[10px] font-black uppercase tracking-widest bg-stone-100 text-stone-600 px-2 py-1 rounded-full">
+          {lead.currentStatus}
+        </span>
+        <span className={cn('text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full', pill.cls)}>
+          {pill.text}
+        </span>
+        <ChevronRight className="w-4 h-4 text-stone-300" />
+      </div>
+    </Link>
+  );
+}
+
 export function TeamHomeContent({
   people,
   scope,
@@ -121,6 +148,51 @@ export function TeamHomeContent({
   const totals = summarizeTeamTotals(people);
   const followUps = teamFollowUpsToday(people);
   const radar = staleLeadRadar(people);
+  const executionMembers = teamExecutionOverview(people);
+  const tomorrowMembers = teamTomorrowPreview(people);
+
+  // Execution Queue expansion: one member at a time; their
+  // executions load lazily on first expand and are cached per
+  // member for the session (a Refresh reloads the overview, and
+  // the next expand re-fetches — executions are not cached across
+  // a refresh because follow-up work changes fast).
+  const [expandedEmp, setExpandedEmp] = useState<string | null>(null);
+  const [executions, setExecutions] = useState<Record<string, ExecutionsResponse>>({});
+  const [execLoading, setExecLoading] = useState<string | null>(null);
+  const [execError, setExecError] = useState<string | null>(null);
+
+  const toggleMember = async (employeeId: string) => {
+    if (expandedEmp === employeeId) {
+      setExpandedEmp(null);
+      return;
+    }
+    setExpandedEmp(employeeId);
+    setExecError(null);
+    if (executions[employeeId]) return;
+    setExecLoading(employeeId);
+    try {
+      const res = await fetchExecutions(employeeId);
+      setExecutions(prev => ({ ...prev, [employeeId]: res }));
+    } catch {
+      setExecError('Could not load this member\u2019s executions. Please try again.');
+    } finally {
+      setExecLoading(null);
+    }
+  };
+
+  const retryExecutions = (employeeId: string) => {
+    setExecutions(prev => {
+      const next = { ...prev };
+      delete next[employeeId];
+      return next;
+    });
+    setExecError(null);
+    setExecLoading(employeeId);
+    fetchExecutions(employeeId)
+      .then(res => setExecutions(prev => ({ ...prev, [employeeId]: res })))
+      .catch(() => setExecError('Could not load this member\u2019s executions. Please try again.'))
+      .finally(() => setExecLoading(null));
+  };
 
   return (
     <div className="space-y-6 text-left">
@@ -150,15 +222,110 @@ export function TeamHomeContent({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <StatCard label="Total Lead" value={totals.totalLeads} icon={Layers} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/totalLeads" />
-        <StatCard label="Today Lead Collection" value={totals.todayCollection} icon={CalendarPlus} tone="bg-sky-50" iconTone="text-sky-500" to="/team/kpi/todayCollection" />
-        <StatCard label="Open leads" value={totals.open} icon={FolderOpen} tone="bg-stone-50" iconTone="text-stone-400" to="/team/kpi/open" />
-        <StatCard label="Due today" value={totals.dueToday} icon={CalendarClock} tone="bg-amber-50" iconTone="text-amber-500" to="/team/kpi/dueToday" />
-        <StatCard label="Overdue" value={totals.overdue} icon={AlertTriangle} tone="bg-red-50" iconTone="text-red-500" to="/team/kpi/overdue" />
-        <StatCard label="No Action Alert" value={totals.noAction} icon={BellRing} tone="bg-red-50" iconTone="text-red-500" to="/team/kpi/noAction" />
-        <StatCard label="Converted" value={totals.converted} icon={TrendingUp} tone="bg-emerald-50" iconTone="text-emerald-500" to="/team/kpi/converted" />
-      </div>
+      <HomeKpiRow values={totals} />
+
+      <section className="space-y-3">
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-sm font-black uppercase tracking-widest text-stone-700 flex items-center gap-2">
+            <ListChecks className="w-4 h-4 text-[#978C21]" /> Execution Queue
+          </h2>
+          <span className="text-[10px] font-bold text-stone-400">Member-wise — tap a member to see their executions</span>
+        </div>
+        {executionMembers.length === 0 ? (
+          <div className="bg-white border border-stone-200/80 rounded-2xl p-6 flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+            <p className="text-sm font-bold text-stone-600">
+              No team members in scope — there is no execution queue to show.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {executionMembers.map(person => {
+              const expanded = expandedEmp === person.employeeId;
+              const exec = executions[person.employeeId];
+              return (
+                <div key={person.userId} className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleMember(person.employeeId)}
+                    aria-expanded={expanded}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-stone-50 transition-colors text-left"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-stone-800 truncate">
+                        {person.name}
+                        {person.isSelf && (
+                          <span className="ml-2 align-middle text-[8px] font-black uppercase tracking-widest bg-[#978C21] text-white px-1.5 py-0.5 rounded">You</span>
+                        )}
+                      </p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
+                        {[person.employeeId, person.designation].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={cn(
+                        'text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full',
+                        person.dueToday > 0 ? 'bg-amber-50 text-amber-700' : 'bg-stone-100 text-stone-400'
+                      )}>
+                        {person.dueToday} due today
+                      </span>
+                      <span className={cn(
+                        'text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full',
+                        person.overdue > 0 ? 'bg-red-50 text-red-600' : 'bg-stone-100 text-stone-400'
+                      )}>
+                        {person.overdue} overdue
+                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-widest bg-stone-100 text-stone-500 px-2 py-1 rounded-full">
+                        {person.openLeads} open
+                      </span>
+                      <ChevronDown className={cn('w-4 h-4 text-stone-400 transition-transform', expanded && 'rotate-180')} />
+                    </div>
+                  </button>
+                  {expanded && (
+                    <div className="border-t border-stone-100 px-4 py-3 space-y-2">
+                      {execLoading === person.employeeId ? (
+                        <div className="space-y-2" role="status" aria-label={`Loading ${person.name}'s executions`}>
+                          {[0, 1].map(i => (
+                            <div key={i} className="h-14 bg-stone-100 rounded-2xl animate-pulse" />
+                          ))}
+                        </div>
+                      ) : execError ? (
+                        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 space-y-2">
+                          <p className="text-sm text-red-600 font-bold">{execError}</p>
+                          <button
+                            type="button"
+                            onClick={() => retryExecutions(person.employeeId)}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-stone-200 rounded-full text-[11px] font-black uppercase tracking-widest text-stone-500"
+                          >
+                            <RefreshCcw className="w-3.5 h-3.5" /> Try again
+                          </button>
+                        </div>
+                      ) : !exec || exec.items.length === 0 ? (
+                        <p className="text-sm font-bold text-stone-600 py-1">
+                          No scheduled follow-ups — nothing in {person.isSelf ? 'your' : `${person.name}'s`} execution queue.
+                        </p>
+                      ) : (
+                        <>
+                          {exec.total > exec.items.length && (
+                            <p className="text-[11px] font-bold text-stone-400">
+                              Showing {exec.items.length} of {exec.total} executions — most urgent first.
+                            </p>
+                          )}
+                          {exec.items.map(lead => (
+                            <Fragment key={lead.id}>
+                              <ExecutionRow lead={lead} />
+                            </Fragment>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <section className="space-y-3">
         <div className="flex items-baseline gap-3">
@@ -178,6 +345,58 @@ export function TeamHomeContent({
               <div key={person.userId}>
                 <MemberRow person={person} variant="followUp" />
               </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h2 className="text-sm font-black uppercase tracking-widest text-stone-700 flex items-center gap-2">
+            <CalendarClock className="w-4 h-4 text-sky-500" /> Tomorrow Preview
+          </h2>
+          <span className="text-[10px] font-bold text-stone-400">
+            {totals.dueTomorrow} follow-up{totals.dueTomorrow === 1 ? '' : 's'} due tomorrow across the team
+          </span>
+          {totals.dueTomorrow > 0 && (
+            <Link to="/team/kpi/dueTomorrow" className="text-[11px] font-black uppercase tracking-widest text-[#978C21] hover:underline ml-auto">
+              View all
+            </Link>
+          )}
+        </div>
+        {tomorrowMembers.length === 0 ? (
+          <div className="bg-white border border-stone-200/80 rounded-2xl p-6 flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+            <p className="text-sm font-bold text-stone-600">
+              Nothing scheduled for tomorrow — no follow-ups due across the team.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {tomorrowMembers.map(person => (
+              <Link
+                key={person.userId}
+                to={`/team/kpi/dueTomorrow?person=${encodeURIComponent(person.employeeId)}`}
+                className="flex items-center justify-between gap-3 bg-white border border-stone-200/80 rounded-2xl px-4 py-3 hover:border-[#978C21]/50 transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-stone-800 truncate">
+                    {person.name}
+                    {person.isSelf && (
+                      <span className="ml-2 align-middle text-[8px] font-black uppercase tracking-widest bg-[#978C21] text-white px-1.5 py-0.5 rounded">You</span>
+                    )}
+                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
+                    {[person.employeeId, person.designation].filter(Boolean).join(' · ')}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] font-black uppercase tracking-widest bg-sky-50 text-sky-600 px-2 py-1 rounded-full">
+                    {person.dueTomorrow ?? 0} due tomorrow
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-stone-300" />
+                </div>
+              </Link>
             ))}
           </div>
         )}

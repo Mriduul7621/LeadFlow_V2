@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -33,10 +34,23 @@ const ALWAYS_VISIBLE_FIELDS = new Set(['prospectName', 'mobile']);
 // Builder "Required" flag is the ONLY source of required-ness there —
 // conditional rules may decide when a field applies, never whether it is
 // required (owner decision, 2026-11-11).
+//
+// EDIT MODE (2026-11-18): the same form edits customer information
+// when rendered at /leads/:id/edit (Lead360's Edit button). The route
+// used to not exist at all, so the catch-all sent the user home —
+// that was the reported bug. In edit mode the form loads the lead,
+// pre-fills every field (system + custom), and saves through
+// leadService.updateLead — the EXISTING server upsert, which matches
+// by lead code, preserves status/assignment/history, and enforces
+// leads.edit + visibility server-side. Status/remarks stay in
+// LeadUpdate; this form never touches them.
 export default function LeadGenerate() {
   const { user } = useAuthStore();
   const { t, language } = useTranslation();
   const { canAccess, userRole } = usePermissions();
+  const navigate = useNavigate();
+  const { id: editLeadId } = useParams<{ id: string }>();
+  const isEditMode = Boolean(editLeadId);
 
   /**
    * Capability check — EVALUATED, never early-returned, before the hooks.
@@ -55,9 +69,28 @@ export default function LeadGenerate() {
    * the hook order is identical on every render.
    */
   const mayCreateLead = canAccess('lead_generate', 'create');
+  // Edit mode is gated on the same grant as Lead360's Edit button
+  // (lead_tracking.edit → the canonical leads.edit); create mode
+  // keeps its own grant. The server re-checks both, plus
+  // visibility, on the actual save.
+  const mayEditLead = canAccess('lead_tracking', 'edit');
+  const mayUseForm = isEditMode ? mayEditLead : mayCreateLead;
 
   const [options, setOptions] = useState<any>({});
   const [fieldConfigs, setFieldConfigs] = useState<FormField[]>([]);
+  const [fieldsLoaded, setFieldsLoaded] = useState(false);
+  // Edit mode: the loaded lead, its load state, and the pre-fill
+  // guards. prefilledRef runs the pre-fill exactly once (the
+  // field-config list arriving later must not reset the user's
+  // edits); prefillingRef holds the division/district cascade
+  // effects off while reset() writes all three geography fields
+  // at once (without it they would wipe district/thana the moment
+  // division landed).
+  const [editLead, setEditLead] = useState<any | null>(null);
+  const [editLoading, setEditLoading] = useState(isEditMode);
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const prefilledRef = useRef(false);
+  const prefillingRef = useRef(false);
   const fieldConfigMap = useMemo(() => {
     const map: Record<string, FormField> = {};
     fieldConfigs.forEach(f => { map[f.fieldKey] = f; });
@@ -99,46 +132,122 @@ export default function LeadGenerate() {
 
   useEffect(() => {
     const loadOptions = async () => {
-      const types = ['Profession', 'Occupation', 'MaritalStatus', 'Area', 'Source', 'Product', 'Campaign', 'Priority'];
-      const results = await Promise.all(types.map(t => metadataService.getActiveValues(t, t === 'Source')));
-      const newOptions: any = {};
-      types.forEach((t, i) => { newOptions[t] = results[i]; });
-      // Also preload values for any custom dropdown field's metadata type
-      const fields = await formBuilderService.getFields();
-      setFieldConfigs(fields);
-      const customDropdownTypes = fields
-        .filter(f => !f.isSystem && f.fieldType === 'dropdown' && f.metadataTypeKey)
-        .map(f => f.metadataTypeKey!);
-      const customResults = await Promise.all(customDropdownTypes.map(t => metadataService.getActiveValues(t)));
-      customDropdownTypes.forEach((t, i) => { newOptions[t] = customResults[i]; });
-      setOptions(newOptions);
+      try {
+        const types = ['Profession', 'Occupation', 'MaritalStatus', 'Area', 'Source', 'Product', 'Campaign', 'Priority'];
+        const results = await Promise.all(types.map(t => metadataService.getActiveValues(t, t === 'Source')));
+        const newOptions: any = {};
+        types.forEach((t, i) => { newOptions[t] = results[i]; });
+        // Also preload values for any custom dropdown field's metadata type
+        const fields = await formBuilderService.getFields();
+        setFieldConfigs(fields);
+        const customDropdownTypes = fields
+          .filter(f => !f.isSystem && f.fieldType === 'dropdown' && f.metadataTypeKey)
+          .map(f => f.metadataTypeKey!);
+        const customResults = await Promise.all(customDropdownTypes.map(t => metadataService.getActiveValues(t)));
+        customDropdownTypes.forEach((t, i) => { newOptions[t] = customResults[i]; });
+        setOptions(newOptions);
+      } finally {
+        // Even when the dictionaries fail, the pre-fill must still
+        // run (system fields only) instead of hanging on a spinner.
+        setFieldsLoaded(true);
+      }
     };
     // A user without the capability never sees the form, so the option
     // dictionaries are not worth a request for them. The guard is inside
     // the effect (not around it) so the hook list stays unconditional.
-    if (!mayCreateLead) return;
+    if (!mayUseForm) return;
     loadOptions();
-  }, [mayCreateLead]);
+  }, [mayUseForm]);
 
   const maritalStatus = watch('maritalStatus');
   const selectedDivision = watch('division');
   const selectedDistrict = watch('district');
 
   useEffect(() => {
+    // While a pre-fill reset is landing, the cascade must not wipe
+    // the district/thana the same reset just wrote (edit mode).
+    if (prefillingRef.current) return;
     setValue('district', '');
     setValue('thana', '');
   }, [selectedDivision, setValue]);
 
   useEffect(() => {
+    if (prefillingRef.current) return;
     setValue('thana', '');
   }, [selectedDistrict, setValue]);
+
+  // Edit mode: load the lead (GET /api/leads/:id — lead code or
+  // UUID; the server 404s out-of-scope leads, never leaks them).
+  useEffect(() => {
+    if (!isEditMode || !editLeadId || !mayEditLead) return;
+    let cancelled = false;
+    setEditLoading(true);
+    setEditLoadError(null);
+    leadService.getLead(editLeadId)
+      .then(lead => {
+        if (cancelled) return;
+        if (!lead) {
+          setEditLoadError('Lead not found. It may have been deleted, or it is outside your scope.');
+          return;
+        }
+        setEditLead(lead);
+      })
+      .catch(() => {
+        if (!cancelled) setEditLoadError('Could not load this lead. Please try again.');
+      })
+      .finally(() => {
+        if (!cancelled) setEditLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [isEditMode, editLeadId, mayEditLead]);
+
+  // Edit mode: pre-fill once the lead AND the field configs have
+  // both arrived (custom fields need the config list for their
+  // keys). The server stores thana in custom_fields and the area
+  // string as "thana, district, division" — prefer the stored
+  // thana, fall back to parsing the area string.
+  useEffect(() => {
+    if (!isEditMode || !editLead || !fieldsLoaded || prefilledRef.current) return;
+    prefilledRef.current = true;
+    prefillingRef.current = true;
+    const areaParts = String(editLead.area || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+    const thana = String(editLead.thana || '') || (areaParts.length >= 3 ? areaParts[0] : '');
+    const custom: Record<string, string> = {};
+    customFieldDefs.forEach(f => {
+      const v = (editLead as any)[f.fieldKey];
+      if (v !== undefined && v !== null && v !== '') custom[f.fieldKey] = String(v);
+    });
+    reset({
+      prospectName: editLead.prospectName || editLead.customerName || '',
+      mobile: editLead.mobile || '',
+      profession: editLead.profession || editLead.occupation || '',
+      occupation: editLead.occupation || '',
+      priority: editLead.priority || '',
+      maritalStatus: editLead.maritalStatus || '',
+      noOfChildren: editLead.noOfChildren != null ? String(editLead.noOfChildren) : '',
+      division: editLead.division || '',
+      district: editLead.district || '',
+      thana,
+      source: editLead.source || '',
+      productName: editLead.productName || '',
+      campaignName: editLead.campaignName || '',
+      residenceAddress: editLead.residenceAddress || '',
+      officeAddress: editLead.officeAddress || '',
+      otherInfo: editLead.otherInfo || '',
+      familyMember: editLead.familyMember || '',
+      customFields: custom,
+    });
+    // The division/district cascade effects run on the same render
+    // cycle as this reset — keep the guard up until they have run.
+    setTimeout(() => { prefillingRef.current = false; }, 0);
+  }, [isEditMode, editLead, fieldsLoaded, customFieldDefs, reset]);
 
   /**
    * The capability gate — placed after EVERY hook call on purpose.
    * Reordering this above the hooks re-introduces React #310; see the
    * `mayCreateLead` note at the top of the component.
    */
-  if (!mayCreateLead) {
+  if (!mayUseForm) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-200 rounded-sm max-w-xl mx-auto space-y-6 animate-in fade-in duration-300 mt-12">
         <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
@@ -152,8 +261,40 @@ export default function LeadGenerate() {
           </p>
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature lead_generate.create Required
+          Strict Security Level: Feature {isEditMode ? 'lead_tracking.edit' : 'lead_generate.create'} Required
         </div>
+      </div>
+    );
+  }
+
+  // Edit mode: loading / not-found states (after the hooks, like
+  // the capability gate above).
+  if (isEditMode && editLoading) {
+    return (
+      <div className="max-w-5xl mx-auto pb-24 space-y-12" role="status" aria-label="Loading lead">
+        <div className="h-16 bg-stone-100 rounded-sm animate-pulse" />
+        <div className="h-96 bg-stone-100 rounded-sm animate-pulse" />
+      </div>
+    );
+  }
+
+  if (isEditMode && editLoadError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-200 rounded-sm max-w-xl mx-auto space-y-6 mt-12">
+        <div className="w-16 h-16 rounded-full bg-red-50 border border-red-100 flex items-center justify-center text-red-500 shrink-0">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold text-slate-900">Could not open this lead</h2>
+          <p className="text-xs text-slate-500 leading-relaxed font-sans">{editLoadError}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/leads/all')}
+          className="px-6 py-3 bg-slate-900 text-white text-sm font-semibold rounded-sm"
+        >
+          Back to Leads
+        </button>
       </div>
     );
   }
@@ -194,10 +335,49 @@ export default function LeadGenerate() {
 
   const onSubmit = async (data: any) => {
     if (!user) return;
-    
+
     const combinedArea = `${data.thana}, ${data.district}, ${data.division}`;
     const childPresence = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
-    
+
+    // Edit mode: customer information only — no status, no
+    // assignment, no creation fields. updateLead merges these onto
+    // the loaded lead and POSTs the full record to the server
+    // upsert, which matches by lead code (so a changed mobile can
+    // never retarget the write) and preserves status, assignment,
+    // history and documents. The server enforces leads.edit +
+    // visibility; a 403/404 there surfaces as an error toast.
+    if (isEditMode && editLeadId) {
+      try {
+        await leadService.updateLead(editLeadId, {
+          prospectName: data.prospectName,
+          mobile: data.mobile,
+          profession: data.profession,
+          occupation: data.occupation,
+          priority: data.priority,
+          maritalStatus: data.maritalStatus,
+          noOfChildren: childPresence ? data.noOfChildren : '0',
+          hasChild: childPresence && Number(data.noOfChildren) > 0,
+          division: data.division,
+          district: data.district,
+          thana: data.thana,
+          area: combinedArea,
+          source: data.source,
+          productName: data.productName,
+          campaignName: data.campaignName,
+          residenceAddress: data.residenceAddress,
+          officeAddress: data.officeAddress,
+          otherInfo: data.otherInfo,
+          familyMember: data.familyMember,
+          customFields: data.customFields || {},
+        });
+        toast.success('Lead updated successfully');
+        navigate(`/leads/${encodeURIComponent(editLeadId)}`);
+      } catch (err: any) {
+        toast.error(err?.message || 'Could not save the changes. Please try again.');
+      }
+      return;
+    }
+
     try {
       // F12: the server upserts a lead when the MOBILE NUMBER already exists
       // (documented behaviour). Without this the operator saw "Lead created
@@ -242,8 +422,12 @@ export default function LeadGenerate() {
             <Zap className="w-8 h-8 fill-[#978C21]" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Add New Lead</h1>
-            <p className="text-sm font-normal text-stone-500 mt-2">{t("leadFormSubtitle")}</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">{isEditMode ? 'Edit Lead' : 'Add New Lead'}</h1>
+            <p className="text-sm font-normal text-stone-500 mt-2">
+              {isEditMode
+                ? `Update customer information${editLead ? ` for ${editLead.prospectName || editLead.customerName || ''}` : ''}. Status and remarks stay in Update Status.`
+                : t("leadFormSubtitle")}
+            </p>
           </div>
         </div>
       </div>
@@ -630,14 +814,23 @@ export default function LeadGenerate() {
              <ShieldCheck className="w-4 h-4 text-emerald-500" />
              <span className="text-xs font-medium text-stone-500">Your data is securely saved</span>
           </div>
-          <button 
-            type="submit" 
+          {isEditMode && (
+            <button
+              type="button"
+              onClick={() => navigate(`/leads/${encodeURIComponent(editLeadId!)}`)}
+              className="px-6 py-5 bg-white border border-slate-200 text-slate-700 text-sm font-semibold rounded-sm hover:bg-stone-50 transition-all"
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            type="submit"
             disabled={isSubmitting}
             className="w-64 py-5 bg-slate-900 hover:bg-black text-white text-sm font-semibold tracking-normal transition-all rounded-sm shadow-2xl flex items-center justify-center gap-4 group disabled:opacity-50"
           >
             {isSubmitting ? t('loading') : (
               <>
-                Generate Lead
+                {isEditMode ? 'Save Changes' : 'Generate Lead'}
                 <ArrowRight className="w-5 h-5 text-[#978C21] group-hover:translate-x-2 transition-transform" />
               </>
             )}
