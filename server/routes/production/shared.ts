@@ -910,7 +910,7 @@ export const dateOrNull = (value: any): string | null => {
  * work to the resolved user (manual lead assignment) must refuse an
  * inactive target; read-only callers (list/queue filters) ignore it.
  */
-export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string; isActive: boolean } | null> {
+export async function resolveAssignedTo(ref: any): Promise<{ userId: string; employeeId: string; isActive: boolean; isAdministrationRole: boolean } | null> {
   if (!ref) return null;
   const value = String(ref).trim();
   if (!value) return null;
@@ -923,17 +923,26 @@ export async function resolveAssignedTo(ref: any): Promise<{ userId: string; emp
     if (!user) return null;
     const statusText = String((user as any).status ?? (user as any).employmentStatus ?? 'Active');
     const isActive = (user as any).isActive !== false && statusText.toLowerCase() !== 'inactive';
-    return { userId: user.id, employeeId: user.employeeId, isActive };
+    const role = normalizeRole((user as any).roleCode || (user as any).role || (user as any).roleName);
+    return { userId: user.id, employeeId: user.employeeId, isActive, isAdministrationRole: role === 'ADMIN' || role === 'SUPERADMIN' };
   }
   try {
     const pool = getPool();
     const uuid = asUuid(value);
     const result = await pool.query(
-      `SELECT id, employee_id, COALESCE(is_active, TRUE) AS is_active FROM users WHERE id::text = $1 OR UPPER(employee_id) = UPPER($2) OR UPPER(email) = UPPER($2) LIMIT 1`,
+      `SELECT u.id, u.employee_id, COALESCE(u.is_active, TRUE) AS is_active, UPPER(COALESCE(r.role_code, '')) AS role_code
+         FROM users u LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.id::text = $1 OR UPPER(u.employee_id) = UPPER($2) OR UPPER(u.email) = UPPER($2) LIMIT 1`,
       [uuid || value, value]
     );
     if (!result.rows[0]) return null;
-    return { userId: result.rows[0].id, employeeId: result.rows[0].employee_id, isActive: result.rows[0].is_active === true };
+    const role = normalizeRole(result.rows[0].role_code);
+    return {
+      userId: result.rows[0].id,
+      employeeId: result.rows[0].employee_id,
+      isActive: result.rows[0].is_active === true,
+      isAdministrationRole: role === 'ADMIN' || role === 'SUPERADMIN',
+    };
   } catch {
     return null;
   }
