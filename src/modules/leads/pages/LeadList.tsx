@@ -8,7 +8,6 @@ import {
   Phone,
   MessageSquare,
   Clock,
-  ChevronLeft,
   ChevronRight,
   Eye,
   XCircle,
