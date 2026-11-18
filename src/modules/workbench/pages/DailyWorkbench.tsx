@@ -307,7 +307,7 @@ function KpiStripCard({
   return (
     <Link
       to={to}
-      className={cn(variantClass[variant] || variantClass.default, 'block hover:ring-2 hover:ring-[#978C21]/40 transition-shadow')}
+      className={cn(variantClass[variant] || variantClass.default, 'block rounded-xl transition-shadow hover:ring-2 hover:ring-[#978C21]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2')}
       aria-label={`${label}: ${value} — view my leads`}
     >
       <div className="flex items-center justify-between gap-2">
@@ -654,9 +654,9 @@ export default function DailyWorkbench() {
   }, [todayYmd]);
 
   return (
-    <div className="space-y-6 pb-12 font-sans max-w-[1280px] mx-auto">
+    <div className="mx-auto max-w-[1280px] space-y-5 pb-10 font-sans sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <div className="flex flex-col gap-4 rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-6 md:flex-row md:items-center md:justify-between" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
         <div>
           <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text"><span className="hidden md:inline">Daily Workbench</span><span className="md:hidden">My Work</span></h1>
           <p className="hidden md:block text-[13px] text-stone-500 mt-2 leading-relaxed">Manage today's calls, meetings, follow-ups and tasks from one place.</p>
@@ -669,14 +669,15 @@ export default function DailyWorkbench() {
             type="button"
             onClick={() => void load()}
             disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2.5 border border-stone-200 rounded-[10px] text-xs font-semibold text-stone-600 hover:text-[#978C21] hover:border-[#978C21]/30 transition-colors disabled:opacity-50 bg-white"
+            aria-label="Refresh daily work"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-4 py-2.5 text-xs font-semibold text-stone-600 transition-colors hover:border-[#978C21]/40 hover:text-[#978C21] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2 disabled:opacity-50"
           >
             <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
             Refresh
           </button>
           <Link
             to="/task-calendar"
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#978C21] text-white rounded-[10px] text-xs font-bold hover:bg-[#8a7f1e] transition-colors shadow-sm"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#978C21] px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#8a7f1e] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
           >
             <CalendarIcon className="w-3.5 h-3.5" />
             Open Calendar
@@ -693,7 +694,7 @@ export default function DailyWorkbench() {
         const self = getSelfPerson(callerTeam.overview?.people);
         if (!self) return null;
         return (
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">My numbers</h2>
               <span className="text-[11px] font-semibold text-stone-400">Your own leads</span>
@@ -775,7 +776,7 @@ export default function DailyWorkbench() {
       ) : (
         <>
           {/* Daily Summary */}
-          <section className="hidden md:block bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="hidden rounded-xl border border-stone-200/80 bg-white p-5 shadow-sm md:block lg:p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Daily Summary</h2>
               <span className="text-[11px] font-semibold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{todayYmd}</span>
@@ -801,7 +802,7 @@ export default function DailyWorkbench() {
 
           {/* Quick Filters */}
           {canViewRoadshows && roadshowsToday.length > 0 && (
-            <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-5" aria-label="Roadshows today">
+            <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm md:p-5" aria-label="Roadshows today">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h2 className="text-sm font-bold text-stone-800">
                   Roadshows today
@@ -828,7 +829,7 @@ export default function DailyWorkbench() {
           )}
 
           {/* Execution Queue */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-5 md:p-6">
             <div className="flex items-end justify-between gap-4 mb-4">
               <div>
                 <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700"><span className="hidden md:inline">Execution Queue</span><span className="md:hidden">Today</span></h2>
@@ -870,7 +871,7 @@ export default function DailyWorkbench() {
                         type="button"
                         onClick={() => setSelectedKey(isSelected ? null : item.key)}
                         aria-expanded={isSelected}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#978C21]"
                       >
                         <span className="lf-mobile-lead-avatar" aria-hidden="true">
                           <Icon className="h-[17px] w-[17px]" />
@@ -887,7 +888,7 @@ export default function DailyWorkbench() {
                       {canEditScheduled && (
                         <Link
                           to={`/leads/${encodeURIComponent(item.leadId)}/update`}
-                          className="lf-row-action lf-row-action--primary"
+                          className="lf-row-action lf-row-action--primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
                           aria-label={`Update status for ${item.leadName}`}
                           title="Update status"
                         >
@@ -896,7 +897,7 @@ export default function DailyWorkbench() {
                       )}
                       <button
                         type="button"
-                        className="lf-row-action"
+                        className="lf-row-action focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2"
                         onClick={() => setSelectedKey(isSelected ? null : item.key)}
                         aria-expanded={isSelected}
                         aria-label={isSelected ? 'Hide details' : 'Show details'}
@@ -927,10 +928,10 @@ export default function DailyWorkbench() {
 
           {/* Selected Item / Quick Action Area */}
           {selectedItem && (
-            <section className="bg-white rounded-[12px] border border-[#978C21]/20 p-6" style={{ boxShadow: '0 4px 12px rgba(151,140,33,0.08)' }}>
+            <section className="rounded-xl border border-[#978C21]/25 bg-white p-4 shadow-sm sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Quick Actions</h3>
-                <button type="button" onClick={() => setSelectedKey(null)} className="p-1.5 rounded-full hover:bg-stone-50 border border-stone-100">
+                <button type="button" onClick={() => setSelectedKey(null)} className="rounded-full border border-stone-200 p-2 transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
                   <X className="w-4 h-4 text-stone-400" />
                 </button>
               </div>
@@ -1000,7 +1001,7 @@ export default function DailyWorkbench() {
 
           {/* Completed Today summary (optional) */}
           {completedToday.length > 0 && (
-            <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+            <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-6">
               <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700 mb-3">Completed Today</h3>
               <p className="text-[11px] text-stone-500 mb-3">Scheduled activities completed today in Asia/Dhaka (authoritative completed_at). Historical lead_activities are immutable; this counts planned work marked completed.</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -1016,7 +1017,7 @@ export default function DailyWorkbench() {
           )}
 
           {/* Tomorrow Preview (lightweight counts) */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="rounded-xl border border-stone-200/80 bg-white p-4 shadow-sm sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Tomorrow Preview</h3>
               <Link to="/task-calendar" className="inline-flex items-center gap-1 text-xs font-semibold text-[#978C21] hover:underline">
@@ -1075,7 +1076,7 @@ export default function DailyWorkbench() {
           <div className="bg-white rounded-[14px] shadow-2xl border border-stone-100 w-full max-w-md overflow-hidden animate-slideUp" style={{ boxShadow: '0 12px 32px rgba(0,0,0,0.12)' }}>
             <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
               <h4 className="text-sm font-black uppercase tracking-widest text-stone-700">Edit Activity</h4>
-              <button type="button" onClick={() => setEditing(null)} className="p-1.5 rounded-full hover:bg-stone-50">
+              <button type="button" onClick={() => setEditing(null)} className="rounded-full p-2 transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21] focus-visible:ring-offset-2">
                 <X className="w-4 h-4 text-stone-400" />
               </button>
             </div>
