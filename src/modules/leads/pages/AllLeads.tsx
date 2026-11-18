@@ -39,7 +39,7 @@ import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 export default function AllLeads() {
   const { user } = useAuthStore();
   const { canAccess, userRole } = usePermissions();
-  const { overview: teamOverview } = useCallerTeam();
+  const { overview: teamOverview, loading: teamOverviewLoading } = useCallerTeam();
   const normalizedRole = String(userRole || user?.role || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const isTeamLeadRole = ['TEAMLEAD', 'RM', 'TL'].includes(normalizedRole);
   const canAssign = canAccess('all_leads', 'assign');
@@ -129,11 +129,11 @@ export default function AllLeads() {
       toast.error('Please choose an assignee');
       return;
     }
-    setBulkAssigning(true);
     if (isTeamLeadRole && bulkAssigneeId === 'unassign') {
       toast.error('Team Leads can assign only to themselves or their own team members.');
       return;
     }
+    setBulkAssigning(true);
     const targetAssignee = bulkAssigneeId === 'unassign' ? '' : bulkAssigneeId;
     try {
       await Promise.all(
@@ -328,7 +328,7 @@ export default function AllLeads() {
       return;
     }
     if (!inlineAssigneeId) {
-      toast.error('Select an assignee or choose Unassigned');
+      toast.error('Select yourself or a member of your own team.');
       return;
     }
     try {
@@ -538,6 +538,7 @@ export default function AllLeads() {
                <div className="flex items-center gap-3">
                   <select
                     value={bulkAssigneeId}
+                    disabled={isTeamLeadRole && teamOverviewLoading}
                     onChange={(e) => setBulkAssigneeId(e.target.value)}
                     className="bg-white border border-slate-200 text-[10px] font-black uppercase py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21] cursor-pointer"
                   >
@@ -667,6 +668,7 @@ export default function AllLeads() {
                                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                     <select
                                       value={inlineAssigneeId}
+                                      disabled={isTeamLeadRole && teamOverviewLoading}
                                       onChange={(e) => setInlineAssigneeId(e.target.value)}
                                       className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                                     >
@@ -944,7 +946,7 @@ export default function AllLeads() {
                      <p className="text-[11px] text-slate-500">Route or transfer matching ownership. Assigning to any RM propagates instant alerts to their interface feed.</p>
                      <select
                        value={editAssignee}
-                       disabled={!canAssign}
+                       disabled={!canAssign || (isTeamLeadRole && teamOverviewLoading)}
                        onChange={(e) => setEditAssignee(e.target.value)}
                        className="w-full bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider p-3 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
                      >
