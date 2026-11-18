@@ -8,7 +8,7 @@
 **Phase 7 branch:** `ux/phase-7-analytics-suite`
 **Phase 8 branch:** `ux/phase-8-roadshow-workspace`
 **Phase 9 branch:** `ux/phase-9-profile-settings`
-**Status:** Phases 1–11 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
+**Status:** Phases 1–12 implemented across stacked review branches; broader page-by-page upgrade remains in progress.
 **UI language:** English — simple, professional wording.
 
 ## Phase 1 — Lead Workspace and Lead 360
@@ -103,10 +103,25 @@
 - Did not change administrator-only System Settings, security policies, data operations or permission configuration.
 - No API, database, permission or business-rule changes.
 
+## Phase 12 — Remaining Pages Consistency & Accessibility
+
+### Activities
+- Reworked page spacing and summary-card sizing for narrow screens while retaining the existing responsive category grid.
+- Added explicit pressed-state semantics and visible keyboard focus to the activity category controls.
+- Converted clickable activity rows into full-width semantic buttons with descriptive accessible names, larger touch targets and visible keyboard focus.
+- Preserved activity generation, category grouping, lead navigation, source data and existing service calls.
+
+### Sales Pipeline
+- Improved the header action layout so the lead total and refresh control wrap cleanly on narrow screens.
+- Added consistent keyboard-focus treatment and comfortable touch sizing to refresh, retry and destination links.
+- Improved stage-card text wrapping to prevent long stage labels from overflowing narrow columns.
+- Preserved the dashboard service payload, stage calculations, Lead Quality snapshot, forbidden/error handling and existing navigation destinations.
+
+- No API, database, permission, data-visibility, workflow or business-rule changes.
+
 ## Next UX phases
-1. Review administrator-only System Settings with extra care around destructive actions, security policies and operational limits.
-2. Refine daily workbench and role-aware team workflows without duplicating the separate dashboard work in PR #144.
-3. Run automated tests, build, responsive checks and accessibility review before requesting merge.
+1. Continue auditing any remaining routed pages not covered by the earlier phases.
+2. Run automated tests, production build, responsive checks and accessibility review before requesting merge.
 
 ## Verification status
 The changed files and branch commits were confirmed through GitHub. Automated tests, production build, and browser-based visual QA have not yet been run in this environment. This report does not claim those checks passed.
