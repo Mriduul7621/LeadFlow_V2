@@ -1850,11 +1850,13 @@ export async function bulkResolveUserRefs(refs: string[]): Promise<Map<string, {
   // identical to the previous ::text comparison (see isCanonicalLowerUuid).
   const uuids = values.filter(isCanonicalLowerUuid);
   const result = await getPool().query(
-    `SELECT id, employee_id, email, COALESCE(is_active, TRUE) AS is_active
-     FROM users
-     WHERE UPPER(employee_id) = ANY($1::text[])
-        OR UPPER(email) = ANY($1::text[])
-        OR ($2::uuid[] IS NOT NULL AND id = ANY($2::uuid[]))`,
+    `SELECT u.id, u.employee_id, u.email, COALESCE(u.is_active, TRUE) AS is_active,
+            UPPER(COALESCE(r.role_code, '')) AS role_code
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+      WHERE UPPER(u.employee_id) = ANY($1::text[])
+         OR UPPER(u.email) = ANY($1::text[])
+         OR ($2::uuid[] IS NOT NULL AND u.id = ANY($2::uuid[]))`,
     [upper, uuids.length ? uuids : null]
   );
   for (const row of result.rows) {
