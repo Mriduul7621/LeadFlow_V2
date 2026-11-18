@@ -75,6 +75,13 @@ export default function Settings() {
     const tab = searchParams.get('tab');
     return tab === 'assignment' ? 'overview' : tab === 'workflow' ? 'workflow' : tab === 'dropdowns' || tab === 'formbuilder' ? tab : 'overview';
   });
+  const requestedSettingsTab = searchParams.get('tab');
+  useEffect(() => {
+    if (requestedSettingsTab === 'workflow') setActiveTab('workflow');
+    else if (requestedSettingsTab === 'dropdowns') setActiveTab('dropdowns');
+    else if (requestedSettingsTab === 'formbuilder') setActiveTab('formbuilder');
+    else setActiveTab('overview');
+  }, [requestedSettingsTab]);
   const [options, setOptions] = useState<DropdownOption[]>([]);
   const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
   const [editingOption, setEditingOption] = useState<{type: string, value: string}>({ type: 'Area', value: '' });
