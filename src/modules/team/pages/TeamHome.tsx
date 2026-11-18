@@ -15,6 +15,9 @@ import {
 import { cn } from '../../../lib/utils';
 import { useCallerTeam } from '../hooks/useCallerTeam';
 import { useAuthStore } from '../../auth/store/authStore';
+import type { RolePermission } from '../../shared/types';
+import { readSessionCache } from '../../shared/api/sessionCache';
+import { resolveFeatureRouteAccess } from '../../../layouts/featureRouteAccess';
 import {
   staleLeadRadar,
   summarizeTeamTotals,
@@ -158,6 +161,14 @@ export function TeamHomeContent({
 }) {
   const user = useAuthStore(state => state.user);
   const workspace = getWorkspaceMeta(user?.role);
+  const rolePermissions = user ? readSessionCache<RolePermission[]>(`roles:${user.id}`)?.value ?? [] : [];
+  const normalizedRole = String(user?.role || '').toUpperCase();
+  const matchedPermission = rolePermissions.find(item =>
+    item.roleId === user?.role || item.roleId === normalizedRole
+  );
+  const visibleQuickLinks = workspace.quickLinks.filter(item =>
+    resolveFeatureRouteAccess(item.to, user?.role || '', matchedPermission)
+  );
   const totals = summarizeTeamTotals(people);
   const followUps = teamFollowUpsToday(people);
   const radar = staleLeadRadar(people);
@@ -192,7 +203,7 @@ export function TeamHomeContent({
       <p className="-mt-3 text-sm text-stone-500">{workspace.subtitle}</p>
 
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Role workspace shortcuts">
-        {workspace.quickLinks.map(item => (
+        {visibleQuickLinks.map(item => (
           <Link key={item.to} to={item.to} className="group rounded-xl border border-stone-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-[#978C21]/50 hover:bg-[#FFFCF8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#978C21]">
             <span className="block text-sm font-bold text-stone-800 group-hover:text-[#756c1b]">{item.label}</span>
             <span className="mt-1 block text-xs leading-5 text-stone-500">{item.description}</span>
