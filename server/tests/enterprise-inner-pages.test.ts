@@ -1,0 +1,208 @@
+/**
+ * enterprise-inner-pages.test.ts
+ * ------------------------------------------------------------------
+ * Fix round 1 (2026-11-19): Mahadi's ask — "side bar theke kono
+ * page er bhitore gele oi page gulo ei design er and wording er
+ * sathe align rekhe design lagbe." Every sidebar-reachable page
+ * now renders the sample's heading (eyebrow + H1 + the sample's
+ * description) through EnterprisePageHeader, in the sample's
+ * design language. Pinned here:
+ *
+ *   - each sidebar route's page file renders the sample heading
+ *     for its own path (Settings' three variants use
+ *     OverviewHeading directly — same sample heading, variant
+ *     titles);
+ *   - no bare "$" in the restyled pages (money is ৳; `$` survives
+ *     only as template interpolation `${...}` or a regex end
+ *     anchor `$/`);
+ *   - every link target in the restyled pages resolves to a real
+ *     route registered in App.tsx (same extraction as the homes
+ *     guards, plus navigate() calls and query strings).
+ *
+ * Deliberately NOT restyled (closest sample-aligned layout kept):
+ * the LeadQualitySnapshot shared component, TeamOverview's tree
+ * rows + StatCard tiles, the org-chart node cards, LeadList's
+ * mobile list + status tabs, the calendar grids, and the shared
+ * UserBulkImportModal / EnterpriseAccessPanel components.
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+const read = (rel: string) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+
+/** Strip block + line comments so documented substitutions don't trip the guards. */
+const stripComments = (src: string): string =>
+  src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+
+/** Sidebar route -> the page file that renders it. */
+const SIDEBAR_PAGES: [string, string][] = [
+  ['/activities', 'src/modules/leads/pages/Activities.tsx'],
+  ['/administration', 'src/modules/navigation/pages/MorePages.tsx'],
+  ['/campaign-breakdown', 'src/modules/dashboard/pages/CampaignBreakdown.tsx'],
+  ['/execution-intelligence', 'src/modules/dashboard/pages/ExecutionIntelligence.tsx'],
+  ['/follow-up', 'src/modules/leads/pages/FollowUpStrategy.tsx'],
+  ['/leads', 'src/modules/leads/pages/LeadList.tsx'],
+  ['/leads/all', 'src/modules/leads/pages/AllLeads.tsx'],
+  ['/leads/new', 'src/modules/leads/pages/LeadGenerate.tsx'],
+  ['/leads/upload', 'src/modules/leads/pages/LeadUpload.tsx'],
+  ['/ncp-progress', 'src/modules/dashboard/pages/NcpProgress.tsx'],
+  ['/notifications', 'src/modules/navigation/pages/MorePages.tsx'],
+  ['/roadshows', 'src/modules/roadshows/pages/RoadshowPage.tsx'],
+  ['/sales-pipeline', 'src/modules/dashboard/pages/SalesPipelinePage.tsx'],
+  ['/settings', 'src/modules/settings/pages/ProfileSettings.tsx'],
+  ['/task-calendar', 'src/modules/auth/pages/TaskCalendar.tsx'],
+  ['/team', 'src/modules/team/pages/TeamOverview.tsx'],
+  ['/trend-charts', 'src/modules/dashboard/pages/TrendCharts.tsx'],
+  ['/users', 'src/modules/users/pages/UserManagement.tsx'],
+  ['/workbench', 'src/modules/workbench/pages/DailyWorkbench.tsx'],
+  ['/more', 'src/modules/navigation/pages/MorePages.tsx'],
+  ['/help', 'src/modules/navigation/pages/MorePages.tsx'],
+  ['/about', 'src/modules/navigation/pages/MorePages.tsx'],
+];
+
+/** Pages one click from the sidebar, restyled in the same round. */
+const LINKED_PAGES: [string, string][] = [
+  ['/team/organogram', 'src/modules/hierarchy/pages/TeamHierarchy.tsx'],
+  ['/settings/performance-diagnostics', 'src/modules/settings/pages/PerformanceDiagnostics.tsx'],
+];
+
+describe('inner pages — every sidebar page renders the sample heading', () => {
+  for (const [route, file] of [...SIDEBAR_PAGES, ...LINKED_PAGES]) {
+    it(`${route} (${file})`, () => {
+      const code = stripComments(read(file));
+      // MorePages routes most headings through PageHeading (which
+      // renders EnterprisePageHeader); More itself uses the header
+      // directly. Either form counts — both render the sample's
+      // heading for the path.
+      const heading =
+        code.includes(`<PageHeading path="${route}"`) ||
+        (code.includes('<EnterprisePageHeader') && code.includes(`path="${route}"`));
+      assert.ok(heading, `${file} renders the sample heading for ${route}`);
+    });
+  }
+
+  it('the three settings variants render the sample heading with their own titles', () => {
+    const settings = stripComments(read('src/modules/settings/pages/Settings.tsx'));
+    for (const title of ['Status & Pipeline', 'Products & Campaigns', 'System Settings']) {
+      assert.ok(settings.includes(`title="${title}"`), `Settings renders the "${title}" heading`);
+    }
+  });
+
+  it('no restyled page keeps a hand-rolled H1 next to the sample heading', () => {
+    // A page that renders EnterprisePageHeader must not also render
+    // its own <h1> — one heading per page, the sample's.
+    const files = new Set([...SIDEBAR_PAGES, ...LINKED_PAGES].map(([, f]) => f));
+    for (const file of files) {
+      if (file.endsWith('Settings.tsx')) continue; // variants use OverviewHeading, covered above
+      const code = stripComments(read(file));
+      assert.ok(!code.includes('<h1'), `${file} must not render its own <h1>`);
+    }
+  });
+});
+
+describe('inner pages — no bare "$" (money is ৳)', () => {
+  const files = new Set([
+    ...SIDEBAR_PAGES.map(([, f]) => f),
+    ...LINKED_PAGES.map(([, f]) => f),
+    'src/modules/settings/pages/Settings.tsx',
+  ]);
+  for (const file of files) {
+    it(file, () => {
+      // `$` survives only as template interpolation `${...}` or a
+      // regex end anchor `$/` (email/date validation patterns).
+      const code = stripComments(read(file))
+        .replaceAll('${', '')
+        .replaceAll('$/', '');
+      assert.ok(!code.includes('$'), `${file} carries a bare dollar sign`);
+    });
+  }
+});
+
+describe('inner pages — every link target is a real App.tsx route', () => {
+  /** Route patterns registered in App.tsx (`path: '/...'`), incl. `:param` segments. */
+  const appRoutes = [...read('src/App.tsx').matchAll(/path: '([^']+)'/g)].map(m => m[1]);
+
+  /** Does `route` match `pattern` (`:param` matches one segment)? */
+  const matchesRoute = (pattern: string, route: string): boolean => {
+    const patternParts = pattern.split('/');
+    const routeParts = route.split('/');
+    if (patternParts.length !== routeParts.length) return false;
+    return patternParts.every((part, i) => part.startsWith(':') || part === routeParts[i]);
+  };
+
+  const isRealRoute = (route: string): boolean =>
+    appRoutes.some(pattern => pattern !== '*' && matchesRoute(pattern, route));
+
+  interface LinkSite {
+    kind: 'static' | 'template';
+    value: string;
+  }
+
+  /** Every link site in a page: `to="..."`, `to: '...'`, template `to`s, and navigate() calls. */
+  const linkSites = (src: string): LinkSite[] => {
+    const sites: LinkSite[] = [];
+    for (const m of src.matchAll(/to="([^"]+)"/g)) sites.push({ kind: 'static', value: m[1] });
+    for (const m of src.matchAll(/to:\s*'([^']+)'/g)) sites.push({ kind: 'static', value: m[1] });
+    for (const m of src.matchAll(/to:\s*`([^`]+)`/g)) sites.push({ kind: 'template', value: m[1] });
+    for (const m of src.matchAll(/to=\{`([^`]+)`\}/g)) sites.push({ kind: 'template', value: m[1] });
+    for (const m of src.matchAll(/to=\{[^}]*'(\/[^']+)'[^}]*\}/g)) sites.push({ kind: 'static', value: m[1] });
+    for (const m of src.matchAll(/navigate\('([^']+)'/g)) sites.push({ kind: 'static', value: m[1] });
+    for (const m of src.matchAll(/navigate\(`([^`]+)`/g)) sites.push({ kind: 'template', value: m[1] });
+    return sites;
+  };
+
+  it('App.tsx registers the routes the inner pages link to', () => {
+    for (const route of ['/', '/users', '/team', '/team/organogram', '/leads', '/leads/new', '/leads/:id', '/workbench', '/task-calendar', '/roadshows', '/sales-pipeline', '/ncp-progress', '/team/kpi/:kpi', '/settings/status-pipeline', '/settings/products-campaigns', '/settings/system']) {
+      assert.ok(appRoutes.includes(route), `App.tsx registers ${route}`);
+    }
+  });
+
+  // Exact site counts pin the extraction itself: if a regex stops
+  // matching a link shape, the count drops and this fails loudly
+  // instead of silently checking fewer links.
+  const EXPECTED_SITES: Record<string, number> = {
+    'src/modules/leads/pages/Activities.tsx': 1,
+    'src/modules/dashboard/pages/SalesPipelinePage.tsx': 3,
+    'src/modules/leads/pages/FollowUpStrategy.tsx': 1,
+    'src/modules/settings/pages/ProfileSettings.tsx': 0,
+    'src/modules/dashboard/pages/CampaignBreakdown.tsx': 0,
+    'src/modules/dashboard/pages/TrendCharts.tsx': 0,
+    'src/modules/navigation/pages/MorePages.tsx': 2,
+    'src/modules/dashboard/pages/NcpProgress.tsx': 0,
+    'src/modules/roadshows/pages/RoadshowPage.tsx': 0,
+    'src/modules/leads/pages/LeadUpload.tsx': 0,
+    'src/modules/team/pages/TeamOverview.tsx': 1,
+    'src/modules/hierarchy/pages/TeamHierarchy.tsx': 0,
+    'src/modules/leads/pages/LeadList.tsx': 8,
+    'src/modules/leads/pages/AllLeads.tsx': 1,
+    'src/modules/workbench/pages/DailyWorkbench.tsx': 16,
+    'src/modules/auth/pages/TaskCalendar.tsx': 5,
+    'src/modules/users/pages/UserManagement.tsx': 0,
+    'src/modules/leads/pages/LeadGenerate.tsx': 0,
+    'src/modules/settings/pages/PerformanceDiagnostics.tsx': 1,
+    'src/modules/dashboard/pages/ExecutionIntelligence.tsx': 0,
+    'src/modules/settings/pages/Settings.tsx': 1,
+  };
+
+  for (const [file, expected] of Object.entries(EXPECTED_SITES)) {
+    it(`${file}: every link target resolves to a registered route`, () => {
+      const sites = linkSites(stripComments(read(file)));
+      assert.equal(sites.length, expected, `${file} link-site count (extraction drift?)`);
+      for (const site of sites) {
+        const normalized = site.kind === 'template'
+          ? site.value.replace(/\$\{[^}]+\}/g, ':param')
+          : site.value;
+        // Query strings ride on a real route (/leads?leadId=...).
+        const base = normalized.split('?')[0];
+        assert.ok(normalized.startsWith('/'), `${file}: link target ${site.value} starts with /`);
+        assert.ok(isRealRoute(base), `${file}: ${site.value} is not a registered App.tsx route`);
+      }
+    });
+  }
+});

@@ -508,7 +508,12 @@ describe('Enterprise home primitives — KpiCard rendering', () => {
 describe('TL+ Home — source guards', () => {
   it('EnterpriseHome decides through the derived enterprise role and the shared overview loader', () => {
     const home = read('src/modules/workspace/pages/EnterpriseHome.tsx');
-    assert.ok(home.includes('useEnterpriseRole()'), 'the root home reads the derived enterprise role');
+    // Fix round 1 (2026-11-19): the home reads the DISPLAY role,
+    // which IS the derived role for everyone except a super admin
+    // previewing another role (enterprise-preview.test.ts pins the
+    // gate); without a provider the display role falls back to the
+    // derived role.
+    assert.ok(home.includes('useEnterpriseDisplayRole()'), 'the root home reads the display role');
     assert.ok(home.includes("role === 'admin'") && home.includes("role === 'manager'") && home.includes("role === 'teamLead'"),
       'one home per derived role, no switcher');
     const hook = read('src/layouts/useEnterpriseRole.ts');

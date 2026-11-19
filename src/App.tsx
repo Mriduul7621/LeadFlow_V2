@@ -210,6 +210,17 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/settings/system"><LazyPage page={<AdminRoute><Settings /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
   },
   {
+    // Fix round (2026-11-19): the CONFIGURATION group's three pages
+    // are three distinct routes — each Settings variant shows only
+    // its own content. Same gates as /settings/system.
+    path: '/settings/status-pipeline',
+    element: <ProtectedRoute><FeatureGate route="/settings/status-pipeline"><LazyPage page={<AdminRoute><Settings variant="status-pipeline" /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/settings/products-campaigns',
+    element: <ProtectedRoute><FeatureGate route="/settings/products-campaigns"><LazyPage page={<AdminRoute><Settings variant="products-campaigns" /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
+  {
     // TEMPORARY admin-only mobile diagnostics. Still behind the standard
     // ProtectedRoute gate, plus the ADMIN/SUPERADMIN-only AdminRoute gate
     // (sidebar entry is also admin-only). Client-side only — no new

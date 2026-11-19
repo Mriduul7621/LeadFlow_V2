@@ -51,6 +51,7 @@ import {
 } from '../../calendar/utils/calendarLayout';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 
 /**
@@ -533,9 +534,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       cells.push(d);
     }
     return (
-      <div className="bg-white border border-slate-200/70 rounded-xl p-3">
+      <div className="ep-card" style={{ padding: 12 }}>
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[11px] font-black uppercase tracking-widest text-slate-700">{MONTHS[m]} {y}</span>
+          <span className="ep-cardhead" style={{ marginBottom: 0 }}>{MONTHS[m]} {y}</span>
           <div className="flex gap-1">
             <button type="button" aria-label="Previous month" onClick={() => setMiniCursor(new Date(y, m - 1, 1))} className="p-1 border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"><ChevronLeft className="w-3.5 h-3.5" /></button>
             <button type="button" aria-label="Next month" onClick={() => setMiniCursor(new Date(y, m + 1, 1))} className="p-1 border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
@@ -585,8 +586,8 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const renderRailContent = () => (
     <div className="space-y-4">
       {renderMiniMonth()}
-      <div className="bg-white border border-slate-200/70 rounded-xl p-3">
-        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+      <div className="ep-card" style={{ padding: 12 }}>
+        <span className="ep-cardhead flex items-center gap-1.5">
           <ListFilter className="w-3.5 h-3.5" /> My calendars
         </span>
         <div className="space-y-1">
@@ -915,58 +916,51 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const weekDays = visibleWeekDates(currentDate, weekendDays, viewMode === 'workweek');
 
   return (
-    <div className="max-w-[1440px] mx-auto pb-24 space-y-4">
+    <div className="ep-page" style={{ maxWidth: 1440 }}>
       <BackButton fallback="/" />
-
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-100 bg-[#F9F9F4] text-[#978C21] shadow-sm">
-            <CalendarIcon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight text-slate-900 leading-none">Task Calendar</h1>
-            <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5">Follow-ups · Meetings · Tasks · Roadshows</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => openCreate()}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-[11px] font-black uppercase tracking-widest rounded-lg shadow-md shadow-[#978C21]/20 cursor-pointer"
-        >
-          <Plus className="w-4 h-4" /> New event
-        </button>
-      </div>
+      <EnterprisePageHeader
+        path="/task-calendar"
+        actions={(
+          <button
+            type="button"
+            onClick={() => openCreate()}
+            className="ep-btn ep-btn-primary"
+          >
+            <Plus className="w-4 h-4" /> New event
+          </button>
+        )}
+      />
 
       <div className="flex gap-4 items-start">
         <aside className="hidden lg:block w-[248px] shrink-0 sticky top-4">{renderRailContent()}</aside>
 
         <section className="flex-1 min-w-0 space-y-3">
           {/* Toolbar */}
-          <div className="flex flex-wrap items-center gap-2 bg-[#FBFAF8] border border-slate-200/70 rounded-xl p-2.5">
+          <div className="ep-card flex flex-wrap items-center gap-2" style={{ padding: 10 }}>
             <button
               type="button"
               onClick={() => setRailOpen(true)}
-              className="lg:hidden inline-flex items-center gap-1.5 px-2.5 py-2 border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 cursor-pointer rounded-lg"
+              className="lg:hidden ep-btn"
             >
               <ListFilter className="w-3.5 h-3.5" /> Calendars
             </button>
             <div className="flex items-center gap-1.5">
-              <button type="button" aria-label="Previous" onClick={() => navigatePeriod('prev')} className="p-2 border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer rounded-lg"><ChevronLeft className="w-4 h-4" /></button>
-              <button type="button" onClick={() => setCurrentDate(new Date())} className="px-3 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-600 cursor-pointer rounded-lg">Today</button>
-              <button type="button" aria-label="Next" onClick={() => navigatePeriod('next')} className="p-2 border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer rounded-lg"><ChevronRight className="w-4 h-4" /></button>
+              <button type="button" aria-label="Previous" onClick={() => navigatePeriod('prev')} className="ep-btn" style={{ padding: '8px 10px' }}><ChevronLeft className="w-4 h-4" /></button>
+              <button type="button" onClick={() => setCurrentDate(new Date())} className="ep-btn">Today</button>
+              <button type="button" aria-label="Next" onClick={() => navigatePeriod('next')} className="ep-btn" style={{ padding: '8px 10px' }}><ChevronRight className="w-4 h-4" /></button>
             </div>
             <span className="text-[12px] font-black text-slate-800 min-w-[150px] text-center flex-1 sm:flex-none">{rangeTitle}</span>
-            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1 sm:flex-none sm:ml-auto min-w-[150px]">
+            <div className="flex items-center gap-2 bg-white border border-[#d9d9d2] rounded-[10px] px-2.5 py-1.5 flex-1 sm:flex-none sm:ml-auto min-w-[150px]">
               <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Search events…"
-                className="outline-none bg-transparent w-full text-[11px] font-semibold placeholder:text-slate-300"
+                className="outline-none bg-transparent w-full text-[13px] placeholder:text-slate-400"
               />
             </div>
-            <div className="flex items-center gap-1 border border-slate-200 p-1 rounded-lg bg-white">
+            <div className="flex items-center gap-1">
               {([
                 ['day', 'Day'],
                 ['workweek', 'Work week'],
@@ -978,8 +972,8 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                   type="button"
                   onClick={() => setViewMode(mode)}
                   className={cn(
-                    'px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider cursor-pointer rounded-md transition-all',
-                    viewMode === mode ? 'bg-[#978C21] text-white shadow' : 'text-slate-400 hover:text-slate-800 hover:bg-slate-100',
+                    'ep-pill',
+                    viewMode === mode && 'active',
                   )}
                 >
                   {label}
@@ -1101,7 +1095,7 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 15 }}
-        className="bg-white border border-slate-200 w-full max-w-lg shadow-2xl overflow-hidden max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl"
+        className="ep-card w-full max-w-lg overflow-hidden max-h-[92vh] flex flex-col" style={{ padding: 0, borderRadius: 14 }}
       >
         <div className="bg-[#FBFAF8] p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1144,7 +1138,7 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
                   {ev.leadMobile || ''}{ev.leadStatus ? ` · ${ev.leadStatus}` : ''}
                 </span>
               </div>
-              <button type="button" onClick={onOpenLead} className="px-3 py-2 bg-[#978C21] hover:bg-[#83781C] text-white text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center gap-1 cursor-pointer shrink-0">
+              <button type="button" onClick={onOpenLead} className="ep-btn ep-btn-primary shrink-0">
                 Open lead <ExternalLink className="w-3 h-3" />
               </button>
             </div>
@@ -1201,11 +1195,11 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
 
         <div className="p-4 bg-[#FBFAF8] border-t border-slate-100 flex gap-2 justify-end flex-wrap">
           {ev.kind === 'roadshow' ? (
-            <button type="button" onClick={onOpenRoadshows} className="px-4 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer flex items-center gap-1.5">
+            <button type="button" onClick={onOpenRoadshows} className="ep-btn ep-btn-primary">
               Open Roadshows <ExternalLink className="w-3 h-3" />
             </button>
           ) : ev.managed ? (
-            <button type="button" onClick={onOpenLead} className="px-4 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer flex items-center gap-1.5">
+            <button type="button" onClick={onOpenLead} className="ep-btn ep-btn-primary">
               Open lead <ExternalLink className="w-3 h-3" />
             </button>
           ) : (
@@ -1213,18 +1207,18 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
               {myPending && (
                 <>
                   <button type="button" onClick={() => onRsvp('accepted')} className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Accept</button>
-                  <button type="button" onClick={() => onRsvp('declined')} className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Decline</button>
+                  <button type="button" onClick={() => onRsvp('declined')} className="ep-btn ep-btn-danger">Decline</button>
                 </>
               )}
               {isScheduled && (canEdit ? (
                 <>
-                  <button type="button" onClick={onEdit} className="px-4 py-2.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer flex items-center gap-1.5"><Pencil className="w-3 h-3" /> Edit</button>
+                  <button type="button" onClick={onEdit} className="ep-btn"><Pencil className="w-3 h-3" /> Edit</button>
                   <button type="button" onClick={onComplete} className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer flex items-center gap-1.5"><CheckCircle className="w-3 h-3" /> Complete</button>
                   <button type="button" onClick={onCancel} className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Cancel</button>
                   {confirmDelete ? (
-                    <button type="button" onClick={onDelete} className="px-4 py-2.5 bg-rose-700 hover:bg-rose-800 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Confirm delete</button>
+                    <button type="button" onClick={onDelete} className="ep-btn ep-btn-danger">Confirm delete</button>
                   ) : (
-                    <button type="button" onClick={() => setConfirmDelete(true)} className="px-4 py-2.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer flex items-center gap-1.5"><Trash2 className="w-3 h-3" /> Delete</button>
+                    <button type="button" onClick={() => setConfirmDelete(true)} className="ep-btn"><Trash2 className="w-3 h-3" /> Delete</button>
                   )}
                 </>
               ) : (
@@ -1232,7 +1226,7 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
               ))}
             </>
           )}
-          <button type="button" onClick={onClose} className="px-4 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Close</button>
+          <button type="button" onClick={onClose} className="ep-btn">Close</button>
         </div>
       </motion.div>
     </div>
@@ -1305,7 +1299,7 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
     }
   };
 
-  const inputCls = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-[12px] font-semibold outline-none focus:border-[#978C21] bg-white';
+  const inputCls = 'ep-input';
   const labelCls = 'text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1';
 
   return (
@@ -1314,7 +1308,7 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 15 }}
-        className="bg-white border border-slate-200 w-full max-w-xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl"
+        className="ep-card w-full max-w-xl overflow-hidden max-h-[92vh] flex flex-col" style={{ padding: 0, borderRadius: 14 }}
       >
         <div className="bg-[#FBFAF8] p-5 border-b border-slate-100 flex items-center justify-between">
           <h3 className="text-base font-black tracking-tight text-slate-900">{isEdit ? 'Edit event' : 'New event'}</h3>
@@ -1333,8 +1327,8 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
                   disabled={isEdit}
                   onClick={() => set({ kind })}
                   className={cn(
-                    'px-3 py-2 text-[10px] font-black uppercase tracking-wider rounded-lg border cursor-pointer',
-                    f.kind === kind ? 'text-white border-transparent' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50',
+                    'ep-pill',
+                    f.kind === kind && 'active',
                     isEdit && 'opacity-60 cursor-not-allowed',
                   )}
                   style={f.kind === kind ? { background: CATEGORY_HEX[kind === 'follow_up' ? 'followup' : kind === 'customer_meeting' ? 'customer_meeting' : kind === 'team_meeting' ? 'team_meeting' : kind] } : undefined}
@@ -1454,7 +1448,7 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
             </div>
             <div>
               <span className={labelCls}>Reminder</span>
-              <select value={f.reminder} onChange={e => set({ reminder: e.target.value })} className={inputCls}>
+              <select value={f.reminder} onChange={e => set({ reminder: e.target.value })} className="ep-select" style={{ width: '100%' }}>
                 {REMINDER_OPTIONS.map(o => (
                   <option key={o.label} value={o.value == null ? 'none' : String(o.value)}>{o.label}</option>
                 ))}
@@ -1462,7 +1456,7 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
             </div>
             <div>
               <span className={labelCls}>Priority</span>
-              <select value={f.priority} onChange={e => set({ priority: e.target.value })} className={inputCls}>
+              <select value={f.priority} onChange={e => set({ priority: e.target.value })} className="ep-select" style={{ width: '100%' }}>
                 {['LOW', 'NORMAL', 'MEDIUM', 'HIGH'].map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
@@ -1476,8 +1470,8 @@ function EventFormModal({ initial, currentUserId, onClose, onSubmit }: FormProps
         </div>
 
         <div className="p-4 bg-[#FBFAF8] border-t border-slate-100 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">Cancel</button>
-          <button type="button" disabled={saving} onClick={() => void handleSave()} className="px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] disabled:opacity-60 text-white font-black text-[10px] uppercase tracking-widest rounded-lg cursor-pointer">
+          <button type="button" onClick={onClose} className="ep-btn">Cancel</button>
+          <button type="button" disabled={saving} onClick={() => void handleSave()} className="ep-btn ep-btn-primary">
             {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create event'}
           </button>
         </div>

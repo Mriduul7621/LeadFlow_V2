@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  PieChart, Pie, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, AreaChart, Area
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, AreaChart, Area, BarChart, Bar, Legend
 } from 'recharts';
-import { 
-  TrendingUp, Users, Phone, Target, Filter, Download, Calendar as CalendarIcon, RefreshCw, LayoutDashboard, CheckCircle, XCircle, Search, X
+import {
+  TrendingUp, Users, Phone, Target, Download, RefreshCw, CheckCircle, Search, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
@@ -13,7 +13,11 @@ import { leadService } from '../../leads/services/leadService';
 import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
 import { downloadWorkbook } from '../../shared/utils/excel';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
+
+/** Stage-pie colours: the sample palette first, then muted tones. */
+const STAGE_COLORS = ['#858515', '#596b35', '#f36b21', '#a6ad79', '#263238', '#b0b8c1', '#e8b48c', '#7d8c6f', '#c9a227', '#8d6e63'];
 
 export default function ExecutionIntelligence() {
   const { user } = useAuthStore();
@@ -37,6 +41,31 @@ export default function ExecutionIntelligence() {
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [popupSearch, setPopupSearch] = useState<string>('');
 
+  // The selected period's date range (local dates), shared by the
+  // loader, the drill-down popup and the chart memos below so all
+  // three always describe the same set of leads.
+  const getPeriodRange = () => {
+    let startDate = new Date(0);
+    let endDate = new Date();
+    const now = new Date();
+
+    if (period === 'TODAY') {
+      startDate = new Date(selectedDate + 'T00:00:00');
+      endDate = new Date(selectedDate + 'T23:59:59.999');
+    } else if (period === 'THIS MONTH') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    } else if (period === 'LAST MONTH') {
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    } else if (period === 'CUSTOM') {
+      startDate = new Date(customDates.start);
+      endDate = new Date(customDates.end);
+      endDate.setHours(23, 59, 59, 999);
+    }
+    return { startDate, endDate };
+  };
+
   const loadData = async () => {
     if (!user) return;
     setLoading(true);
@@ -59,24 +88,7 @@ export default function ExecutionIntelligence() {
       }
 
       // Determine date ranges
-      let startDate = new Date(0);
-      let endDate = new Date();
-      const now = new Date();
-
-      if (period === 'TODAY') {
-        startDate = new Date(selectedDate + 'T00:00:00');
-        endDate = new Date(selectedDate + 'T23:59:59.999');
-      } else if (period === 'THIS MONTH') {
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-      } else if (period === 'LAST MONTH') {
-        startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      } else if (period === 'CUSTOM') {
-        startDate = new Date(customDates.start);
-        endDate = new Date(customDates.end);
-        endDate.setHours(23, 59, 59, 999);
-      }
+      const { startDate, endDate } = getPeriodRange();
 
       // Filter leads by date & role
       let filteredLeads = allLeads.filter(l => {
@@ -147,24 +159,7 @@ export default function ExecutionIntelligence() {
   };
 
   const getFilteredLeadsForPopup = () => {
-    let startDate = new Date(0);
-    let endDate = new Date();
-    const now = new Date();
-
-    if (period === 'TODAY') {
-      startDate = new Date(selectedDate + 'T00:00:00');
-      endDate = new Date(selectedDate + 'T23:59:59.999');
-    } else if (period === 'THIS MONTH') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    } else if (period === 'LAST MONTH') {
-      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-    } else if (period === 'CUSTOM') {
-      startDate = new Date(customDates.start);
-      endDate = new Date(customDates.end);
-      endDate.setHours(23, 59, 59, 999);
-    }
+    const { startDate, endDate } = getPeriodRange();
 
     let result = leads.filter(l => {
       const leadDate = new Date(l.timestamp);
@@ -219,78 +214,148 @@ export default function ExecutionIntelligence() {
     }
   };
 
+  // ----------------------------------------------------------------
+  // Analytic content (fix round, 2026-11-19 — "Analytics page E
+  // analytic type E data thakte Hobe"). Every chart below is
+  // computed from the same period-filtered leads the KPI cards
+  // summarise; nothing is fabricated, and an empty period shows
+  // an honest empty state instead of a chart.
+  // ----------------------------------------------------------------
+
+  /** The leads the selected period covers (same scope as the KPIs). */
+  const filteredLeads = useMemo(() => {
+    const { startDate, endDate } = getPeriodRange();
+    return leads.filter(l => {
+      const leadDate = new Date(l.timestamp);
+      return leadDate >= startDate && leadDate <= endDate;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, period, selectedDate, customDates]);
+
+  /** Stage distribution for the pie chart (real LeadFlow statuses). */
+  const stageBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const lead of filteredLeads) {
+      const status = lead.currentStatus || 'Unknown';
+      counts.set(status, (counts.get(status) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [filteredLeads]);
+
+  /**
+   * Leads over time: hourly buckets for a single day, daily
+   * buckets for longer periods. Keys are LOCAL dates/hours so a
+   * bucket never lands on the wrong day across timezones.
+   */
+  const trendPoints = useMemo(() => {
+    const buckets = new Map<string, { label: string; leads: number }>();
+    for (const lead of filteredLeads) {
+      const d = new Date(lead.timestamp);
+      const key = period === 'TODAY'
+        ? String(d.getHours()).padStart(2, '0')
+        : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const label = period === 'TODAY'
+        ? `${d.getHours()}:00`
+        : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const bucket = buckets.get(key) ?? { label, leads: 0 };
+      bucket.leads += 1;
+      buckets.set(key, bucket);
+    }
+    return [...buckets.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, bucket]) => bucket);
+  }, [filteredLeads, period]);
+
+  /** NCP comparison per area for the bar chart (from teamStats). */
+  const ncpByArea = useMemo(
+    () => teamStats.map(row => ({
+      area: row.team,
+      projected: row.projected,
+      collected: row.collected,
+    })),
+    [teamStats],
+  );
+
+  /** Conversion/contact/collection rates — real counts only. */
+  const rates = useMemo(() => {
+    const total = filteredLeads.length;
+    const contacted = filteredLeads.filter(l =>
+      ['Contacted', 'Interested', 'Follow-up Set', 'Meeting Fixed', 'Meeting Completed', 'Pipeline Locked', 'Converted'].includes(l.currentStatus),
+    ).length;
+    const converted = filteredLeads.filter(l => l.currentStatus === 'Converted').length;
+    const pct = (part: number, whole: number) => (whole === 0 ? 0 : Math.round((part / whole) * 100));
+    return {
+      total,
+      contactRate: pct(contacted, total),
+      conversionRate: pct(converted, total),
+      collectionRate: pct(stats.collected, stats.projected),
+    };
+  }, [filteredLeads, stats]);
+
   return (
-    <div className="space-y-8 pb-24 bg-white font-sans">
+    <div className="ep-page">
       <BackButton fallback="/" />
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Execution Intelligence</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Live Status ledger and Hierarchical Output Audit</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button 
+      <EnterprisePageHeader
+        path="/execution-intelligence"
+        actions={(
+          <button
+            type="button"
             onClick={loadData}
-            className="p-3 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm"
+            className="ep-btn"
+            aria-label="Refresh analytics"
           >
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            Refresh
           </button>
-        </div>
-      </div>
+        )}
+      />
 
-      {/* Period Filter Header */}
-      <div className="bg-[#3C3C3C] p-6 rounded-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-           <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center">
-              <LayoutDashboard className="w-4 h-4 text-[#978C21]" />
-           </div>
-           <div>
-              <h4 className="text-white text-sm font-semibold">Daily Status Audit</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Execution intelligence scope</p>
-           </div>
+      {/* Period filter */}
+      <div className="ep-card" style={{ marginBottom: 18 }}>
+        <div className="ep-cardhead">
+          <div>
+            <h3>Period</h3>
+            <div className="ep-muted">{formattedDateRange()}</div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPeriod(p)}
+                className={cn('ep-pill', period === p && 'active')}
+                aria-pressed={period === p}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
-           {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
-             <button 
-               key={p}
-               onClick={() => setPeriod(p)}
-               className={cn(
-                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
-                 period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
-               )}
-             >
-               {p}
-             </button>
-           ))}
-           <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
-           <div className="flex items-center gap-2 px-2">
-              <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
-           </div>
-        </div>
-      </div>
-
-      {period === 'CUSTOM' && (
-        <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4 animate-fade-in">
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
-              <input 
-                type="date" 
+        {period === 'CUSTOM' && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            <label className="ep-field-label">
+              Start
+              <input
+                type="date"
                 value={customDates.start}
                 onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
-              <input 
-                type="date" 
+            </label>
+            <label className="ep-field-label">
+              End
+              <input
+                type="date"
                 value={customDates.end}
                 onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-        </div>
-      )}
+            </label>
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="flex justify-center items-center py-24">
@@ -298,88 +363,204 @@ export default function ExecutionIntelligence() {
         </div>
       ) : (
         <>
-          {/* Key KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {/* Key KPI cards — each opens its drill-down list. */}
+          <div className="ep-grid-3">
              {[
-               { id: 'contacted', label: 'CONTACTED CALLS', value: stats.contacted, icon: Phone, color: 'text-brand-blue' },
-               { id: 'meetings', label: 'MEETINGS COMPLETED', value: stats.meetings, icon: Users, color: 'text-slate-900' },
-               { id: 'followups', label: 'FOLLOW-UPS SET', value: stats.followUps, icon: RefreshCw, color: 'text-slate-500' },
-               { id: 'pipeline', label: 'PIPELINE LOCKED', value: stats.pipeline, icon: Target, color: 'text-slate-900' },
-               { id: 'projected', label: 'PROJECTED NCP', value: `৳${stats.projected.toLocaleString()}`, icon: TrendingUp, color: 'text-brand-text' },
-               { id: 'collected', label: 'COLLECTED NCP', value: `৳${stats.collected.toLocaleString()}`, icon: CheckCircle, color: 'text-[#10B981]', isGreen: true },
-             ].map((stat, i) => (
+               { id: 'contacted', label: 'Contacted calls', value: stats.contacted, icon: Phone, foot: 'Tap to list the leads', tone: '' },
+               { id: 'meetings', label: 'Meetings completed', value: stats.meetings, icon: Users, foot: 'Tap to list the leads', tone: '' },
+               { id: 'followups', label: 'Follow-ups set', value: stats.followUps, icon: RefreshCw, foot: 'Tap to list the leads', tone: '' },
+               { id: 'pipeline', label: 'Pipeline locked', value: stats.pipeline, icon: Target, foot: 'Tap to list the leads', tone: '' },
+               { id: 'projected', label: 'Projected NCP', value: `৳${stats.projected.toLocaleString()}`, icon: TrendingUp, foot: 'Tap to list the leads', tone: '' },
+               { id: 'collected', label: 'Collected NCP', value: `৳${stats.collected.toLocaleString()}`, icon: CheckCircle, foot: 'Tap to list the leads', tone: 'green' },
+             ].map(stat => (
                 <button
                    key={stat.id}
+                   type="button"
                    onClick={() => {
                       setActivePopup(stat.id);
                       setPopupSearch('');
                    }}
-                   className="p-6 bg-white border border-slate-100 hover:border-[#978C21]/20 rounded-sm text-left group hover:bg-slate-50/50 transition-colors cursor-pointer select-none border-0 outline-none w-full shadow-sm"
+                   className="ep-card ep-kpi-btn"
+                   aria-label={`${stat.label}: ${stat.value}`}
                 >
-                   <div className="flex items-center gap-2 mb-4">
-                      <stat.icon className={cn("w-4 h-4", stat.color)} />
-                      <p className="text-xs font-medium text-slate-500">{stat.label}</p>
+                   <div className="ep-metric-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <stat.icon className="w-4 h-4" />
+                      {stat.label}
                    </div>
-                   <h5 className={cn("text-3xl font-black text-brand-text tracking-tighter italic", stat.isGreen && "text-[#10B981]")}>{stat.value}</h5>
+                   <div className={cn('ep-metric', stat.tone === 'green' && 'text-[#10B981]')}>{stat.value}</div>
+                   <div className="ep-trend">{stat.foot}</div>
                 </button>
              ))}
           </div>
 
-          {/* Area Breakout Leaderboard */}
-          <div className="bg-white rounded-sm border border-slate-100 overflow-hidden shadow-sm mt-8">
-            <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between">
+          {/* Charts: leads over time + stage distribution. */}
+          <div className="ep-layout2">
+            <div className="ep-card">
+              <div className="ep-cardhead">
                 <div>
-                  <h4 className="text-[12px] font-black uppercase text-brand-text tracking-widest italic">Regional Agency Distribution</h4>
-                  <p className="text-[8px] uppercase tracking-widest text-slate-400 font-bold mt-1">Real-time team breakout numbers</p>
+                  <h3>Leads over time</h3>
+                  <div className="ep-muted">{period === 'TODAY' ? 'New leads by hour, today' : 'New leads by day, in this period'}</div>
                 </div>
-                <button 
-                  onClick={handleExportTeamStats}
-                  className="flex items-center gap-2 border border-slate-100 bg-white hover:bg-slate-50 hover:border-[#978C21]/20 px-4 py-2 text-[10px] uppercase font-black tracking-wider shadow-sm transition-all text-[#978C21]"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Export Sheet
-                </button>
+                <span className="ep-pill">{rates.total} leads</span>
+              </div>
+              {trendPoints.length === 0 ? (
+                <p className="ep-empty">No leads in this period — the trend appears when there is data to show.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={230}>
+                  <AreaChart data={trendPoints} margin={{ top: 5, right: 5, bottom: 0, left: -18 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Area type="monotone" dataKey="leads" stroke="#858515" fill="#a6ad79" fillOpacity={0.45} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
-             <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                   <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
-                      <tr>
-                         <th className="px-8 py-4">Team / Agency</th>
-                         <th className="px-6 py-4 text-center">Total Assigned</th>
-                         <th className="px-6 py-4 text-center text-brand-blue">No Call Yet</th>
-                         <th className="px-6 py-4 text-center">Contacted</th>
-                         <th className="px-6 py-4 text-center">Meetings</th>
-                         <th className="px-6 py-4 text-center font-bold">Follow-ups</th>
-                         <th className="px-6 py-4 text-center">Pipeline Locked</th>
-                         <th className="px-6 py-4 text-center text-[#10B981]">Collected NCP</th>
-                         <th className="px-6 py-4 text-center">Projected NCP</th>
+            <div className="ep-card">
+              <div className="ep-cardhead">
+                <div>
+                  <h3>Stage distribution</h3>
+                  <div className="ep-muted">Leads by current status</div>
+                </div>
+                <span className="ep-pill">{stageBreakdown.length} stages</span>
+              </div>
+              {stageBreakdown.length === 0 ? (
+                <p className="ep-empty">No leads in this period — the breakdown appears when there is data to show.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={230}>
+                  <PieChart>
+                    <Pie
+                      data={stageBreakdown}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={82}
+                      label={(props: any) => `${props.name} ${Math.round((props.percent ?? 0) * 100)}%`}
+                      labelLine={false}
+                    >
+                      {stageBreakdown.map((entry, i) => (
+                        <Cell key={entry.name} fill={STAGE_COLORS[i % STAGE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Charts: NCP comparison per area + rates. */}
+          <div className="ep-layout2">
+            <div className="ep-card">
+              <div className="ep-cardhead">
+                <div>
+                  <h3>NCP by area</h3>
+                  <div className="ep-muted">Projected vs collected, per area</div>
+                </div>
+                <span className="ep-pill">৳</span>
+              </div>
+              {ncpByArea.length === 0 ? (
+                <p className="ep-empty">No area records in this period — the comparison appears when there is data to show.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={230}>
+                  <BarChart data={ncpByArea} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                    <XAxis dataKey="area" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `৳${Number(v).toLocaleString()}`} width={90} />
+                    <Tooltip formatter={v => `৳${Number(v).toLocaleString()}`} />
+                    <Legend />
+                    <Bar dataKey="projected" name="Projected" fill="#a6ad79" />
+                    <Bar dataKey="collected" name="Collected" fill="#596b35" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <div className="ep-card">
+              <div className="ep-cardhead">
+                <div>
+                  <h3>Rates</h3>
+                  <div className="ep-muted">Shares of the leads in this period</div>
+                </div>
+              </div>
+              <div className="ep-list">
+                <div className="ep-listrow">
+                  <div>
+                    <div className="ep-rowtitle">Contact rate</div>
+                    <div className="ep-rowsub">Leads reached at least once</div>
+                  </div>
+                  <span className="ep-pill">{rates.contactRate}%</span>
+                </div>
+                <div className="ep-listrow">
+                  <div>
+                    <div className="ep-rowtitle">Conversion rate</div>
+                    <div className="ep-rowsub">Leads with status Converted</div>
+                  </div>
+                  <span className="ep-pill">{rates.conversionRate}%</span>
+                </div>
+                <div className="ep-listrow">
+                  <div>
+                    <div className="ep-rowtitle">Collection rate</div>
+                    <div className="ep-rowsub">Collected vs projected NCP</div>
+                  </div>
+                  <span className="ep-pill">{rates.collectionRate}%</span>
+                </div>
+              </div>
+              <div className="ep-cardfoot">Rates are computed from the {rates.total} lead{rates.total === 1 ? '' : 's'} in this period.</div>
+            </div>
+          </div>
+
+          {/* Area breakout table */}
+          <div className="ep-card ep-tablecard">
+            <div className="ep-tablehead">
+              <div>
+                <h3>Regional agency distribution</h3>
+                <div className="ep-muted">Team breakout numbers for this period</div>
+              </div>
+              <button type="button" onClick={handleExportTeamStats} className="ep-btn">
+                <Download className="w-3.5 h-3.5" />
+                Export sheet
+              </button>
+            </div>
+            <div className="ep-tablewrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Team / Agency</th>
+                    <th style={{ textAlign: 'center' }}>Total assigned</th>
+                    <th style={{ textAlign: 'center' }}>No call yet</th>
+                    <th style={{ textAlign: 'center' }}>Contacted</th>
+                    <th style={{ textAlign: 'center' }}>Meetings</th>
+                    <th style={{ textAlign: 'center' }}>Follow-ups</th>
+                    <th style={{ textAlign: 'center' }}>Pipeline locked</th>
+                    <th style={{ textAlign: 'center' }}>Collected NCP</th>
+                    <th style={{ textAlign: 'center' }}>Projected NCP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teamStats.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="ep-td-empty">No active team records matched for this range</td>
+                    </tr>
+                  ) : (
+                    teamStats.map((row, i) => (
+                      <tr key={i}>
+                        <td><strong>{row.team}</strong></td>
+                        <td style={{ textAlign: 'center' }}>{row.assigned}</td>
+                        <td style={{ textAlign: 'center' }}><strong>{row.noCall}</strong></td>
+                        <td style={{ textAlign: 'center' }}>{row.contacted}</td>
+                        <td style={{ textAlign: 'center' }}>{row.meetings}</td>
+                        <td style={{ textAlign: 'center' }}>{row.followUps}</td>
+                        <td style={{ textAlign: 'center' }}><strong>{row.pipeline}</strong></td>
+                        <td style={{ textAlign: 'center' }}><strong>৳{row.collected.toLocaleString()}</strong></td>
+                        <td style={{ textAlign: 'center' }}>৳{row.projected.toLocaleString()}</td>
                       </tr>
-                   </thead>
-                   <tbody className="divide-y divide-slate-50 italic text-[11px]">
-                      {teamStats.length === 0 ? (
-                         <tr>
-                            <td colSpan={9} className="text-center py-12 text-slate-400 font-bold uppercase tracking-widest italic text-[10px]">
-                               No active team records matched for this range
-                            </td>
-                         </tr>
-                      ) : (
-                        teamStats.map((row, i) => (
-                           <tr key={i} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-8 py-4 font-black uppercase text-slate-700">{row.team}</td>
-                              <td className="px-6 py-4 text-center text-slate-500 font-semibold">{row.assigned}</td>
-                              <td className="px-6 py-4 text-center font-black text-brand-blue">{row.noCall}</td>
-                              <td className="px-6 py-4 text-center text-slate-500">{row.contacted}</td>
-                              <td className="px-6 py-4 text-center text-slate-500">{row.meetings}</td>
-                              <td className="px-6 py-4 text-center text-slate-500">{row.followUps}</td>
-                              <td className="px-6 py-4 text-center font-black text-[#978C21]">{row.pipeline}</td>
-                              <td className="px-6 py-4 text-center font-black text-[#10B981]">৳{row.collected.toLocaleString()}</td>
-                              <td className="px-6 py-4 text-center font-black text-slate-400">৳{row.projected.toLocaleString()}</td>
-                           </tr>
-                        ))
-                      )}
-                   </tbody>
-                </table>
-             </div>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}
@@ -409,43 +590,44 @@ export default function ExecutionIntelligence() {
                       </button>
                    </div>
 
-                   <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 px-4 py-2.5 rounded-sm mb-6 shadow-sm">
+                   <div className="flex items-center gap-2 mb-6">
                       <Search className="w-4 h-4 text-slate-400" />
-                      <input 
-                        type="text" 
-                        placeholder="Filter drilldown by client name, mobile or area..." 
+                      <input
+                        type="text"
+                        placeholder="Filter drilldown by client name, mobile or area..."
                         value={popupSearch}
                         onChange={(e) => setPopupSearch(e.target.value)}
-                        className="bg-transparent border-none text-[10px] font-bold uppercase text-slate-800 placeholder-slate-400 outline-none w-full"
+                        className="ep-search"
+                        style={{ flex: 1 }}
                       />
                    </div>
 
-                   <div className="border border-slate-100 rounded-sm overflow-hidden bg-white">
-                      <div className="max-h-[55vh] overflow-y-auto">
-                        <table className="w-full text-left">
-                           <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100">
+                   <div className="ep-card ep-tablecard">
+                      <div className="max-h-[55vh] overflow-y-auto ep-tablewrap">
+                        <table>
+                           <thead>
                               <tr>
-                                 <th className="px-6 py-4">Client Name</th>
-                                 <th className="px-6 py-4">Area</th>
-                                 <th className="px-6 py-4 text-center">NCP Collected</th>
-                                 <th className="px-6 py-4 text-center">Current Status</th>
+                                 <th>Client Name</th>
+                                 <th>Area</th>
+                                 <th style={{ textAlign: 'center' }}>NCP Collected</th>
+                                 <th style={{ textAlign: 'center' }}>Current Status</th>
                               </tr>
                            </thead>
-                           <tbody className="divide-y divide-slate-50 text-[11px] italic font-medium">
+                           <tbody>
                               {getFilteredLeadsForPopup().length === 0 ? (
                                  <tr>
-                                    <td colSpan={4} className="text-center py-12 text-slate-400 font-bold uppercase tracking-widest text-[9px] italic">
+                                    <td colSpan={4} className="ep-td-empty">
                                        No active logs registered for this KPI
                                     </td>
                                  </tr>
                               ) : (
                                 getFilteredLeadsForPopup().map((lead, idx) => (
-                                   <tr key={lead.id || idx} className="hover:bg-slate-50/50 transition-colors">
-                                      <td className="px-6 py-3 font-bold text-slate-800 uppercase not-italic">{lead.prospectName}</td>
-                                      <td className="px-6 py-3 text-slate-450">{lead.area}</td>
-                                      <td className="px-6 py-3 font-black text-slate-700 text-center">৳{(lead.collectedNCP || 0).toLocaleString()}</td>
-                                      <td className="px-6 py-3 text-center">
-                                         <span className="px-2 py-0.5 bg-slate-100 text-[8px] font-black uppercase text-slate-600 rounded">
+                                   <tr key={lead.id || idx}>
+                                      <td><strong>{lead.prospectName}</strong></td>
+                                      <td>{lead.area}</td>
+                                      <td style={{ textAlign: 'center' }}><strong>৳{(lead.collectedNCP || 0).toLocaleString()}</strong></td>
+                                      <td style={{ textAlign: 'center' }}>
+                                         <span className="ep-pill">
                                             {lead.currentStatus}
                                          </span>
                                       </td>
@@ -459,9 +641,11 @@ export default function ExecutionIntelligence() {
                 </div>
 
                 <div className="mt-8 border-t border-slate-100 pt-6">
-                   <button 
+                   <button
+                     type="button"
                      onClick={() => setActivePopup(null)}
-                     className="w-full py-4 bg-slate-900 hover:bg-slate-850 text-white font-black uppercase tracking-widest text-[10px] rounded-sm shadow-md transition-all italic"
+                     className="ep-btn ep-btn-primary"
+                     style={{ width: '100%', justifyContent: 'center' }}
                    >
                      Close intelligence panel
                    </button>

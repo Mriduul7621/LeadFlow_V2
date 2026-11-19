@@ -404,7 +404,15 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(!wb.includes('useTranslation'), 'Workbench must not use useTranslation');
     assert.ok(!wb.includes("t('") && !wb.includes('t("'), 'must not call t()');
     assert.ok(wb.includes('Daily Workbench'), 'title must be Daily Workbench');
-    assert.ok(wb.includes("Manage today") || wb.includes('Manage today'), 'subtitle must be Manage today’s calls');
+    // Fix round 1 (2026-11-19): the hand-rolled header (subtitle
+    // "Manage today's calls…") is replaced by the sample's heading
+    // via EnterprisePageHeader — the sample's "Follow-up Queue"
+    // label + "Prioritize overdue and upcoming follow-ups."
+    // description for /workbench. The page name survives in the
+    // no-access copy above.
+    assert.ok(wb.includes('path="/workbench"'), 'the heading comes from the sample via EnterprisePageHeader');
+    const nav = read('src/layouts/enterpriseNav.ts');
+    assert.ok(nav.includes("'Follow-up Queue': 'Prioritize overdue and upcoming follow-ups.'"), 'the sample description for /workbench');
     // Brand tokens via class names
     assert.ok(wb.includes('rounded-[12px]') || wb.includes('rounded-[10px]'), 'must use 10-12px radii');
     assert.ok(wb.includes('bg-white') && wb.includes('border'), 'must use warm neutral surfaces');

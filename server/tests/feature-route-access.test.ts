@@ -35,7 +35,7 @@ const ALL_ROUTES = Object.keys(FEATURE_ROUTES);
 const NON_ADMIN_ROLES = ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH'];
 const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/sales-pipeline', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id'];
 const INSIGHT_ROUTES = ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'];
-const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/leads/upload', '/leads/all', '/users'];
+const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/leads/upload', '/leads/all', '/users'];
 
 describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   it('ADMIN and SUPERADMIN pass every registered route, even when menuAccess disables it', () => {

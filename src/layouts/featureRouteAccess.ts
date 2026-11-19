@@ -139,6 +139,11 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
   '/settings': { route: '/settings', path: '/settings', roles: EVERYONE },
   '/settings/system': { route: '/settings/system', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
+  // Fix round (2026-11-19): the CONFIGURATION group's three pages
+  // are three distinct routes, all in the same admin-only module
+  // as /settings/system (same menuAccess key, same fallback).
+  '/settings/status-pipeline': { route: '/settings/status-pipeline', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
+  '/settings/products-campaigns': { route: '/settings/products-campaigns', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/settings/performance-diagnostics': {
     route: '/settings/performance-diagnostics',
     path: '/settings/performance-diagnostics',

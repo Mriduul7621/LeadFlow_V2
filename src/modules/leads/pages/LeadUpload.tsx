@@ -8,8 +8,6 @@ import {
   X,
   Plus,
   ArrowRight,
-  Database,
-  BarChart3,
   ShieldCheck,
   AlertTriangle,
   ListChecks
@@ -26,6 +24,7 @@ import {
 } from '../../shared/utils/excel';
 import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { REAL_SHEET_HEADERS, mapRowForPreview, formatSheetCellForDisplay, isDateColumn, type PreviewRow } from '../utils/leadUploadMapping';
 
 /** Display formatting for preview cells (never mutates the submitted data). */
@@ -60,19 +59,21 @@ export default function LeadUpload() {
 
   if (!canAccess('lead_upl_gen', 'upload_raw_csv_xlsx')) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-100 rounded-sm shadow-xs max-w-xl mx-auto space-y-6 animate-in fade-in duration-300 mt-12">
-        <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
-          <AlertCircle className="w-8 h-8" />
-        </div>
-        <div className="space-y-2">
-          <span className="text-sm font-medium text-[#978C21]">Access Restricted</span>
-          <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
-          <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
-            Your current clearance level <span className="text-red-550 font-black">"{userRole || 'RESTRICTED'}"</span> does not possess active credentials to upload raw lead sheets or configure campaign lists.
-          </p>
-        </div>
-        <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
-          Strict Security Level: Feature lead_upl_gen.upload_raw_csv_xlsx Required
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ textAlign: 'center', marginTop: 48 }}>
+          <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 mx-auto">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div className="space-y-2" style={{ marginTop: 16 }}>
+            <span className="text-sm font-medium text-[#978C21]">Access Restricted</span>
+            <h2 className="text-xl font-bold text-slate-900">Access Denied</h2>
+            <p className="ep-muted">
+              Your role <span className="font-bold text-red-600">"{userRole || 'RESTRICTED'}"</span> does not have permission to upload lead sheets.
+            </p>
+          </div>
+          <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none" style={{ marginTop: 16 }}>
+            Strict Security Level: Feature lead_upl_gen.upload_raw_csv_xlsx Required
+          </div>
         </div>
       </div>
     );
@@ -270,25 +271,20 @@ export default function LeadUpload() {
   ];
 
   return (
-    <div className="max-w-5xl mx-auto space-y-12 pb-24">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-slate-100 pb-10">
-        <div className="flex items-center gap-6">
-          <div className="w-16 h-16 bg-[#F9F9F4] rounded-sm flex items-center justify-center text-[#978C21] shadow-sm border border-slate-100">
-            <Database className="w-8 h-8" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Bulk Lead Upload</h1>
-            <p className="text-sm text-slate-500 mt-2">Upload leads from Excel files</p>
-          </div>
-        </div>
-        <button
-          onClick={downloadTemplate}
-          className="flex items-center gap-3 px-6 py-3 bg-[#978C21]/10 hover:bg-[#978C21]/20 border border-[#978C21]/30 text-[#978C21] text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm active:scale-95 group animate-bounce-slow"
-        >
-          <Download className="w-4 h-4 text-[#978C21] transition-transform group-hover:translate-y-0.5" />
-          Download Sample Format
-        </button>
-      </div>
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/leads/upload"
+        actions={(
+          <button
+            type="button"
+            onClick={downloadTemplate}
+            className="ep-btn"
+          >
+            <Download className="w-4 h-4" />
+            Download sample format
+          </button>
+        )}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
          <div className="lg:col-span-2 space-y-8">
@@ -298,8 +294,8 @@ export default function LeadUpload() {
                onDragLeave={handleDrag}
                onDrop={handleDrop}
                className={cn(
-                  "relative h-96 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden rounded-sm border-2 border-dashed",
-                  dragActive ? "border-[#978C21] bg-[#978C21]/5 scale-[1.01]" : "border-slate-200 hover:border-[#978C21]/50 bg-[#FBFAF8]"
+                  "relative h-96 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden rounded-[14px] border-2 border-dashed",
+                  dragActive ? "border-[#858515] bg-[#858515]/5 scale-[1.01]" : "border-slate-200 hover:border-[#858515]/50 bg-[#FBFAF8]"
                )}
             >
                <input
@@ -330,17 +326,17 @@ export default function LeadUpload() {
                            onClick={(e) => { e.stopPropagation(); resetFileState(); }}
                            className="text-red-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 mx-auto hover:bg-red-50 px-4 py-2 rounded-sm mt-8 z-20 transition-all border border-transparent hover:border-red-100"
                         >
-                        <X className="w-4 h-4" /> Remove Entity
+                        <X className="w-4 h-4" /> Remove file
                         </button>
                      </motion.div>
                   ) : (
                      <div className="space-y-4">
-                        <p className="text-3xl font-black text-brand-text tracking-tighter italic serif uppercase">Drop Logic File Here</p>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic leading-relaxed">System awaiting bulk intelligence payload</p>
+                        <p className="text-3xl font-black text-brand-text tracking-tighter italic serif uppercase">Drop your file here</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic leading-relaxed">XLSX or CSV &middot; up to 5,000 rows</p>
                         <div className="pt-10">
                            <div className="inline-flex items-center gap-3 px-6 py-3 bg-white border border-slate-100 shadow-sm rounded-sm">
                               <Plus className="w-4 h-4 text-[#978C21]" />
-                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Select Local Source</span>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Select a file</span>
                            </div>
                         </div>
                      </div>
@@ -352,21 +348,19 @@ export default function LeadUpload() {
                <motion.div
                   initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm space-y-10"
+                  className="ep-card space-y-10"
                >
-                  <div className="flex items-center justify-between border-b border-slate-50 pb-8">
+                  <div className="ep-cardhead">
                     <div className="flex items-center gap-4">
                       <ShieldCheck className={cn('w-8 h-8', attentionRows.length > 0 ? 'text-amber-500' : 'text-emerald-500')} />
                       <div>
-                        <h3 className="font-black text-[18px] uppercase tracking-tight text-brand-text italic serif">Data Integrity Assessment</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 italic">
+                        <h3>Data integrity assessment</h3>
+                        <div className="ep-muted">
                           {validating ? 'Validating against database…' : 'Pre-commit validation (read-only)'}
-                        </p>
+                        </div>
                       </div>
                     </div>
-                    <div className="px-4 py-2 bg-slate-50 rounded-sm">
-                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">{mappedRows.length} data row(s)</p>
-                    </div>
+                    <span className="ep-pill">{mappedRows.length} data row(s)</span>
                   </div>
 
                   {/* Validation summary */}
@@ -377,7 +371,7 @@ export default function LeadUpload() {
                         { label: 'Would Insert', val: serverPreview ? serverPreview.inserted : '—', tone: 'text-emerald-600' },
                         { label: 'Would Update', val: serverPreview ? serverPreview.updated : '—', tone: 'text-blue-600' },
                      ].map((item, i) => (
-                        <div key={i} className="border border-slate-100 rounded-sm p-4 bg-[#FBFAF8]">
+                        <div key={i} className="ep-card" style={{ padding: 12 }}>
                            <p className={cn('text-xl font-black', item.tone)}>{item.val}</p>
                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{item.label}</p>
                         </div>
@@ -400,25 +394,25 @@ export default function LeadUpload() {
                            <ListChecks className="w-5 h-5 text-amber-500" />
                            <h4 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Rows needing attention</h4>
                         </div>
-                        <div className="overflow-x-auto border border-slate-100 rounded-sm max-h-64 overflow-y-auto">
-                           <table className="w-full text-left">
+                        <div className="ep-tablewrap" style={{ maxHeight: 256, overflowY: 'auto' }}>
+                           <table>
                               <thead>
-                                 <tr className="bg-[#3C3C3C] text-white text-[9px] font-black uppercase tracking-widest">
-                                    <th className="px-4 py-3">Sheet Row</th>
-                                    <th className="px-4 py-3">Name</th>
-                                    <th className="px-4 py-3">Phone</th>
-                                    <th className="px-4 py-3">Assigned To</th>
-                                    <th className="px-4 py-3">Issues</th>
+                                 <tr>
+                                    <th>Sheet Row</th>
+                                    <th>Name</th>
+                                    <th>Phone</th>
+                                    <th>Assigned To</th>
+                                    <th>Issues</th>
                                  </tr>
                               </thead>
                               <tbody>
                                  {attentionRows.slice(0, 50).map((row, i) => (
-                                    <tr key={i} className="text-[11px] text-slate-600 border-t border-slate-50 hover:bg-slate-50/60">
-                                       <td className="px-4 py-3 font-black">{row.rowNumber + 1}</td>
-                                       <td className="px-4 py-3">{row.name || '—'}</td>
-                                       <td className="px-4 py-3">{row.phone || '—'}</td>
-                                       <td className="px-4 py-3">{row.assignedTo || '—'}</td>
-                                       <td className="px-4 py-3 text-red-500 font-bold">{row.issues.join(' · ')}</td>
+                                    <tr key={i}>
+                                       <td><strong>{row.rowNumber + 1}</strong></td>
+                                       <td>{row.name || '—'}</td>
+                                       <td>{row.phone || '—'}</td>
+                                       <td>{row.assignedTo || '—'}</td>
+                                       <td style={{ color: '#c84d43' }}><strong>{row.issues.join(' · ')}</strong></td>
                                     </tr>
                                  ))}
                               </tbody>
@@ -439,21 +433,24 @@ export default function LeadUpload() {
                   )}
 
                   {/* Raw data preview */}
-                  <div className="overflow-x-auto border border-slate-50 rounded-sm shadow-inner bg-[#FBFAF8]">
-
-                    <table className="w-full text-left">
-                      <tbody className="italic">
-                        {previewData.map((row: any, i) => (
-                          <tr key={i} className={cn(
-                             'text-[11px] group transition-all',
-                             i === 0 ? 'bg-[#3C3C3C] font-black text-white uppercase tracking-[0.1em]' : 'text-slate-500 font-bold hover:bg-white'
-                          )}>
+                  <div className="ep-tablewrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          {(previewData[0] || []).map((cell: any, j: number) => (
+                            <th key={j} className="whitespace-nowrap">{displayCell(cell, headerRow[j])}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewData.slice(1).map((row: any, i) => (
+                          <tr key={i}>
                             {row.map((cell: any, j: number) => (
                               <td
                                 key={j}
                                 className={cn(
-                                  'px-6 py-4 whitespace-nowrap border-r border-slate-100/10',
-                                  i > 0 && isDateColumn(headerRow[j]) && 'tabular-nums'
+                                  'whitespace-nowrap',
+                                  isDateColumn(headerRow[j]) && 'tabular-nums'
                                 )}
                               >
                                 {displayCell(cell, headerRow[j])}
@@ -509,25 +506,23 @@ export default function LeadUpload() {
                   <button
                     onClick={handleUpload}
                     disabled={processing || validating || fullData.length === 0}
-                    className={cn(
-                      'w-full py-6 bg-slate-900 hover:bg-black text-white text-[12px] font-black uppercase tracking-[0.4em] transition-all rounded-sm shadow-xl flex items-center justify-center gap-4 group italic',
-                      (processing || validating || fullData.length === 0) && 'opacity-60 cursor-not-allowed'
-                    )}
+                    className="ep-btn ep-btn-primary"
+                    style={{ width: '100%', justifyContent: 'center', padding: '14px' }}
                   >
                     {processing ? 'Importing…' : validating ? 'Validating…' : `Import ${fullData.length} row(s)`}
-                    <ArrowRight className="w-5 h-5 text-[#978C21] group-hover:translate-x-2 transition-transform" />
+                    <ArrowRight className="w-5 h-5" />
                   </button>
                </motion.div>
             )}
          </div>
 
          <div className="space-y-6">
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm group">
+            <div className="ep-card group">
                <div className="flex items-center gap-4 mb-8">
                   <div className="w-10 h-10 rounded-sm bg-slate-50 flex items-center justify-center text-slate-400 group-hover:text-amber-500 transition-colors">
                      <AlertCircle className="w-6 h-6" />
                   </div>
-                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">Injection Constraints</h4>
+                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">Upload rules</h4>
                </div>
                 <ul className="space-y-6">
                   {[
@@ -545,20 +540,17 @@ export default function LeadUpload() {
                </ul>
             </div>
 
-            <div className="bg-[#3C3C3C] rounded-sm p-8 shadow-xl relative overflow-hidden">
-               <div className="relative z-10">
-                  <div className="flex items-center gap-4 mb-8">
-                     <ShieldCheck className="w-6 h-6 text-[#978C21]" />
-                     <h4 className="font-black text-[13px] uppercase tracking-widest text-white italic serif">Snapshot Integrity</h4>
-                  </div>
-                  <p className="text-[11px] font-black text-slate-400 leading-relaxed italic uppercase tracking-tighter">
-                     Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
-                  </p>
+            <div className="ep-card">
+               <div className="flex items-center gap-4 mb-8">
+                  <ShieldCheck className="w-6 h-6 text-[#978C21]" />
+                  <h4 className="font-black text-[13px] uppercase tracking-widest text-brand-text italic serif">How import works</h4>
                </div>
-               <BarChart3 className="absolute -bottom-6 -right-6 w-32 h-32 text-white/5 rotate-12" />
+               <p className="text-[11px] font-black text-slate-500 leading-relaxed italic uppercase tracking-tighter">
+                  Each row is imported as the lead's CURRENT STATE. Initial/Follow-up statuses, remarks, TAT and dates are preserved. Existing leads are updated safely — blank cells never erase data, and duplicates are reported.
+               </p>
             </div>
 
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-sm">
+            <div className="ep-card">
                <div className="flex items-center justify-between mb-6">
                   <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic">Database Sync</span>
                   <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />

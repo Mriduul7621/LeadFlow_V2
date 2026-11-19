@@ -1876,6 +1876,20 @@
 }
 .ep-brand strong { font-size: 18px; display: block; line-height: 1.2; }
 .ep-brand small { display: block; color: var(--ep-muted); font-size: 10px; letter-spacing: 1px; }
+/* The sample's rolebox, ported 1:1 — super-admin role preview only
+   (fix round, 2026-11-19). It never renders for non-super-admins. */
+.ep-rolebox {
+  background: var(--ep-bg); border: 1px solid var(--ep-line);
+  padding: 11px; border-radius: 12px; margin: 0 4px 20px;
+}
+.ep-rolebox label {
+  display: block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--ep-muted); margin-bottom: 6px;
+}
+.ep-rolebox select {
+  width: 100%; border: 0; background: transparent;
+  color: var(--ep-deep); font-weight: 700; outline: none; font-size: 14px;
+}
 .ep-navlabel {
   font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
   color: #9a9d93; padding: 0 11px; margin: 13px 0 7px;
@@ -1974,6 +1988,16 @@
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px; margin-bottom: 18px;
 }
+/* 3-column KPI grid (Analytics page: six KPI cards). */
+.ep-grid-3 {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px; margin-bottom: 18px;
+}
+/* A KPI card that is a <button> (Analytics drill-downs): same look
+   as a linked card, with the button defaults reset. */
+.ep-kpi-btn { text-align: left; width: 100%; cursor: pointer; font: inherit; color: inherit; }
+.ep-kpi-btn:hover { border-color: #b6ba8a; }
+.ep-kpi-btn.active { border-color: var(--ep-deep); }
 .ep-card {
   background: white; border: 1px solid var(--ep-line); border-radius: 14px;
   padding: 17px; min-width: 0; box-shadow: 0 5px 22px rgba(40, 48, 30, 0.04);
@@ -2026,6 +2050,9 @@
 }
 .ep-pill.orange { background: #fff0e5; color: #c65d20; }
 .ep-pill.red { background: #fae9e7; color: var(--ep-red); }
+/* Selected state for pill toggle buttons (Analytics period filter). */
+button.ep-pill { cursor: pointer; font: inherit; border: none; }
+.ep-pill.active { background: var(--ep-deep); color: #fff; }
 a.ep-pill:hover { filter: brightness(0.97); }
 
 /* Data table card. */
@@ -2058,12 +2085,47 @@ a.ep-person:hover strong { color: var(--ep-deep); }
   border: 1px solid var(--ep-line); background: white; padding: 9px 12px;
   border-radius: 9px; font-size: 11px; min-width: 180px; color: var(--ep-ink);
 }
+/* Sample-style select + field label for inner pages (fix round,
+   2026-11-19): the sample's input look, usable as a form control. */
+.ep-select {
+  border: 1px solid var(--ep-line); background: white; padding: 9px 12px;
+  border-radius: 9px; font-size: 12px; color: var(--ep-ink); font-weight: 600;
+}
+/* Generic sample-style text input for inner-page forms (same look
+   as the Add Lead form's fields). */
+.ep-input {
+  background: #fff; border: 1px solid #e7e7df; border-radius: 9px;
+  padding: 9px 12px; font-size: 13px; font-weight: 400; color: #263238;
+  width: 100%;
+}
+.ep-input:disabled { opacity: 0.45; }
+.ep-field-label {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 10px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--ep-muted); font-weight: 700;
+}
 
 /* Error banner + panel (homes). */
 .ep-banner {
   padding: 13px 15px; background: #fff6ed; border: 1px solid #f4dfcb;
   border-radius: 11px; color: #88522e; font-size: 12px; margin-bottom: 16px;
 }
+/* The role-preview indicator (fix round, 2026-11-19): unmistakable
+   while a super admin previews another role — amber, pinned to the
+   top of the content area, with a one-click return to their own view. */
+.ep-preview-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 15px; background: #fef3c7; border: 1px solid #f5d67a;
+  border-radius: 11px; color: #7a5a12; font-size: 12px; font-weight: 600;
+  margin-bottom: 16px;
+}
+.ep-preview-banner .ep-preview-back {
+  border: 1px solid #d9b64a; background: white; color: #7a5a12;
+  border-radius: 9px; padding: 6px 12px; font-weight: 700; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.ep-preview-banner .ep-preview-back:hover { background: #fff8e1; }
 .ep-error {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   background: #fef2f2; border: 1px solid #fecaca; border-radius: 14px; padding: 17px;
@@ -2120,11 +2182,47 @@ a.ep-person:hover strong { color: var(--ep-deep); }
 .ep-leadform select:disabled { opacity: 0.45; }
 .ep-leadform label { font-size: 13px; font-weight: 600; color: #263238; }
 
+/* --- Mobile bottom navigation (fix round, 2026-11-19) --- */
+/* Fixed bar, mobile only (same 720px breakpoint as the drawer):
+   white, olive active state, small icon + label. z-index 10 sits
+   above the content and the sticky topbar (5) but below the drawer
+   (20) and its scrim (15), so the open drawer covers the bar. */
+.ep-bottomnav {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0; z-index: 10;
+  background: white;
+  border-top: 1px solid var(--ep-line);
+  box-shadow: 0 -4px 18px rgba(40, 48, 30, 0.06);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+}
+.ep-bottomnav-tab {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 5px 2px 3px;
+  color: var(--ep-muted);
+  text-decoration: none;
+  font-size: 10px; font-weight: 600; line-height: 1.2;
+  border-top: 2px solid transparent;
+  min-width: 0;
+}
+.ep-bottomnav-ico { width: 20px; height: 20px; }
+.ep-bottomnav-label {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
+.ep-bottomnav-tab.active {
+  color: var(--ep-deep);
+  border-top-color: var(--ep-olive);
+}
+.ep-bottomnav-tab.active .ep-bottomnav-label { font-weight: 800; }
+
 /* --- Breakpoints (the sample's, exactly) --- */
 @media (max-width: 1050px) {
   .ep-shell { grid-template-columns: 220px 1fr; }
   .ep-content { padding: 25px 22px; }
   .ep-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ep-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   .ep-shell { display: block; }
@@ -2136,7 +2234,10 @@ a.ep-person:hover strong { color: var(--ep-deep); }
   .ep-sidebar-scrim { display: block; }
   .ep-topbar { height: 60px; padding: 0 15px; }
   .ep-hamburger { display: inline-flex; }
-  .ep-content { padding: 22px 14px 35px; }
+  /* The bottom nav is ~62px tall (+ the iPhone safe area): the
+     content keeps that much clearance so the bar never covers it. */
+  .ep-bottomnav { display: flex; }
+  .ep-content { padding: 22px 14px calc(35px + 68px + env(safe-area-inset-bottom)); }
   .ep-heading { display: block; }
   .ep-heading h1 { font-size: 24px; }
   .ep-heading .ep-actions { margin-top: 15px; }

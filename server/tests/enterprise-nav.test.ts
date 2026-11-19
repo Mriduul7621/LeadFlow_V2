@@ -65,16 +65,22 @@ describe('buildEnterpriseNavGroups — Admin', () => {
     assert.equal(byLabel.get('Teams & Hierarchy'), '/team');
   });
 
-  it('CONFIGURATION carries all three System-settings labels on the one real page', () => {
-    // Three sample items share /settings/system honestly: each names
-    // a different configuration area on that page.
+  it('CONFIGURATION carries the three settings pages on three DISTINCT routes', () => {
+    // Fix round 1 (2026-11-19): the three items used to share
+    // /settings/system, so every click landed on the same page and
+    // all three highlighted at once. Each is now its own page with
+    // only its own content.
     assert.deepEqual(groupLabels(groupsFor('admin'), 'CONFIGURATION'), [
       'Status & Pipeline',
       'Products & Campaigns',
       'System Settings',
     ]);
     const config = groupsFor('admin').find(g => g.title === 'CONFIGURATION')!;
-    assert.ok(config.items.every(i => i.path === '/settings/system'));
+    const byLabel = new Map(config.items.map(i => [i.label, i.path]));
+    assert.equal(byLabel.get('Status & Pipeline'), '/settings/status-pipeline');
+    assert.equal(byLabel.get('Products & Campaigns'), '/settings/products-campaigns');
+    assert.equal(byLabel.get('System Settings'), '/settings/system');
+    assert.equal(new Set(config.items.map(i => i.path)).size, 3, 'three distinct destinations');
   });
 
   it('INSIGHTS carries Analytics and ADMINISTRATION carries Administration', () => {

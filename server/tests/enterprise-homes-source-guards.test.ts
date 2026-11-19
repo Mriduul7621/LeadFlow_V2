@@ -237,12 +237,15 @@ describe('enterprise homes — the shared hook and primitives', () => {
     assert.ok(!hook.includes('getLeads'), 'the hook never calls getLeads');
   });
 
-  it('EnterpriseHome lazy-loads exactly one home per derived role, with no switcher', () => {
+  it('EnterpriseHome lazy-loads exactly one home per DISPLAY role, with no switcher for ordinary users', () => {
     const home = stripComments(read('src/modules/workspace/pages/EnterpriseHome.tsx'));
     for (const page of ['AdminHome', 'ManagerHome', 'TeamLeadHome', 'AgentHome']) {
       assert.ok(home.includes(`import('./${page}')`), `EnterpriseHome lazy-loads ${page}`);
     }
-    assert.ok(home.includes('useEnterpriseRole()'), 'the role comes from the derivation hook');
+    // Fix round 1: the role comes from the display-role hook, which is
+    // the derived role for everyone — except a super admin previewing
+    // another role (see enterprise-preview.test.ts for the gate).
+    assert.ok(home.includes('useEnterpriseDisplayRole()'), 'the role comes from the display-role hook');
     assert.ok(!home.includes('setRole'), 'no control anywhere switches the role');
   });
 

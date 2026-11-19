@@ -45,6 +45,7 @@ import { isForbiddenError } from '../../shared/api/forbidden';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { getSelfPerson } from '../../team/services/teamOverviewService';
 import HomeViewSwitch from '../../team/components/HomeViewSwitch';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 /** ------------------------------------------------------------
  * Daily Workbench — focused daily lead execution workspace.
@@ -229,14 +230,14 @@ function SummaryCard({
   variant?: 'default' | 'blue' | 'orange' | 'emerald' | 'red' | 'olive' | 'slate';
   sub?: string;
 }) {
-  const variantClass: Record<string, string> = {
-    default: 'kpi-card',
-    blue: 'kpi-card kpi-card-blue',
-    orange: 'kpi-card kpi-card-orange',
-    emerald: 'kpi-card kpi-card-emerald',
-    red: 'kpi-card kpi-card-red',
-    olive: 'kpi-card kpi-card-olive',
-    slate: 'kpi-card',
+  const valueColor: Record<string, string | undefined> = {
+    default: undefined,
+    blue: '#2563eb',
+    orange: '#f36b21',
+    emerald: '#047857',
+    red: '#dc2626',
+    olive: '#858515',
+    slate: undefined,
   };
   const iconClass: Record<string, string> = {
     default: 'icon-capsule icon-capsule-slate',
@@ -248,17 +249,15 @@ function SummaryCard({
     slate: 'icon-capsule icon-capsule-slate',
   };
   return (
-    <div className={cn(variantClass[variant] || variantClass.default)}>
+    <div className="ep-card">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-500">{label}</p>
+        <div className="ep-metric-label">{label}</div>
         <div className={cn(iconClass[variant] || iconClass.default)}>
           <Icon className="w-4 h-4" />
         </div>
       </div>
-      <div className="mt-4">
-        <p className="text-2xl md:text-[28px] font-black tracking-tight leading-none text-brand-text">{value}</p>
-        {sub && <p className="text-[11px] font-medium text-stone-400 mt-2">{sub}</p>}
-      </div>
+      <div className="ep-metric" style={{ color: valueColor[variant] }}>{value}</div>
+      {sub && <div className="ep-trend">{sub}</div>}
     </div>
   );
 }
@@ -286,14 +285,14 @@ function KpiStripCard({
   variant?: 'default' | 'blue' | 'orange' | 'emerald' | 'red' | 'olive' | 'slate';
   to: string;
 }) {
-  const variantClass: Record<string, string> = {
-    default: 'kpi-card',
-    blue: 'kpi-card kpi-card-blue',
-    orange: 'kpi-card kpi-card-orange',
-    emerald: 'kpi-card kpi-card-emerald',
-    red: 'kpi-card kpi-card-red',
-    olive: 'kpi-card kpi-card-olive',
-    slate: 'kpi-card',
+  const valueColor: Record<string, string | undefined> = {
+    default: undefined,
+    blue: '#2563eb',
+    orange: '#f36b21',
+    emerald: '#047857',
+    red: '#dc2626',
+    olive: '#858515',
+    slate: undefined,
   };
   const iconClass: Record<string, string> = {
     default: 'icon-capsule icon-capsule-slate',
@@ -307,19 +306,17 @@ function KpiStripCard({
   return (
     <Link
       to={to}
-      className={cn(variantClass[variant] || variantClass.default, 'block hover:ring-2 hover:ring-[#978C21]/40 transition-shadow')}
+      className="ep-card ep-kpi-btn"
       aria-label={`${label}: ${value} — view my leads`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-500">{label}</p>
+        <div className="ep-metric-label">{label}</div>
         <div className={cn(iconClass[variant] || iconClass.default)}>
           <Icon className="w-4 h-4" />
         </div>
       </div>
-      <div className="mt-4">
-        <p className="text-2xl md:text-[28px] font-black tracking-tight leading-none text-brand-text">{value}</p>
-        <p className="text-[11px] font-medium text-stone-400 mt-2">Tap to see my leads</p>
-      </div>
+      <div className="ep-metric" style={{ color: valueColor[variant] }}>{value}</div>
+      <div className="ep-trend">Tap to see my leads</div>
     </Link>
   );
 }
@@ -654,35 +651,33 @@ export default function DailyWorkbench() {
   }, [todayYmd]);
 
   return (
-    <div className="space-y-6 pb-12 font-sans max-w-[1280px] mx-auto">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-[12px] border border-stone-100" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-        <div>
-          <h1 className="text-2xl font-black tracking-tight leading-none text-brand-text"><span className="hidden md:inline">Daily Workbench</span><span className="md:hidden">My Work</span></h1>
-          <p className="hidden md:block text-[13px] text-stone-500 mt-2 leading-relaxed">Manage today's calls, meetings, follow-ups and tasks from one place.</p>
-          <p className="text-[11px] font-semibold text-stone-400 mt-2 md:mt-1">Asia/Dhaka · {dhakaDisplay}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {callerTeam.hasTeam && <HomeViewSwitch active="work" />}
-          <OutboxIndicator />
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2.5 border border-stone-200 rounded-[10px] text-xs font-semibold text-stone-600 hover:text-[#978C21] hover:border-[#978C21]/30 transition-colors disabled:opacity-50 bg-white"
-          >
-            <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
-            Refresh
-          </button>
-          <Link
-            to="/task-calendar"
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#978C21] text-white rounded-[10px] text-xs font-bold hover:bg-[#8a7f1e] transition-colors shadow-sm"
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            Open Calendar
-          </Link>
-        </div>
-      </div>
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/workbench"
+        actions={(
+          <>
+            <span className="ep-pill">Asia/Dhaka · {dhakaDisplay}</span>
+            {callerTeam.hasTeam && <HomeViewSwitch active="work" />}
+            <OutboxIndicator />
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="ep-btn"
+            >
+              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
+              Refresh
+            </button>
+            <Link
+              to="/task-calendar"
+              className="ep-btn ep-btn-primary"
+            >
+              <CalendarIcon className="w-3.5 h-3.5" />
+              Open Calendar
+            </Link>
+          </>
+        )}
+      />
 
       {/* My numbers — the caller's OWN seven KPIs (KPI drill-down,
           2026-11-13). From the already-loaded overview self row, so no
@@ -693,9 +688,9 @@ export default function DailyWorkbench() {
         const self = getSelfPerson(callerTeam.overview?.people);
         if (!self) return null;
         return (
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="ep-card">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">My numbers</h2>
+              <h2 className="ep-cardhead" style={{ marginBottom: 0 }}>My numbers</h2>
               <span className="text-[11px] font-semibold text-stone-400">Your own leads</span>
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -749,7 +744,7 @@ export default function DailyWorkbench() {
               <p className="text-xs text-red-500 mt-0.5">Please try again.</p>
             </div>
           </div>
-          <button type="button" onClick={() => void load()} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-[10px]">
+          <button type="button" onClick={() => void load()} className="ep-btn ep-btn-danger">
             Retry
           </button>
         </div>
@@ -759,13 +754,13 @@ export default function DailyWorkbench() {
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-[12px] border border-stone-100 p-5 min-h-[118px] animate-pulse" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+              <div key={i} className="ep-card animate-pulse" style={{ minHeight: 118 }}>
                 <div className="h-3 w-24 bg-stone-100 rounded mb-4" />
                 <div className="h-7 w-20 bg-stone-100 rounded" />
               </div>
             ))}
           </div>
-          <div className="bg-white rounded-[12px] border border-stone-100 p-6 space-y-3 animate-pulse">
+          <div className="ep-card space-y-3 animate-pulse">
             <div className="h-4 w-32 bg-stone-100 rounded" />
             <div className="h-10 bg-stone-100 rounded-[10px]" />
             <div className="h-16 bg-stone-100 rounded-[10px]" />
@@ -775,9 +770,9 @@ export default function DailyWorkbench() {
       ) : (
         <>
           {/* Daily Summary */}
-          <section className="hidden md:block bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="hidden md:block ep-card">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Daily Summary</h2>
+              <h2 className="ep-cardhead" style={{ marginBottom: 0 }}>Daily Summary</h2>
               <span className="text-[11px] font-semibold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{todayYmd}</span>
             </div>
             <div className={cn('grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3', canViewRoadshows ? 'lg:grid-cols-7' : 'lg:grid-cols-6')}>
@@ -801,11 +796,11 @@ export default function DailyWorkbench() {
 
           {/* Quick Filters */}
           {canViewRoadshows && roadshowsToday.length > 0 && (
-            <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-5" aria-label="Roadshows today">
+            <section className="ep-card" aria-label="Roadshows today">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h2 className="text-sm font-bold text-stone-800">
                   Roadshows today
-                  <span className="ml-2 rounded-full border border-stone-100 bg-stone-50 px-2 py-0.5 text-[11px] font-bold text-stone-500" data-roadshow-count={roadshowsToday.length}>
+                  <span className="ep-pill" data-roadshow-count={roadshowsToday.length}>
                     {roadshowsToday.length}
                   </span>
                 </h2>
@@ -819,7 +814,7 @@ export default function DailyWorkbench() {
                       <span className="block truncate text-sm font-semibold text-stone-800">{roadshow.organization}</span>
                       <span className="block truncate text-xs text-stone-500">{roadshow.location} · {formatDhakaDue(roadshow.scheduledAt)}</span>
                     </span>
-                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">{roadshow.status === 'reschedule' ? 'Rescheduled' : 'Pending'}</span>
+                    <span className="ep-pill orange">{roadshow.status === 'reschedule' ? 'Rescheduled' : 'Pending'}</span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-stone-400" />
                   </Link>
                 ))}
@@ -828,17 +823,17 @@ export default function DailyWorkbench() {
           )}
 
           {/* Execution Queue */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-4 md:p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="ep-card">
             <div className="flex items-end justify-between gap-4 mb-4">
               <div>
-                <h2 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700"><span className="hidden md:inline">Execution Queue</span><span className="md:hidden">Today</span></h2>
+                <h2 className="ep-cardhead" style={{ marginBottom: 0 }}><span className="hidden md:inline">Execution Queue</span><span className="md:hidden">Today</span></h2>
                 <p className="hidden md:block text-[12px] text-stone-500 mt-1.5 leading-relaxed">Overdue follow-ups first, then today's work by scheduled time. Tomorrow does not enter this queue.</p>
               </div>
-              <span className="text-[11px] font-bold text-stone-400 bg-stone-50 px-2.5 py-1 rounded-full border border-stone-100">{workItems.length} items</span>
+              <span className="ep-pill">{workItems.length} items</span>
             </div>
 
             {workItems.length === 0 ? (
-              <div className="rounded-[12px] border border-dashed border-stone-200 bg-[#FFFCF8] px-6 py-12 text-center">
+              <div className="ep-empty" style={{ padding: '48px 24px' }}>
                 <div className="w-12 h-12 rounded-full bg-white border border-stone-100 flex items-center justify-center mx-auto mb-4">
                   <CheckCircle2 className="w-6 h-6 text-emerald-500" />
                 </div>
@@ -927,9 +922,9 @@ export default function DailyWorkbench() {
 
           {/* Selected Item / Quick Action Area */}
           {selectedItem && (
-            <section className="bg-white rounded-[12px] border border-[#978C21]/20 p-6" style={{ boxShadow: '0 4px 12px rgba(151,140,33,0.08)' }}>
+            <section className="ep-card" style={{ borderColor: '#c9d29a' }}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Quick Actions</h3>
+                <h3 className="ep-cardhead" style={{ marginBottom: 0 }}>Quick Actions</h3>
                 <button type="button" onClick={() => setSelectedKey(null)} className="p-1.5 rounded-full hover:bg-stone-50 border border-stone-100">
                   <X className="w-4 h-4 text-stone-400" />
                 </button>
@@ -955,7 +950,7 @@ export default function DailyWorkbench() {
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <Link
                     to={`/leads/${encodeURIComponent(selectedItem.leadId)}`}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-[#978C21] text-white text-xs font-bold hover:bg-[#8a7f1e] transition-colors"
+                    className="ep-btn ep-btn-primary"
                   >
                     Open Lead <ExternalLink className="w-3.5 h-3.5" />
                   </Link>
@@ -986,7 +981,7 @@ export default function DailyWorkbench() {
                       <button
                         type="button"
                         onClick={() => openEdit(selectedItem)}
-                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-white border border-stone-200 text-stone-600 hover:text-[#978C21] hover:border-[#978C21]/30 text-xs font-bold transition-colors"
+                        className="ep-btn"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                         Edit / Reschedule
@@ -1000,14 +995,14 @@ export default function DailyWorkbench() {
 
           {/* Completed Today summary (optional) */}
           {completedToday.length > 0 && (
-            <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-              <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700 mb-3">Completed Today</h3>
+            <section className="ep-card">
+              <h3 className="ep-cardhead">Completed Today</h3>
               <p className="text-[11px] text-stone-500 mb-3">Scheduled activities completed today in Asia/Dhaka (authoritative completed_at). Historical lead_activities are immutable; this counts planned work marked completed.</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {completedToday.slice(0, 8).map(sa => (
                   <div key={sa.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-[10px] border border-stone-100 bg-[#FFFCF8]">
                     <span className="text-xs font-semibold text-stone-700 truncate">{sa.leadCustomerName || sa.title || sa.activityType}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700">Completed</span>
+                    <span className="ep-pill">Completed</span>
                   </div>
                 ))}
               </div>
@@ -1016,9 +1011,9 @@ export default function DailyWorkbench() {
           )}
 
           {/* Tomorrow Preview (lightweight counts) */}
-          <section className="bg-white rounded-[12px] border border-stone-100 p-6" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <section className="ep-card">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-black uppercase tracking-[0.12em] text-stone-700">Tomorrow Preview</h3>
+              <h3 className="ep-cardhead" style={{ marginBottom: 0 }}>Tomorrow Preview</h3>
               <Link to="/task-calendar" className="inline-flex items-center gap-1 text-xs font-semibold text-[#978C21] hover:underline">
                 Open Calendar <ChevronRight className="w-3.5 h-3.5" />
               </Link>
@@ -1072,7 +1067,7 @@ export default function DailyWorkbench() {
       {/* Edit Modal */}
       {editing && (
         <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-[14px] shadow-2xl border border-stone-100 w-full max-w-md overflow-hidden animate-slideUp" style={{ boxShadow: '0 12px 32px rgba(0,0,0,0.12)' }}>
+          <div className="ep-card w-full max-w-md overflow-hidden animate-slideUp" style={{ padding: 0 }}>
             <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
               <h4 className="text-sm font-black uppercase tracking-widest text-stone-700">Edit Activity</h4>
               <button type="button" onClick={() => setEditing(null)} className="p-1.5 rounded-full hover:bg-stone-50">
@@ -1082,24 +1077,24 @@ export default function DailyWorkbench() {
             <div className="p-6 space-y-4">
               <label className="space-y-1.5 block">
                 <span className="text-[11px] font-semibold text-stone-500">Title</span>
-                <input type="text" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} className="w-full px-3 py-2 bg-[#FFFCF8] border border-stone-200 rounded-[10px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0359B3]/10 focus:border-[#0359B3]" />
+                <input type="text" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} className="ep-input" />
               </label>
               <label className="space-y-1.5 block">
                 <span className="text-[11px] font-semibold text-stone-500">Scheduled At</span>
-                <input type="datetime-local" value={editForm.scheduledAt} onChange={e => setEditForm({ ...editForm, scheduledAt: e.target.value })} className="w-full px-3 py-2 bg-[#FFFCF8] border border-stone-200 rounded-[10px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0359B3]/10 focus:border-[#0359B3]" />
+                <input type="datetime-local" value={editForm.scheduledAt} onChange={e => setEditForm({ ...editForm, scheduledAt: e.target.value })} className="ep-input" />
               </label>
               <label className="space-y-1.5 block">
                 <span className="text-[11px] font-semibold text-stone-500">Remarks</span>
-                <textarea value={editForm.remarks} onChange={e => setEditForm({ ...editForm, remarks: e.target.value })} rows={3} className="w-full px-3 py-2 bg-[#FFFCF8] border border-stone-200 rounded-[10px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0359B3]/10 focus:border-[#0359B3] resize-none" />
+                <textarea value={editForm.remarks} onChange={e => setEditForm({ ...editForm, remarks: e.target.value })} rows={3} className="ep-input" style={{ resize: 'none' }} />
               </label>
             </div>
             <div className="px-6 py-4 bg-[#FFFCF8] border-t border-stone-100 flex justify-end gap-2">
-              <button type="button" onClick={() => setEditing(null)} className="px-4 py-2 border border-stone-200 rounded-[10px] text-xs font-semibold text-stone-600 hover:bg-white">Cancel</button>
+              <button type="button" onClick={() => setEditing(null)} className="ep-btn">Cancel</button>
               <button
                 type="button"
                 disabled={!!actionLoading}
                 onClick={() => void handleEditSave()}
-                className="px-4 py-2 bg-[#978C21] text-white rounded-[10px] text-xs font-bold hover:bg-[#8a7f1e] disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="ep-btn ep-btn-primary"
               >
                 {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                 Save

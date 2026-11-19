@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   MapPinned,
   Network,
+  Plus,
   Settings as SettingsIcon,
   SlidersHorizontal,
   TrendingUp,
@@ -46,11 +47,14 @@ import type { EnterpriseRole } from './enterpriseRole';
  *     already IS the workload/allocation view; a second item to the
  *     same route would be a duplicate.
  *
- * Two sample items share one real destination, honestly: "Status &
- * Pipeline" and "Products & Campaigns" both land on System settings
- * (/settings/system), where the metadata engine (dropdowns tab)
- * holds the FollowUpStatus / Product / Campaign types and the DZ-6
- * stage-rules editor lives in the Danger Zone.
+ * The Admin CONFIGURATION group is three DISTINCT pages (fix round,
+ * 2026-11-19 — Mahadi found all three landing on /settings/system,
+ * which lit all three active at once): Status & Pipeline
+ * (/settings/status-pipeline: lead statuses + workflow rules),
+ * Products & Campaigns (/settings/products-campaigns: the Product
+ * and Campaign metadata types) and System Settings
+ * (/settings/system: everything else, including the Danger Zone).
+ * Each is its own route, so exactly one nav item is ever active.
  *
  * Two additions are NOT in the sample and are added so no kept
  * feature loses its only entry point (both reported in the PR body):
@@ -129,6 +133,16 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   'Add Lead': 'Capture a prospect with the required details.',
   'Profile & Settings': 'Manage personal profile and preferences.',
   Notifications: 'Review important updates.',
+  // Additions (not in the sample — the pages exist only in LeadFlow):
+  // plain descriptions in the sample's voice, so their headings never
+  // render an empty subtitle.
+  Administration: 'Manage access and lead operations.',
+  More: 'More pages and account actions.',
+  Help: 'Guidance for everyday LeadFlow tasks.',
+  About: 'What LeadFlow helps your team do.',
+  'Performance Diagnostics': 'System diagnostics and request performance.',
+  'KPI detail': 'Leads behind a KPI card.',
+  Team: 'Compare managed teams and workload.',
 };
 
 type NavItemDef = EnterpriseNavItem & { permission?: string };
@@ -166,8 +180,8 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
       {
         title: 'CONFIGURATION',
         items: [
-          { label: 'Status & Pipeline', path: '/settings/system', icon: SlidersHorizontal },
-          { label: 'Products & Campaigns', path: '/settings/system', icon: Globe },
+          { label: 'Status & Pipeline', path: '/settings/status-pipeline', icon: SlidersHorizontal },
+          { label: 'Products & Campaigns', path: '/settings/products-campaigns', icon: Globe },
           { label: 'System Settings', path: '/settings/system', icon: SettingsIcon },
         ],
       },
@@ -260,13 +274,14 @@ export function buildEnterpriseNavGroups(access: EnterpriseNavAccess): Enterpris
     return access.canOpen(item.path);
   };
 
-  // No dedupe by path: the Admin CONFIGURATION group maps three
-  // sample items to one real page (/settings/system) and the sample
-  // shows all three labels — each names a different configuration
-  // area the user finds on that page (the metadata engine holds the
-  // FollowUpStatus / Product / Campaign types; the Danger Zone holds
-  // the stage rules). The sidebar's active state resolves the shared
-  // destination to a single highlight (see AppLayout).
+  // No dedupe by path: several sample items legitimately share a
+  // real destination (Teams / Team Members / Teams & Hierarchy all
+  // land on /team; Analytics / Performance / Team Performance all
+  // land on /execution-intelligence) — but never within ONE role's
+  // nav, so the active state is always unambiguous. (The Admin
+  // CONFIGURATION group used to share /settings/system across
+  // three items; the 2026-11-19 fix round split it into three
+  // distinct routes for exactly that reason.)
   const groups: EnterpriseNavGroup[] = [];
   for (const group of navItemsFor(access.role)) {
     const items: EnterpriseNavItem[] = group.items
@@ -275,6 +290,84 @@ export function buildEnterpriseNavGroups(access: EnterpriseNavAccess): Enterpris
     if (items.length > 0) groups.push({ title: group.title, items });
   }
   return groups;
+}
+
+/**
+ * The mobile bottom navigation (fix round, 2026-11-19 — Mahadi
+ * asked for a fixed bottom bar on his phone): the role's 3–4 most
+ * important pages, Overview always first. It follows the DISPLAY
+ * role, so a super admin previewing another role sees that role's
+ * tabs. The bar itself is mobile-only (CSS hides it at desktop
+ * widths, at the same 720px breakpoint as the drawer).
+ *
+ * The tabs are the same destinations the sidebar offers, filtered
+ * by the SAME access predicates — a tab the user could not open
+ * would be a dead button, so it never renders. The agent's first
+ * tab is labelled "My Work" (the agent home's H1), not "Overview".
+ */
+export interface EnterpriseBottomNavTab {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+}
+
+interface BottomNavTabDef extends EnterpriseBottomNavTab {
+  /** Functional permission gate, as in the sidebar (Analytics only). */
+  permission?: string;
+}
+
+const BOTTOM_NAV_TABS: Record<EnterpriseRole, BottomNavTabDef[]> = {
+  admin: [
+    { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Users & Roles', path: '/users', icon: UserCog },
+    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
+    { label: 'Analytics', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+  ],
+  manager: [
+    { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Teams', path: '/team', icon: Users },
+    { label: 'Analytics', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
+  ],
+  teamLead: [
+    { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Team Members', path: '/team', icon: Users },
+    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
+    { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
+  ],
+  agent: [
+    { label: 'My Work', path: '/', icon: LayoutDashboard },
+    { label: 'My Leads', path: '/leads', icon: ClipboardList },
+    { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
+    { label: 'Add Lead', path: '/leads/new', icon: Plus },
+  ],
+};
+
+export function buildEnterpriseBottomNavTabs(access: EnterpriseNavAccess): EnterpriseBottomNavTab[] {
+  const passes = (tab: BottomNavTabDef): boolean => {
+    if (tab.permission && !access.canAccess(tab.permission, 'view')) return false;
+    return access.canOpen(tab.path);
+  };
+  return BOTTOM_NAV_TABS[access.role]
+    .filter(passes)
+    .map(({ permission: _permission, ...tab }) => tab);
+}
+
+/**
+ * The bottom bar's active tab: the same longest-prefix rule as the
+ * sidebar (exact for '/', prefix for the rest). Tabs never share a
+ * path within one role, so the match is always unambiguous.
+ */
+export function enterpriseBottomNavActivePath(tabs: EnterpriseBottomNavTab[], pathname: string): string | null {
+  let best: { path: string; length: number } | null = null;
+  for (const tab of tabs) {
+    const matches = tab.path === '/'
+      ? pathname === '/'
+      : pathname === tab.path || pathname.startsWith(`${tab.path}/`);
+    if (!matches) continue;
+    if (!best || tab.path.length > best.length) best = { path: tab.path, length: tab.path.length };
+  }
+  return best?.path ?? null;
 }
 
 /**
@@ -294,6 +387,8 @@ const FALLBACK_LABELS: Record<string, string> = {
   '/about': 'About',
   '/settings': 'Profile & Settings',
   '/settings/system': 'System Settings',
+  '/settings/status-pipeline': 'Status & Pipeline',
+  '/settings/products-campaigns': 'Products & Campaigns',
   '/settings/performance-diagnostics': 'Performance Diagnostics',
   '/team/kpi': 'KPI detail',
   '/team/organogram': 'Teams & Hierarchy',
@@ -346,4 +441,67 @@ export function enterpriseLabelForPath(groups: EnterpriseNavGroup[], pathname: s
   if (pathname.startsWith('/leads/') && pathname.endsWith('/update')) return 'Update lead';
   if (pathname.startsWith('/leads/')) return 'Lead details';
   return 'LeadFlow';
+}
+
+/**
+ * The sidebar's active item: the entry whose path matches the
+ * current pathname — exact, or the longest prefix for deep links
+ * (/leads/123 activates /leads; /team/kpi/overdue activates
+ * /team). Ties resolve to the LAST item in nav order, so exactly
+ * one highlight ever shows. (The Admin CONFIGURATION group used
+ * to tie three labels to /settings/system; the 2026-11-19 fix
+ * round gave each its own route, so the tie-break is now only a
+ * safety net for future shared destinations.)
+ *
+ * Pure and directly unit-testable — AppLayout imports it.
+ */
+export function enterpriseActivePath(groups: EnterpriseNavGroup[], pathname: string): string | null {
+  let best: { path: string; length: number; order: number } | null = null;
+  let order = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      order += 1;
+      const matches = item.path === '/'
+        ? pathname === '/'
+        : pathname === item.path || pathname.startsWith(`${item.path}/`);
+      if (!matches) continue;
+      if (!best || item.path.length > best.length || (item.path.length === best.length && order > best.order)) {
+        best = { path: item.path, length: item.path.length, order };
+      }
+    }
+  }
+  return best?.path ?? null;
+}
+
+export interface EnterprisePageHeading {
+  /** The sample's nav label for this page, for this role. */
+  title: string;
+  /** The sample's description for the label ('' when none exists). */
+  sub: string;
+}
+
+/**
+ * The sample-aligned heading for a sidebar page: the title is the
+ * role's own nav label for the route (the agent's "My Leads", not
+ * the generic "Leads"; the admin's "Analytics", the manager's
+ * "Performance"), and the subtitle is the sample's `descriptions`
+ * entry for that label. Inner pages render it through
+ * EnterprisePageHeader so every page's heading speaks the
+ * sample's words. Deep links fall back to the breadcrumb label.
+ */
+export function enterpriseHeadingForPath(role: EnterpriseRole, pathname: string): EnterprisePageHeading {
+  const groups = buildEnterpriseNavGroups({
+    role,
+    canOpen: () => true,
+    canAccess: () => true,
+  });
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (item.path === pathname) {
+        return { title: item.label, sub: ENTERPRISE_PAGE_DESCRIPTIONS[item.label] ?? '' };
+      }
+    }
+  }
+  const label = enterpriseLabelForPath(groups, pathname);
+  return { title: label, sub: ENTERPRISE_PAGE_DESCRIPTIONS[label] ?? '' };
 }

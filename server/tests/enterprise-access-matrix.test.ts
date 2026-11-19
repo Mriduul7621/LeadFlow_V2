@@ -83,7 +83,7 @@ describe('access matrix — the default grant table (2026-11-19 change)', () => 
 
 describe('access matrix — Admin (ADMIN)', () => {
   it('opens every admin nav destination', () => {
-    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/administration']) {
+    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/administration']) {
       assert.equal(canOpen(route, 'ADMIN'), true, `ADMIN opens ${route}`);
       assert.equal(canOpen(route, 'SUPERADMIN'), true, `SUPERADMIN opens ${route}`);
     }
@@ -110,7 +110,7 @@ describe('access matrix — Manager (MANAGER)', () => {
   });
 
   it('does NOT open the admin-only routes', () => {
-    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/administration']) {
+    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/administration']) {
       assert.equal(canOpen(route, 'MANAGER'), false, `MANAGER must not open ${route}`);
     }
   });
@@ -130,7 +130,7 @@ describe('access matrix — Team Lead (TEAM_LEAD)', () => {
   });
 
   it('does NOT open the admin-only routes', () => {
-    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/administration']) {
+    for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/administration']) {
       assert.equal(canOpen(route, 'TEAM_LEAD'), false, `TEAM_LEAD must not open ${route}`);
     }
   });
@@ -190,7 +190,7 @@ describe('access matrix — Agent (RO + EMPLOYEE): the new reports.view grant', 
       for (const route of ['/', '/leads', '/leads/new', '/workbench', '/activities', '/task-calendar', '/follow-up']) {
         assert.equal(canOpen(route, role), true, `${role} opens ${route}`);
       }
-      for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/administration']) {
+      for (const route of ['/users', '/leads/upload', '/leads/all', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/administration']) {
         assert.equal(canOpen(route, role), false, `${role} must not open ${route}`);
       }
     }

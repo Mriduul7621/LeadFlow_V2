@@ -8,6 +8,7 @@ import { leadService } from '../services/leadService';
 import { Lead } from '../../shared/types';
 import { buildActivities, groupByCategory, ActivityCategory, Activity } from '../utils/activityEngine';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 
 const CATEGORY_CONFIG: Record<ActivityCategory, { label: string; icon: any; color: string }> = {
@@ -50,16 +51,11 @@ export default function Activities() {
   const grouped = useMemo(() => groupByCategory(activities), [activities]);
 
   return (
-    <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
+    <div className="ep-page">
       <BackButton fallback="/" />
-      <div>
-        <h1 className="text-xl font-bold text-slate-800">Activities</h1>
-        <p className="text-[11px] text-slate-400 uppercase tracking-widest mt-1">
-          Every pending follow-up, call, and meeting across your visible leads, organized by urgency.
-        </p>
-      </div>
+      <EnterprisePageHeader path="/activities" />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3" style={{ marginBottom: 18 }}>
         {(Object.keys(CATEGORY_CONFIG) as ActivityCategory[]).map(cat => {
           const config = CATEGORY_CONFIG[cat];
           const Icon = config.icon;
@@ -69,9 +65,10 @@ export default function Activities() {
               key={cat}
               onClick={() => setActiveCategory(cat)}
               className={cn(
-                "p-4 rounded-sm border text-left transition-all",
-                activeCategory === cat ? "border-[#978C21] bg-white shadow-md" : "border-slate-100 bg-slate-50 hover:bg-white"
+                "ep-card ep-kpi-btn",
+                activeCategory === cat && "active"
               )}
+              aria-pressed={activeCategory === cat}
             >
               <div className={cn("w-8 h-8 rounded-sm flex items-center justify-center mb-3", config.color)}>
                 <Icon className="w-4 h-4" />
@@ -83,15 +80,18 @@ export default function Activities() {
         })}
       </div>
 
-      <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-50 bg-[#FBFAF8]">
-          <h3 className="text-sm font-semibold text-slate-700">{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
+      <div className="ep-card ep-tablecard">
+        <div className="ep-tablehead">
+          <div>
+            <h3>{CATEGORY_CONFIG[activeCategory].label} ({grouped[activeCategory].length})</h3>
+            <div className="ep-muted">Tap an activity to open its lead</div>
+          </div>
         </div>
         <div className="divide-y divide-slate-50">
           {loading ? (
-            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">Loading activities...</div>
+            <p className="ep-empty" style={{ padding: '24px 17px', textAlign: 'center' }}>Loading activities…</p>
           ) : grouped[activeCategory].length === 0 ? (
-            <div className="p-10 text-center text-[11px] text-slate-300 uppercase tracking-widest italic">Nothing here</div>
+            <p className="ep-empty" style={{ padding: '24px 17px', textAlign: 'center' }}>Nothing here</p>
           ) : (
             grouped[activeCategory].map(activity => {
               const TypeIcon = TYPE_ICON[activity.type];

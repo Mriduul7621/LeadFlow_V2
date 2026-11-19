@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Users, Network, RefreshCcw, CalendarClock, TrendingUp, FolderOpen,
+  Network, RefreshCcw, CalendarClock, TrendingUp, FolderOpen,
   ChevronRight, ChevronDown, AlertTriangle, Trophy, Wallet, ArrowUp,
 } from 'lucide-react';
 import { apiRequest } from '../../shared/api/http';
 import { cn } from '../../../lib/utils';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 /**
  * Team report (FIX-1 item 5, evolved per owner request 2026-11-11)
@@ -77,10 +78,7 @@ const money = (n: number) => `৳${Math.round(Number(n) || 0).toLocaleString('en
 
 function PersonCard({ person, onSelect }: { person: TeamPerson; onSelect?: (p: TeamPerson) => void }) {
   return (
-    <div className={cn(
-      'bg-white border rounded-2xl p-4 shadow-sm space-y-3',
-      person.isSelf ? 'border-[#978C21] ring-1 ring-[#978C21]/40' : 'border-stone-200/80'
-    )}>
+    <div className="ep-card" style={{ borderColor: person.isSelf ? '#858515' : undefined }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-black text-stone-800 truncate">
@@ -122,7 +120,8 @@ function PersonCard({ person, onSelect }: { person: TeamPerson; onSelect?: (p: T
         <button
           type="button"
           onClick={() => onSelect(person)}
-          className="w-full text-center text-[10px] font-black uppercase tracking-widest text-[#978C21] hover:underline"
+          className="ep-btn"
+          style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
         >
           View in tree detail
         </button>
@@ -291,7 +290,7 @@ function PersonDetail({
   }, [subtreeMembers, person]);
 
   return (
-    <section className="bg-white border border-[#978C21]/40 rounded-2xl p-4 sm:p-5 shadow-sm space-y-5">
+    <section className="ep-card" style={{ borderColor: '#858515' }}>
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold text-stone-400">
           {ancestors.map(a => (
@@ -523,56 +522,57 @@ export default function TeamOverview() {
   }), [roots]);
 
   return (
-    <div className="space-y-6 text-left">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 bg-[#978C21]/10 text-[#978C21] rounded-2xl flex items-center justify-center">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-black text-stone-800 tracking-tight">My Team</h1>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400">
-              {people.length} people in your scope · {totals.open} open · {totals.converted} converted · {totals.due} due today
-            </p>
-            <p className="text-[11px] font-bold text-[#978C21] flex items-center gap-1 mt-0.5">
-              <Wallet className="w-3.5 h-3.5" /> Possible business (open pipeline): {money(totals.pipeline)}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={load}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-stone-200 rounded-full text-[11px] font-black uppercase tracking-widest text-stone-500 hover:border-[#978C21]/50"
-          >
-            <RefreshCcw className="w-3.5 h-3.5" /> Refresh
-          </button>
-          <Link
-            to="/team/organogram"
-            className="flex items-center gap-2 px-4 py-2 bg-[#3C3C3B] text-white rounded-full text-[11px] font-black uppercase tracking-widest hover:bg-black"
-          >
-            <Network className="w-3.5 h-3.5" /> Organogram
-          </Link>
-        </div>
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/team"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={load}
+              className="ep-btn"
+            >
+              <RefreshCcw className="w-3.5 h-3.5" /> Refresh
+            </button>
+            <Link
+              to="/team/organogram"
+              className="ep-btn ep-btn-primary"
+            >
+              <Network className="w-3.5 h-3.5" /> Organogram
+            </Link>
+          </>
+        )}
+      />
+
+      <div className="ep-card" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 20px', marginBottom: 18 }}>
+        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{people.length}</strong> people in your scope</span>
+        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.open}</strong> open</span>
+        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.converted}</strong> converted</span>
+        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.due}</strong> due today</span>
+        <span className="ep-muted"><Wallet className="w-3.5 h-3.5" style={{ display: 'inline', verticalAlign: '-2px' }} /> Possible business (open pipeline): <strong style={{ color: 'var(--ep-ink)' }}>{money(totals.pipeline)}</strong></span>
       </div>
 
       {loading ? (
-        <div className="bg-white border border-stone-200/80 rounded-2xl p-10 text-center text-sm text-stone-400 font-bold">
-          Loading your team...
+        <div className="ep-card">
+          <p className="ep-empty" style={{ textAlign: 'center' }}>Loading your team…</p>
         </div>
       ) : error ? (
-        <div className="bg-red-50 border border-red-100 rounded-2xl p-6 text-sm text-red-600 font-bold">{error}</div>
+        <div className="ep-card" style={{ borderColor: '#e8b4b0', background: '#fdf6f5' }}>
+          <p className="text-sm font-bold" style={{ color: '#c84d43' }}>{error}</p>
+        </div>
       ) : people.length === 0 ? (
-        <div className="bg-white border border-stone-200/80 rounded-2xl p-10 text-center space-y-2">
+        <div className="ep-card" style={{ textAlign: 'center' }}>
           <p className="text-sm font-black text-stone-700">No team members in your scope yet</p>
-          <p className="text-xs text-stone-400">When people report to you — directly or through your team — they will appear here with their lead counts.</p>
+          <p className="ep-muted" style={{ marginTop: 6 }}>When people report to you — directly or through your team — they will appear here with their lead counts.</p>
         </div>
       ) : (
         <>
           <section className="space-y-2">
-            <div className="flex items-baseline gap-3">
-              <h2 className="text-sm font-black uppercase tracking-widest text-stone-700">Team tree</h2>
-              <span className="text-[10px] font-bold text-stone-400">Starts at the top of your scope — expand a team, tap a person for detail</span>
+            <div className="ep-cardhead" style={{ marginBottom: 4 }}>
+              <div>
+                <h3>Team tree</h3>
+                <div className="ep-muted">Starts at the top of your scope — expand a team, tap a person for detail</div>
+              </div>
             </div>
             <div>
               {roots.map(root => (
@@ -597,9 +597,11 @@ export default function TeamOverview() {
 
           {grouped.map(group => (
             <section key={group.key} className="space-y-3">
-              <div className="flex items-baseline gap-3">
-                <h2 className="text-sm font-black uppercase tracking-widest text-stone-700">{group.title}</h2>
-                <span className="text-[10px] font-bold text-stone-400">{group.members.length} · {group.blurb}</span>
+              <div className="ep-cardhead" style={{ marginBottom: 0 }}>
+                <div>
+                  <h3>{group.title}</h3>
+                  <div className="ep-muted">{group.members.length} · {group.blurb}</div>
+                </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {group.members.map(person => (

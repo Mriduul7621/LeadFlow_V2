@@ -5,6 +5,7 @@ import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useAuthStore } from '../../auth/store/authStore';
 import { userService } from '../../users/services/userService';
 import type { User } from '../../shared/types';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 import {
   roadshowService,
@@ -252,20 +253,19 @@ export default function RoadshowPage() {
 
   if (!canView) {
     return (
-      <div className="mx-auto max-w-xl py-16 text-center">
-        <h1 className="text-lg font-semibold text-stone-800">Roadshow access unavailable</h1>
-        <p className="mt-2 text-sm text-stone-500">Your role does not have permission to view Roadshow Follow-up.</p>
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ textAlign: 'center' }}>
+          <h2 className="text-lg font-semibold text-stone-800">Roadshow access unavailable</h2>
+          <p className="ep-muted" style={{ marginTop: 8 }}>Your role does not have permission to view Roadshow Follow-up.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-10">
+    <div className="ep-page" style={{ maxWidth: 1024 }}>
       <BackButton fallback="/" />
-      <header>
-        <h1 className="text-2xl font-bold tracking-tight text-brand-text">Roadshow Follow-up</h1>
-        <p className="mt-1 text-sm text-stone-500">Schedule field events, assign your team, and track leads by roadshow.</p>
-      </header>
+      <EnterprisePageHeader path="/roadshows" />
 
       <nav className="flex gap-2 overflow-x-auto border-b border-stone-200" aria-label="Roadshow sections">
         <button type="button" onClick={() => { setActiveTab('status'); resetForm(); }} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-semibold ${activeTab === 'status' ? 'border-[#978C21] text-[#756c1b]' : 'border-transparent text-stone-500'}`}>
@@ -284,32 +284,32 @@ export default function RoadshowPage() {
       </nav>
 
       {(activeTab === 'add' || editingId) && (
-        <form onSubmit={submit} className="space-y-5 border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
-          <div className="flex items-start justify-between gap-3">
+        <form onSubmit={submit} className="ep-card space-y-5" style={{ marginBottom: 18 }}>
+          <div className="ep-cardhead">
             <div>
-              <h2 className="text-base font-semibold text-stone-800">{editingId ? 'Update Roadshow' : 'Add Roadshow'}</h2>
-              <p className="mt-1 text-xs text-stone-500">Enter the host organization, venue, schedule and assigned team.</p>
+              <h3>{editingId ? 'Update Roadshow' : 'Add Roadshow'}</h3>
+              <div className="ep-muted">Enter the host organization, venue, schedule and assigned team.</div>
             </div>
-            {editingId && <button type="button" onClick={resetForm} className="rounded-md p-2 text-stone-500 hover:bg-stone-100" aria-label="Close edit form"><X className="h-4 w-4" /></button>}
+            {editingId && <button type="button" onClick={resetForm} className="ep-btn" aria-label="Close edit form"><X className="h-4 w-4" /></button>}
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="space-y-1.5 text-xs font-medium text-stone-600">
               Organization
-              <input required maxLength={255} value={form.organization} onChange={event => setForm(current => ({ ...current, organization: event.target.value }))} className="input-standard" placeholder="Organization name" />
+              <input required maxLength={255} value={form.organization} onChange={event => setForm(current => ({ ...current, organization: event.target.value }))} className="ep-input" placeholder="Organization name" />
             </label>
             <label className="space-y-1.5 text-xs font-medium text-stone-600">
               Location
-              <input required maxLength={255} value={form.location} onChange={event => setForm(current => ({ ...current, location: event.target.value }))} className="input-standard" placeholder="Venue or area" />
+              <input required maxLength={255} value={form.location} onChange={event => setForm(current => ({ ...current, location: event.target.value }))} className="ep-input" placeholder="Venue or area" />
             </label>
             <label className="space-y-1.5 text-xs font-medium text-stone-600">
               Date and time
-              <input required type="datetime-local" value={form.scheduledAt} onChange={event => setForm(current => ({ ...current, scheduledAt: event.target.value }))} className="input-standard" />
+              <input required type="datetime-local" value={form.scheduledAt} onChange={event => setForm(current => ({ ...current, scheduledAt: event.target.value }))} className="ep-input" />
               <span className="block text-[11px] text-stone-400">Bangladesh time (Asia/Dhaka)</span>
             </label>
             {editingId && (
               <label className="space-y-1.5 text-xs font-medium text-stone-600">
                 Status
-                <select value={form.status} onChange={event => setForm(current => ({ ...current, status: event.target.value as RoadshowStatus }))} className="select-standard">
+                <select value={form.status} onChange={event => setForm(current => ({ ...current, status: event.target.value as RoadshowStatus }))} className="ep-select">
                   {ROADSHOW_STATUSES.filter(status => status !== 'cancel' || canCancel || isAdmin).map(status => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
                 </select>
               </label>
@@ -345,7 +345,7 @@ export default function RoadshowPage() {
             )}
           </fieldset>
           <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" disabled={saving} className="btn-primary normal-case tracking-normal">
+            <button type="submit" disabled={saving} className="ep-btn ep-btn-primary">
               {saving ? 'Saving…' : editingId ? 'Save changes' : 'Add Roadshow'}
             </button>
             {editingId && form.status === 'execute' && (
@@ -366,9 +366,9 @@ export default function RoadshowPage() {
             </div>
           )}
           {loading ? (
-            <p className="py-12 text-center text-sm text-stone-500">Loading Roadshows…</p>
+            <div className="ep-card"><p className="ep-empty" style={{ textAlign: 'center' }}>Loading Roadshows…</p></div>
           ) : forbidden || loadError ? null : roadshows.length === 0 ? (
-            <div className="border-y border-stone-100 bg-white px-4 py-12 text-center">
+            <div className="ep-card" style={{ textAlign: 'center' }}>
               <MapPinned className="mx-auto h-7 w-7 text-stone-400" />
               <p className="mt-3 text-sm font-semibold text-stone-700">No Roadshows added</p>
               <p className="mt-1 text-xs text-stone-500">Roadshows created for your team will appear here.</p>
@@ -378,7 +378,7 @@ export default function RoadshowPage() {
             const locked = roadshow.status === 'execute' || roadshow.status === 'cancel';
             const canManage = canEdit && (!locked || isAdmin);
             return (
-              <article key={roadshow.id} className="border-y border-stone-100 bg-white">
+              <article key={roadshow.id} className="ep-card" style={{ padding: 0, overflow: 'hidden' }}>
                 <button type="button" onClick={() => setSelectedId(isSelected ? null : roadshow.id)} aria-expanded={isSelected} className="flex min-h-[76px] w-full items-center gap-3 px-4 py-3 text-left sm:px-5">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#978C21]/10 text-[#756c1b]"><MapPinned className="h-[18px] w-[18px]" /></span>
                   <span className="min-w-0 flex-1">
@@ -409,7 +409,7 @@ export default function RoadshowPage() {
                     )}
                     <div className="flex flex-wrap items-center gap-2">
                       {canManage && (
-                        <button type="button" onClick={() => beginEdit(roadshow)} className="btn-secondary normal-case tracking-normal">
+                        <button type="button" onClick={() => beginEdit(roadshow)} className="ep-btn">
                           <Pencil className="h-3.5 w-3.5" /> Edit
                         </button>
                       )}
@@ -419,7 +419,7 @@ export default function RoadshowPage() {
                         </button>
                       )}
                       {roadshow.status !== 'execute' && roadshow.status !== 'cancel' && canCancel && (
-                        <button type="button" onClick={() => void changeStatus(roadshow, 'cancel')} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-stone-200 px-4 text-sm font-semibold text-stone-600 hover:bg-stone-50">
+                        <button type="button" onClick={() => void changeStatus(roadshow, 'cancel')} className="ep-btn">
                           <X className="h-4 w-4" /> Cancel
                         </button>
                       )}
@@ -435,21 +435,25 @@ export default function RoadshowPage() {
 
       {activeTab === 'performance' && canReport && !editingId && (
         <section className="space-y-4">
-          <div>
-            <h2 className="text-base font-semibold text-stone-800">Roadshow Performance</h2>
-            <p className="mt-1 text-xs text-stone-500">Lead counts are calculated from active leads carrying each executed roadshow source code.</p>
+          <div className="ep-card">
+            <div className="ep-cardhead" style={{ marginBottom: 0 }}>
+              <div>
+                <h3>Roadshow performance</h3>
+                <div className="ep-muted">Lead counts are calculated from active leads carrying each executed roadshow source code.</div>
+              </div>
+            </div>
           </div>
           {performanceLoading ? (
-            <p className="border-y border-stone-100 bg-white px-4 py-10 text-center text-sm text-stone-500">Loading performance…</p>
+            <div className="ep-card"><p className="ep-empty" style={{ textAlign: 'center' }}>Loading performance…</p></div>
           ) : performanceError ? (
             <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               <span>{performanceError}</span>
               <button type="button" onClick={() => void loadPerformance()} className="font-semibold underline underline-offset-2">Retry</button>
             </div>
           ) : performance.length === 0 ? (
-            <p className="border-y border-stone-100 bg-white px-4 py-10 text-center text-sm text-stone-500">No executed Roadshows have performance data yet.</p>
+            <div className="ep-card"><p className="ep-empty" style={{ textAlign: 'center' }}>No executed Roadshows have performance data yet.</p></div>
           ) : performance.map(roadshow => (
-            <article key={roadshow.id} className="border-y border-stone-100 bg-white px-4 py-4 sm:px-5">
+            <article key={roadshow.id} className="ep-card">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-stone-800">{roadshow.organization}</h3>
@@ -463,7 +467,7 @@ export default function RoadshowPage() {
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {roadshow.stageBreakdown.map(stage => (
-                  <span key={stage.status} className="rounded-full bg-stone-100 px-2.5 py-1 text-[11px] text-stone-700">{stage.status || 'Unassigned'} · {stage.count}</span>
+                  <span key={stage.status} className="ep-pill">{stage.status || 'Unassigned'} · {stage.count}</span>
                 ))}
               </div>
             </article>

@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { DayBucket } from '../utils/enterpriseData';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import { ENTERPRISE_ROLE_LABELS } from '../../../layouts/enterpriseRole';
+import { enterpriseHeadingForPath } from '../../../layouts/enterpriseNav';
 
 /**
  * EnterprisePrimitives — the Enterprise Preview sample's visual
@@ -11,6 +14,33 @@ import type { DayBucket } from '../utils/enterpriseData';
  * Nothing here fetches or invents data: each primitive only renders
  * what its caller passes.
  */
+
+/**
+ * The sample-aligned heading for a sidebar page (fix round,
+ * 2026-11-19): eyebrow "{Role} workspace", H1 the role's own nav
+ * label for the route, subtitle the sample's description for that
+ * label — so every inner page speaks the sample's words. Pages
+ * pass their real action buttons as `actions`; pages with no
+ * actions pass none (no fake Filters button).
+ */
+export function EnterprisePageHeader(props: {
+  path: string;
+  actions?: React.ReactNode;
+}) {
+  // The DISPLAY role, so a super admin previewing another role
+  // sees that role's heading on inner pages too (outside the
+  // provider this is just the caller's own derived role).
+  const { role } = useEnterpriseDisplayRole();
+  const heading = enterpriseHeadingForPath(role, props.path);
+  return (
+    <OverviewHeading
+      eyebrow={`${ENTERPRISE_ROLE_LABELS[role]} workspace`}
+      title={heading.title}
+      sub={heading.sub}
+      actions={props.actions}
+    />
+  );
+}
 
 export function OverviewHeading(props: {
   eyebrow: string;

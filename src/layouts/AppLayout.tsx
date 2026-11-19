@@ -25,9 +25,17 @@ import {
 } from '../modules/shared/api/sessionCache';
 import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
 import { resolveFeatureRouteAccess } from './featureRouteAccess';
-import { buildEnterpriseNavGroups, enterpriseLabelForPath, type EnterpriseNavGroup } from './enterpriseNav';
-import { ENTERPRISE_ROLE_LABELS } from './enterpriseRole';
+import { buildEnterpriseBottomNavTabs, buildEnterpriseNavGroups, enterpriseActivePath, enterpriseBottomNavActivePath, enterpriseLabelForPath, type EnterpriseNavGroup } from './enterpriseNav';
+import EnterpriseBottomNav from './EnterpriseBottomNav';
+import { ENTERPRISE_ROLE_LABELS, type EnterpriseRole } from './enterpriseRole';
 import { useEnterpriseRole } from './useEnterpriseRole';
+import {
+  canPreviewRoles,
+  isPreviewingRole,
+  resolveDisplayRole,
+  ENTERPRISE_PREVIEW_ROLE_OPTIONS,
+} from './enterprisePreview';
+import { EnterpriseDisplayRoleProvider } from './enterpriseDisplayRole';
 import DhakaClock from './DhakaClock';
 import { usePermissions } from '../modules/shared/hooks/usePermissions';
 
@@ -44,11 +52,18 @@ import { usePermissions } from '../modules/shared/hooks/usePermissions';
  * bar are retired with it.
  *
  * The sidebar shows exactly ONE role's nav, derived from the
- * caller's real scope and role (useEnterpriseRole) — never a
- * switcher. Entries are filtered by the SAME resolvers the router
- * uses (resolveFeatureRouteAccess for the route module +
- * canAccess for the functional permission), so a role that cannot
- * open a page never sees its sidebar entry either.
+ * caller's real scope and role (useEnterpriseRole) — except for
+ * super admins, who may PREVIEW another role's nav + overview
+ * from the sidebar rolebox (fix round, 2026-11-19; see
+ * enterprisePreview.ts). The preview is display-only: data stays
+ * scoped to the real user and page access still enforces real
+ * permissions. The preview choice is re-validated against the
+ * super-admin check on every render, so a non-super-admin can
+ * never switch roles — including through tampered client state.
+ * Entries are filtered by the SAME resolvers the router uses
+ * (resolveFeatureRouteAccess for the route module + canAccess
+ * for the functional permission), so a role that cannot open a
+ * page never sees its sidebar entry either.
  *
  * Kept verbatim from the old shell: the forced first-login
  * password reset, the 30-minute session timeout, the notification
@@ -60,37 +75,26 @@ import { usePermissions } from '../modules/shared/hooks/usePermissions';
 const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
 const NOTIFICATION_REFRESH_MS = 60_000;
 
-/**
- * The sidebar's active item: the entry whose path matches the
- * current pathname — exact, or the longest prefix for deep links
- * (/leads/123 activates /leads; /team/kpi/overdue activates
- * /team). Ties (the Admin CONFIGURATION group maps three labels
- * to /settings/system) resolve to the LAST item in nav order, so
- * exactly one highlight ever shows and it names the page itself
- * ("System Settings", not "Status & Pipeline").
- */
-function activeNavPath(groups: EnterpriseNavGroup[], pathname: string): string | null {
-  let best: { path: string; length: number; order: number } | null = null;
-  let order = 0;
-  for (const group of groups) {
-    for (const item of group.items) {
-      order += 1;
-      const matches = item.path === '/'
-        ? pathname === '/'
-        : pathname === item.path || pathname.startsWith(`${item.path}/`);
-      if (!matches) continue;
-      if (!best || item.path.length > best.length || (item.path.length === best.length && order > best.order)) {
-        best = { path: item.path, length: item.path.length, order };
-      }
-    }
-  }
-  return best?.path ?? null;
-}
-
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
   const { canAccess } = usePermissions();
+  // Super-admin role preview (fix round, 2026-11-19): the role
+  // chosen in the sidebar rolebox, or null for the caller's own
+  // view. Component state only — never persisted — and the
+  // display role is re-derived from the super-admin check on
+  // every render (see resolveDisplayRole). Declared before the
+  // display-role derivation below (TDZ).
+  const [previewRole, setPreviewRole] = useState<EnterpriseRole | null>(null);
   const { role: enterpriseRole, loading: roleLoading } = useEnterpriseRole();
+  // The role the shell DISPLAYS: the caller's own derived role,
+  // unless a super admin is previewing another role (display
+  // only — data and route access still use the real user).
+  // Re-derived from the super-admin check on every render, so a
+  // preview choice made while the role was ADMIN is dropped the
+  // moment the caller is not a super admin.
+  const canPreview = canPreviewRoles(user?.role);
+  const displayRole = resolveDisplayRole({ realRole: enterpriseRole, previewRole, canPreview });
+  const isPreviewing = isPreviewingRole({ realRole: enterpriseRole, previewRole, canPreview });
   const location = useLocation();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
@@ -447,10 +451,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     : buildEnterpriseNavGroups({
         canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
         canAccess,
-        role: enterpriseRole,
+        role: displayRole,
       });
-  const activePath = activeNavPath(sidebarGroups, location.pathname);
+  const activePath = enterpriseActivePath(sidebarGroups, location.pathname);
   const crumbLabel = enterpriseLabelForPath(sidebarGroups, location.pathname);
+
+  // The mobile bottom bar: the DISPLAY role's most important pages
+  // (Overview first), through the same access predicates as the
+  // sidebar — so it follows a super-admin role preview exactly like
+  // the sidebar does, and never shows a tab the user cannot open.
+  const bottomNavTabs = roleLoading
+    ? []
+    : buildEnterpriseBottomNavTabs({
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
+        canAccess,
+        role: displayRole,
+      });
+  const bottomNavActivePath = enterpriseBottomNavActivePath(bottomNavTabs, location.pathname);
 
   const handleLogout = () => {
     logout();
@@ -471,6 +488,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <small>Sales workspace</small>
           </div>
         </div>
+        {/* Super-admin role preview (fix round, 2026-11-19): the
+            sample's sidebar rolebox, restored 1:1. Rendered only
+            when the caller passes the super-admin check AND the
+            role has finished deriving — never for other users. */}
+        {canPreview && !roleLoading && (
+          <div className="ep-rolebox">
+            <label htmlFor="ep-role-preview">Preview role</label>
+            <select
+              id="ep-role-preview"
+              value={previewRole ?? enterpriseRole}
+              onChange={e => setPreviewRole(e.target.value as EnterpriseRole)}
+              aria-label="Preview the workspace as another role"
+            >
+              {ENTERPRISE_PREVIEW_ROLE_OPTIONS.map(role => (
+                <option key={role} value={role}>
+                  {ENTERPRISE_ROLE_LABELS[role]}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {roleLoading ? (
           <div className="ep-nav-skeleton" role="status" aria-label="Loading navigation">
             <div className="ep-skeleton-line" />
@@ -652,7 +690,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 </span>
                 <span className="ep-userlabel">
                   <span>{user.name}</span>
-                  <small>{roleLoading ? '' : ENTERPRISE_ROLE_LABELS[enterpriseRole]}</small>
+                  <small>{roleLoading ? '' : ENTERPRISE_ROLE_LABELS[displayRole]}</small>
                 </span>
               </Link>
               <div className="relative group">
@@ -700,9 +738,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </header>
 
         <main className="ep-content">
-          {children}
+          {/* While a super admin previews another role, the banner
+              is unmissable and one click returns to the real view.
+              Non-super-admins can never reach this branch:
+              isPreviewing is false unless canPreview is true. */}
+          {isPreviewing && (
+            <div className="ep-preview-banner" role="status">
+              <span>
+                Previewing as {ENTERPRISE_ROLE_LABELS[displayRole]} — display only.
+                Your access and data are unchanged.
+              </span>
+              <button
+                type="button"
+                className="ep-preview-back"
+                onClick={() => setPreviewRole(null)}
+              >
+                Back to my view
+              </button>
+            </div>
+          )}
+          <EnterpriseDisplayRoleProvider
+            value={{
+              role: displayRole,
+              loading: roleLoading,
+              isPreviewing,
+              realRole: enterpriseRole,
+            }}
+          >
+            {children}
+          </EnterpriseDisplayRoleProvider>
         </main>
       </div>
+      <EnterpriseBottomNav tabs={bottomNavTabs} activePath={bottomNavActivePath} />
     </div>
   );
 }

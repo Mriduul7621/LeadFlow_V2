@@ -21,7 +21,7 @@ import { FormField } from '../../shared/types';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { BANGLADESH_GEOGRAPHY } from '../../shared/utils/bangladeshGeography';
-import { OverviewHeading } from '../../workspace/components/EnterprisePrimitives';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 // System fields whose presence/format is essential to a lead record -
 // these stay in the form regardless of admin visibility settings, so
@@ -139,7 +139,8 @@ export default function LeadGenerate() {
    */
   if (!mayCreateLead) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-200 rounded-sm max-w-xl mx-auto space-y-6 animate-in fade-in duration-300 mt-12">
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ textAlign: 'center', marginTop: 48 }}>
         <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
           <AlertCircle className="w-8 h-8" />
         </div>
@@ -152,6 +153,7 @@ export default function LeadGenerate() {
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
           Strict Security Level: Feature lead_generate.create Required
+        </div>
         </div>
       </div>
     );
@@ -241,11 +243,7 @@ export default function LeadGenerate() {
           CSS) and a "Save lead" submit. Classes only: every field,
           the validation schema, translations and the submit flow are
           unchanged. */}
-      <OverviewHeading
-        eyebrow="Lead workspace"
-        title="Add Lead"
-        sub="Capture a prospect with the required details."
-      />
+      <EnterprisePageHeader path="/leads/new" />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* Section 1: Identity */}

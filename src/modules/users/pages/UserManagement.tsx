@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { UserBulkImportModal } from '../components/UserBulkImportModal';
 import EnterpriseAccessPanel from '../components/EnterpriseAccessPanel';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -1107,42 +1108,36 @@ export default function UserManagement() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 pb-12">
-      {/* Page header */}
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">User Management</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage employees, departments, roles and organizational hierarchy.</p>
-        </div>
-        {activeTab === 'employees' && (
-          <div className="flex items-center gap-2">
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/users"
+        actions={activeTab === 'employees' ? (
+          <>
             <button
               onClick={() => setShowBulkImport(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-medium rounded-lg transition-colors shadow-sm"
+              className="ep-btn"
             >
               <Upload className="w-4 h-4" /> Bulk Import Users
             </button>
             <button
               onClick={openCreateUser}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-semibold rounded-lg transition-colors shadow-sm"
+              className="ep-btn ep-btn-primary"
             >
               <UserPlus className="w-4 h-4" /> Add Employee
             </button>
-          </div>
-        )}
-      </div>
+          </>
+        ) : undefined}
+      />
 
       {/* Tab navigation */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+      <div className="flex gap-1 flex-wrap">
         {tabs.map(tab => (
           <button
             key={tab.key}
             onClick={() => { setActiveTab(tab.key); if (tab.key === 'roles') setShowRoleForm(false); }}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all",
-              activeTab === tab.key
-                ? "bg-white text-[#978C21] shadow-sm border border-slate-200"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
+              "ep-pill",
+              activeTab === tab.key && "active",
             )}
           >
             {tab.icon}
@@ -1165,8 +1160,8 @@ export default function UserManagement() {
       {activeTab === 'employees' && (
         <div className="space-y-4">
           {/* Filters */}
-          <div className="flex flex-col md:flex-row gap-3 bg-white border border-slate-200 rounded-xl p-4">
-            <div className="flex-1 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <div className="ep-card flex flex-col md:flex-row gap-3" style={{ padding: 12 }}>
+            <div className="flex-1 flex items-center gap-2 bg-white border border-[#d9d9d2] rounded-[10px] px-3 py-2">
               <Search className="w-4 h-4 text-slate-400" />
               <input
                 type="text"
@@ -1179,7 +1174,7 @@ export default function UserManagement() {
             <select
               value={filterDeptId}
               onChange={e => setFilterDeptId(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
+              className="ep-select"
             >
               <option value="">All Departments</option>
               {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -1187,7 +1182,7 @@ export default function UserManagement() {
             <select
               value={filterRole}
               onChange={e => setFilterRole(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21]"
+              className="ep-select"
             >
               <option value="">All Roles</option>
               {roles.map(r => <option key={r.roleId} value={r.roleId}>{r.roleName}</option>)}
@@ -1195,22 +1190,22 @@ export default function UserManagement() {
           </div>
 
           {/* Employee table */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
+          <div className="ep-card ep-tablecard">
+            <div className="ep-tablewrap">
+              <table>
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Employee</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Role & Department</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Status</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500">Contact</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-slate-500 text-right">Actions</th>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Role &amp; Department</th>
+                    <th>Status</th>
+                    <th>Contact</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-16 text-center text-sm text-slate-400">
+                      <td colSpan={5} className="ep-td-empty">
                         No employees found.
                       </td>
                     </tr>
@@ -1232,7 +1227,7 @@ export default function UserManagement() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="space-y-1">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-md">
+                              <span className="ep-pill">
                                 <Shield className="w-3 h-3 text-[#978C21]" />
                                 {roles.find(r => r.roleId === u.role)?.roleName || u.role}
                               </span>
@@ -1254,12 +1249,7 @@ export default function UserManagement() {
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className={cn(
-                              "inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full",
-                              u.status === 'Active'
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-slate-100 text-slate-500"
-                            )}>
+                            <span className="ep-pill" style={u.status === 'Active' ? { color: '#047857' } : undefined}>
                               {u.status === 'Active' ? <UserCheck className="w-3 h-3" /> : <UserX className="w-3 h-3" />}
                               {u.status}
                             </span>
@@ -1316,7 +1306,7 @@ export default function UserManagement() {
       {activeTab === 'departments' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Form */}
-          <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="lg:col-span-4 ep-card space-y-4">
             <h3 className="text-base font-semibold text-slate-800">
               {editingDeptId ? 'Edit Department' : 'Add Department'}
             </h3>
@@ -1328,13 +1318,13 @@ export default function UserManagement() {
                   value={deptFormName}
                   onChange={e => setDeptFormName(e.target.value)}
                   placeholder="e.g. Operations, Finance"
-                  className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                  className="ep-input"
                 />
               </div>
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  className="ep-btn ep-btn-primary flex-1"
                 >
                   <Save className="w-4 h-4" />
                   {editingDeptId ? 'Update' : 'Add Department'}
@@ -1353,7 +1343,7 @@ export default function UserManagement() {
           </div>
 
           {/* List */}
-          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6">
+          <div className="lg:col-span-8 ep-card">
             <h3 className="text-base font-semibold text-slate-800 mb-4">
               Departments ({departments.length})
             </h3>
@@ -1442,7 +1432,7 @@ export default function UserManagement() {
           {!showRoleForm ? (
             <>
               {roleTemplates.length > 0 && (
-                <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                <div className="ep-card space-y-3">
                   <div className="flex items-start gap-2">
                     <Sparkles className="w-4 h-4 text-[#978C21] mt-0.5" />
                     <div>
@@ -1493,7 +1483,7 @@ export default function UserManagement() {
                 <h3 className="text-base font-semibold text-slate-800">Roles ({roles.length})</h3>
                 <button
                   onClick={handleNewRole}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors"
+                  className="ep-btn ep-btn-primary"
                 >
                   <Plus className="w-4 h-4" /> Add Role
                 </button>
@@ -1501,7 +1491,7 @@ export default function UserManagement() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {roles.map(r => (
-                  <div key={r.roleId} className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-shadow">
+                  <div key={r.roleId} className="ep-card">
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h4 className="text-sm font-semibold text-slate-800">{r.roleName}</h4>
@@ -1606,7 +1596,7 @@ export default function UserManagement() {
                     <button
                       onClick={handleSaveAsTemplate}
                       disabled={savingTemplate}
-                      className="inline-flex items-center gap-2 px-4 py-2 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                      className="ep-btn ep-btn-primary"
                     >
                       {savingTemplate ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       Save template
@@ -1623,7 +1613,7 @@ export default function UserManagement() {
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* 1. Role basic info */}
-                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                <div className="lg:col-span-4 ep-card space-y-4">
                   <h3 className="text-base font-semibold text-slate-800">
                     1. Role Details
                   </h3>
@@ -1693,7 +1683,7 @@ export default function UserManagement() {
 
                   <button
                     onClick={handleSaveRole}
-                    className="w-full py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    className="ep-btn ep-btn-primary w-full"
                   >
                     <Save className="w-4 h-4" /> Save Role
                   </button>
@@ -1701,7 +1691,7 @@ export default function UserManagement() {
 
                 {/* 3. Feature permissions — module/page visibility only */}
                 <div className="lg:col-span-8 space-y-4">
-                  <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                  <div className="ep-card space-y-4">
                     <h3 className="text-base font-semibold text-slate-800">3. Feature Access</h3>
                     <p className="text-sm text-slate-500">
                       Module and page visibility only. What the role can <em>do</em> inside a module
@@ -1756,7 +1746,7 @@ export default function UserManagement() {
               </div>
 
               {/* 4. Action permissions (canonical, server-enforced) */}
-              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+              <div className="ep-card space-y-4">
                 <div>
                   <h3 className="text-base font-semibold text-slate-800">4. Action Permissions</h3>
                   <p className="text-sm text-slate-500">
@@ -1839,7 +1829,7 @@ export default function UserManagement() {
             <button
               onClick={saveLadder}
               disabled={savingLadder}
-              className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-60"
+              className="ep-btn ep-btn-primary"
             >
               <Save className="w-4 h-4" /> {savingLadder ? 'Saving…' : 'Save Ladder'}
             </button>
@@ -1906,7 +1896,7 @@ export default function UserManagement() {
                 </div>
               )}
 
-              <div className="bg-white border border-slate-200 rounded-xl p-5">
+              <div className="ep-card">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-slate-700">Reporting setup</span>
                   <span className="text-sm text-slate-500">
@@ -1944,7 +1934,7 @@ export default function UserManagement() {
             const dh = hierConfig.departments!;
             const clean = dh.headless.length === 0 && dh.empty.length === 0 && dh.teamDrift.length === 0;
             return (
-              <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+              <div className="ep-card space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm font-medium text-slate-700">Department health</span>
                   <span className="text-xs text-slate-500">
@@ -2034,7 +2024,7 @@ export default function UserManagement() {
               journey as any deactivation: open the person, pick the successor,
               save (which transfers the book). */}
           {hierConfig?.ownership && hierConfig.ownership.available && (
-            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-2">
+            <div className="ep-card space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium text-slate-700">Lead ownership</span>
                 <span className="text-xs text-slate-500">
@@ -2080,7 +2070,7 @@ export default function UserManagement() {
           )}
 
           {/* Ladder levels */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="ep-card space-y-4">
             {hierConfig && hierConfig.levels.length > 0 ? (
               hierConfig.levels.map(level => (
                 <div key={level.level} className="flex flex-col sm:flex-row sm:items-center gap-3 pb-4 border-b border-slate-100 last:border-0 last:pb-0">
@@ -2163,7 +2153,7 @@ export default function UserManagement() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+              className="ep-card w-full max-w-2xl max-h-[90vh] overflow-y-auto" style={{ padding: 0, borderRadius: 14 }}
               onClick={e => e.stopPropagation()}
             >
               {/* Modal header */}
@@ -2193,7 +2183,7 @@ export default function UserManagement() {
                       value={userForm.name}
                       onChange={e => setUserForm({ ...userForm, name: e.target.value })}
                       placeholder="e.g. Abdur Rahman"
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                      className="ep-input"
                     />
                   </div>
                   <div>
@@ -2204,7 +2194,7 @@ export default function UserManagement() {
                       value={userForm.employeeId}
                       onChange={e => setUserForm({ ...userForm, employeeId: e.target.value })}
                       placeholder="e.g. RM001"
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                      className="ep-input"
                     />
                   </div>
                   <div>
@@ -2214,7 +2204,7 @@ export default function UserManagement() {
                       value={userForm.contact}
                       onChange={e => setUserForm({ ...userForm, contact: e.target.value })}
                       placeholder="e.g. 01712345678"
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                      className="ep-input"
                     />
                   </div>
                   <div>
@@ -2225,7 +2215,7 @@ export default function UserManagement() {
                       value={userForm.email}
                       onChange={e => setUserForm({ ...userForm, email: e.target.value })}
                       placeholder="e.g. abdur@company.com"
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                      className="ep-input"
                     />
                   </div>
                   <div>
@@ -2236,7 +2226,7 @@ export default function UserManagement() {
                       onChange={e => setUserForm({ ...userForm, designation: e.target.value })}
                       placeholder="e.g. Relationship Officer"
                       list="um-designation-suggestions"
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] transition-colors"
+                      className="ep-input"
                     />
                     <datalist id="um-designation-suggestions">
                       {Array.from(new Set([
@@ -2268,7 +2258,7 @@ export default function UserManagement() {
                           ...(userForm.designation.trim() ? {} : { designation: nextRoleObj?.roleName || '' }),
                         });
                       }}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                      className="ep-select" style={{ width: "100%" }}
                     >
                       {roles.map(r => (
                         <option key={r.roleId} value={r.roleId}>{r.roleName}</option>
@@ -2280,7 +2270,7 @@ export default function UserManagement() {
                     <select
                       value={userForm.departmentId}
                       onChange={e => setUserForm({ ...userForm, departmentId: e.target.value })}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                      className="ep-select" style={{ width: "100%" }}
                     >
                       <option value="">No Department</option>
                       {departments.map(d => (
@@ -2341,7 +2331,7 @@ export default function UserManagement() {
                           value={userForm.managerId}
                           onChange={e => setUserForm({ ...userForm, managerId: e.target.value })}
                           disabled={loadingManagers}
-                          className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white disabled:bg-slate-50"
+                          className="ep-select" style={{ width: "100%" }}
                         >
                           <option value="">{loadingManagers ? 'Loading managers…' : 'Select the line manager (any active employee)'}</option>
                           {(() => {
@@ -2377,7 +2367,7 @@ export default function UserManagement() {
                     <select
                       value={userForm.status}
                       onChange={e => setUserForm({ ...userForm, status: e.target.value as any })}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                      className="ep-select" style={{ width: "100%" }}
                     >
                       <option value="Active">Active</option>
                       <option value="Inactive">Inactive</option>
@@ -2410,7 +2400,7 @@ export default function UserManagement() {
                     value={userForm.password}
                     onChange={e => setUserForm({ ...userForm, password: e.target.value })}
                     placeholder={editingUser ? "Leave blank to keep current password" : "Leave blank to auto-generate"}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                    className="ep-select" style={{ width: "100%" }}
                   />
                   <p className="text-xs text-slate-400">
                     {editingUser
@@ -2451,7 +2441,7 @@ export default function UserManagement() {
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                    className="ep-btn ep-btn-primary"
                   >
                     {editingUser ? 'Save Changes' : 'Add Employee'}
                   </button>
@@ -2478,7 +2468,7 @@ export default function UserManagement() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              className="ep-card max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4"
               onClick={e => e.stopPropagation()}
             >
               <div>
@@ -2516,7 +2506,7 @@ export default function UserManagement() {
                 <select
                   value={handover.targetId}
                   onChange={e => setHandover({ ...handover, targetId: e.target.value })}
-                  className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                  className="ep-select" style={{ width: "100%" }}
                 >
                   <option value="">Select a colleague…</option>
                   {/* Suggested first (same department, then the person's own
@@ -2554,7 +2544,7 @@ export default function UserManagement() {
                   type="button"
                   disabled={savingHandover || !handover.targetId}
                   onClick={confirmHandover}
-                  className="px-5 py-2.5 bg-[#978C21] hover:bg-[#83781C] text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                  className="ep-btn ep-btn-primary"
                 >
                   {savingHandover
                     ? 'Transferring…'
@@ -2580,7 +2570,7 @@ export default function UserManagement() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              className="ep-card max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-start justify-between">
@@ -2609,7 +2599,7 @@ export default function UserManagement() {
                     <select
                       value={headForm.primaryUserId}
                       onChange={e => setHeadForm(prev => ({ ...prev, primaryUserId: e.target.value }))}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#978C21] bg-white"
+                      className="ep-select" style={{ width: "100%" }}
                     >
                       <option value="">No head (department left headless)</option>
                       {headCandidates(headDept).map(u => (
@@ -2665,7 +2655,7 @@ export default function UserManagement() {
                   type="button"
                   onClick={handleSaveHeads}
                   disabled={savingHeads || headCandidates(headDept).length === 0}
-                  className="px-6 py-2.5 bg-[#978C21] hover:bg-[#83781C] disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                  className="ep-btn ep-btn-primary"
                 >
                   {savingHeads ? 'Saving…' : 'Save heads'}
                 </button>
