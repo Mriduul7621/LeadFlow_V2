@@ -9,7 +9,6 @@ import Login from './modules/auth/pages/Login';
 import ProtectedRoute from './modules/auth/components/ProtectedRoute';
 import AdminRoute from './modules/auth/components/AdminRoute';
 import FeatureGate from './modules/auth/components/FeatureGate';
-import HomeLanding from './modules/auth/components/HomeLanding';
 import { initializeAuthSession } from './modules/auth/services/authFlow';
 import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
@@ -33,7 +32,7 @@ import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
  * area shows a compact placeholder. No full-screen spinner per
  * navigation, no route behavior change.
  */
-const Dashboard = lazy(() => import('./modules/dashboard/pages/Dashboard'));
+const EnterpriseHome = lazy(() => import('./modules/workspace/pages/EnterpriseHome'));
 const LeadGenerate = lazy(() => import('./modules/leads/pages/LeadGenerate'));
 const LeadList = lazy(() => import('./modules/leads/pages/LeadList'));
 const LeadUpload = lazy(() => import('./modules/leads/pages/LeadUpload'));
@@ -109,10 +108,12 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    // HomeLanding applies the once-per-session Workbench-first landing
-    // decision; the Dashboard element itself is unchanged and renders
-    // for every later visit to `/` (sidebar Home) within the session.
-    element: <ProtectedRoute><FeatureGate route="/"><HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding></FeatureGate></ProtectedRoute>,
+    // Enterprise Preview redesign (2026-11-19): `/` renders the
+    // derived role overview (Admin / Manager / Team Lead / Agent).
+    // No landing redirect and no Workbench-first bounce any more —
+    // the overview IS the landing page, and the Daily Workbench
+    // stays one tap away in the sidebar ("Follow-up Queue").
+    element: <ProtectedRoute><FeatureGate route="/"><LazyPage page={<EnterpriseHome />} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/more',

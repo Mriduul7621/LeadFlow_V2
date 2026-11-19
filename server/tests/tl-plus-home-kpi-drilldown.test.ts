@@ -31,11 +31,17 @@
  *      org totals pin, and server/client row agreement.
  *   5. Rendering (SSR, repo style) — the drill-down content at a
  *      people level, a leaf level, not-found; the Export button
- *      only with the grant; Team Home KPI cards link to the page.
- *   6. Source guards — wiring (HomeLanding/useCallerTeam run on
- *      callerSeesTeam; the route + FeatureGate entry exist; the
- *      Workbench strip links person=self; the server never imports
- *      the sibling branches' LeadExportService/teamTree).
+ *      only with the grant; the enterprise KpiCard primitive links
+ *      to the page (TeamHomeContent is retired — the Enterprise
+ *      Preview homes render KpiCard, see section 6).
+ *   6. Source guards — wiring (the enterprise role derivation in
+ *      enterpriseRole.ts + useEnterpriseRole runs on the overview
+ *      scope and the direct-reports fact, useCallerTeam unchanged;
+ *      the four enterprise homes wire every KPI through
+ *      kpiDrilldownUrl with the right key; the route + FeatureGate
+ *      entry exist; the Workbench strip links person=self; the
+ *      server never imports the sibling branches' LeadExportService/
+ *      teamTree).
  */
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -78,7 +84,7 @@ import {
   treeRootsOf,
   type KpiLevel,
 } from '../../src/modules/team/utils/kpiDrilldown';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { KpiCard } from '../../src/modules/workspace/components/EnterprisePrimitives';
 import {
   TeamKpiDrilldownContent,
   type KpiLeadsResponse,
@@ -1074,16 +1080,34 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
     assert.ok(!withoutGrant.includes('Export'), 'ungranted callers see no button at all');
   });
 
-  it('Team Home KPI cards link to the drill-down page', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(
-        MemoryRouter,
-        null,
-        React.createElement(TeamHomeContent, { people: treePeople, scope: 'Team' })
-      )
-    );
-    for (const kpi of ['open', 'dueToday', 'overdue', 'converted', 'totalLeads', 'todayCollection', 'noAction']) {
-      assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
+  it('the enterprise KpiCard links to the drill-down page for all seven KPIs', () => {
+    // TeamHomeContent is retired (Enterprise Preview, 2026-11-19):
+    // the four role homes render the shared KpiCard primitive with
+    // `to={kpiDrilldownUrl(key)}`. Pin the primitive's link +
+    // aria-label behaviour here; the per-home wiring is pinned in
+    // the section 6 source guards.
+    const renderCard = (label: string, value: number, kpi: 'open' | 'dueToday' | 'overdue' | 'converted' | 'totalLeads' | 'todayCollection' | 'noAction') =>
+      renderToStaticMarkup(
+        React.createElement(
+          MemoryRouter,
+          null,
+          React.createElement(KpiCard, { label, value, foot: 'test', to: kpiDrilldownUrl(kpi) })
+        )
+      );
+    const cases = [
+      { label: 'Open leads', value: 10, kpi: 'open' },
+      { label: 'Due today', value: 3, kpi: 'dueToday' },
+      { label: 'Overdue', value: 3, kpi: 'overdue' },
+      { label: 'Converted', value: 2, kpi: 'converted' },
+      { label: 'Total Lead', value: 12, kpi: 'totalLeads' },
+      { label: 'Today Lead Collection', value: 6, kpi: 'todayCollection' },
+      { label: 'No Action Alert', value: 4, kpi: 'noAction' },
+    ] as const;
+    for (const c of cases) {
+      const html = renderCard(c.label, c.value, c.kpi);
+      assert.ok(html.includes(`href="/team/kpi/${c.kpi}"`), `the ${c.kpi} card links to its drill-down`);
+      assert.ok(html.includes(`aria-label="${c.label}: ${c.value}"`),
+        `the ${c.kpi} card carries the "label: value" aria-label`);
     }
   });
 
@@ -1110,20 +1134,25 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
     assert.ok(html.includes('href="/team/kpi/totalLeads"'), 'the KPI crumb links back to the top level');
   });
 
-  it('Team Home totals for an Organization caller sum the whole visible set', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(
-        MemoryRouter,
-        null,
-        React.createElement(TeamHomeContent, { people: orgPeople, scope: 'Organization' })
-      )
-    );
-    assert.ok(html.includes('Organization scope'), 'the scope is shown');
-    assert.ok(html.includes('aria-label="Total Lead: 12 — view details"'),
+  it('the enterprise KpiCard renders org totals with the "label: value" aria-label', () => {
+    // The org totals still come from summarizeTeamTotals over the
+    // whole visible set (section 2 pins the sums); the homes render
+    // them through KpiCard, whose aria-label is "label: value".
+    const totals = summarizeTeamTotals(orgPeople);
+    assert.deepEqual(totals, { open: 10, dueToday: 3, overdue: 3, converted: 2, totalLeads: 12, todayCollection: 6, noAction: 4 });
+    const renderCard = (label: string, value: number, kpi: 'open' | 'totalLeads' | 'converted' | 'noAction') =>
+      renderToStaticMarkup(
+        React.createElement(
+          MemoryRouter,
+          null,
+          React.createElement(KpiCard, { label, value, foot: 'test', to: kpiDrilldownUrl(kpi) })
+        )
+      );
+    assert.ok(renderCard('Total Lead', totals.totalLeads, 'totalLeads').includes('aria-label="Total Lead: 12"'),
       'Total Lead shows the org-wide 12, not the admin\'s own 1');
-    assert.ok(html.includes('aria-label="Open leads: 10 — view details"'));
-    assert.ok(html.includes('aria-label="No Action Alert: 4 — view details"'));
-    assert.ok(html.includes('aria-label="Converted: 2 — view details"'));
+    assert.ok(renderCard('Open leads', totals.open, 'open').includes('aria-label="Open leads: 10"'));
+    assert.ok(renderCard('No Action Alert', totals.noAction, 'noAction').includes('aria-label="No Action Alert: 4"'));
+    assert.ok(renderCard('Converted', totals.converted, 'converted').includes('aria-label="Converted: 2"'));
   });
 });
 
@@ -1132,12 +1161,58 @@ describe('TeamKpiDrilldown — rendering from the resolved level', () => {
 /* ================================================================ */
 
 describe('KPI drill-down — source guards', () => {
-  it('HomeLanding and useCallerTeam run on callerSeesTeam, not the tree fact alone', () => {
-    const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes('callerSeesTeam(overview)'), 'the landing decision uses the sees-a-team rule');
-    assert.ok(!landing.includes('callerHasTeam('), 'no tree-only check remains in the landing');
-    const hook = read('src/modules/team/hooks/useCallerTeam.ts');
-    assert.ok(hook.includes('hasTeam: callerSeesTeam(overview)'), 'the switch gating uses the same rule');
+  it('the enterprise role derives from scope + the direct-reports fact; useCallerTeam is unchanged', () => {
+    // HomeLanding is retired (Enterprise Preview, 2026-11-19): `/`
+    // renders the derived role overview directly, and the landing
+    // decision is now deriveEnterpriseRole (scope + hasTeam) fed by
+    // useEnterpriseRole. useCallerTeam still runs on callerSeesTeam.
+    assert.ok(!fs.existsSync(path.join(repoRoot, 'src/modules/auth/components/HomeLanding.tsx')),
+      'HomeLanding is deleted — no landing redirect any more');
+    assert.ok(!fs.existsSync(path.join(repoRoot, 'src/modules/team/pages/TeamHome.tsx')),
+      'TeamHome is deleted — the enterprise homes replace it');
+    const role = read('src/layouts/enterpriseRole.ts');
+    assert.ok(role.includes("if (role === 'ADMIN' || role === 'SUPERADMIN') return 'admin'"),
+      'admin bypass first');
+    assert.ok(role.includes("if (visibility === 'FullTeam' || visibility === 'Organization') return 'manager'"),
+      'FullTeam / Organization data visibility -> manager');
+    assert.ok(role.includes("if (input.overviewScope === 'Organization') return 'manager'"),
+      'Organization overview scope -> manager');
+    assert.ok(role.includes('if (input.hasDirectReports) return \'teamLead\''),
+      'direct reports -> teamLead');
+    assert.ok(role.includes("return 'agent'"), 'everyone else -> agent');
+    const hook = read('src/layouts/useEnterpriseRole.ts');
+    assert.ok(hook.includes('deriveEnterpriseRole({'), 'the hook derives through the pure function');
+    assert.ok(hook.includes('overviewScope: callerTeam.overview?.scope'), 'the scope comes from the caller-team overview');
+    assert.ok(hook.includes('hasDirectReports: callerHasTeam(callerTeam.overview?.people)'),
+      'the reports fact comes from the overview people (the UM-1 tree fact)');
+    const callerTeam = read('src/modules/team/hooks/useCallerTeam.ts');
+    assert.ok(callerTeam.includes('hasTeam: callerSeesTeam(overview)'), 'useCallerTeam still runs on callerSeesTeam');
+  });
+
+  it('every enterprise home KPI drills through kpiDrilldownUrl with the right key', () => {
+    // The homes render KpiCard with `to={kpiDrilldownUrl(key)}` —
+    // never a hand-built /team/kpi/... string, so the drill-down
+    // URL shape stays in one place.
+    const homes: Record<string, string[]> = {
+      'src/modules/workspace/pages/AdminHome.tsx': ['totalLeads', 'open', 'converted', 'noAction'],
+      'src/modules/workspace/pages/ManagerHome.tsx': ['totalLeads', 'overdue', 'noAction'],
+      'src/modules/workspace/pages/TeamLeadHome.tsx': ['totalLeads', 'dueToday', 'overdue', 'noAction'],
+      'src/modules/workspace/pages/AgentHome.tsx': ['totalLeads', 'dueToday', 'overdue', 'converted'],
+    };
+    for (const [file, keys] of Object.entries(homes)) {
+      const src = read(file);
+      assert.ok(src.includes("from '../../team/utils/kpiDrilldown'"), `${file} imports the drill-down helper`);
+      for (const key of keys) {
+        assert.ok(src.includes(`kpiDrilldownUrl('${key}'`), `${file} drills the ${key} KPI through kpiDrilldownUrl`);
+      }
+      assert.ok(!src.includes('"/team/kpi/'), `${file} never hand-builds a drill-down URL`);
+    }
+    // The agent's KPIs always land on the caller's OWN leads.
+    const agent = read('src/modules/workspace/pages/AgentHome.tsx');
+    for (const key of ['totalLeads', 'dueToday', 'overdue', 'converted']) {
+      assert.ok(agent.includes(`kpiDrilldownUrl('${key}', 'self')`),
+        `AgentHome ${key} drills to person=self`);
+    }
   });
 
   it('the drill-down route exists, gated, under the Team module', () => {

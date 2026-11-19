@@ -1,18 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LayoutDashboard,
-  ClipboardList,
-  ChevronRight,
   ChevronDown,
   LogOut,
   X,
   Bell,
-  Target,
   Lock,
   WifiOff,
-  Plus,
-  MoreHorizontal,
   Menu,
+  CircleHelp,
+  Info,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -28,48 +24,73 @@ import {
   writeSessionCache,
 } from '../modules/shared/api/sessionCache';
 import { markShellStartupSettled, waitForShellStartup } from '../modules/shared/api/startupPriority';
-import { ANY_ROLE, resolveMenuVisibility } from './menuVisibility';
 import { resolveFeatureRouteAccess } from './featureRouteAccess';
-import { buildSidebarGroups } from './sidebarNav';
+import { buildEnterpriseNavGroups, enterpriseLabelForPath, type EnterpriseNavGroup } from './enterpriseNav';
+import { ENTERPRISE_ROLE_LABELS } from './enterpriseRole';
+import { useEnterpriseRole } from './useEnterpriseRole';
 import DhakaClock from './DhakaClock';
 import { usePermissions } from '../modules/shared/hooks/usePermissions';
 
-interface MenuItem {
-  label: string;
-  icon: any;
-  path: string;
-  roles: string[];
-}
-
 /**
- * The five primary destinations are organization-wide: `ANY_ROLE` ('*')
- * mirrors the route registry (featureRouteAccess.ts) so the menu and the
- * page gate can never disagree, and the role codes that live in the
- * database (EMPLOYEE, TEAM_LEAD, MANAGER, SBE, SM, CEO, custom codes) are
- * not silently locked out by a stale enum list. A configured
- * `menuAccess[path]` still wins over this default.
+ * AppLayout — the enterprise shell (Enterprise Preview redesign,
+ * 2026-11-19).
+ * ------------------------------------------------------------------
+ * The sample prototype's shell, rebuilt on LeadFlow's real routes
+ * and real permissions: a 250px sticky white sidebar (brand block,
+ * role-based grouped nav, Help/About footer) and a 70px sticky
+ * topbar (breadcrumb, Dhaka clock, notification bell, profile
+ * chip). The sidebar is a drawer at <=720px with a hamburger;
+ * the old floating nav pill, utility bar and mobile bottom tab
+ * bar are retired with it.
+ *
+ * The sidebar shows exactly ONE role's nav, derived from the
+ * caller's real scope and role (useEnterpriseRole) — never a
+ * switcher. Entries are filtered by the SAME resolvers the router
+ * uses (resolveFeatureRouteAccess for the route module +
+ * canAccess for the functional permission), so a role that cannot
+ * open a page never sees its sidebar entry either.
+ *
+ * Kept verbatim from the old shell: the forced first-login
+ * password reset, the 30-minute session timeout, the notification
+ * bell + panel, the offline badge, the roles-matrix load, the
+ * drawer lifecycle (back button closes it; no in-drawer close or
+ * exit control), and the startup-gate sequencing.
  */
-const PRIMARY_NAV_ITEMS: MenuItem[] = [
-  { label: 'Home', icon: LayoutDashboard, path: '/', roles: [ANY_ROLE] },
-  { label: 'My Work', icon: Target, path: '/workbench', roles: [ANY_ROLE] },
-  { label: 'Add Lead', icon: Plus, path: '/leads/new', roles: [ANY_ROLE] },
-  { label: 'Leads', icon: ClipboardList, path: '/leads', roles: [ANY_ROLE] },
-  { label: 'More', icon: MoreHorizontal, path: '/more', roles: [ANY_ROLE] },
-];
-const MORE_NAV_PATHS = [
-  '/more', '/notifications', '/help', '/about', '/administration',
-  '/settings', '/settings/system', '/settings/performance-diagnostics',
-  '/users', '/leads/upload', '/leads/all', '/activities', '/task-calendar',
-  '/follow-up', '/team', '/execution-intelligence', '/ncp-progress',
-  '/trend-charts', '/campaign-breakdown', '/sales-pipeline',
-];
 
 const ROLE_MENU_TTL_MS = 5 * 60 * 1000;
 const NOTIFICATION_REFRESH_MS = 60_000;
 
+/**
+ * The sidebar's active item: the entry whose path matches the
+ * current pathname — exact, or the longest prefix for deep links
+ * (/leads/123 activates /leads; /team/kpi/overdue activates
+ * /team). Ties (the Admin CONFIGURATION group maps three labels
+ * to /settings/system) resolve to the LAST item in nav order, so
+ * exactly one highlight ever shows and it names the page itself
+ * ("System Settings", not "Status & Pipeline").
+ */
+function activeNavPath(groups: EnterpriseNavGroup[], pathname: string): string | null {
+  let best: { path: string; length: number; order: number } | null = null;
+  let order = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      order += 1;
+      const matches = item.path === '/'
+        ? pathname === '/'
+        : pathname === item.path || pathname.startsWith(`${item.path}/`);
+      if (!matches) continue;
+      if (!best || item.path.length > best.length || (item.path.length === best.length && order > best.order)) {
+        best = { path: item.path, length: item.path.length, order };
+      }
+    }
+  }
+  return best?.path ?? null;
+}
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
   const { canAccess } = usePermissions();
+  const { role: enterpriseRole, loading: roleLoading } = useEnterpriseRole();
   const location = useLocation();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
@@ -208,8 +229,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [location.pathname]);
 
   /**
-   * Left drawer (hamburger) lifecycle: it never survives a navigation, it
-   * closes on Escape, and while open the page behind it must not scroll.
+   * Mobile drawer lifecycle (the sidebar is a drawer only at
+   * <=720px; on desktop it is always visible and this state is
+   * inert): it never survives a navigation, it closes on Escape,
+   * and while open the page behind it must not scroll.
    *
    * Closing is the BACK BUTTON's job: opening the drawer pushes one history
    * entry (same URL, marker state) so the device/browser back gesture pops
@@ -342,7 +365,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     return (
       <div id="forced_reset_container" className="fixed inset-0 bg-[#FDFBF7] z-50 flex items-center justify-center p-6">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="max-w-md w-full bg-white border border-stone-200 p-8 rounded-[12px] shadow-xl space-y-6"
@@ -371,7 +394,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-600">Confirm Password</label>
+              <label className="text-sm font-medium text-slate-700">Confirm Password</label>
               <input
                 type="password"
                 required
@@ -408,35 +431,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const userRoleName = user.role || '';
   const userRoleNormalized = userRoleName.toUpperCase();
   const matchedPermission = rolesPermissions.find(rp => rp.roleId === userRoleName || rp.roleId === userRoleNormalized);
-  const isItemVisible = (item: MenuItem): boolean =>
-    resolveMenuVisibility(userRoleName, matchedPermission, item);
-  const visiblePrimaryItems = PRIMARY_NAV_ITEMS.filter(isItemVisible);
-  const isPrimaryItemActive = (path: string) => {
-    if (path === '/') return location.pathname === '/';
-    if (path === '/workbench') return location.pathname === '/workbench';
-    if (path === '/leads') {
-      return location.pathname === '/leads'
-        || (location.pathname.startsWith('/leads/') && !['/leads/new', '/leads/upload', '/leads/all'].includes(location.pathname));
-    }
-    if (path === '/leads/new') return location.pathname === '/leads/new';
-    return MORE_NAV_PATHS.some(morePath =>
-      location.pathname === morePath || location.pathname.startsWith(`${morePath}/`)
-    );
-  };
 
   /**
-   * Left sidebar contents. Same visibility rule as the router and the
-   * retired More → Reports directory: an entry appears only when BOTH the
-   * route module (Feature Access) and its functional `view` permission allow
-   * the destination — so the drawer can never surface a page the user would
-   * be bounced out of.
+   * Role sidebar contents. Same visibility rule as the router: an
+   * entry appears only when BOTH the route module (Feature Access)
+   * and its functional `view` permission allow the destination —
+   * so the sidebar can never surface a page the user would be
+   * bounced out of. While the role is still deriving, no nav
+   * renders at all (a skeleton instead): showing the agent nav to
+   * a manager for one frame would be a wrong answer, not a loading
+   * state.
    */
-  const sidebarGroups = buildSidebarGroups({
-    canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
-    canAccess,
-  });
-  const isSidebarItemActive = (path: string) =>
-    location.pathname === path || location.pathname.startsWith(`${path}/`);
+  const sidebarGroups = roleLoading
+    ? []
+    : buildEnterpriseNavGroups({
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
+        canAccess,
+        role: enterpriseRole,
+      });
+  const activePath = activeNavPath(sidebarGroups, location.pathname);
+  const crumbLabel = enterpriseLabelForPath(sidebarGroups, location.pathname);
 
   const handleLogout = () => {
     logout();
@@ -444,287 +458,251 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7] flex text-brand-text font-sans">
-      <div className="flex-1 flex flex-col min-w-0 bg-[#FDFBF7]">
-        <header className="sticky top-0 z-30 flex-shrink-0">
-          {/* Hub-style header — mirrors the Learning Hub / shantalife.com
-              shell: a thin right-aligned utility bar above a floating
-              rounded nav pill. Where the Hub's utility bar carries its
-              E-BOOK link and BN|EN switcher, LeadFlow carries the live
-              Asia/Dhaka date + time instead (Mahadi's spec, 2026-11-04);
-              the offline badge keeps the clock company on the left. */}
-          <div className="leadflow-utility-bar">
-            <div className="leadflow-utility-inner">
-              {isOffline && (
-                <span className="mr-auto inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 border border-red-200 text-[11px] font-bold text-red-700" role="status" aria-live="polite">
-                  <WifiOff className="w-3.5 h-3.5" />
-                  Connection degraded
-                </span>
-              )}
-              <DhakaClock className="leadflow-utility-clock" />
-            </div>
+    <div className="ep-shell">
+      <aside
+        id="leadflow-sidebar"
+        className={cn('ep-sidebar', isSidebarOpen && 'open')}
+        aria-label="Sidebar navigation"
+      >
+        <div className="ep-brand">
+          <div className="ep-logo" aria-hidden="true">L</div>
+          <div>
+            <strong>LeadFlow</strong>
+            <small>Sales workspace</small>
           </div>
-          <div className="leadflow-nav-shell">
-            <div className="leadflow-nav-pill">
-          <button
-            type="button"
-            id="leadflow-sidebar-toggle"
-            className={cn('lf-sidebar-toggle', isSidebarOpen && 'is-active')}
-            aria-label="Menu"
-            aria-haspopup="dialog"
-            aria-expanded={isSidebarOpen}
-            aria-controls="leadflow-sidebar"
-            onClick={() => (isSidebarOpen ? closeSidebar() : openSidebar())}
-          >
-            <Menu className="h-[18px] w-[18px]" />
-          </button>
-
-          <div className="flex items-center shrink-0">
-            <img
-              src="https://lh3.googleusercontent.com/d/1Mv6Wn1SLKO9c-fCyEj2G36dzxpSRNOFO"
-              alt="Shanta Life"
-              className="h-7 sm:h-8 w-auto max-w-[112px] sm:max-w-none object-contain"
-              referrerPolicy="no-referrer"
-            />
+        </div>
+        {roleLoading ? (
+          <div className="ep-nav-skeleton" role="status" aria-label="Loading navigation">
+            <div className="ep-skeleton-line" />
+            <div className="ep-skeleton-line" />
+            <div className="ep-skeleton-line" />
+            <div className="ep-skeleton-line" />
           </div>
-          <nav className="leadflow-desktop-nav" aria-label="Primary navigation">
-            {visiblePrimaryItems.map(item => {
-              const active = isPrimaryItemActive(item.path);
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  aria-current={active ? 'page' : undefined}
-                  className={cn('leadflow-desktop-nav-item', active && 'is-active', item.path === '/leads/new' && 'is-primary')}
-                >
-                  <item.icon className="h-4 w-4" strokeWidth={active ? 2.4 : 1.8} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-2 md:gap-3">
-             <div className="flex items-center gap-1 md:gap-2">
-                <div className="relative">
-                   <button
-                     onClick={() => setIsNotifOpen(!isNotifOpen)}
-                     className="relative p-2.5 border border-stone-100 rounded-[10px] text-stone-500 hover:text-[#978C21] hover:bg-stone-50 transition-all duration-150 hover:border-stone-200 bg-white shadow-sm"
-                     aria-label="Notifications"
-                     aria-haspopup="dialog"
-                     aria-expanded={isNotifOpen}
-                   >
-                     <Bell className="w-[18px] h-[18px]" />
-                     {unreadCount > 0 && (
-                       <span className="absolute -top-1 -right-1 bg-[#F3702B] text-white text-[10px] font-bold h-5 w-5 rounded-full flex items-center justify-center shadow-sm border-2 border-white">
-                         {unreadCount > 9 ? '9+' : unreadCount}
-                       </span>
-                     )}
-                   </button>
-
-                   {isNotifOpen && (
-                     <>
-                       <div 
-                         className="fixed inset-0 z-40" 
-                         onClick={() => setIsNotifOpen(false)}
-                         aria-hidden="true"
-                       />
-                       <div className="absolute right-0 mt-2 w-[340px] max-w-[92vw] bg-white border border-stone-100 rounded-[12px] shadow-xl py-3 z-50 text-left max-h-[420px] overflow-hidden flex flex-col" role="dialog" aria-label="Notifications">
-                         <div className="px-4 py-2.5 border-b border-stone-100 flex justify-between items-center">
-                           <span className="text-sm font-bold text-stone-800">Notifications {unreadCount > 0 && `(${unreadCount})`}</span>
-                           <button onClick={() => setIsNotifOpen(false)} className="p-1 rounded-full hover:bg-stone-50" aria-label="Close"><X className="w-4 h-4 text-stone-400" /></button>
-                          </div>
-                          {notifications.length > 0 && (
-                            <div className="px-3 py-2 border-b border-stone-50 flex items-center justify-between bg-[#FFFCF8]">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleMarkAllRead(); }}
-                                className="text-xs font-semibold text-[#978C21] hover:underline cursor-pointer px-2 py-1 rounded"
-                              >
-                                Mark All Read
-                              </button>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAll(); }}
-                                className="text-xs font-semibold text-red-600 hover:underline cursor-pointer px-2 py-1 rounded"
-                              >
-                                Delete All
-                              </button>
-                            </div>
-                          )}
-
-                         <div className="divide-y divide-stone-50 overflow-y-auto flex-1">
-                           {notifications.length === 0 ? (
-                             <div className="px-4 py-10 text-center">
-                               <div className="w-10 h-10 rounded-full bg-stone-50 border border-stone-100 flex items-center justify-center mx-auto mb-3"><Bell className="w-5 h-5 text-stone-300" /></div>
-                               <p className="text-sm font-medium text-stone-500">No notifications yet</p>
-                             </div>
-                           ) : (
-                             notifications.map((notif) => (
-                               <div 
-                                 key={notif.id} 
-                                 onClick={() => { handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); }}
-                                 className={cn(
-                                   "p-4 hover:bg-stone-50 transition-colors cursor-pointer text-left",
-                                   !notif.read ? "bg-[#978C21]/[0.06] border-l-[3px] border-l-[#978C21]" : ""
-                                 )}
-                                 role="button"
-                                 tabIndex={0}
-                                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); }}}
-                               >
-                                 <div className="flex justify-between items-start gap-2">
-                                    <h5 className="text-sm font-semibold text-stone-800 leading-tight">{notif.title}</h5>
-                                    {!notif.read && <span className="w-2 h-2 rounded-full bg-[#978C21] mt-1.5 shrink-0" aria-label="Unread" />}
-                                 </div>
-                                 <p className="text-[13px] text-stone-500 mt-1.5 leading-relaxed line-clamp-2">{notif.message}</p>
-                                 <span className="text-xs text-stone-400 mt-2 block font-mono">
-                                   {new Date(notif.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
-                                 </span>
-                               </div>
-                             ))
-                           )}
-                         </div>
-                       </div>
-                     </>
-                   )}
-                </div>
-                
-                <div className="flex items-center gap-1">
-                  {/* Profile chip — mirrors the Learning Hub: avatar +
-                      name, and the chip itself leads to the Profile page
-                      (/settings). Sign-out stays in the menu beside it. */}
-                  <Link
-                    to="/settings"
-                    className="leadflow-profile-chip"
-                    aria-label={`${user.name} · Profile`}
-                    title={user.name}
-                  >
-                    <span className="w-8 h-8 rounded-full bg-stone-800 flex items-center justify-center overflow-hidden shrink-0">
-                      {user.avatarUrl ? (
-                        <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      ) : (
-                        <span className="text-white font-bold text-[13px]">
-                          {user.name.charAt(0).toUpperCase()}
-                        </span>
-                      )}
-                    </span>
-                    <span className="hidden md:block max-w-[140px] truncate text-[12.5px] font-bold text-stone-800">
-                      {user.name}
-                    </span>
-                  </Link>
-                  <div className="relative group">
-                  <button
-                    onClick={() => setIsUserMenuOpen((open) => !open)}
-                    className="p-1.5 rounded-full hover:bg-stone-50 transition-colors"
-                    aria-haspopup="menu"
-                    aria-expanded={isUserMenuOpen}
-                    aria-label="User menu"
-                  >
-                    <ChevronDown className="w-4 h-4 text-stone-400 group-hover:text-stone-600 transition-colors" />
-                  </button>
-                  {isUserMenuOpen && (
-                    <button
-                      type="button"
-                      className="fixed inset-0 z-40 cursor-default"
-                      aria-label="Close user menu"
-                      onClick={() => setIsUserMenuOpen(false)}
-                    />
-                  )}
-                  <div className={cn(
-                    "absolute right-0 top-[110%] w-64 bg-white rounded-[12px] shadow-xl border border-stone-100 py-2 transition-all duration-150 transform origin-top-right z-50 overflow-hidden",
-                    isUserMenuOpen
-                      ? "opacity-100 visible"
-                      : "opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible",
-                  )} role="menu" aria-label="User menu">
-                    <div className="px-5 py-4 border-b border-stone-50">
-                      <p className="text-xs text-stone-400 font-medium">Logged in as</p>
-                      <p className="text-sm text-stone-800 font-bold truncate mt-1">{user.name}</p>
-                      <p className="text-xs text-stone-500 mt-1 truncate">{user.email}</p>
-                      <span className="inline-flex mt-2 px-2 py-0.5 bg-[#978C21]/10 text-[#978C21] rounded-full text-[11px] font-bold border border-[#978C21]/20">{user.role}</span>
-                    </div>
-                    <button 
-                      onClick={handleLogout}
-                      className="w-full px-5 py-3 flex items-center gap-3 text-red-600 hover:bg-red-50 text-sm font-semibold transition-colors text-left"
-                      role="menuitem"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Logout
-                    </button>
-                  </div>
-                  </div>
-                </div>
-             </div>
-          </div>
-            </div>
-          </div>
-        </header>
-
-        <main className="leadflow-main flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
-          {children}
-        </main>
-      </div>
-      {/* ----------------------------------------------------------------
-          Left sidebar (drawer). It replaces More → Reports: the analytics
-          pages, the workspace pages, Roadshow Follow-up and the Sales
-          Pipeline live here, permission-filtered, one tap from anywhere.
-          Nothing listed here is duplicated in More.
-          ---------------------------------------------------------------- */}
-      {isSidebarOpen && (
-        <>
-          <div
-            className="lf-sidebar-scrim is-open"
-            onClick={closeSidebar}
-            aria-hidden="true"
-          />
-          <aside
-            id="leadflow-sidebar"
-            className="lf-sidebar is-open"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Menu"
-          >
-            <div className="lf-sidebar-head">
-              <span className="lf-sidebar-title">Menu</span>
-            </div>
-            <nav className="lf-sidebar-body" aria-label="Sidebar navigation">
-              {sidebarGroups.map(group => (
-                <div key={group.title} className="lf-sidebar-group">
-                  <p className="lf-sidebar-group-title">{group.title}</p>
+        ) : (
+          <nav className="ep-nav" aria-label="Primary navigation">
+            {sidebarGroups.map(group => (
+              <div key={group.title}>
+                <div className="ep-navlabel">{group.title}</div>
+                <div className="ep-navgroup">
                   {group.items.map(item => {
-                    const active = isSidebarItemActive(item.path);
+                    const active = item.path === activePath;
                     return (
                       <Link
-                        key={item.path}
+                        key={`${group.title}:${item.path}:${item.label}`}
                         to={item.path}
-                        className={cn('lf-sidebar-item', active && 'is-active')}
+                        className={cn('ep-navitem', active && 'active')}
                         aria-current={active ? 'page' : undefined}
-                        onClick={() => setIsSidebarOpen(false)}
                       >
-                        <span className="lf-sidebar-item-icon">
-                          <item.icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+                        <span className="ep-navico" aria-hidden="true">
+                          <item.icon className="h-[19px] w-[19px]" strokeWidth={1.9} />
                         </span>
-                        <span className="lf-sidebar-item-copy">
-                          <strong>{item.label}</strong>
-                          <small>{item.description}</small>
-                        </span>
-                        <ChevronRight className="lf-sidebar-item-arrow" />
+                        {item.label}
                       </Link>
                     );
                   })}
                 </div>
-              ))}
-              {sidebarGroups.length === 0 && (
-                <p className="lf-sidebar-empty">No additional pages are enabled for your role.</p>
-              )}
-            </nav>
-          </aside>
-        </>
+              </div>
+            ))}
+            {sidebarGroups.length === 0 && (
+              <p className="ep-nav-empty">No pages are enabled for your role.</p>
+            )}
+          </nav>
+        )}
+        <div className="ep-sidefoot">
+          <Link to="/help" className="ep-sidefoot-link">
+            <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" /> Help
+          </Link>
+          <Link to="/about" className="ep-sidefoot-link">
+            <Info className="h-3.5 w-3.5" aria-hidden="true" /> About
+          </Link>
+        </div>
+      </aside>
+      {isSidebarOpen && (
+        <div
+          className="ep-sidebar-scrim"
+          onClick={closeSidebar}
+          aria-hidden="true"
+        />
       )}
 
-      <nav className="leadflow-mobile-nav" aria-label="Primary mobile navigation">
-        {visiblePrimaryItems.map(item => {
-          const active = isPrimaryItemActive(item.path);
-          return <Link key={item.path} to={item.path} aria-current={active ? "page" : undefined} className={cn("leadflow-mobile-nav-item", item.path === "/leads/new" && "leadflow-mobile-nav-item--primary", active && "is-active")}><item.icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.4 : 1.8} /><span>{item.label}</span></Link>;
-        })}
-      </nav>
+      <div className="ep-main">
+        <header className="ep-topbar">
+          <div className="ep-topbar-left">
+            <button
+              type="button"
+              id="leadflow-sidebar-toggle"
+              className="ep-hamburger"
+              aria-label="Menu"
+              aria-haspopup="dialog"
+              aria-expanded={isSidebarOpen}
+              aria-controls="leadflow-sidebar"
+              onClick={() => (isSidebarOpen ? closeSidebar() : openSidebar())}
+            >
+              <Menu className="h-[18px] w-[18px]" />
+            </button>
+            <div className="ep-crumb">
+              Workspace / <b>{crumbLabel}</b>
+            </div>
+          </div>
+          <div className="ep-topright">
+            {isOffline && (
+              <span className="ep-offline" role="status" aria-live="polite">
+                <WifiOff className="w-3.5 h-3.5" />
+                Connection degraded
+              </span>
+            )}
+            <DhakaClock className="ep-topbar-clock" />
+            <div className="relative">
+              <button
+                onClick={() => setIsNotifOpen(!isNotifOpen)}
+                className="ep-bell"
+                aria-label="Notifications"
+                aria-haspopup="dialog"
+                aria-expanded={isNotifOpen}
+              >
+                <Bell className="w-[18px] h-[18px]" />
+                {unreadCount > 0 && (
+                  <span className="ep-bell-badge">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {isNotifOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsNotifOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div className="absolute right-0 mt-2 w-[340px] max-w-[92vw] bg-white border border-stone-100 rounded-[12px] shadow-xl py-3 z-50 text-left max-h-[420px] overflow-hidden flex flex-col" role="dialog" aria-label="Notifications">
+                    <div className="px-4 py-2.5 border-b border-stone-100 flex justify-between items-center">
+                      <span className="text-sm font-bold text-stone-800">Notifications {unreadCount > 0 && `(${unreadCount})`}</span>
+                      <button onClick={() => setIsNotifOpen(false)} className="p-1 rounded-full hover:bg-stone-50" aria-label="Close"><X className="w-4 h-4 text-stone-400" /></button>
+                    </div>
+                    {notifications.length > 0 && (
+                      <div className="px-3 py-2 border-b border-stone-50 flex items-center justify-between bg-[#FFFCF8]">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMarkAllRead(); }}
+                          className="text-xs font-semibold text-[#978C21] hover:underline cursor-pointer px-2 py-1 rounded"
+                        >
+                          Mark All Read
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteAll(); }}
+                          className="text-xs font-semibold text-red-600 hover:underline cursor-pointer px-2 py-1 rounded"
+                        >
+                          Delete All
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="divide-y divide-stone-50 overflow-y-auto flex-1">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-10 text-center">
+                          <div className="w-10 h-10 rounded-full bg-stone-50 border border-stone-100 flex items-center justify-center mx-auto mb-3"><Bell className="w-5 h-5 text-stone-300" /></div>
+                          <p className="text-sm font-medium text-stone-500">No notifications yet</p>
+                        </div>
+                      ) : (
+                        notifications.map((notif) => (
+                          <div
+                            key={notif.id}
+                            onClick={() => { handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); }}
+                            className={cn(
+                              "p-4 hover:bg-stone-50 transition-colors cursor-pointer text-left",
+                              !notif.read ? "bg-[#978C21]/[0.06] border-l-[3px] border-l-[#978C21]" : ""
+                            )}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); } }}
+                          >
+                            <div className="flex justify-between items-start gap-2">
+                              <h5 className="text-sm font-semibold text-stone-800 leading-tight">{notif.title}</h5>
+                              {!notif.read && <span className="w-2 h-2 rounded-full bg-[#978C21] mt-1.5 shrink-0" aria-label="Unread" />}
+                            </div>
+                            <p className="text-[13px] text-stone-500 mt-1.5 leading-relaxed line-clamp-2">{notif.message}</p>
+                            <span className="text-xs text-stone-400 mt-2 block font-mono">
+                              {new Date(notif.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1">
+              {/* Profile chip — the sample's avatar + name + role, and
+                  the chip itself leads to the Profile page
+                  (/settings). Sign-out stays in the menu beside it. */}
+              <Link
+                to="/settings"
+                className="ep-profile-chip"
+                aria-label={`${user.name} · Profile`}
+                title={user.name}
+              >
+                <span className="ep-avatar" aria-hidden="true">
+                  {user.avatarUrl ? (
+                    <img src={user.avatarUrl} alt="" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                  ) : (
+                    user.name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase()
+                  )}
+                </span>
+                <span className="ep-userlabel">
+                  <span>{user.name}</span>
+                  <small>{roleLoading ? '' : ENTERPRISE_ROLE_LABELS[enterpriseRole]}</small>
+                </span>
+              </Link>
+              <div className="relative group">
+                <button
+                  onClick={() => setIsUserMenuOpen((open) => !open)}
+                  className="p-1.5 rounded-full hover:bg-stone-50 transition-colors"
+                  aria-haspopup="menu"
+                  aria-expanded={isUserMenuOpen}
+                  aria-label="User menu"
+                >
+                  <ChevronDown className="w-4 h-4 text-stone-400 group-hover:text-stone-600 transition-colors" />
+                </button>
+                {isUserMenuOpen && (
+                  <button
+                    type="button"
+                    className="fixed inset-0 z-40 cursor-default"
+                    aria-label="Close user menu"
+                    onClick={() => setIsUserMenuOpen(false)}
+                  />
+                )}
+                <div className={cn(
+                  "absolute right-0 top-[110%] w-64 bg-white rounded-[12px] shadow-xl border border-stone-100 py-2 transition-all duration-150 transform origin-top-right z-50 overflow-hidden",
+                  isUserMenuOpen
+                    ? "opacity-100 visible"
+                    : "opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible",
+                )} role="menu" aria-label="User menu">
+                  <div className="px-5 py-4 border-b border-stone-50">
+                    <p className="text-xs text-stone-400 font-medium">Logged in as</p>
+                    <p className="text-sm text-stone-800 font-bold truncate mt-1">{user.name}</p>
+                    <p className="text-xs text-stone-500 mt-1 truncate">{user.email}</p>
+                    <span className="inline-flex mt-2 px-2 py-0.5 bg-[#978C21]/10 text-[#978C21] rounded-full text-[11px] font-bold border border-[#978C21]/20">{user.role}</span>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="w-full px-5 py-3 flex items-center gap-3 text-red-600 hover:bg-red-50 text-sm font-semibold transition-colors text-left"
+                    role="menuitem"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Logout
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="ep-content">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

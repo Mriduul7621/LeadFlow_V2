@@ -30,11 +30,22 @@ const ROOT = process.cwd();
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 
 const PAGES = [
-  'src/modules/dashboard/pages/Dashboard.tsx',
   'src/modules/workbench/pages/DailyWorkbench.tsx',
   'src/modules/leads/pages/AllLeads.tsx',
   'src/modules/roadshows/pages/RoadshowPage.tsx',
   'src/modules/dashboard/pages/SalesPipelinePage.tsx',
+];
+
+// Enterprise Preview (2026-11-19): Dashboard.tsx is deleted and the
+// "no access" wiring split in two — the shared home hook carries the
+// classifier + the forbidden flag, and the four role homes render the
+// empty state from the hook's flag.
+const HOME_HOOK = 'src/modules/workspace/hooks/useEnterpriseHomeData.ts';
+const ROLE_HOMES = [
+  'src/modules/workspace/pages/AdminHome.tsx',
+  'src/modules/workspace/pages/ManagerHome.tsx',
+  'src/modules/workspace/pages/TeamLeadHome.tsx',
+  'src/modules/workspace/pages/AgentHome.tsx',
 ];
 
 describe('F3 — "no access yet" empty state', () => {
@@ -83,11 +94,24 @@ describe('F3 — "no access yet" empty state', () => {
       assert.ok(src.includes('setForbidden(false)'), `${page} must clear the flag on retry/refresh`);
       assert.ok(/setForbidden\(true\)/.test(src), `${page} must set the flag on a 403`);
     }
+
+    // The role homes split the wiring: the shared hook carries the
+    // classifier + the flag, and each home renders the empty state.
+    const hook = read(HOME_HOOK);
+    assert.ok(hook.includes("from '../../shared/api/forbidden'"), `${HOME_HOOK} must import the shared classifier`);
+    assert.ok(hook.includes('isForbiddenError('), `${HOME_HOOK} must classify the failure`);
+    assert.ok(hook.includes('setForbidden(false)'), `${HOME_HOOK} must clear the flag on retry/refresh`);
+    assert.ok(/setForbidden\(true\)/.test(hook), `${HOME_HOOK} must set the flag on a 403`);
+    for (const home of ROLE_HOMES) {
+      assert.ok(read(home).includes('<NoAccessYet'), `${home} must render the empty state`);
+    }
   });
 
   it('D. a real failure still shows the retry message (never "no access")', () => {
     const expectations: Record<string, string> = {
-      'src/modules/dashboard/pages/Dashboard.tsx': "setError('Dashboard data could not be loaded.')",
+      // Enterprise Preview: the dashboard failure message moved from
+      // Dashboard.tsx's setError into the home hook's setMetricsError.
+      [HOME_HOOK]: "setMetricsError('Dashboard data could not be loaded.')",
       'src/modules/workbench/pages/DailyWorkbench.tsx': "setError('Daily work could not be loaded.')",
       'src/modules/leads/pages/AllLeads.tsx': "toast.error('Initialization matrix sync failure')",
       'src/modules/roadshows/pages/RoadshowPage.tsx': "setLoadError(error instanceof Error ? error.message : 'Roadshows could not be loaded.')",
@@ -109,8 +133,13 @@ describe('F3 — "no access yet" empty state', () => {
   it('E. the empty state never hides a page the server DID answer', () => {
     // Guard against the tempting shortcut: `forbidden` may gate content only
     // in branches that already existed for errors/loading, not the whole page.
-    const dash = read('src/modules/dashboard/pages/Dashboard.tsx');
-    assert.ok(dash.includes('{forbidden ? (\n        <NoAccessYet'), 'the dashboard swaps the error card, nothing else');
+    // Enterprise Preview: the role homes early-return the empty state
+    // (the hook's flag is only ever set when the metrics read was
+    // denied, never when the server answered), and the pipeline still
+    // swaps the error card.
+    for (const home of ROLE_HOMES) {
+      assert.ok(read(home).includes('if (forbidden) return <NoAccessYet'), `${home} must early-return the empty state on forbidden`);
+    }
     const pipeline = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
     assert.ok(pipeline.includes('{forbidden ? (\n        <NoAccessYet'), 'the pipeline swaps the error card');
   });

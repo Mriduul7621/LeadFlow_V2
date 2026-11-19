@@ -25,9 +25,14 @@
  *      403 without the grant.
  *   6. Rendering (SSR, repo style) — the all-zero people level,
  *      the zero leaf (name + employee ID + 0 count + message),
- *      Entered dates on No Action rows, the alert-styled card.
+ *      Entered dates on No Action rows, the enterprise KpiCard
+ *      rendering the new cards as alert-styled links
+ *      (TeamHomeContent is retired — the Enterprise Preview homes
+ *      render KpiCard, see section 7).
  *   7. Source guards — the shared predicate module, the probe,
- *      no count-filter anywhere in the drill-down path. (The
+ *      no count-filter anywhere in the drill-down path, and the
+ *      enterprise homes wiring the new cards (Total Lead, No
+ *      Action Alert) through kpiDrilldownUrl. (The
  *      degraded-schema test — without lead_activities /
  *      status_history — is the LAST test of section 2–5, since it
  *      drops objects.)
@@ -58,11 +63,12 @@ import {
   KPI_KEYS,
   KPI_META,
   isKpiKey,
+  kpiDrilldownUrl,
   kpiValueFor,
   resolveKpiLevel,
   sortKpiRows,
 } from '../../src/modules/team/utils/kpiDrilldown';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { KpiCard } from '../../src/modules/workspace/components/EnterprisePrimitives';
 import {
   TeamKpiDrilldownContent,
   type KpiLeadsResponse,
@@ -762,21 +768,32 @@ describe('new KPI cards — rendering (never-empty rule)', () => {
     assert.ok(html.includes('Entered 10 Nov 2026'), 'the entry date renders in Dhaka');
   });
 
-  it('Team Home renders all seven cards — No Action Alert as an alert', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(
-        MemoryRouter,
-        null,
-        React.createElement(TeamHomeContent, { people: treePeople, scope: 'Team' })
-      )
-    );
-    for (const kpi of ['totalLeads', 'todayCollection', 'noAction']) {
-      assert.ok(html.includes(`href="/team/kpi/${kpi}"`), `the ${kpi} card links to its drill-down`);
-    }
-    assert.ok(html.includes('No Action Alert'), 'the alert card is labelled');
-    assert.ok(html.includes('Total Lead') && html.includes('Today Lead Collection'), 'the new cards are labelled');
-    // Totals render even at 0: the all-zero member's team still shows
-    // every card (checked via the labels above, not hidden cards).
+  it('the enterprise KpiCard renders the new cards — No Action Alert as an alert-toned link', () => {
+    // TeamHomeContent is retired (Enterprise Preview, 2026-11-19):
+    // the role homes render the shared KpiCard primitive with
+    // `to={kpiDrilldownUrl(key)}`, and the No Action Alert card
+    // carries the alert tone. Pin the primitive here; the per-home
+    // wiring is pinned in the section 7 source guards.
+    const totals = summarizeTeamTotals(treePeople);
+    const renderCard = (label: string, value: number, kpi: 'totalLeads' | 'todayCollection' | 'noAction', tone?: 'orange') =>
+      renderToStaticMarkup(
+        React.createElement(
+          MemoryRouter,
+          null,
+          React.createElement(KpiCard, { label, value, foot: 'test', tone, to: kpiDrilldownUrl(kpi) })
+        )
+      );
+    const totalLead = renderCard('Total Lead', totals.totalLeads, 'totalLeads');
+    assert.ok(totalLead.includes('href="/team/kpi/totalLeads"'), 'the Total Lead card links to its drill-down');
+    assert.ok(totalLead.includes('aria-label="Total Lead: 60"'), 'the Total Lead card shows the summed total');
+    const today = renderCard('Today Lead Collection', totals.todayCollection, 'todayCollection');
+    assert.ok(today.includes('href="/team/kpi/todayCollection"'), 'the Today Lead Collection card links to its drill-down');
+    assert.ok(today.includes('aria-label="Today Lead Collection: 9"'));
+    const alert = renderCard('No Action Alert', totals.noAction, 'noAction', 'orange');
+    assert.ok(alert.includes('href="/team/kpi/noAction"'), 'the No Action Alert card links to its drill-down');
+    assert.ok(alert.includes('No Action Alert'), 'the alert card is labelled');
+    assert.ok(alert.includes('class="ep-trend warn"'), 'the alert card carries the warn trend class');
+    assert.ok(alert.includes('aria-label="No Action Alert: 5"'));
   });
 });
 
@@ -810,6 +827,27 @@ describe('new KPI cards — source guards', () => {
     assert.ok(page.includes('level.rows.map('), 'the people level maps every row');
     assert.ok(!page.includes('level.rows.filter('), 'no row is filtered out of the people level');
     assert.ok(page.includes('No leads for this KPI yet'), 'the all-zero line exists');
+  });
+
+  it('the enterprise homes wire the new cards (Total Lead, No Action Alert) through kpiDrilldownUrl', () => {
+    // TeamHomeContent is retired (Enterprise Preview, 2026-11-19):
+    // the new cards now live on the role homes as KpiCard links.
+    // Total Lead is a KPI on Admin, Manager, Team Lead and Agent;
+    // No Action Alert is a KPI on Team Lead and an attention-row
+    // drill-down on Admin and Manager.
+    const admin = read('src/modules/workspace/pages/AdminHome.tsx');
+    assert.ok(admin.includes("kpiDrilldownUrl('totalLeads')"), 'AdminHome Total leads KPI drills down');
+    assert.ok(admin.includes("kpiDrilldownUrl('noAction')"), 'AdminHome No Action attention row drills down');
+    assert.ok(admin.includes('label="Total leads"'), 'AdminHome labels the card Total leads');
+    const manager = read('src/modules/workspace/pages/ManagerHome.tsx');
+    assert.ok(manager.includes("kpiDrilldownUrl('totalLeads')"), 'ManagerHome Managed leads KPI drills down');
+    assert.ok(manager.includes("kpiDrilldownUrl('noAction')"), 'ManagerHome No Action attention row drills down');
+    const teamLead = read('src/modules/workspace/pages/TeamLeadHome.tsx');
+    assert.ok(teamLead.includes('label="No Action Alert"'), 'TeamLeadHome carries the No Action Alert KPI card');
+    assert.ok(teamLead.includes("kpiDrilldownUrl('noAction')"), 'TeamLeadHome No Action Alert KPI drills down');
+    assert.ok(teamLead.includes("kpiDrilldownUrl('totalLeads')"), 'TeamLeadHome Team leads KPI drills down');
+    const agent = read('src/modules/workspace/pages/AgentHome.tsx');
+    assert.ok(agent.includes("kpiDrilldownUrl('totalLeads', 'self')"), 'AgentHome My leads drills to the caller\'s own leads');
   });
 
   it('the demo fallback documents its no-action proxy', () => {

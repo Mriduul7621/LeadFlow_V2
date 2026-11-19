@@ -683,8 +683,16 @@ describe('Performance & latency hardening — client source guards', () => {
     // 5. Case handling: raw and normalized role names both match.
     assert.equal(resolveMenuVisibility('employee', undefined, itemInRoles), true);
 
-    // And the layout still delegates its single check to this function.
-    assert.ok(LAYOUT().includes('resolveMenuVisibility('), 'AppLayout must use the extracted visibility check');
+    // And the layout still delegates its single check to the extracted
+    // visibility machinery. Enterprise Preview (2026-11-19): AppLayout
+    // no longer calls resolveMenuVisibility directly — the sidebar nav
+    // builder filters through resolveFeatureRouteAccess, which itself
+    // delegates to resolveMenuVisibility (verified below), so the
+    // layout still never inlines its own visibility logic.
+    assert.ok(LAYOUT().includes('resolveFeatureRouteAccess('), 'AppLayout must use the extracted route-access check');
+    const featureAccess = read('src/layouts/featureRouteAccess.ts');
+    assert.ok(featureAccess.includes('resolveMenuVisibility('),
+      'resolveFeatureRouteAccess must still delegate to the menu-visibility check');
   });
 
   it('E. notification mutations refresh DB-backed state + session cache (client)', () => {

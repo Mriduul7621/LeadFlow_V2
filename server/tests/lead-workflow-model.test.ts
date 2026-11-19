@@ -45,32 +45,33 @@ describe('Lead workflow model', () => {
   });
 
   it('keeps routes and internal feature keys while renaming visible labels', () => {
-    const layout = read('src/layouts/AppLayout.tsx');
+    // Enterprise Preview (2026-11-19): the five primary shell tabs are
+    // retired — the sidebar nav now lives in enterpriseNav.ts, with the
+    // sample's labels. This guard still protects the ROUTES and the
+    // internal feature keys, which are unchanged. The legacy names still
+    // live in the translations and the role-editor feature catalog
+    // asserted below.
+    const nav = read('src/layouts/enterpriseNav.ts');
     const translations = read('src/modules/shared/utils/translations.ts');
     const roleEditor = read('src/modules/users/pages/UserManagement.tsx');
     const app = read('src/App.tsx');
 
-    // The visible shell labels were simplified by the mobile navigation
-    // redesign (PR #52) — this guard protects the ROUTES and the internal
-    // feature keys, which are unchanged. The legacy names still live in the
-    // translations and the role-editor feature catalog asserted below.
     for (const [label, route] of [
-      ['Home', '/'],
-      ['My Work', '/workbench'],
+      ['Overview', '/'],
+      ['Follow-up Queue', '/workbench'],
       ['Add Lead', '/leads/new'],
+      ['My Leads', '/leads'],
       ['Leads', '/leads'],
-      ['More', '/more'],
     ] as const) {
       assert.match(
-        layout,
+        nav,
         new RegExp(`label: '${label}'[^}]*path: '${route}'`),
-        `shell tab ${label} must keep route ${route}`,
+        `sidebar item ${label} must keep route ${route}`,
       );
     }
-    assert.ok(
-      layout.indexOf("path: '/leads/new'") < layout.indexOf("path: '/leads'"),
-      'shell order must stay Add Lead → Leads',
-    );
+    // The /more directory page keeps its route even though the new shell
+    // gives it no sidebar entry (every destination is reachable elsewhere).
+    assert.ok(app.includes("path: '/more'"), 'the /more route must survive the shell redesign');
     assert.ok(translations.includes('navLeadTracking: "Lead Workspace"'));
     assert.ok(translations.includes('navAllLeads: "Lead Pool"'));
     assert.match(roleEditor, /key: 'lead_tracking',[\s\S]*label: 'Lead Workspace'/);

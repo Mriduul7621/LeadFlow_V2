@@ -23,20 +23,34 @@
  * from both the browser bundle and the server runtime graph.
  */
 
-/** Field executive — a frontline seller works their own pipeline. */
+/**
+ * Field executive — a frontline seller works their own pipeline.
+ *
+ * Enterprise Preview (2026-11-19): `reports.view` is now part of the
+ * field default. The sample's Agent nav carries MY PERFORMANCE →
+ * Performance (/execution-intelligence) and NCP Progress
+ * (/ncp-progress), and both pages are gated on the canonical
+ * `reports.view` grant (the server permission sheet maps their
+ * feature codes onto it, and the client route fallback derives its
+ * insight list from this table). Without the grant the agent's own
+ * performance pages would be closed to them. The grant is READ-only
+ * and own-scope: the endpoints still return only the caller's own
+ * leads, and an admin can revoke it per role from Roles & Access.
+ */
 const FIELD_EXEC = [
   'dashboard.view',
   'leads.view', 'leads.create', 'leads.edit',
   'campaigns.view', 'products.view',
   'roadshows.view', 'notifications.view',
+  'reports.view',
 ];
 
-/** Team lead — runs a downline: assignment + team/report reads. */
+/** Team lead — runs a downline: assignment + team reads. (`reports.view` comes via FIELD_EXEC since 2026-11-19.) */
 const TEAM_LEAD = [
   ...FIELD_EXEC,
   'leads.assign',
   'roadshows.create', 'roadshows.edit',
-  'teams.view', 'reports.view',
+  'teams.view',
 ];
 
 /** Manager — oversees full teams, transfers and exports. */

@@ -28,11 +28,18 @@
  *     explicit target for the default landing to override — the guards
  *     in section 4 pin that this PR did not change that either.
  *
+ * Enterprise Preview (2026-11-19): HomeLanding.tsx is deleted and `/`
+ * renders EnterpriseHome directly — no landing redirect, no
+ * Workbench-first bounce. The pure decision (resolveHomePath, section 1)
+ * and the marker service (section 2) survive untouched as contracts;
+ * the HomeLanding rendering section is deleted with the component, and
+ * the source guards (section 4) now pin the EnterpriseHome root.
+ *
  * Sections:
  *   1. resolveHomePath — the pure landing decision per role class.
  *   2. homeLanding marker — once-per-session lifecycle.
- *   3. HomeLanding rendering (renderToStaticMarkup, repo style).
- *   4. Source guards — wiring (root wraps Dashboard in HomeLanding,
+ *   3. (deleted with HomeLanding.tsx — the component no longer exists)
+ *   4. Source guards — wiring (root renders EnterpriseHome directly,
  *      activateSession re-arms + still navigates to `/`), and the
  *      unchanged surroundings (Workbench route, FeatureGate fallback,
  *      unauthenticated -> /login, no return-URL mechanism).
@@ -42,8 +49,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
   DASHBOARD_HOME_PATH,
@@ -58,8 +63,6 @@ import {
   resetHomeLanding,
 } from '../../src/modules/auth/services/homeLanding';
 import { resetSessionCacheForTests } from '../../src/modules/shared/api/sessionCache';
-import { useAuthStore } from '../../src/modules/auth/store/authStore';
-import HomeLanding from '../../src/modules/auth/components/HomeLanding';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const read = (rel: string) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -145,43 +148,27 @@ describe('homeLanding marker — once-per-session lifecycle', () => {
 });
 
 /* ================================================================ */
-/* 3. HomeLanding rendering                                          */
+/* 3. (deleted — HomeLanding.tsx no longer exists)                   */
 /* ================================================================ */
 
-describe('HomeLanding — rendering outcomes', () => {
-  beforeEach(() => {
-    resetSessionCacheForTests();
-    useAuthStore.setState({ user: null, token: null, isAuthenticated: false, isInitialized: true });
-  });
-
-  // Rendering note (same constraint FeatureGate's tests live with):
-  // zustand's SSR snapshot is the store's INITIAL state, so a static
-  // render always sees the logged-out store — the interactive outcomes
-  // (placeholder while the matrix loads, Navigate on a Workbench
-  // decision, children once consumed) are therefore pinned by the pure
-  // decision tests (section 1), the marker lifecycle (section 2) and
-  // the source guards (section 4), exactly how this suite covers
-  // FeatureGate. What SSR CAN prove is the defensive fall-through:
-  it('falls through to the Dashboard when there is no user (unreachable above ProtectedRoute)', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(HomeLanding, null, React.createElement('div', null, 'DASHBOARD_BODY'))
-    );
-    assert.ok(html.includes('DASHBOARD_BODY'), 'no user -> children render verbatim');
-    assert.ok(!html.includes('Checking access'), 'no placeholder on the fall-through');
-  });
-});
+// The HomeLanding rendering section died with the component
+// (Enterprise Preview 2026-11-19): `/` renders EnterpriseHome
+// directly, so there is no wrapper left to render. The pure decision
+// (section 1) and the marker lifecycle (section 2) still pin the
+// surviving contracts, and section 4 pins the new root wiring.
 
 /* ================================================================ */
 /* 4. Source guards — wiring and unchanged surroundings              */
 /* ================================================================ */
 
 describe('workbench landing — source guards', () => {
-  it('the root route wraps the Dashboard in HomeLanding; the Workbench route is unchanged', () => {
+  it('the root route renders EnterpriseHome directly; the Workbench route is unchanged', () => {
     const app = read('src/App.tsx');
     assert.ok(
-      app.includes('<HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding>'),
-      'root route must apply the landing decision around the unchanged Dashboard element'
+      app.includes('<LazyPage page={<EnterpriseHome />} />'),
+      'root route must render the Enterprise home directly (no HomeLanding wrapper)'
     );
+    assert.ok(!app.includes('HomeLanding'), 'the deleted landing wrapper must not be referenced by the router');
     assert.ok(
       app.includes('path: \'/workbench\'') && app.includes('<LazyPage page={<DailyWorkbench />} />'),
       'the /workbench route still renders DailyWorkbench'
@@ -196,24 +183,30 @@ describe('workbench landing — source guards', () => {
     assert.ok(!flow.includes("navigate('/workbench')"), 'authFlow must not hard-code the landing page');
   });
 
-  it('FeatureGate denial still falls back to the root (no loop: the landing is consumed by then)', () => {
+  it('FeatureGate denial still falls back to the root (no loop: the root renders a home, never a redirect)', () => {
     const gate = read('src/modules/auth/components/FeatureGate.tsx');
     assert.ok(gate.includes('Navigate to="/" replace'), 'denied routes still redirect to /');
-    const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes('consumeHomeLanding(userId)'), 'the decision is consumed before navigating');
-    assert.ok(landing.includes('resolveHomePath('), 'the component decides through the pure resolver');
+    // The old no-loop argument (the landing consumed its decision
+    // before navigating) died with HomeLanding.tsx. The new one is
+    // structural: the root renders EnterpriseHome in place, so a
+    // fallback to / can never bounce anywhere.
+    const app = read('src/App.tsx');
+    assert.ok(app.includes('<LazyPage page={<EnterpriseHome />} />'), 'the root renders the Enterprise home directly');
+    const home = read('src/modules/workspace/pages/EnterpriseHome.tsx');
+    assert.ok(!home.includes('<Navigate'), 'the home never redirects — the role overview IS the landing page');
   });
 
-  it('HomeLanding waits for the role matrix, then redirects only on a Workbench decision', () => {
-    const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes('hasConsumedHomeLanding(userId)'), 'consumed sessions skip the decision entirely');
-    assert.ok(landing.includes('<AccessResolving />'), 'undecided sessions show the neutral placeholder, not a guessed page');
-    assert.ok(
-      landing.includes('decision === WORKBENCH_HOME_PATH') && landing.includes('<Navigate to={WORKBENCH_HOME_PATH} replace />'),
-      'only a Workbench decision redirects, and only to /workbench'
-    );
-    assert.ok(landing.includes('decision === DASHBOARD_HOME_PATH'), 'a Dashboard decision renders the children in place');
-    assert.ok(landing.includes('adminService.getRoles()'), 'the role matrix comes from the same source FeatureGate uses');
+  it('useEnterpriseRole waits for the overview, then derives the home from the role matrix + team fact', () => {
+    // Retargeted from the deleted HomeLanding component: the "wait
+    // for the matrix, then decide" invariant now lives in the hook
+    // that derives the enterprise role.
+    const hook = read('src/layouts/useEnterpriseRole.ts');
+    assert.ok(hook.includes('callerTeam.loading'), 'the home waits for the overview before deciding');
+    assert.ok(/adminService\s*\.\s*getRoles\(\)/.test(hook), 'the role matrix comes from the same source FeatureGate uses');
+    assert.ok(hook.includes('deriveEnterpriseRole({'), 'the home decision goes through the pure role derivation');
+    assert.ok(hook.includes('callerHasTeam(callerTeam.overview?.people)'), 'the team fact comes from the shared overview loader');
+    const home = read('src/modules/workspace/pages/EnterpriseHome.tsx');
+    assert.ok(home.includes('HomeSkeleton'), 'an undecided home shows a neutral skeleton, not a guessed page');
   });
 
   it('unauthenticated users still go to /login, and no return-URL mechanism exists to override the default', () => {

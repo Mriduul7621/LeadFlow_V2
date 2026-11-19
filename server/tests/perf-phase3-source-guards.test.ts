@@ -26,10 +26,19 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), 'utf-8');
 }
 
+/**
+ * Enterprise Preview retarget (2026-11-19): Dashboard.tsx is deleted;
+ * the loaders now live in the shared home hook — loadDashboardData
+ * (critical KPI) then loadQueue (deferred queue buckets). The hook
+ * loads NO scheduled activities (those live in the Daily Workbench),
+ * so the scheduled-activity sequencing assert in test B is dropped,
+ * and the queue reads are THREE bounded buckets (overdue / today /
+ * upcoming) instead of two, so test C's count goes 2 → 3.
+ */
 function dashboardLoaders(): { kpi: string; daily: string; full: string } {
-  const full = read('src/modules/dashboard/pages/Dashboard.tsx');
+  const full = read('src/modules/workspace/hooks/useEnterpriseHomeData.ts');
   const kpiStart = full.indexOf('const loadDashboardData');
-  const dailyStart = full.indexOf('const loadDailyExecution');
+  const dailyStart = full.indexOf('const loadQueue');
   assert.ok(kpiStart >= 0 && dailyStart > kpiStart);
   return {
     full,
@@ -61,16 +70,18 @@ describe('Performance Phase 3 — critical vs deferred startup', () => {
   it('B. noncritical deferred reads wait for critical readiness', () => {
     const { kpi, daily, full } = dashboardLoaders();
     assert.ok(kpi.includes('markCriticalStartupSettled()'), 'KPI loader must release the startup gate');
-    assert.ok(daily.includes('await waitForCriticalStartup()'), 'daily execution must wait for critical readiness');
+    assert.ok(daily.includes('await waitForCriticalStartup()'), 'queue buckets must wait for critical readiness');
     const waitIdx = daily.indexOf('await waitForCriticalStartup()');
+    const overdueIdx = daily.indexOf("getFollowUpQueue({ bucket: 'overdue', limit: 50 })");
     const todayIdx = daily.indexOf("getFollowUpQueue({ bucket: 'today', limit: 50 })");
     const upcomingIdx = daily.indexOf("getFollowUpQueue({ bucket: 'upcoming', limit: 50 })");
-    const scheduledIdx = daily.indexOf('scheduledActivityService.list({ from: dhakaToday, to: tomorrowYmd, limit: 100 })');
-    assert.ok(waitIdx >= 0 && todayIdx > waitIdx, 'today follow-up must start AFTER critical readiness');
+    assert.ok(waitIdx >= 0 && overdueIdx > waitIdx, 'overdue follow-up must start AFTER critical readiness');
+    assert.ok(todayIdx > waitIdx, 'today follow-up must start AFTER critical readiness');
     assert.ok(upcomingIdx > waitIdx, 'upcoming follow-up must start AFTER critical readiness');
-    assert.ok(scheduledIdx > upcomingIdx, 'scheduled activities must start AFTER the follow-up reads');
-    assert.ok(!daily.includes('setTimeout'), 'no arbitrary sleeps in daily execution');
-    assert.ok(!full.includes('setTimeout'), 'Dashboard must not introduce setTimeout delays');
+    assert.ok(!daily.includes('setTimeout'), 'no arbitrary sleeps in the queue loader');
+    assert.ok(!full.includes('setTimeout'), 'the home hook must not introduce setTimeout delays');
+    // The scheduled-activity sequencing assert is dropped: the home hook
+    // loads no scheduled activities (those live in the Daily Workbench).
 
     const layout = read('src/layouts/AppLayout.tsx');
     assert.ok(layout.includes('waitForShellStartup()'), 'notification first-fetch waits on the shell gate, not first-dashboard-critical');
@@ -93,10 +104,13 @@ describe('Performance Phase 3 — critical vs deferred startup', () => {
 
   it('C. follow-up bucket reads stay server-authoritative and are not replaced by bucket=all', () => {
     const { daily, full } = dashboardLoaders();
-    assert.equal((full.match(/leadService\.getFollowUpQueue\(/g) || []).length, 2);
+    // Three bounded buckets now (overdue / today / upcoming) — the home
+    // chart and attention lists need the overdue bucket too.
+    assert.equal((full.match(/leadService\.getFollowUpQueue\(/g) || []).length, 3);
+    assert.ok(daily.includes("getFollowUpQueue({ bucket: 'overdue', limit: 50 })"));
     assert.ok(daily.includes("getFollowUpQueue({ bucket: 'today', limit: 50 })"));
     assert.ok(daily.includes("getFollowUpQueue({ bucket: 'upcoming', limit: 50 })"));
-    assert.ok(!daily.includes("bucket: 'all'"), 'dashboard must not switch Today/Tomorrow to bucket=all');
+    assert.ok(!daily.includes("bucket: 'all'"), 'the home hook must not switch Today/Tomorrow to bucket=all');
     const followUpSvc = read('src/modules/leads/services/leadService.ts');
     const qStart = followUpSvc.indexOf('async getFollowUpQueue');
     const qBody = followUpSvc.slice(qStart, followUpSvc.indexOf('async getLeadActivities'));
@@ -330,12 +344,12 @@ describe('Performance Phase 3 — startupPriority behavior', () => {
       resetStartupPriority,
     } = await loadGate();
 
-    // Source: Dashboard KPI `finally` calls mark even after the catch.
+    // Source: the home hook's KPI `finally` calls mark even after the catch.
     const { kpi } = dashboardLoaders();
     const finallyIdx = kpi.indexOf('finally');
     assert.ok(finallyIdx >= 0, 'KPI loader must use finally');
     assert.ok(kpi.indexOf('markCriticalStartupSettled()', finallyIdx) > finallyIdx, 'failure path still marks settled');
-    assert.ok(kpi.includes("setError('Dashboard data could not be loaded.')"));
+    assert.ok(kpi.includes("setMetricsError('Dashboard data could not be loaded.')"));
 
     let daily = 0;
     let shell = 0;

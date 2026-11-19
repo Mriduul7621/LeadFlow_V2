@@ -2,11 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  User as UserIcon, 
-  Briefcase, 
-  ArrowRight,
+  User as UserIcon,
+  Briefcase,
   ShieldCheck,
-  Zap,
   Check,
   AlertCircle
 } from 'lucide-react';
@@ -23,6 +21,7 @@ import { FormField } from '../../shared/types';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { BANGLADESH_GEOGRAPHY } from '../../shared/utils/bangladeshGeography';
+import { OverviewHeading } from '../../workspace/components/EnterprisePrimitives';
 
 // System fields whose presence/format is essential to a lead record -
 // these stay in the form regardless of admin visibility settings, so
@@ -235,32 +234,32 @@ export default function LeadGenerate() {
   };
 
   return (
-    <div className="lead-generate-page max-w-5xl mx-auto pb-24 space-y-12">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-slate-100 pb-10">
-        <div className="flex items-center gap-6">
-          <div className="w-16 h-16 bg-slate-900 rounded-sm flex items-center justify-center text-[#978C21] shadow-xl">
-            <Zap className="w-8 h-8 fill-[#978C21]" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Add New Lead</h1>
-            <p className="text-sm font-normal text-stone-500 mt-2">{t("leadFormSubtitle")}</p>
-          </div>
-        </div>
-      </div>
+    <div className="ep-page ep-leadform lead-generate-page space-y-4">
+      {/* Enterprise Preview restyle (2026-11-19): the sample's Add Lead
+          page — eyebrow + H1 + the sample's own description, the form
+          in sample cards, the sample's input style (via .ep-leadform
+          CSS) and a "Save lead" submit. Classes only: every field,
+          the validation schema, translations and the submit flow are
+          unchanged. */}
+      <OverviewHeading
+        eyebrow="Lead workspace"
+        title="Add Lead"
+        sub="Capture a prospect with the required details."
+      />
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-10">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* Section 1: Identity */}
         <motion.section 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm"
+          className="ep-card"
         >
-          <div className="flex items-center gap-4 mb-12 border-b border-slate-50 pb-6">
+          <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
             <UserIcon className="w-6 h-6 text-[#978C21]" />
             <h2 className="font-semibold text-base text-slate-800">{t("customerInfo")}</h2>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-3">
               <label className="text-sm font-medium text-slate-700">{t("customerName")} *</label>
               <input 
@@ -407,14 +406,14 @@ export default function LeadGenerate() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm"
+          className="ep-card"
         >
-          <div className="flex items-center gap-4 mb-12 border-b border-slate-50 pb-6">
+          <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
             <Briefcase className="w-6 h-6 text-[#978C21]" />
             <h2 className="font-semibold text-base text-slate-800">{t("residenceAddress")} & {t("campaign")}</h2>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {isFieldVisible('division') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("division")}{fieldConfigMap.division?.isMandatory !== false && ' *'}</label>
@@ -567,14 +566,14 @@ export default function LeadGenerate() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="bg-white rounded-sm border border-slate-100 p-10 shadow-sm"
+            className="ep-card"
           >
-            <div className="flex items-center gap-4 mb-12 border-b border-slate-50 pb-6">
+            <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
               <Briefcase className="w-6 h-6 text-[#978C21]" />
               <h2 className="font-semibold text-base text-slate-800">{t("otherInfo")}</h2>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {customFieldDefs.map(field => (
                 <div key={field.id} className={cn("space-y-3", field.fieldType === 'textarea' && "md:col-span-2")}>
                   <label className="text-sm font-medium text-slate-700">
@@ -625,22 +624,17 @@ export default function LeadGenerate() {
           </motion.section>
         )}
 
-        <div className="flex items-center justify-end gap-6 mt-16 group">
+        <div className="flex items-center justify-end gap-6 mt-6">
           <div className="flex items-center gap-2 mr-auto opacity-60">
              <ShieldCheck className="w-4 h-4 text-emerald-500" />
              <span className="text-xs font-medium text-stone-500">Your data is securely saved</span>
           </div>
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={isSubmitting}
-            className="w-64 py-5 bg-slate-900 hover:bg-black text-white text-sm font-semibold tracking-normal transition-all rounded-sm shadow-2xl flex items-center justify-center gap-4 group disabled:opacity-50"
+            className="ep-btn ep-btn-primary disabled:opacity-50"
           >
-            {isSubmitting ? t('loading') : (
-              <>
-                Generate Lead
-                <ArrowRight className="w-5 h-5 text-[#978C21] group-hover:translate-x-2 transition-transform" />
-              </>
-            )}
+            {isSubmitting ? t('loading') : 'Save lead'}
           </button>
         </div>
       </form>

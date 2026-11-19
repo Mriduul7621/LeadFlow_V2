@@ -25,11 +25,16 @@
  *      reset on fresh login together with the landing marker).
  *   4. teamOverviewService shaping — callerHasTeam, totals,
  *      follow-ups-today ordering, stale-lead radar.
- *   5. Rendering — TeamHomeContent from an overview payload (SSR,
- *      repo style) and the HomeViewSwitch labels.
- *   6. Source guards — wiring (HomeLanding decides through the pure
- *      resolver + the shared overview loader; the Workbench shows
- *      the switch only to team holders; no new route exists).
+ *   5. Rendering — the KpiCard primitive from the Enterprise Preview
+ *      homes (SSR, repo style) and the HomeViewSwitch labels.
+ *      (TeamHomeContent died with TeamHome.tsx in the Enterprise
+ *      Preview redesign, 2026-11-19; the render coverage moved to
+ *      the primitive the role homes actually render.)
+ *   6. Source guards — wiring (EnterpriseHome decides through the
+ *      derived enterprise role + the shared overview loader; the
+ *      Workbench shows the switch only to team holders; no new
+ *      route exists; the root renders EnterpriseHome directly,
+ *      with no HomeLanding wrapper).
  */
 import { describe, it, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -70,7 +75,7 @@ import {
   teamFollowUpsToday,
   type TeamOverviewPerson,
 } from '../../src/modules/team/services/teamOverviewService';
-import { TeamHomeContent } from '../../src/modules/team/pages/TeamHome';
+import { KpiCard } from '../../src/modules/workspace/components/EnterprisePrimitives';
 import HomeViewSwitch from '../../src/modules/team/components/HomeViewSwitch';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -445,43 +450,43 @@ describe('teamOverviewService — team facts and shaping', () => {
 /* 5. Rendering (SSR, repo style)                                    */
 /* ================================================================ */
 
-describe('TeamHome — rendering from the overview payload', () => {
-  it('renders totals, member rows (name + employee ID) and the radar', () => {
+describe('Enterprise home primitives — KpiCard rendering', () => {
+  it('a linked card renders label + value + foot, links to its destination, and names itself for assistive tech', () => {
     const html = renderToStaticMarkup(
       React.createElement(
         MemoryRouter,
         null,
-        React.createElement(TeamHomeContent, { people: fixturePeople, scope: 'Team' })
-      )
-    );
-    assert.ok(html.includes('Team Home'), 'team-first heading');
-    assert.ok(html.includes('Open leads') && html.includes('Due today') && html.includes('Overdue') && html.includes('Converted')
-      && html.includes('Total Lead') && html.includes('Today Lead Collection') && html.includes('No Action Alert'),
-      'the seven team totals are labelled');
-    assert.ok(html.includes('>19<') && html.includes('>11<'), 'totals are summed over the whole team (19 open, 11 overdue)');
-    assert.ok(html.includes('Team follow-ups today'), 'follow-ups section present');
-    assert.ok(html.includes('Arif Member') && html.includes('EMP-002'), 'member rows carry name + employee ID');
-    assert.ok(html.includes('href="/team"'), 'member rows link through to My Team');
-    assert.ok(html.includes('Stale-lead radar'), 'radar section present');
-    assert.ok(!html.includes('Dina Member'), 'a member with nothing due/overdue appears in neither list');
-    const followUpOrder = ['Arif Member', 'Bina Member', 'Lena Lead', 'Chad Member'].map(n => html.indexOf(n));
-    assert.ok(followUpOrder.every((v, i) => v >= 0 && (i === 0 || followUpOrder[i - 1] < v)),
-      'follow-up rows render worst-first');
-  });
-
-  it('renders the all-clear states when nothing is due or overdue', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(
-        MemoryRouter,
-        null,
-        React.createElement(TeamHomeContent, {
-          people: [person({ isSelf: true, directReports: 1, name: 'Solo Lead', employeeId: 'EMP-100' })],
-          scope: 'Team',
+        React.createElement(KpiCard, {
+          label: 'Overdue',
+          value: 11,
+          foot: '3 need action today',
+          tone: 'red',
+          to: '/follow-up?bucket=overdue',
         })
       )
     );
-    assert.ok(html.includes('Nothing due today'), 'follow-ups all-clear');
-    assert.ok(html.includes('No overdue follow-ups'), 'radar all-clear');
+    assert.ok(html.includes('Overdue'), 'label rendered');
+    assert.ok(html.includes('>11<'), 'value rendered');
+    assert.ok(html.includes('3 need action today'), 'foot rendered');
+    assert.ok(html.includes('href="/follow-up?bucket=overdue"'), 'the card links to its destination');
+    assert.ok(html.includes('aria-label="Overdue: 11"'), 'the link carries a label: value aria-label');
+    assert.ok(html.includes('ep-kpi-link'), 'linked cards carry the link class');
+    assert.ok(html.includes('ep-trend warn'), 'a red tone warns on the foot');
+  });
+
+  it('an unlinked card renders as a plain card with no link and no aria-label', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(KpiCard, { label: 'Total leads', value: 44, foot: 'Across your team' })
+      )
+    );
+    assert.ok(html.includes('Total leads') && html.includes('>44<'), 'label + value rendered');
+    assert.ok(!html.includes('<a '), 'no link without a destination');
+    assert.ok(!html.includes('href='), 'no href without a destination');
+    assert.ok(!html.includes('aria-label'), 'no aria-label without a link');
+    assert.ok(!html.includes('ep-kpi-link'), 'no link class without a destination');
   });
 
   it('the switch offers Team and My work', () => {
@@ -501,30 +506,38 @@ describe('TeamHome — rendering from the overview payload', () => {
 /* ================================================================ */
 
 describe('TL+ Home — source guards', () => {
-  it('HomeLanding decides through the pure resolver and the shared overview loader', () => {
-    const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes('resolveHomeLandingDecision({'), 'landing decision goes through the pure TL+ resolver');
-    assert.ok(landing.includes('loadTeamOverview(userId)'), 'team fact comes from the ONE overview data path');
-    assert.ok(landing.includes("setHomeViewPreference(userId, 'team')"), 'a team landing pins the session Team preference');
-    assert.ok(landing.includes('decision === TEAM_HOME_PATH'), 'the team decision renders the team home in place');
-    assert.ok(!landing.includes("to={TEAM_HOME_PATH}"), 'the team home is NOT a redirect target — TEAM_HOME_PATH is a decision token, not a route');
+  it('EnterpriseHome decides through the derived enterprise role and the shared overview loader', () => {
+    const home = read('src/modules/workspace/pages/EnterpriseHome.tsx');
+    assert.ok(home.includes('useEnterpriseRole()'), 'the root home reads the derived enterprise role');
+    assert.ok(home.includes("role === 'admin'") && home.includes("role === 'manager'") && home.includes("role === 'teamLead'"),
+      'one home per derived role, no switcher');
+    const hook = read('src/layouts/useEnterpriseRole.ts');
+    assert.ok(hook.includes('deriveEnterpriseRole({'), 'the role comes from the pure derivation');
+    assert.ok(hook.includes('callerHasTeam(callerTeam.overview?.people)'), 'the team fact comes from the ONE overview data path');
+    assert.ok(/adminService\s*\.\s*getRoles\(\)/.test(hook), 'data visibility comes from the same role matrix FeatureGate uses');
+    const role = read('src/layouts/enterpriseRole.ts');
+    assert.ok(role.includes("input.overviewScope === 'Organization'"), 'Organization scope maps to manager');
+    assert.ok(role.includes("if (input.hasDirectReports) return 'teamLead'"), '>= 1 direct report maps to team lead');
   });
 
-  it('no team-home route exists; the root composition is unchanged', () => {
+  it('no team-home route exists; the root renders EnterpriseHome directly, with no landing wrapper', () => {
     const app = read('src/App.tsx');
     assert.ok(!app.includes("path: '/team-home'"), 'no new route was invented for the team home');
     assert.ok(
-      app.includes('<HomeLanding><LazyPage page={<Dashboard />} /></HomeLanding>'),
-      'the root still wraps the unchanged Dashboard in HomeLanding'
+      app.includes('<LazyPage page={<EnterpriseHome />} />'),
+      'the root renders the Enterprise home directly'
     );
+    assert.ok(!app.includes('HomeLanding'), 'no landing wrapper stands between the root route and the home');
   });
 
-  it('the Workbench shows the switch only to callers with a team; the My Team page is untouched by this feature', () => {
+  it('the Workbench shows the switch only to callers with a team; the role homes are the landing\'s lazy chunks', () => {
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
     assert.ok(workbench.includes('callerTeam.hasTeam && <HomeViewSwitch active="work" />'),
       'the Team toggle on My Day is gated on having a team');
-    const landing = read('src/modules/auth/components/HomeLanding.tsx');
-    assert.ok(landing.includes("import('../../team/pages/TeamHome')"), 'the team home is the landing\'s lazy TeamHome page');
+    const home = read('src/modules/workspace/pages/EnterpriseHome.tsx');
+    for (const page of ['AdminHome', 'ManagerHome', 'TeamLeadHome', 'AgentHome']) {
+      assert.ok(home.includes(`import('./${page}')`), `the ${page} chunk loads lazily from the home switch`);
+    }
   });
 
   it('the server extension is one field on the existing endpoint, in both data paths', () => {

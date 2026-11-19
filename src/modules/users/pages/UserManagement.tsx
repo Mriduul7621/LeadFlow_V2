@@ -177,6 +177,19 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
     ],
   },
   {
+    // Enterprise Preview (2026-11-19): the Reports module was missing
+    // from this editor — an admin could toggle the insight FEATURES
+    // (Performance, NCP Progress, Trends & Reports, Campaigns) but
+    // NOT the canonical `reports.view` grant the server permission
+    // sheet enforces for those pages. With the field default now
+    // carrying `reports.view` (roleGrantDefaults.ts), this toggle is
+    // how the admin grants or revokes report access per role.
+    module: 'Reports',
+    items: [
+      { code: 'reports.view', label: 'View', desc: 'Open the report pages (Performance, NCP Progress, Trends & Reports, Campaigns) within this role’s data-visibility scope. The server enforces this grant on the report data endpoints.' },
+    ],
+  },
+  {
     module: 'Leads',
     items: [
       { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },

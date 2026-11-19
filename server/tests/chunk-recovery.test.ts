@@ -389,7 +389,10 @@ describe('Chunk recovery — wiring source guards', () => {
 
   it('N. the route-splitting contract of Phase 2 is untouched', () => {
     const app = read('src/App.tsx');
-    assert.match(app, /const\s+Dashboard\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\/modules\/dashboard\/pages\/Dashboard['"]\s*\)/,
+    // Enterprise Preview (2026-11-19): the home chunk is now
+    // EnterpriseHome (the old Dashboard.tsx is deleted); the lazy
+    // declaration keeps the exact same unwrapped-loader shape.
+    assert.match(app, /const\s+EnterpriseHome\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]\.\/modules\/workspace\/pages\/EnterpriseHome['"]\s*\)/,
       'lazy route declarations keep their exact shape (loader unwrapped)');
     assert.equal(app.split('lazy((').length - 1 >= 18, true, 'all feature pages remain lazy');
   });
