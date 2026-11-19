@@ -129,10 +129,17 @@ describe('UI English-only & Design Modernization — source guards', () => {
     }
     // Polished English literals on the homes.
     const agent = stripComments(read('src/modules/workspace/pages/AgentHome.tsx'));
-    assert.ok(agent.includes('My Work'), 'Agent home title must be My Work');
     assert.ok(agent.includes('Add Lead'), 'Agent home must have Add Lead');
-    assert.ok(agent.includes('Your priorities'), 'Agent home must have Your priorities');
-    assert.ok(agent.includes('Overdue first, then due today'), 'Agent home follow-ups subtitle must be English');
+    // Agent workspace rebuild (2026-11-20): the H1 is the greeting
+    // and the sections are the demo's — "My Work" survives as the
+    // sidebar label (pinned in enterprise-nav.test.ts), not as a
+    // literal on the home.
+    assert.ok(agent.includes('Personal workspace'), 'Agent home must keep the Personal workspace eyebrow');
+    assert.ok(agent.includes("Here's your personal performance and what needs your attention today."), 'Agent home greeting subline must be English');
+    assert.ok(agent.includes('Priority follow-ups'), 'Agent home must have Priority follow-ups');
+    assert.ok(agent.includes('My pipeline'), 'Agent home must have My pipeline');
+    assert.ok(agent.includes('Weekly activity'), 'Agent home must have Weekly activity');
+    assert.ok(agent.includes('Recent leads'), 'Agent home must have Recent leads');
     const manager = stripComments(read('src/modules/workspace/pages/ManagerHome.tsx'));
     assert.ok(manager.includes('Overview'), 'Manager home title must be Overview');
     assert.ok(manager.includes('Welcome back'), 'Manager home must greet in English');

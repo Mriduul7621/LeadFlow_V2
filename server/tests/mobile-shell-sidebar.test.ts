@@ -179,22 +179,36 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
       // Every home still shows the caller's own work: a KPI grid and a
       // follow-up / workload table.
       assert.ok(src.includes('<KpiCard'), `${file} must render its KPI cards`);
-      assert.ok(src.includes('<DataTableCard'), `${file} must render its work table`);
+      // AgentHome is the exception (Agent workspace rebuild,
+      // 2026-11-20): its work table is the Priority follow-ups list
+      // and the Recent leads list, not the shared DataTableCard.
+      if (file.endsWith('AgentHome.tsx')) {
+        assert.ok(src.includes('Priority follow-ups'), 'AgentHome must render its priority list');
+        assert.ok(src.includes('Recent leads'), 'AgentHome must render its recent leads');
+      } else {
+        assert.ok(src.includes('<DataTableCard'), `${file} must render its work table`);
+      }
     }
   });
 
   it('Overdue stays prominent on every home: a KPI card and the first attention row', () => {
     // The old Home put "Overdue Follow-ups" beside "Active Leads" in
     // the KPI grid. The role homes keep overdue first-class in both
-    // shapes they use: Agent and Team Lead carry an Overdue KPI right
-    // after Due today; Manager and Admin lead their attention list
-    // with "Overdue follow-ups".
-    for (const file of ['src/modules/workspace/pages/AgentHome.tsx', 'src/modules/workspace/pages/TeamLeadHome.tsx']) {
+    // shapes they use: Team Lead carries an Overdue KPI right after
+    // Due today; Manager and Admin lead their attention list with
+    // "Overdue follow-ups"; the Agent (workspace rebuild, 2026-11-20)
+    // names the overdue count in the Due-today KPI subline instead
+    // of a separate card.
+    for (const file of ['src/modules/workspace/pages/TeamLeadHome.tsx']) {
       const src = read(file);
       const grid = src.slice(src.indexOf('<div className="ep-grid">'));
       const dueIdx = grid.indexOf('label="Due today"');
       const overdueIdx = grid.indexOf('label="Overdue"');
       assert.ok(dueIdx !== -1 && overdueIdx > dueIdx, `${file}: the Overdue KPI must follow Due today inside the KPI grid`);
+    }
+    {
+      const src = read('src/modules/workspace/pages/AgentHome.tsx');
+      assert.ok(src.includes('overdue needs attention'), 'AgentHome must name the overdue count in the Due-today subline');
     }
     for (const file of ['src/modules/workspace/pages/ManagerHome.tsx', 'src/modules/workspace/pages/AdminHome.tsx']) {
       const src = read(file);

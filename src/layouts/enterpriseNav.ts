@@ -82,6 +82,16 @@ import type { EnterpriseRole } from './enterpriseRole';
  * The /more directory page has no entry: every destination it
  * lists is reachable elsewhere in this nav or the footer.
  *
+ * Agent workspace (2026-11-20, Mahadi's demo screenshots): the
+ * agent nav is ONE WORKSPACE group — My Work, Activities, My
+ * Leads, Follow-up Queue, My Performance, Task Calendar, Roadshow
+ * — with no ACCOUNT group (the sidebar-bottom profile block in
+ * AppLayout carries the settings gear instead). Daily Workbench,
+ * Sales Pipeline, Add Lead and NCP Progress left the agent
+ * sidebar with that rebuild; their routes stay live and the other
+ * roles keep their entries. The mobile bottom bar is unchanged
+ * for the agent (My Work / My Leads / Workbench / Add Lead).
+ *
  * The sidebar is a UX surface, never a security boundary: every entry
  * is filtered by the SAME resolvers the router uses
  * (`resolveFeatureRouteAccess` for the route module + `canAccess` for
@@ -133,11 +143,13 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   'Trends & Reports': 'Explore trends and authorized reports.',
   'NCP Progress': 'Track NCP progress against target.',
   'Roadshow Follow-up': 'Track roadshow activity and follow-up actions.',
+  Roadshow: 'Track roadshow activity and follow-up actions.',
   'Task Calendar': 'Review tasks and scheduled work.',
   'Team Members': 'Review member workload and support needs.',
   'Team Performance': 'Review team performance and progress.',
   Activities: 'Review calls, meetings, messages and notes.',
   'My Leads': 'Manage your assigned leads and next actions.',
+  'My Performance': 'Track progress, activity and conversion trends.',
   'Add Lead': 'Capture a prospect with the required details.',
   'Profile & Settings': 'Manage personal profile and preferences.',
   Notifications: 'Review important updates.',
@@ -259,27 +271,31 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
       { title: 'ACCOUNT', items: ACCOUNT_ITEMS },
     ];
   }
+  // Agent workspace (2026-11-20, Mahadi's demo screenshots): ONE
+  // WORKSPACE group, in his exact order — My Work, Activities right
+  // after it, My Leads, Follow-up Queue, My Performance, Task
+  // Calendar, Roadshow. NO ACCOUNT group: Profile & Settings /
+  // Notifications leave the agent sidebar — the profile block at
+  // the sidebar bottom (AppLayout) carries the settings gear, the
+  // topbar bell opens the notification panel, and the topbar
+  // profile chip stays as it is. Four items left the agent sidebar
+  // with this rebuild (all reported to Mahadi for veto; the routes
+  // stay live and other roles keep them): Daily Workbench and Sales
+  // Pipeline (not in the demo), Add Lead (a button on My Work and
+  // My Leads instead), and NCP Progress (not in the demo).
   return [
     {
-      title: 'MY WORK',
+      title: 'WORKSPACE',
       items: [
-        { label: 'Overview', path: '/', icon: LayoutDashboard },
-        { label: 'My Leads', path: '/leads', icon: ClipboardList },
-        { label: 'Add Lead', path: '/leads/new', icon: ClipboardList },
-        { label: 'Daily Workbench', path: '/workbench', icon: Clock },
-        { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
+        { label: 'My Work', path: '/', icon: LayoutDashboard },
         { label: 'Activities', path: '/activities', icon: Activity },
+        { label: 'My Leads', path: '/leads', icon: ClipboardList },
+        { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
+        { label: 'My Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
         { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
+        { label: 'Roadshow', path: '/roadshows', icon: MapPinned },
       ],
     },
-    {
-      title: 'MY PERFORMANCE',
-      items: [
-        { label: 'Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
-        { label: 'NCP Progress', path: '/ncp-progress', icon: Banknote, permission: 'ncp_progress' },
-      ],
-    },
-    { title: 'ACCOUNT', items: ACCOUNT_ITEMS },
   ];
 }
 

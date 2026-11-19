@@ -43,6 +43,16 @@ export function buildLeadSchema(fieldConfigMap: Record<string, FormField>) {
     productName: req('productName', true),
     campaignName: req('campaignName', true),
     otherInfo: req('otherInfo', false),
+    // Agent workspace rebuild (2026-11-20): the demo's Email field
+    // (optional; format-checked only when filled in) and the
+    // Assign-to field (optional; blank means "myself"). Both are
+    // plain optional keys — they add no required-ness of their own
+    // and cannot break existing parses.
+    email: z.string().optional().default('').refine(
+      val => !val || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val),
+      'Enter a valid email address',
+    ),
+    assignedTo: z.string().optional().default(''),
     customFields: z.record(z.string(), z.string()).optional(),
   }).superRefine((data, ctx) => {
     // Conditional SHOW/APPLY rule: the children field only applies to

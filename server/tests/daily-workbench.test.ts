@@ -68,7 +68,10 @@ describe('Daily Workbench — source guards', () => {
     const nav = enterpriseNav();
     assert.ok(nav.includes("label: 'Daily Workbench', path: '/workbench'"), 'the sidebar must offer Daily Workbench → /workbench');
     assert.ok(nav.includes("label: 'Follow-up Queue', path: '/follow-up'"), 'the sidebar must offer Follow-up Queue → /follow-up');
-    assert.ok(read('src/modules/workspace/pages/AgentHome.tsx').includes('title="My Work"'), 'the agent home must keep the My Work title');
+    // Agent workspace rebuild (2026-11-20): "My Work" survives as
+    // the Agent sidebar label — the home's H1 is the time-based
+    // greeting now.
+    assert.ok(nav.includes("label: 'My Work', path: '/'"), 'the agent nav must keep the My Work label');
     // The workspace pages live in the sidebar (not in More).
     for (const route of ['/activities', '/task-calendar', '/follow-up']) {
       assert.ok(nav.includes(`path: '${route}'`), `the sidebar must carry ${route}`);

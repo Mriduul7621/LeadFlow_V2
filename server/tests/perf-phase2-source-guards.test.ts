@@ -177,7 +177,17 @@ describe('Performance Phase 2 — the Task Calendar is a route of its own', () =
       const src = read(`src/modules/workspace/pages/${name}.tsx`);
       assert.ok(src.includes('<OverviewHeading'), `${name} must keep its overview heading`);
       assert.ok(src.includes('<KpiCard'), `${name} must keep its KPI cards`);
-      assert.ok(src.includes('<ChartCard'), `${name} must keep its chart card`);
+      // AgentHome is the exception (Agent workspace rebuild,
+      // 2026-11-20): its chart is the Weekly activity card — the
+      // shared ChartCard hardcodes a "7 days" pill and has no slot
+      // for the timeframe dropdown, so the home renders the same
+      // .ep-chart bars directly.
+      if (name === 'AgentHome') {
+        assert.ok(src.includes('Weekly activity'), 'AgentHome must keep its chart card');
+        assert.ok(src.includes('ep-chart'), 'AgentHome must render chart bars');
+      } else {
+        assert.ok(src.includes('<ChartCard'), `${name} must keep its chart card`);
+      }
     }
   });
 

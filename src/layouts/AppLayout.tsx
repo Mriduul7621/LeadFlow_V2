@@ -9,6 +9,7 @@ import {
   Menu,
   CircleHelp,
   Info,
+  Settings,
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
@@ -558,6 +559,43 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Info className="h-3.5 w-3.5" aria-hidden="true" /> About
           </Link>
         </div>
+        {/* Agent workspace (2026-11-20, Mahadi): the agent sidebar
+            has no ACCOUNT group, so the profile lives at the
+            sidebar bottom instead — avatar + name + employee ID,
+            with a settings gear beside it. Both lead to /settings,
+            exactly like the topbar profile chip; the gear is the
+            explicit settings entry, not a sidebar page. Other
+            roles keep their ACCOUNT items and see no block here. */}
+        {displayRole === 'agent' && (
+          <div className="ep-agent-profile">
+            <Link
+              to="/settings"
+              className="ep-agent-profile-who"
+              aria-label={`${user.name} · Profile`}
+              title={user.name}
+            >
+              <span className="ep-avatar" aria-hidden="true">
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                ) : (
+                  user.name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase()
+                )}
+              </span>
+              <span className="ep-agent-profile-copy">
+                <strong>{user.name}</strong>
+                <small>{user.employeeId || user.role}</small>
+              </span>
+            </Link>
+            <Link
+              to="/settings"
+              className="ep-agent-profile-gear"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <Settings className="h-[17px] w-[17px]" />
+            </Link>
+          </div>
+        )}
       </aside>
       {isSidebarOpen && (
         <div
