@@ -1,617 +1,450 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Network, RefreshCcw, CalendarClock, TrendingUp, FolderOpen,
-  ChevronRight, ChevronDown, AlertTriangle, Trophy, Wallet, ArrowUp,
-} from 'lucide-react';
-import { apiRequest } from '../../shared/api/http';
+import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Network, RefreshCcw, UserPlus } from 'lucide-react';
 import { cn } from '../../../lib/utils';
-import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
+import { EnterprisePageHeader, KpiCard } from '../../workspace/components/EnterprisePrimitives';
+import BackButton from '../../shared/components/BackButton';
+import { useCallerTeam } from '../hooks/useCallerTeam';
+import { getSelfPerson, summarizeTeamTotals, type TeamOverviewPerson } from '../services/teamOverviewService';
+import { useAgentHomeLeads } from '../../workspace/hooks/useAgentHomeLeads';
+import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
+import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
+import {
+  memberCompletions,
+  memberStatus,
+  scopeLeadsByAssignee,
+  scopePeople,
+  tlAncestorOf,
+} from '../../workspace/utils/teamWorkspaceData';
+import { formatDhakaShort } from '../../workspace/utils/enterpriseData';
+import type { Lead } from '../../shared/types';
 
 /**
- * Team report (FIX-1 item 5, evolved per owner request 2026-11-11)
+ * TeamOverview — the Team Members page (Team Lead / Manager /
+ * Admin workspace rebuild, 2026-11-20, Mahadi's demo
+ * screenshot 4).
  * ------------------------------------------------------------------
- * ONE data path: GET /api/team/tree returns the caller's people as
- * the reporting tree (server applies the caller's visibility scope —
- * nobody outside it is ever in the payload). This page renders, from
- * that single payload:
- *   1. the org TREE, opening at the top of the caller's visible tree,
- *      nodes labelled name + employee ID + designation, each with own
- *      numbers and a whole-subtree rollup incl. "Possible business
- *      (open pipeline)" = summed expected premium of open leads;
- *   2. a drill-down DETAIL for the selected person: breadcrumb back up
- *      the tree, own numbers, their direct team (name + ID wise), the
- *      subtree's pipeline by lead status, and two plain-language
- *      insights — "Needs follow-up" (most overdue + due today) and
- *      "Doing well" (top converters; this month when anyone converted
- *      this month, otherwise all time — the heading says which);
- *   3. the original flat Manager -> Team Leader -> Team Member groups.
- * The organogram chart lives on at /team/organogram.
+ * Mahadi called the old page "ekta faltu design" (an org tree +
+ * tier groups fed by GET /api/team/tree). The rebuild follows the
+ * demo: 4 KPI cards + a Team roster table, with the Retail Sales
+ * Dashboard drill-down pattern — roster → click a member → that
+ * member's detail (their KPIs, leads and follow-ups due) → click
+ * a lead → Lead360. The organogram chart still lives at
+ * /team/organogram (linked from the header).
+ *
+ * Data comes from the ONE scoped overview payload (GET
+ * /api/team/overview via useCallerTeam) + the caller's visible
+ * leads (useAgentHomeLeads) + the follow-up queue (one 'all'
+ * read for the member detail). The /api/team/tree endpoint and
+ * its builder (server/services/teamTree.ts) were REMOVED with
+ * the rebuild — the roster was their only caller.
+ *
+ * Honest metrics (no targets model exists — Phase 3 undecided):
+ *   Progress  = follow-up completion % (completed-today /
+ *               (completed-today + due-today + overdue)), the
+ *               SAME definition as Team Overview's member
+ *               performance — "—" when nothing was due or done.
+ *   Capacity  = the demo's "Capacity used" has no model, so the
+ *               fourth card is "Avg. active leads" per member
+ *               (a plain count).
+ *   Avg. conversion = team converted / team total leads.
+ * Status is honest and simple: "Needs attention" when the
+ * member has any overdue follow-up, else "On track".
+ *
+ * Manager grouping (Mahadi): a Manager FIRST sees TL groups;
+ * clicking a Team Lead drills to that TL's member-wise roster
+ * (?tl=), then to a member (?member=). Admin-role users never
+ * appear in the roster or any aggregate (an admin is never a
+ * sales employee). "+ Invite member" is the Add user flow and
+ * shows ONLY with the admin-granted `users.add_employee` grant
+ * (and only once the server permission sheet has settled, so
+ * it never flashes in for an ungranted TL).
  */
 
-export interface TeamPerson {
-  userId: string;
-  employeeId: string;
-  name: string;
-  designation: string | null;
-  roleName: string | null;
-  department: string | null;
-  managerEmployeeId: string | null;
-  managerName: string | null;
-  tier: 'manager' | 'teamLead' | 'teamMember';
-  directReports: number;
-  openLeads: number;
-  convertedLeads: number;
-  dueToday: number;
-  isSelf: boolean;
-  // Org-tree report additions (GET /api/team/tree)
-  childrenIds: string[];
-  overdue: number;
-  convertedThisMonth: number;
-  pipelineValue: number;
-  subtree: {
-    people: number;
-    openLeads: number;
-    dueToday: number;
-    overdue: number;
-    converted: number;
-    convertedThisMonth: number;
-    pipelineValue: number;
-  };
-  subtreeStatusCounts: Record<string, number>;
+function initialsOf(name: string): string {
+  return String(name || '?')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0])
+    .join('')
+    .toUpperCase() || '?';
 }
 
-interface TeamTreeResponse {
-  success: boolean;
-  scope: string;
-  people: TeamPerson[];
-  rootIds: string[];
+interface RosterRowProps {
+  person: TeamOverviewPerson;
+  pct: number | null;
+  followUpsDue: number;
+  to: string;
 }
 
-const TIERS: Array<{ key: TeamPerson['tier']; title: string; blurb: string }> = [
-  { key: 'manager', title: 'Managers', blurb: 'People whose teams have team leaders under them' },
-  { key: 'teamLead', title: 'Team Leaders', blurb: 'People with team members reporting to them' },
-  { key: 'teamMember', title: 'Team Members', blurb: 'Individual contributors' },
-];
-
-const money = (n: number) => `৳${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
-
-function PersonCard({ person, onSelect }: { person: TeamPerson; onSelect?: (p: TeamPerson) => void }) {
-  return (
-    <div className="ep-card" style={{ borderColor: person.isSelf ? '#858515' : undefined }}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-black text-stone-800 truncate">
-            {person.name}
-            {person.isSelf && (
-              <span className="ml-2 align-middle text-[8px] font-black uppercase tracking-widest bg-[#978C21] text-white px-1.5 py-0.5 rounded">You</span>
-            )}
-          </p>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
-            {[person.designation, person.department].filter(Boolean).join(' · ') || person.employeeId}
-          </p>
-          {person.managerName && (
-            <p className="text-[10px] text-stone-400 mt-0.5">Reports to {person.managerName}</p>
-          )}
-        </div>
-        {person.directReports > 0 && (
-          <span className="shrink-0 text-[9px] font-black uppercase tracking-widest bg-stone-100 text-stone-500 px-2 py-1 rounded-full">
-            {person.directReports} report{person.directReports === 1 ? '' : 's'}
-          </span>
-        )}
-      </div>
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="bg-stone-50 rounded-xl py-2">
-          <p className="text-base font-black text-stone-800 flex items-center justify-center gap-1"><FolderOpen className="w-3.5 h-3.5 text-stone-400" />{person.openLeads}</p>
-          <p className="text-[8px] font-black uppercase tracking-widest text-stone-400">Open leads</p>
-        </div>
-        <div className="bg-emerald-50 rounded-xl py-2">
-          <p className="text-base font-black text-emerald-700 flex items-center justify-center gap-1"><TrendingUp className="w-3.5 h-3.5" />{person.convertedLeads}</p>
-          <p className="text-[8px] font-black uppercase tracking-widest text-emerald-600/70">Converted</p>
-        </div>
-        <div className={cn('rounded-xl py-2', person.dueToday > 0 ? 'bg-amber-50' : 'bg-stone-50')}>
-          <p className={cn('text-base font-black flex items-center justify-center gap-1', person.dueToday > 0 ? 'text-amber-700' : 'text-stone-800')}>
-            <CalendarClock className="w-3.5 h-3.5" />{person.dueToday}
-          </p>
-          <p className={cn('text-[8px] font-black uppercase tracking-widest', person.dueToday > 0 ? 'text-amber-600/70' : 'text-stone-400')}>Due today</p>
-        </div>
-      </div>
-      {onSelect && (
-        <button
-          type="button"
-          onClick={() => onSelect(person)}
-          className="ep-btn"
-          style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
-        >
-          View in tree detail
-        </button>
-      )}
-    </div>
-  );
-}
-
-function TreeNode({
-  person, byId, depth, expanded, onToggle, selectedId, onSelect,
-}: {
-  person: TeamPerson;
-  byId: Map<string, TeamPerson>;
-  depth: number;
-  expanded: Set<string>;
-  onToggle: (id: string) => void;
-  selectedId: string | null;
-  onSelect: (p: TeamPerson) => void;
-}) {
-  const kids = (person.childrenIds || []).map(id => byId.get(id)).filter(Boolean) as TeamPerson[];
-  const isOpen = expanded.has(person.userId);
-  const selected = selectedId === person.userId;
-  return (
-    <div>
-      <div
-        className={cn(
-          'flex items-start gap-2 py-2.5 pr-3 rounded-xl border mb-1.5 bg-white',
-          selected ? 'border-[#978C21] ring-1 ring-[#978C21]/40' : 'border-stone-200/80'
-        )}
-        style={{ marginLeft: Math.min(depth, 6) * 14 }}
-      >
-        {kids.length > 0 ? (
-          <button
-            type="button"
-            aria-label={isOpen ? 'Collapse team' : 'Expand team'}
-            onClick={() => onToggle(person.userId)}
-            className="mt-0.5 ml-1.5 shrink-0 w-6 h-6 rounded-full bg-stone-100 text-stone-500 flex items-center justify-center"
-          >
-            {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          </button>
-        ) : (
-          <span className="mt-0.5 ml-1.5 shrink-0 w-6 h-6 rounded-full bg-stone-50 flex items-center justify-center">
-            <span className="w-1.5 h-1.5 rounded-full bg-stone-300" />
-          </span>
-        )}
-        <button type="button" onClick={() => onSelect(person)} className="min-w-0 flex-1 text-left">
-          <p className="text-sm font-black text-stone-800 truncate">
-            {person.name}
-            {person.isSelf && (
-              <span className="ml-2 align-middle text-[8px] font-black uppercase tracking-widest bg-[#978C21] text-white px-1.5 py-0.5 rounded">You</span>
-            )}
-          </p>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
-            {person.employeeId} · {[person.designation, person.department].filter(Boolean).join(' · ')}
-          </p>
-          <p className="text-[11px] text-stone-500 mt-1">
-            Own: <b>{person.openLeads}</b> open · <b>{person.dueToday}</b> due today ·{' '}
-            <span className={person.overdue > 0 ? 'text-red-600 font-bold' : undefined}><b>{person.overdue}</b> overdue</span> ·{' '}
-            <b>{person.convertedLeads}</b> converted
-          </p>
-          {kids.length > 0 && person.subtree && (
-            <p className="text-[11px] text-stone-500">
-              Whole team ({person.subtree.people}): <b>{person.subtree.openLeads}</b> open ·{' '}
-              <span className="text-[#978C21] font-bold">Possible business (open pipeline) {money(person.subtree.pipelineValue)}</span>
-            </p>
-          )}
-        </button>
-      </div>
-      {isOpen && kids.map(kid => (
-        <Fragment key={kid.userId}>
-          <TreeNode
-            person={kid}
-            byId={byId}
-            depth={depth + 1}
-            expanded={expanded}
-            onToggle={onToggle}
-            selectedId={selectedId}
-            onSelect={onSelect}
-          />
-        </Fragment>
-      ))}
-    </div>
-  );
-}
-
-function StatCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'red' | 'amber' | 'green' | 'olive' }) {
-  const toneClass = tone === 'red' ? 'text-red-600' : tone === 'amber' ? 'text-amber-700' : tone === 'green' ? 'text-emerald-700' : tone === 'olive' ? 'text-[#978C21]' : 'text-stone-800';
-  return (
-    <div className="bg-stone-50 rounded-xl py-3 px-2 text-center">
-      <p className={cn('text-lg font-black', toneClass)}>{value}</p>
-      <p className="text-[8px] font-black uppercase tracking-widest text-stone-400">{label}</p>
-      {sub && <p className="text-[9px] font-bold text-stone-400 mt-0.5">{sub}</p>}
-    </div>
-  );
-}
-
-function PersonDetail({
-  person, byId, byEmployeeId, onSelect,
-}: {
-  person: TeamPerson;
-  byId: Map<string, TeamPerson>;
-  byEmployeeId: Map<string, TeamPerson>;
-  onSelect: (p: TeamPerson) => void;
-}) {
-  // Breadcrumb: walk up via managerEmployeeId while the manager is in scope.
-  const ancestors = useMemo(() => {
-    const chain: TeamPerson[] = [];
-    const seen = new Set<string>([person.userId]);
-    let cursor: TeamPerson | undefined = person;
-    while (cursor?.managerEmployeeId) {
-      const mgr = byEmployeeId.get(cursor.managerEmployeeId.toUpperCase());
-      if (!mgr || seen.has(mgr.userId)) break;
-      seen.add(mgr.userId);
-      chain.unshift(mgr);
-      cursor = mgr;
-    }
-    return chain;
-  }, [person, byEmployeeId]);
-
-  const directTeam = useMemo(
-    () => (person.childrenIds || []).map(id => byId.get(id)).filter(Boolean) as TeamPerson[],
-    [person, byId]
-  );
-
-  const subtreeMembers = useMemo(() => {
-    const out: TeamPerson[] = [];
-    const seen = new Set<string>();
-    const walk = (p: TeamPerson) => {
-      if (seen.has(p.userId)) return;
-      seen.add(p.userId);
-      out.push(p);
-      for (const id of p.childrenIds || []) {
-        const kid = byId.get(id);
-        if (kid) walk(kid);
-      }
-    };
-    walk(person);
-    return out;
-  }, [person, byId]);
-
-  const statusRows = useMemo(() => {
-    const entries = Object.entries(person.subtreeStatusCounts || {}).sort((a, b) => b[1] - a[1]);
-    const max = entries.length ? entries[0][1] : 0;
-    return entries.map(([status, count]) => ({ status, count, pct: max > 0 ? Math.round((count / max) * 100) : 0 }));
-  }, [person]);
-
-  const needsFollowUp = useMemo(() =>
-    subtreeMembers
-      .filter(p => p.userId !== person.userId && (p.overdue + p.dueToday) > 0)
-      .sort((a, b) => (b.overdue + b.dueToday) - (a.overdue + a.dueToday) || b.overdue - a.overdue || a.name.localeCompare(b.name))
-      .slice(0, 5),
-    [subtreeMembers, person]);
-
-  const doingWell = useMemo(() => {
-    const others = subtreeMembers.filter(p => p.userId !== person.userId);
-    const thisMonth = others
-      .filter(p => p.convertedThisMonth > 0)
-      .sort((a, b) => b.convertedThisMonth - a.convertedThisMonth || b.convertedLeads - a.convertedLeads || a.name.localeCompare(b.name))
-      .slice(0, 5);
-    if (thisMonth.length > 0) return { period: 'this month' as const, rows: thisMonth };
-    const allTime = others
-      .filter(p => p.convertedLeads > 0)
-      .sort((a, b) => b.convertedLeads - a.convertedLeads || a.name.localeCompare(b.name))
-      .slice(0, 5);
-    return { period: 'all time' as const, rows: allTime };
-  }, [subtreeMembers, person]);
-
-  return (
-    <section className="ep-card" style={{ borderColor: '#858515' }}>
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-1 text-[11px] font-bold text-stone-400">
-          {ancestors.map(a => (
-            <span key={a.userId} className="flex items-center gap-1">
-              <button type="button" onClick={() => onSelect(a)} className="hover:text-[#978C21] hover:underline">{a.name}</button>
-              <ChevronRight className="w-3 h-3" />
-            </span>
-          ))}
-          <span className="text-stone-700">{person.name}</span>
-        </div>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h2 className="text-base font-black text-stone-800">
-              {person.name}
-              {person.isSelf && <span className="ml-2 align-middle text-[8px] font-black uppercase tracking-widest bg-[#978C21] text-white px-1.5 py-0.5 rounded">You</span>}
-            </h2>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
-              {person.employeeId} · {[person.designation, person.department].filter(Boolean).join(' · ')}
-              {person.managerName ? ` · Reports to ${person.managerName}` : ''}
-            </p>
-          </div>
-          {ancestors.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onSelect(ancestors[ancestors.length - 1])}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-100 rounded-full text-[10px] font-black uppercase tracking-widest text-stone-500"
-            >
-              <ArrowUp className="w-3 h-3" /> Back to {ancestors[ancestors.length - 1].name}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Own numbers</p>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <StatCard label="Open leads" value={String(person.openLeads)} />
-          <StatCard label="Due today" value={String(person.dueToday)} tone={person.dueToday > 0 ? 'amber' : undefined} />
-          <StatCard label="Overdue" value={String(person.overdue)} tone={person.overdue > 0 ? 'red' : undefined} />
-          <StatCard label="Converted" value={String(person.convertedLeads)} sub={`${person.convertedThisMonth} this month`} tone="green" />
-          <StatCard label="Possible business (own)" value={money(person.pipelineValue)} tone="olive" />
-        </div>
-      </div>
-
-      {person.subtree && person.directReports > 0 && (
-        <div className="bg-[#978C21]/5 border border-[#978C21]/20 rounded-xl px-4 py-3 text-[12px] text-stone-600">
-          Whole team below <b>{person.name}</b> ({person.subtree.people} people incl. self):{' '}
-          <b>{person.subtree.openLeads}</b> open · <b>{person.subtree.dueToday}</b> due today ·{' '}
-          <b>{person.subtree.overdue}</b> overdue · <b>{person.subtree.converted}</b> converted ·{' '}
-          <span className="text-[#978C21] font-bold">Possible business (open pipeline) {money(person.subtree.pipelineValue)}</span>
-        </div>
-      )}
-
-      {directTeam.length > 0 && (
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Direct team — tap a person to drill down</p>
-          <div className="divide-y divide-stone-100 border border-stone-100 rounded-xl overflow-hidden">
-            {directTeam.map(member => (
-              <button
-                key={member.userId}
-                type="button"
-                onClick={() => onSelect(member)}
-                className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left hover:bg-stone-50"
-              >
-                <span className="text-sm font-black text-stone-800">{member.name}</span>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">{member.employeeId} · {member.designation || ''}</span>
-                <span className="ml-auto text-[11px] text-stone-500">
-                  <b>{member.openLeads}</b> open · <b>{member.dueToday}</b> due ·{' '}
-                  <span className={member.overdue > 0 ? 'text-red-600 font-bold' : undefined}><b>{member.overdue}</b> overdue</span> ·{' '}
-                  <b>{member.convertedLeads}</b> converted · {money(member.pipelineValue)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {statusRows.length > 0 && (
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">
-            {person.directReports > 0 ? 'Team pipeline by status (whole team below, incl. self)' : 'Pipeline by status'}
-          </p>
-          <div className="space-y-1.5">
-            {statusRows.map(row => (
-              <div key={row.status} className="flex items-center gap-3">
-                <span className="w-32 shrink-0 text-[11px] font-bold text-stone-600 truncate">{row.status}</span>
-                <div className="flex-1 h-2.5 bg-stone-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-[#978C21] rounded-full" style={{ width: `${row.pct}%` }} />
-                </div>
-                <span className="w-8 text-right text-[11px] font-black text-stone-700">{row.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="border border-red-100 bg-red-50/50 rounded-xl p-4">
-          <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-red-600">
-            <AlertTriangle className="w-3.5 h-3.5" /> Needs follow-up
-          </p>
-          <p className="text-[10px] text-stone-400 mt-1">In this team, the people with the most overdue + due-today follow-ups.</p>
-          {needsFollowUp.length === 0 ? (
-            <p className="text-xs font-bold text-stone-500 mt-3">Nobody in this team is behind on follow-ups. 🎉</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {needsFollowUp.map(p => (
-                <button key={p.userId} type="button" onClick={() => onSelect(p)} className="w-full flex items-center gap-2 text-left">
-                  <span className="text-xs font-black text-stone-700 truncate">{p.name}</span>
-                  <span className="text-[10px] font-bold text-stone-400">{p.employeeId}</span>
-                  <span className="ml-auto shrink-0 text-[11px] font-bold text-red-600">{p.overdue} overdue · {p.dueToday} due today</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="border border-emerald-100 bg-emerald-50/50 rounded-xl p-4">
-          <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-emerald-700">
-            <Trophy className="w-3.5 h-3.5" /> Doing well — converted {doingWell.period}
-          </p>
-          <p className="text-[10px] text-stone-400 mt-1">
-            {doingWell.period === 'this month'
-              ? 'Top converters in this team this month — a good place to appreciate.'
-              : 'Nobody in this team has converted this month yet, so here are the top converters of all time.'}
-          </p>
-          {doingWell.rows.length === 0 ? (
-            <p className="text-xs font-bold text-stone-500 mt-3">No conversions in this team yet.</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {doingWell.rows.map(p => (
-                <button key={p.userId} type="button" onClick={() => onSelect(p)} className="w-full flex items-center gap-2 text-left">
-                  <span className="text-xs font-black text-stone-700 truncate">{p.name}</span>
-                  <span className="text-[10px] font-bold text-stone-400">{p.employeeId}</span>
-                  <span className="ml-auto shrink-0 text-[11px] font-bold text-emerald-700">
-                    {doingWell.period === 'this month' ? `${p.convertedThisMonth} this month · ` : ''}{p.convertedLeads} converted
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
+const RosterRow: FC<RosterRowProps> = ({ person, pct, followUpsDue, to }) => (
+  <Link to={to} className="ep-roster-row" aria-label={`Open ${person.name}'s detail`}>
+    <span className="ep-roster-member">
+      <span className="ep-miniavatar" aria-hidden="true">{initialsOf(person.name)}</span>
+      <span className="ep-roster-copy">
+        <strong>
+          {person.name}
+          {person.isSelf && <span className="ep-roster-you">You</span>}
+        </strong>
+        <small>{person.employeeId}</small>
+      </span>
+    </span>
+    <span className="ep-roster-role">{person.designation || person.roleName || 'Team member'}</span>
+    <span className="ep-roster-num">{person.openLeads}</span>
+    <span className="ep-roster-num">{pct === null ? '—' : `${pct}%`}</span>
+    <span className="ep-roster-num">{followUpsDue}</span>
+    <span className={cn('ep-pill', memberStatus(person) === 'Needs attention' ? 'warn' : 'ok')}>
+      {memberStatus(person)}
+    </span>
+  </Link>
+);
 
 export default function TeamOverview() {
-  const [people, setPeople] = useState<TeamPerson[]>([]);
-  const [rootIds, setRootIds] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const callerTeam = useCallerTeam();
+  const homeLeads = useAgentHomeLeads();
+  const { canAccess, serverPermissionsSettled } = usePermissions();
+  const { role: displayRole } = useEnterpriseDisplayRole();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [queueItems, setQueueItems] = useState<FollowUpQueueItem[]>([]);
+  const [queueLoading, setQueueLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
-    setError('');
+  const memberParam = searchParams.get('member');
+  const tlParam = searchParams.get('tl');
+
+  const loadQueue = useCallback(async () => {
+    setQueueLoading(true);
     try {
-      const res = await apiRequest<TeamTreeResponse>('/api/team/tree');
-      const list = Array.isArray(res?.people) ? res.people : [];
-      const roots = Array.isArray(res?.rootIds) ? res.rootIds : [];
-      setPeople(list);
-      setRootIds(roots);
-      // Open at the top of the caller's tree: roots expanded one level,
-      // and the caller selected so their detail is the first thing seen.
-      setExpanded(new Set(roots));
-      const self = list.find(p => p.isSelf);
-      setSelectedId(self ? self.userId : (roots[0] ?? null));
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load the team overview');
+      const result = await leadService.getFollowUpQueue({ bucket: 'all', limit: 200 });
+      setQueueItems(result.items || []);
+    } catch {
+      setQueueItems([]);
     } finally {
-      setLoading(false);
+      setQueueLoading(false);
     }
+  }, []);
+
+  useEffect(() => { void loadQueue(); }, [loadQueue]);
+
+  const self = useMemo(
+    () => (callerTeam.overview ? getSelfPerson(callerTeam.overview.people) : undefined),
+    [callerTeam.overview],
+  );
+  const people = useMemo(() => callerTeam.overview?.people ?? [], [callerTeam.overview]);
+
+  // In-scope roster (admin-role users removed everywhere).
+  const roster = useMemo(
+    () => (self ? scopePeople(people, self, displayRole) : []),
+    [people, self, displayRole],
+  );
+  const rosterIds = useMemo(
+    () => new Set(roster.map(p => String(p.employeeId).toUpperCase())),
+    [roster],
+  );
+  const scopedLeads = useMemo(
+    () => scopeLeadsByAssignee(homeLeads.leads, rosterIds),
+    [homeLeads.leads, rosterIds],
+  );
+  const totals = useMemo(() => summarizeTeamTotals(roster), [roster]);
+  const completions = useMemo(
+    () => memberCompletions(roster, scopedLeads),
+    [roster, scopedLeads],
+  );
+
+  const avgConversion = totals.totalLeads === 0
+    ? 0
+    : Math.round((totals.converted / totals.totalLeads) * 100);
+  const avgActiveLeads = roster.length === 0
+    ? 0
+    : Math.round((totals.open / roster.length) * 10) / 10;
+
+  const canAddUser = serverPermissionsSettled && canAccess('user_management', 'add_employee');
+
+  // Manager TL grouping (?tl= drills one TL's member-wise roster).
+  const isManagerView = displayRole === 'manager';
+  const tlGroups = useMemo(() => {
+    if (!isManagerView || !self) return [];
+    const groups = new Map<string, { tl: TeamOverviewPerson; members: TeamOverviewPerson[] }>();
+    for (const person of roster) {
+      const tl = tlAncestorOf(people, person.employeeId, self.employeeId) ?? self;
+      const key = String(tl.employeeId).toUpperCase();
+      const group = groups.get(key) ?? { tl, members: [] };
+      group.members.push(person);
+      groups.set(key, group);
+    }
+    return [...groups.values()].sort((a, b) => a.tl.name.localeCompare(b.tl.name));
+  }, [isManagerView, roster, people, self]);
+  const selectedTlGroup = useMemo(
+    () => tlGroups.find(g => String(g.tl.employeeId).toUpperCase() === String(tlParam || '').toUpperCase()),
+    [tlGroups, tlParam],
+  );
+  const visibleRoster = useMemo(() => {
+    if (!isManagerView || !tlParam) return roster;
+    return selectedTlGroup ? selectedTlGroup.members : [];
+  }, [isManagerView, tlParam, roster, selectedTlGroup]);
+
+  const selectedMember = useMemo(
+    () => roster.find(p => String(p.employeeId).toUpperCase() === String(memberParam || '').toUpperCase()),
+    [roster, memberParam],
+  );
+  const memberLeads = useMemo(() => {
+    if (!selectedMember) return [];
+    const memberId = String(selectedMember.employeeId).toUpperCase();
+    return scopedLeads
+      .filter(lead => String(lead.assignedTo || '').toUpperCase() === memberId)
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  }, [selectedMember, scopedLeads]);
+  const memberFollowUps = useMemo(() => {
+    if (!selectedMember) return [];
+    const memberId = String(selectedMember.employeeId).toUpperCase();
+    return queueItems
+      .filter(item => String(item.assignedTo || '').toUpperCase() === memberId)
+      .sort((a, b) => new Date(a.nextFollowUpAt).getTime() - new Date(b.nextFollowUpAt).getTime());
+  }, [selectedMember, queueItems]);
+  const selectedCompletion = selectedMember
+    ? completions.get(String(selectedMember.employeeId).toUpperCase())
+    : undefined;
+
+  const closeMember = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('member');
+    setSearchParams(next);
   };
 
-  useEffect(() => { load(); }, []);
-
-  const byId = useMemo(() => new Map(people.map(p => [p.userId, p])), [people]);
-  const byEmployeeId = useMemo(
-    () => new Map(people.map(p => [String(p.employeeId).toUpperCase(), p])),
-    [people]
-  );
-  const roots = useMemo(
-    () => rootIds.map(id => byId.get(id)).filter(Boolean) as TeamPerson[],
-    [rootIds, byId]
-  );
-  const selected = selectedId ? byId.get(selectedId) || null : null;
-
-  const selectPerson = (p: TeamPerson) => {
-    setSelectedId(p.userId);
-    // Make sure the selected person is visible in the tree: expand the
-    // ancestor chain above them.
-    setExpanded(prev => {
-      const next = new Set(prev);
-      let cursor: TeamPerson | undefined = p;
-      const seen = new Set<string>();
-      while (cursor?.managerEmployeeId && !seen.has(cursor.userId)) {
-        seen.add(cursor.userId);
-        const mgr = byEmployeeId.get(cursor.managerEmployeeId.toUpperCase());
-        if (!mgr) break;
-        next.add(mgr.userId);
-        cursor = mgr;
-      }
-      return next;
-    });
-  };
-
-  const toggle = (id: string) =>
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-
-  const grouped = useMemo(() => TIERS.map(tier => ({
-    ...tier,
-    members: people
-      .filter(p => p.tier === tier.key)
-      .sort((a, b) => (b.openLeads + b.dueToday) - (a.openLeads + a.dueToday) || a.name.localeCompare(b.name)),
-  })).filter(g => g.members.length > 0), [people]);
-
-  // Totals from the roots' rollups: every person in scope is counted
-  // exactly once (roots' subtrees partition the scope).
-  const totals = useMemo(() => ({
-    open: roots.reduce((s, p) => s + (p.subtree?.openLeads || 0), 0),
-    converted: roots.reduce((s, p) => s + (p.subtree?.converted || 0), 0),
-    due: roots.reduce((s, p) => s + (p.subtree?.dueToday || 0), 0),
-    pipeline: roots.reduce((s, p) => s + (p.subtree?.pipelineValue || 0), 0),
-  }), [roots]);
+  const loading = callerTeam.loading || homeLeads.loading;
 
   return (
     <div className="ep-page">
+      <BackButton fallback="/" />
       <EnterprisePageHeader
         path="/team"
         actions={(
           <>
             <button
               type="button"
-              onClick={load}
+              onClick={() => { callerTeam.refresh(); void loadQueue(); }}
               className="ep-btn"
             >
               <RefreshCcw className="w-3.5 h-3.5" /> Refresh
             </button>
-            <Link
-              to="/team/organogram"
-              className="ep-btn ep-btn-primary"
-            >
+            <Link to="/team/organogram" className="ep-btn">
               <Network className="w-3.5 h-3.5" /> Organogram
             </Link>
+            {canAddUser && (
+              <Link to="/users/team" className="ep-btn ep-btn-primary">
+                <UserPlus className="w-3.5 h-3.5" /> Invite member
+              </Link>
+            )}
           </>
         )}
       />
-
-      <div className="ep-card" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 20px', marginBottom: 18 }}>
-        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{people.length}</strong> people in your scope</span>
-        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.open}</strong> open</span>
-        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.converted}</strong> converted</span>
-        <span className="ep-muted"><strong style={{ color: 'var(--ep-ink)' }}>{totals.due}</strong> due today</span>
-        <span className="ep-muted"><Wallet className="w-3.5 h-3.5" style={{ display: 'inline', verticalAlign: '-2px' }} /> Possible business (open pipeline): <strong style={{ color: 'var(--ep-ink)' }}>{money(totals.pipeline)}</strong></span>
-      </div>
 
       {loading ? (
         <div className="ep-card">
           <p className="ep-empty" style={{ textAlign: 'center' }}>Loading your team…</p>
         </div>
-      ) : error ? (
+      ) : callerTeam.error || !callerTeam.overview || !self ? (
         <div className="ep-card" style={{ borderColor: '#e8b4b0', background: '#fdf6f5' }}>
-          <p className="text-sm font-bold" style={{ color: '#c84d43' }}>{error}</p>
+          <p className="text-sm font-bold" style={{ color: '#c84d43' }}>The team could not be loaded.</p>
+          <button type="button" className="ep-btn" style={{ marginTop: 12 }} onClick={() => callerTeam.refresh()}>
+            Retry
+          </button>
         </div>
-      ) : people.length === 0 ? (
-        <div className="ep-card" style={{ textAlign: 'center' }}>
-          <p className="text-sm font-black text-stone-700">No team members in your scope yet</p>
-          <p className="ep-muted" style={{ marginTop: 6 }}>When people report to you — directly or through your team — they will appear here with their lead counts.</p>
-        </div>
-      ) : (
+      ) : selectedMember ? (
         <>
-          <section className="space-y-2">
-            <div className="ep-cardhead" style={{ marginBottom: 4 }}>
+          <button type="button" className="ep-btn" onClick={closeMember} style={{ marginBottom: 12 }}>
+            ← Back to {isManagerView && tlParam && selectedTlGroup ? `${selectedTlGroup.tl.name}'s team` : 'team members'}
+          </button>
+          <div className="ep-card">
+            <div className="ep-cardhead">
               <div>
-                <h3>Team tree</h3>
-                <div className="ep-muted">Starts at the top of your scope — expand a team, tap a person for detail</div>
-              </div>
-            </div>
-            <div>
-              {roots.map(root => (
-                <Fragment key={root.userId}>
-                  <TreeNode
-                    person={root}
-                    byId={byId}
-                    depth={0}
-                    expanded={expanded}
-                    onToggle={toggle}
-                    selectedId={selectedId}
-                    onSelect={selectPerson}
-                  />
-                </Fragment>
-              ))}
-            </div>
-          </section>
-
-          {selected && (
-            <PersonDetail person={selected} byId={byId} byEmployeeId={byEmployeeId} onSelect={selectPerson} />
-          )}
-
-          {grouped.map(group => (
-            <section key={group.key} className="space-y-3">
-              <div className="ep-cardhead" style={{ marginBottom: 0 }}>
-                <div>
-                  <h3>{group.title}</h3>
-                  <div className="ep-muted">{group.members.length} · {group.blurb}</div>
+                <h3>{selectedMember.name}</h3>
+                <div className="ep-muted">
+                  {selectedMember.employeeId} · {selectedMember.designation || selectedMember.roleName || 'Team member'}
+                  {selectedMember.managerName ? ` · Reports to ${selectedMember.managerName}` : ''}
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {group.members.map(person => (
-                  <div key={person.userId}>
-                    <PersonCard person={person} onSelect={selectPerson} />
-                  </div>
+              <span className={cn('ep-pill', memberStatus(selectedMember) === 'Needs attention' ? 'warn' : 'ok')}>
+                {memberStatus(selectedMember)}
+              </span>
+            </div>
+            <div className="ep-grid" style={{ marginTop: 4 }}>
+              <KpiCard label="Assigned leads" value={selectedMember.totalLeads} foot="Assigned to this member" />
+              <KpiCard label="Open leads" value={selectedMember.openLeads} foot="Not yet converted or closed" />
+              <KpiCard
+                label="Due today"
+                value={selectedMember.dueToday}
+                foot={selectedMember.overdue > 0 ? `${selectedMember.overdue} overdue` : 'Nothing overdue'}
+                tone={selectedMember.overdue > 0 ? 'orange' : undefined}
+              />
+              <KpiCard
+                label="Follow-up completion"
+                value={selectedCompletion?.pct === null || selectedCompletion?.pct === undefined ? '—' : `${selectedCompletion.pct}%`}
+                foot={`${selectedCompletion?.completed ?? 0} completed today`}
+              />
+            </div>
+          </div>
+
+          <div className="ep-card">
+            <div className="ep-cardhead">
+              <h3>Their leads</h3>
+              <span className="ep-muted">{memberLeads.length} lead{memberLeads.length === 1 ? '' : 's'}</span>
+            </div>
+            {memberLeads.length === 0 ? (
+              <p className="ep-empty">No leads assigned to this member yet.</p>
+            ) : (
+              <div className="ep-list">
+                {memberLeads.map((lead: Lead) => (
+                  <Link
+                    key={lead.id}
+                    to={`/leads/${encodeURIComponent(lead.id)}`}
+                    className="ep-listrow ep-recent-row"
+                  >
+                    <span className="ep-person">
+                      <span className="ep-miniavatar" aria-hidden="true">{initialsOf(lead.prospectName || '')}</span>
+                      <span>
+                        <strong>{lead.prospectName || 'Unnamed lead'}</strong>
+                        <span className="ep-cellsub">
+                          {lead.source || 'No source'}
+                          {lead.nextFollowUpDate ? ` · Next follow-up ${formatDhakaShort(lead.nextFollowUpDate)}` : ''}
+                        </span>
+                      </span>
+                    </span>
+                    <span className={cn('ep-pill', getLeadStatusColorClasses(lead.currentStatus))}>
+                      {lead.currentStatus}
+                    </span>
+                  </Link>
                 ))}
               </div>
-            </section>
-          ))}
+            )}
+          </div>
+
+          <div className="ep-card">
+            <div className="ep-cardhead">
+              <h3>Follow-ups due</h3>
+              <span className="ep-muted">{memberFollowUps.length} scheduled</span>
+            </div>
+            {queueLoading ? (
+              <p className="ep-empty">Loading follow-ups…</p>
+            ) : memberFollowUps.length === 0 ? (
+              <p className="ep-empty">No follow-ups scheduled for this member.</p>
+            ) : (
+              <div className="ep-list">
+                {memberFollowUps.map(item => (
+                  <Link
+                    key={item.id}
+                    to={`/leads/${encodeURIComponent(item.id)}`}
+                    className="ep-listrow ep-recent-row"
+                  >
+                    <span className="ep-person">
+                      <span>
+                        <strong>{item.prospectName || item.customerName || 'Unnamed lead'}</strong>
+                        <span className="ep-cellsub">
+                          {item.currentStatus}
+                          {item.dueState === 'overdue' ? ` · Overdue${item.overdueDays ? ` ${item.overdueDays}d` : ''}` : ''}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="ep-muted">{formatDhakaShort(item.nextFollowUpAt)}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="ep-grid">
+            <KpiCard label="Team members" value={roster.length} foot="People in scope, including you" />
+            <KpiCard label="Active leads" value={totals.open} foot="Open leads across the team" />
+            <KpiCard label="Avg. conversion" value={`${avgConversion}%`} foot={`${totals.converted} of ${totals.totalLeads} converted`} />
+            <KpiCard label="Avg. active leads" value={avgActiveLeads} foot="Open leads per member" />
+          </div>
+
+          {isManagerView && !tlParam ? (
+            <div className="ep-card">
+              <div className="ep-cardhead">
+                <div>
+                  <h3>Teams by team lead</h3>
+                  <div className="ep-muted">Click a team lead to see their members</div>
+                </div>
+              </div>
+              {tlGroups.length === 0 ? (
+                <p className="ep-empty">No team leads in scope yet.</p>
+              ) : (
+                <div className="ep-member-list">
+                  {tlGroups.map(group => {
+                    const groupTotals = summarizeTeamTotals(group.members);
+                    return (
+                      <Link
+                        key={group.tl.employeeId}
+                        to={`/team?tl=${encodeURIComponent(group.tl.employeeId)}`}
+                        className="ep-member-row"
+                        aria-label={`Open ${group.tl.name}'s team`}
+                      >
+                        <span className="ep-miniavatar" aria-hidden="true">{initialsOf(group.tl.name)}</span>
+                        <span className="ep-member-copy">
+                          <strong>{group.tl.name}</strong>
+                          <small>
+                            {group.tl.designation || group.tl.roleName || 'Team Lead'}
+                            {` · ${group.members.length} member${group.members.length === 1 ? '' : 's'} · ${groupTotals.open} active leads`}
+                          </small>
+                        </span>
+                        <span className="ep-member-pct">→</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="ep-card">
+              <div className="ep-cardhead">
+                <div>
+                  <h3>{isManagerView && tlParam && selectedTlGroup ? `${selectedTlGroup.tl.name}'s team` : 'Team roster'}</h3>
+                  <div className="ep-muted">
+                    {visibleRoster.length} member{visibleRoster.length === 1 ? '' : 's'} · click a member to see their leads and follow-ups
+                  </div>
+                </div>
+                {isManagerView && tlParam && (
+                  <Link className="ep-viewall" to="/team">← All teams</Link>
+                )}
+              </div>
+              {visibleRoster.length === 0 ? (
+                <p className="ep-empty">No team members in scope yet.</p>
+              ) : (
+                <>
+                  <div className="ep-roster-head" aria-hidden="true">
+                    <span>Member</span>
+                    <span>Role</span>
+                    <span>Active leads</span>
+                    <span>Follow-up completion</span>
+                    <span>Follow-ups due</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="ep-roster-list">
+                    {visibleRoster.map(person => {
+                      const completion = completions.get(String(person.employeeId).toUpperCase());
+                      const params = new URLSearchParams(searchParams);
+                      params.set('member', person.employeeId);
+                      return (
+                        <RosterRow
+                          key={person.userId}
+                          person={person}
+                          pct={completion?.pct ?? null}
+                          followUpsDue={person.dueToday + person.overdue}
+                          to={`/team?${params.toString()}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

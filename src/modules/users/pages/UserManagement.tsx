@@ -161,8 +161,10 @@ const APP_FEATURE_GROUPS = [...new Set(APP_FEATURES.map(feature => feature.group
 /*  from feature/menu visibility (APP_FEATURES) and data visibility.   */
 /*                                                                     */
 /*  Every code below already exists in the `permissions` catalog       */
-/*  seeded by migration 025 — no code is invented here. Each mapped    */
-/*  action is enforced server-side (production.routes.ts).             */
+/*  seeded by migration 025 — except `users.add_employee`, seeded by   */
+/*  migration 063 (Team Lead / Manager workspace, 2026-11-20). No      */
+/*  code is invented here. Each mapped action is enforced server-side  */
+/*  (production.routes.ts).                                            */
 /* ------------------------------------------------------------------ */
 interface ActionPermissionMeta {
   code: string;
@@ -209,6 +211,14 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
       { code: 'users.create', label: 'Create', desc: 'Onboard new employees.' },
       { code: 'users.edit', label: 'Edit', desc: 'Edit employee details and activate/deactivate accounts. Password resets are administrator-only, and self-service password changes never require this.' },
       { code: 'users.delete', label: 'Delete', desc: 'Remove employees.' },
+      // Team Lead / Manager workspace (2026-11-20): the admin-granted
+      // user-add access — Employee-role users only, reporting to the
+      // adding TL/Manager, in their department. Grants the "Add user"
+      // button on Team Members and the User Management sidebar page.
+      // No other user-management power comes with it (no edit/delete/
+      // role change). The server enforces the grant on
+      // POST /api/users/employee.
+      { code: 'users.add_employee', label: 'Add Employee', desc: 'Add Employee-role users to the caller’s own team (Team Lead / Manager only; the new employee reports to them).' },
     ],
   },
   {

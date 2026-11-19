@@ -99,7 +99,17 @@ describe('Enterprise Preview home — Add Lead action (PR #24b)', () => {
 });
 
 describe('Enterprise Preview home — queue buckets stay reachable (PR #24c)', () => {
-  it('Follow-up Queue is in every role\'s enterprise nav', () => {
+  it('Follow-up Monitor / Queue is in every role\'s enterprise nav', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): the demo's
+    // sidebar label is "Follow-up Monitor" for TL/Manager/Admin;
+    // Agent keeps "Follow-up Queue". The page H1 stays "Follow-up
+    // Queue" for every role (see enterpriseHeadingForPath).
+    const expected: Record<EnterpriseRole, string> = {
+      admin: 'Follow-up Monitor',
+      manager: 'Follow-up Monitor',
+      teamLead: 'Follow-up Monitor',
+      agent: 'Follow-up Queue',
+    };
     const roles: EnterpriseRole[] = ['admin', 'manager', 'teamLead', 'agent'];
     for (const role of roles) {
       const groups = buildEnterpriseNavGroups({
@@ -110,7 +120,7 @@ describe('Enterprise Preview home — queue buckets stay reachable (PR #24c)', (
       const items = groups.flatMap(g => g.items);
       const strategy = items.find(item => item.path === '/follow-up');
       assert.ok(strategy, `${role} nav must include /follow-up`);
-      assert.equal(strategy!.label, 'Follow-up Queue', `${role} nav must label it Follow-up Queue`);
+      assert.equal(strategy!.label, expected[role], `${role} nav must label it ${expected[role]}`);
     }
   });
 

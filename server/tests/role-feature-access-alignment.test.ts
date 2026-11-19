@@ -226,17 +226,19 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(p.includes("'/workbench'"), 'workbench must map to /workbench');
   });
 
-  it('the sidebar still lists the Daily Workbench, and the Agent nav keeps the My Work label', () => {
-    // Enterprise Preview (2026-11-19): the primary tabs are retired —
-    // the Workbench is the sidebar's "Daily Workbench" item (the
-    // 2026-11-19 label fix: the old "Follow-up Queue" label belonged
-    // to /follow-up, not /workbench). Agent workspace rebuild
+  it('the sidebar dropped Daily Workbench, and the Agent nav keeps the My Work label', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): NO role's
+    // sidebar carries /workbench anymore — the Agent home (My Work)
+    // is the day's workspace, and /workbench stays live by URL + on
+    // the Agent bottom bar as "Workbench". Agent workspace rebuild
     // (2026-11-20): "My Work" survives as the Agent sidebar label
     // and breadcrumb — the home's H1 is the time-based greeting now.
     // The routes are unchanged.
     const nav = read('src/layouts/enterpriseNav.ts');
-    assert.match(nav, /label: 'Daily Workbench'[^}]*path: '\/workbench'/,
-      'the sidebar must keep the Workbench reachable as Daily Workbench');
+    assert.doesNotMatch(nav, /label: 'Daily Workbench'[^}]*path: '\/workbench'/,
+      'no sidebar item may offer Daily Workbench anymore');
+    assert.match(nav, /label: 'Workbench'[^}]*path: '\/workbench'/,
+      'the Agent bottom bar still reaches /workbench as Workbench');
     assert.match(nav, /label: 'Follow-up Queue'[^}]*path: '\/follow-up'/,
       'the sidebar must keep the Follow-up Queue reachable as Follow-up Queue');
     assert.match(nav, /label: 'My Work'[^}]*path: '\/'/,

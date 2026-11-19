@@ -6,6 +6,7 @@ import { readSessionCache, writeSessionCache } from '../../shared/api/sessionCac
 import { ROLES_CACHE_CHANGED_EVENT } from '../../shared/utils/localCacheEvents';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { callerHasTeam } from '../../team/services/teamOverviewService';
+import { useEnterpriseRole } from '../../../layouts/useEnterpriseRole';
 import type { RolePermission } from '../../shared/types';
 import {
   canResolveRouteAccess,
@@ -30,7 +31,11 @@ import {
  *     `teamLeadAllowed` predicate needs the has-subordinate fact, and
  *     deciding before it lands would bounce a team lead out of Lead
  *     Intake on a cold load. The wait below covers the team fetch
- *     exactly like the matrix fetch.
+ *     exactly like the matrix fetch. The same applies to the
+ *     `managerAllowed` predicate (useEnterpriseRole, shared caches
+ *     — no extra network request): a Manager must not be bounced
+ *     out of Lead Intake / User Management while the derived role
+ *     is still loading.
  *
  * Three outcomes, not two:
  *   granted -> render the page
@@ -78,6 +83,12 @@ export default function FeatureGate({ route, children }: { route: string; childr
   const callerTeam = useCallerTeam();
   const hasSubordinates = callerHasTeam(callerTeam.overview?.people);
   const teamSettled = !callerTeam.loading;
+  // The derived enterprise role for `managerAllowed` routes
+  // (Lead Intake, User Management). Route access always uses
+  // the REAL role, never a super-admin preview.
+  const enterpriseRole = useEnterpriseRole();
+  const isManager = enterpriseRole.role === 'manager';
+  const roleSettled = !enterpriseRole.loading;
   // Seed from the session cache synchronously: an in-session navigation
   // (and a reload in a tab that already fetched the matrix) decides on the
   // first paint, with no placeholder frame.
@@ -133,15 +144,17 @@ export default function FeatureGate({ route, children }: { route: string; childr
 
   const matched = matchRole(roles, user);
 
-  if (!canResolveRouteAccess(route, user.role, matched, { teamSettled })) {
+  if (!canResolveRouteAccess(route, user.role, matched, { teamSettled, roleSettled })) {
     // Nothing to decide on yet — wait, do NOT redirect. `settled`
-    // marks a finished matrix fetch attempt and `teamSettled` a
-    // finished team fetch attempt, so this can never hang: once both
-    // attempts resolve (success or failure) the decision below runs.
-    if (!settled || !teamSettled) return <AccessResolving />;
+    // marks a finished matrix fetch attempt, `teamSettled` a
+    // finished team fetch attempt and `roleSettled` a finished
+    // enterprise-role derivation, so this can never hang: once
+    // all attempts resolve (success or failure) the decision
+    // below runs.
+    if (!settled || !teamSettled || !roleSettled) return <AccessResolving />;
   }
 
-  if (!resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates })) {
+  if (!resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates, isManager })) {
     return <Navigate to="/" replace />;
   }
 

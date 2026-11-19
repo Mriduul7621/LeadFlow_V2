@@ -4,21 +4,27 @@ import { toast } from 'sonner';
 import { useAuthStore } from '../../auth/store/authStore';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { downlineOf } from '../../team/services/teamOverviewService';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import { isAdminPerson } from '../../workspace/utils/teamWorkspaceData';
 import { leadService } from '../services/leadService';
 
 /**
  * ReassignLeadDialog — move a lead to another member of the caller's
- * team (2026-11-19, Mahadi).
+ * team (2026-11-19, extended 2026-11-20, Mahadi).
  * ------------------------------------------------------------------
  * A team lead may reassign ANY lead in their team scope — their own
  * or any subordinate's (A → B allowed) — to ANYONE in their full
- * downline (the whole subtree, not just direct reports). The target
- * picker lists ONLY the caller's downline, excluding the current
- * assignee; the server re-checks the same rule (caller has a team +
- * target in the downline) on every request, so this UI can never
- * widen access. After the move the lead leaves the TL's My Leads
- * and appears under the new owner; the TL still sees it via team
- * scope. No approval flow — the TL decides directly.
+ * downline (the whole subtree, not just direct reports). A Manager
+ * or Admin may reassign to anyone in their visible set (the
+ * server's visibility check bounds the target). The picker always
+ * excludes the current assignee and admin-role users (an admin is
+ * never a seller). The server re-checks the same rule
+ * (callerHasTeamScope + target in scope) on every request, so this
+ * UI can never widen access. After the move the lead leaves the
+ * TL's My Leads and appears under the new owner; the TL still sees
+ * it via team scope. No approval flow — the TL/Manager decides
+ * directly. The target rule follows the REAL role, never the
+ * super-admin preview — the server enforces the real rule.
  *
  * Shared by Lead360 and the lead list; the caller owns the open
  * state and refreshes its own data via `onReassigned`.
@@ -40,6 +46,7 @@ interface ReassignLeadDialogProps {
 export default function ReassignLeadDialog({ lead, onClose, onReassigned }: ReassignLeadDialogProps) {
   const user = useAuthStore(state => state.user);
   const callerTeam = useCallerTeam();
+  const { realRole } = useEnterpriseDisplayRole();
   const [selected, setSelected] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -51,11 +58,21 @@ export default function ReassignLeadDialog({ lead, onClose, onReassigned }: Reas
 
   const targets = useMemo(() => {
     if (!lead) return [];
+    const people = callerTeam.overview?.people ?? [];
     const current = String(lead.assignedTo || '').toUpperCase();
-    return downlineOf(callerTeam.overview?.people, user?.employeeId)
+    // Team Lead: the full downline only. Manager / Admin: everyone
+    // visible (the server's visibility check bounds the target).
+    // Either way: never the current assignee, never an admin-role
+    // user. Self stays listed — reassigning a lead back to
+    // yourself always passes the server rule.
+    const pool = realRole === 'teamLead'
+      ? downlineOf(people, user?.employeeId)
+      : people;
+    return pool
+      .filter(person => !isAdminPerson(person))
       .filter(person => String(person.employeeId).toUpperCase() !== current)
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [lead, callerTeam.overview, user?.employeeId]);
+  }, [lead, callerTeam.overview, user?.employeeId, realRole]);
 
   const currentAssigneeName = useMemo(() => {
     if (!lead?.assignedTo) return null;

@@ -239,6 +239,12 @@ export interface Lead {
   otherInfo?: string;
   assignedTo: string; // Employee ID
   assignedBy?: string; // Employee ID
+  // Creator (2026-11-20, Team Leads / My Leads scope split): the
+  // server exposes both id spaces — `createdBy` is the users.id
+  // UUID, `createdByEmployeeId` the roster employee ID. Either may
+  // be absent on old/demo rows; scope matching tries both.
+  createdBy?: string | null;
+  createdByEmployeeId?: string;
   currentStatus: LeadStatus;
   projectedNCP: number;
   collectedNCP: number;

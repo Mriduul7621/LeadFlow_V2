@@ -480,14 +480,25 @@ describe('FIX-1b — source guards', () => {
   });
 
   it('the Team overview page and Administration entry exist', () => {
-    // Org-tree evolution (2026-11-11): the page's ONE data path is now
-    // GET /api/team/tree (a superset payload — the flat groups below are
-    // rendered from it). The /api/team/overview endpoint itself is
-    // unchanged and its API assertions above still pin it.
-    assert.match(teamPage, /\/api\/team\/tree/);
-    assert.match(teamPage, /Managers/);
-    assert.match(teamPage, /Team Leaders/);
-    assert.match(teamPage, /Team Members/);
+    // Team Lead / Manager / Admin workspace (2026-11-20): /team was
+    // REBUILT as the Team Members roster (Mahadi: the tree page was
+    // "ekta faltu design"). The page reads the team overview
+    // (useCallerTeam) + the loaded leads list — it never calls the
+    // tree endpoint, and the flat tier groups are gone. The tree
+    // endpoint + builder survive (pinned in
+    // team-tree-report.test.ts) and the organogram chart still lives
+    // at /team/organogram, linked from the header. (The header
+    // comment documents the rebuild, so the negative checks run on
+    // comment-stripped code.)
+    const stripped = teamPage
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    assert.doesNotMatch(stripped, /\/api\/team\/tree/, 'the roster page must not call the tree endpoint');
+    assert.doesNotMatch(stripped, /Managers/, 'no Managers tier group');
+    assert.doesNotMatch(stripped, /Team Leaders/, 'no Team Leaders tier group');
+    assert.match(teamPage, /RosterRow/, 'the roster table renders');
+    assert.match(teamPage, /ep-roster-row/, 'roster rows link to the member detail');
+    assert.match(teamPage, /\/team\/organogram/, 'the Organogram link is kept');
     assert.match(morePages, /label: 'Team'/);
   });
 });

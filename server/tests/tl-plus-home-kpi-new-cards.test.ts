@@ -829,23 +829,25 @@ describe('new KPI cards — source guards', () => {
     assert.ok(page.includes('No leads for this KPI yet'), 'the all-zero line exists');
   });
 
-  it('the enterprise homes wire the new cards (Total Lead, No Action Alert) through kpiDrilldownUrl', () => {
-    // TeamHomeContent is retired (Enterprise Preview, 2026-11-19):
-    // the new cards now live on the role homes as KpiCard links.
-    // Total Lead is a KPI on Admin, Manager, Team Lead and Agent;
-    // No Action Alert is a KPI on Team Lead and an attention-row
-    // drill-down on Admin and Manager.
-    const admin = read('src/modules/workspace/pages/AdminHome.tsx');
-    assert.ok(admin.includes("kpiDrilldownUrl('totalLeads')"), 'AdminHome Total leads KPI drills down');
-    assert.ok(admin.includes("kpiDrilldownUrl('noAction')"), 'AdminHome No Action attention row drills down');
-    assert.ok(admin.includes('label="Total leads"'), 'AdminHome labels the card Total leads');
-    const manager = read('src/modules/workspace/pages/ManagerHome.tsx');
-    assert.ok(manager.includes("kpiDrilldownUrl('totalLeads')"), 'ManagerHome Managed leads KPI drills down');
-    assert.ok(manager.includes("kpiDrilldownUrl('noAction')"), 'ManagerHome No Action attention row drills down');
-    const teamLead = read('src/modules/workspace/pages/TeamLeadHome.tsx');
-    assert.ok(teamLead.includes('label="No Action Alert"'), 'TeamLeadHome carries the No Action Alert KPI card');
-    assert.ok(teamLead.includes("kpiDrilldownUrl('noAction')"), 'TeamLeadHome No Action Alert KPI drills down');
-    assert.ok(teamLead.includes("kpiDrilldownUrl('totalLeads')"), 'TeamLeadHome Team leads KPI drills down');
+  it('the enterprise homes wire the Agent KPI set through kpiDrilldownUrl', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers over ONE shared component
+    // carrying the Agent KPI set at team scope (Assigned leads /
+    // Due today / Contacted / Converted). The Total Lead / No Action
+    // Alert cards are gone — no-action leads now surface in the
+    // At-risk leads section (overdue follow-up OR no activity in
+    // 48h), not as a KPI card.
+    const team = read('src/modules/workspace/pages/TeamOverviewHome.tsx');
+    assert.ok(team.includes("kpiDrilldownUrl('totalLeads')"), 'TeamOverviewHome Assigned leads KPI drills down');
+    assert.ok(team.includes("kpiDrilldownUrl('dueToday')"), 'TeamOverviewHome Due today KPI drills down');
+    assert.ok(team.includes("kpiDrilldownUrl('converted')"), 'TeamOverviewHome Converted KPI drills down');
+    assert.ok(team.includes('label="Assigned leads"'), 'TeamOverviewHome labels the card Assigned leads');
+    assert.ok(team.includes('label="Due today"'), 'TeamOverviewHome labels the card Due today');
+    assert.ok(team.includes('label="Contacted"'), 'TeamOverviewHome labels the card Contacted');
+    assert.ok(team.includes('label="Converted"'), 'TeamOverviewHome labels the card Converted');
+    assert.ok(!team.includes("kpiDrilldownUrl('noAction')"), 'no No Action KPI drill-down on the shared home');
+    assert.ok(!team.includes('label="No Action Alert"'), 'no No Action Alert card on the shared home');
+    assert.ok(team.includes('At-risk leads'), 'no-action leads surface in the At-risk leads section instead');
     const agent = read('src/modules/workspace/pages/AgentHome.tsx');
     assert.ok(agent.includes("kpiDrilldownUrl('totalLeads', 'self')"), 'AgentHome My leads drills to the caller\'s own leads');
   });

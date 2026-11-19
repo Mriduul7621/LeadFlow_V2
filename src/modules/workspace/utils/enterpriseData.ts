@@ -1,4 +1,3 @@
-import type { FollowUpQueueItem } from '../../leads/services/leadService';
 import type { DropdownOption } from '../../shared/types';
 
 /**
@@ -60,39 +59,6 @@ export function dhakaDayLabel(dayKey: string): string {
     weekday: 'short',
     day: 'numeric',
   });
-}
-
-export interface DayBucket {
-  /** 'YYYY-MM-DD' (Dhaka). */
-  dayKey: string;
-  /** 'Mon 12' style label. */
-  label: string;
-  count: number;
-  isToday: boolean;
-}
-
-/**
- * Group follow-up queue items by their Dhaka due day for today plus
- * the next six days. Always returns all seven days, even at 0
- * (never-empty rule). Items due before today or after day 6 are not
- * in any bucket — the caller keeps them in the overdue / upcoming
- * totals instead.
- */
-export function buildNext7Days(items: FollowUpQueueItem[], now: Date = new Date()): DayBucket[] {
-  const startMs = dhakaDayStartMs(now);
-  const days: DayBucket[] = [];
-  for (let i = 0; i < 7; i++) {
-    const dayStart = startMs + i * 86_400_000;
-    const key = dhakaDayKey(new Date(dayStart + 3600 * 1000));
-    days.push({ dayKey: key, label: dhakaDayLabel(key), count: 0, isToday: i === 0 });
-  }
-  for (const item of items) {
-    const t = new Date(item.nextFollowUpAt).getTime();
-    if (Number.isNaN(t)) continue;
-    const offset = Math.floor((t - startMs) / 86_400_000);
-    if (offset >= 0 && offset < 7) days[offset].count += 1;
-  }
-  return days;
 }
 
 /** '12 Nov' style short date for a Dhaka instant. */

@@ -609,8 +609,15 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
     // Enterprise Preview: the "No trend data available" empty state died
-    // with Dashboard.tsx (that disjunct is dropped, not weakened). The
-    // home chart is now built from the real follow-up queue buckets.
-    assert.ok(page.includes('setChartDays(buildNext7Days([...today, ...upcoming]))'), 'the home chart must be built from the real queue buckets');
+    // with Dashboard.tsx (that disjunct is dropped, not weakened).
+    // Team Lead / Manager / Admin workspace (2026-11-20): the 7-day
+    // chart pipeline (chartDays / buildNext7Days) was removed — the
+    // homes chart team activity from the loaded leads list via
+    // activityBuckets, and the hook carries no chart state anymore.
+    // (The hook's header comment documents the removal, so the
+    // negative checks run on comment-stripped code.)
+    const code = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    assert.ok(!code.includes('chartDays'), 'the hook carries no 7-day chart state anymore');
+    assert.ok(!code.includes('buildNext7Days'), 'the 7-day chart builder is gone');
   });
 });

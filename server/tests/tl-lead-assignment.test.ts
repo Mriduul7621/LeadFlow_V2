@@ -127,26 +127,36 @@ function seedTeam() {
   return { tl, subA, subB, subC, outsider, agent, loneManager, admin };
 }
 
-describe('Follow-up labels match their pages (2026-11-19)', () => {
-  it('/workbench is "Daily Workbench" and /follow-up is "Follow-up Queue" in every role', () => {
-    for (const role of ROLES) {
-      const items = labelsFor(role);
-      const workbench = items.find(i => i.path === '/workbench');
-      const followUp = items.find(i => i.path === '/follow-up');
-      // Admin has no /workbench entry (no Daily Workbench in the
-      // admin nav) — the label rule applies wherever the item exists.
-      // Agent workspace rebuild (2026-11-20): the agent nav dropped
-      // /workbench too (not in Mahadi's demo) — the route stays live
-      // and the heading still resolves through the fallback map.
-      if (role === 'admin' || role === 'agent') {
-        assert.equal(workbench, undefined, `${role} has no workbench entry`);
-      } else {
-        assert.ok(workbench, `${role} nav must include /workbench`);
-        assert.equal(workbench!.label, 'Daily Workbench', `${role} must label /workbench Daily Workbench`);
-      }
+describe('Follow-up labels match their pages (2026-11-19, navs rebuilt 2026-11-20)', () => {
+  it('/follow-up is "Follow-up Monitor" for TL/Manager/Admin and "Follow-up Queue" for the Agent', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi's
+    // demo screenshot 3): the sidebar label is "Follow-up
+    // Monitor" for the three lead roles; the Agent keeps
+    // "Follow-up Queue" (his demo). The PAGE heading stays
+    // "Follow-up Queue" for every role — the demo's H1 (see the
+    // heading test below).
+    for (const role of ['admin', 'manager', 'teamLead'] as EnterpriseRole[]) {
+      const followUp = labelsFor(role).find(i => i.path === '/follow-up');
       assert.ok(followUp, `${role} nav must include /follow-up`);
-      assert.equal(followUp!.label, 'Follow-up Queue', `${role} must label /follow-up Follow-up Queue`);
+      assert.equal(followUp!.label, 'Follow-up Monitor', `${role} must label /follow-up Follow-up Monitor`);
     }
+    const agentFollowUp = labelsFor('agent').find(i => i.path === '/follow-up');
+    assert.ok(agentFollowUp, 'agent nav must include /follow-up');
+    assert.equal(agentFollowUp!.label, 'Follow-up Queue', 'agent must label /follow-up Follow-up Queue');
+  });
+
+  it('NO role nav carries /workbench anymore (Daily Workbench left every sidebar 2026-11-20)', () => {
+    // The route stays live by URL and the heading still resolves
+    // through the fallback map — only the sidebar entry is gone.
+    for (const role of ROLES) {
+      const workbench = labelsFor(role).find(i => i.path === '/workbench');
+      assert.equal(workbench, undefined, `${role} has no workbench entry`);
+    }
+    assert.equal(
+      enterpriseHeadingForPath('agent', '/workbench').title,
+      'Daily Workbench',
+      'the /workbench heading still resolves through the fallback map',
+    );
   });
 
   it('no role nav carries the retired "Follow-up Strategy" label', () => {
@@ -163,17 +173,28 @@ describe('Follow-up labels match their pages (2026-11-19)', () => {
       'Prioritize overdue and upcoming follow-ups.',
       'Follow-up Queue keeps the sample description verbatim'
     );
+    assert.equal(
+      ENTERPRISE_PAGE_DESCRIPTIONS['Follow-up Monitor'],
+      'Prioritize overdue and upcoming follow-ups.',
+      'Follow-up Monitor shares the queue description'
+    );
     assert.equal(ENTERPRISE_PAGE_DESCRIPTIONS['Follow-up Strategy'], undefined, 'the retired label has no description');
   });
 
-  it('page headings follow the labels', () => {
+  it('page headings follow the demo: /follow-up is "Follow-up Queue" for every role', () => {
+    // Mahadi asked to follow the demo exactly: the sidebar label
+    // is "Follow-up Monitor" for TL/Manager/Admin, but the page's
+    // own H1 is "Follow-up Queue" (the demo's H1). Sidebar and H1
+    // deliberately differ here — flagged in the PR report.
+    for (const role of ROLES) {
+      assert.deepEqual(enterpriseHeadingForPath(role, '/follow-up'), {
+        title: 'Follow-up Queue',
+        sub: 'Prioritize overdue and upcoming follow-ups.',
+      });
+    }
     assert.deepEqual(enterpriseHeadingForPath('agent', '/workbench'), {
       title: 'Daily Workbench',
       sub: ENTERPRISE_PAGE_DESCRIPTIONS['Daily Workbench'],
-    });
-    assert.deepEqual(enterpriseHeadingForPath('agent', '/follow-up'), {
-      title: 'Follow-up Queue',
-      sub: 'Prioritize overdue and upcoming follow-ups.',
     });
   });
 
@@ -184,31 +205,39 @@ describe('Follow-up labels match their pages (2026-11-19)', () => {
       const paths = groups.flatMap(g => g.items.map(i => i.path));
       assert.equal(new Set(paths).size, paths.length, `${role} nav must not duplicate a path`);
       assert.equal(enterpriseActivePath(groups, '/follow-up'), '/follow-up');
-      // Admin and Agent have no /workbench nav item, so nothing is
+      // No role has a /workbench nav item anymore, so nothing is
       // active there (null) — the page itself stays reachable by URL.
-      if (role === 'admin' || role === 'agent') {
-        assert.equal(enterpriseActivePath(groups, '/workbench'), null);
-      } else {
-        assert.equal(enterpriseActivePath(groups, '/workbench'), '/workbench');
-      }
+      assert.equal(enterpriseActivePath(groups, '/workbench'), null);
     }
   });
 
-  it('the mobile bottom bar shortens Daily Workbench to "Workbench"', () => {
-    for (const role of ['teamLead', 'agent'] as EnterpriseRole[]) {
+  it('the mobile bottom bar shortens Daily Workbench to "Workbench" (agent only now)', () => {
+    // Team Lead / Manager / Admin bottom tabs (2026-11-20) dropped
+    // Workbench; only the agent's bar still carries it.
+    const agentTabs = buildEnterpriseBottomNavTabs({ role: 'agent', ...allowAll });
+    const tab = agentTabs.find(t => t.path === '/workbench');
+    assert.ok(tab, 'agent bottom nav must carry /workbench');
+    assert.equal(tab!.label, 'Workbench', 'agent bottom tab uses the short form');
+    for (const role of ['admin', 'manager', 'teamLead'] as EnterpriseRole[]) {
       const tabs = buildEnterpriseBottomNavTabs({ role, ...allowAll });
-      const tab = tabs.find(t => t.path === '/workbench');
-      assert.ok(tab, `${role} bottom nav must carry /workbench`);
-      assert.equal(tab!.label, 'Workbench', `${role} bottom tab uses the short form`);
+      assert.equal(tabs.find(t => t.path === '/workbench'), undefined, `${role} bottom nav has no Workbench tab`);
     }
   });
 });
 
 describe('Lead Intake route predicate — ADMIN or ≥1 subordinate', () => {
-  it('the registry pins teamLeadAllowed on /leads/upload (and nowhere else)', () => {
-    assert.equal(FEATURE_ROUTES['/leads/upload'].teamLeadAllowed, true);
+  it('the registry pins teamLeadAllowed + managerAllowed on /leads/upload and /users/team (and nowhere else)', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): User
+    // Management carries the same two predicates as Lead Intake.
+    for (const route of ['/leads/upload', '/users/team']) {
+      assert.equal(FEATURE_ROUTES[route].teamLeadAllowed, true, `${route} carries teamLeadAllowed`);
+      assert.equal(FEATURE_ROUTES[route].managerAllowed, true, `${route} carries managerAllowed`);
+    }
     for (const [key, entry] of Object.entries(FEATURE_ROUTES)) {
-      if (key !== '/leads/upload') assert.equal(entry.teamLeadAllowed, undefined, `${key} must not carry the predicate`);
+      if (key !== '/leads/upload' && key !== '/users/team') {
+        assert.equal(entry.teamLeadAllowed, undefined, `${key} must not carry teamLeadAllowed`);
+        assert.equal(entry.managerAllowed, undefined, `${key} must not carry managerAllowed`);
+      }
     }
   });
 
@@ -427,12 +456,65 @@ describe('Team Lead reassign — server rule (demo mode)', () => {
     assert.equal(storedLead(lead.id).assignedTo, 'AGENT1', 'the lead must stay with the agent');
   });
 
-  it('a no-reports MANAGER cannot reassign — holding leads.assign is not having a team', async () => {
+  it('a no-reports MANAGER CAN unassign — Manager scope (FullTeam) counts as team scope now', async () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi):
+    // reassign belongs to Team Lead AND Manager. The 2026-11-19
+    // rule asked only "does the caller have a subtree?" and
+    // refused a no-reports Manager; the new rule counts Manager
+    // scope (FullTeam / Organization) as team scope. Unassigning
+    // isolates the team-scope arm: the scope check allows a null
+    // target, so only the has-team rule can refuse this — and it
+    // no longer does for a Manager.
     const { loneManager } = seedTeam();
     const lead = await createLeadAs(loneManager, '01700000106');
     const res = await reassignAs(loneManager, lead.id, '01700000106', '');
-    assert.equal(res.status, 403, `no-reports manager unassign should be 403, got ${res.status} ${JSON.stringify(res.body)}`);
-    assert.equal(storedLead(lead.id).assignedTo, 'MGR9');
+    assert.equal(res.status, 200, `no-reports manager unassign should succeed, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(storedLead(lead.id).assignedTo, '', 'the lead is unassigned');
+  });
+
+  it('a no-reports MANAGER cannot reassign OUTSIDE their visibility — the scope check binds them', async () => {
+    // Manager-scope callers skip the subtree check, but the
+    // visibility check (isAssignedToAllowed) still bounds them:
+    // a no-reports Manager's demo visibility is self-only, so
+    // OUT1 is out of scope. (In DB mode the FullTeam arm is the
+    // whole department — the same check, a wider set.)
+    const { loneManager } = seedTeam();
+    const lead = await createLeadAs(loneManager, '01700000106');
+    const res = await reassignAs(loneManager, lead.id, '01700000106', 'OUT1');
+    assert.equal(res.status, 403, `out-of-scope manager reassign should be 403, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(storedLead(lead.id).assignedTo, 'MGR9', 'the lead must stay with the manager');
+  });
+
+  it('a Manager WITH a downline reassigns inside their subtree — 200', async () => {
+    const { subA } = seedTeam();
+    // Give the TL's subtree to a Manager: MGR9 manages EMPA.
+    const mgr = fallbackStore.users.find((u: any) => u.employeeId === 'MGR9');
+    const empA = fallbackStore.users.find((u: any) => u.employeeId === 'EMPA');
+    empA.managerId = 'MGR9';
+    empA.reportingManagerId = 'MGR9';
+    const lead = await createLeadAs(subA, '01700000110');
+    assert.equal(storedLead(lead.id).assignedTo, 'EMPA');
+
+    // The manager reassigns EMPA's lead to EMPC (EMPA's report —
+    // inside the manager's subtree, and inside their visibility).
+    const res = await reassignAs(mgr, lead.id, '01700000110', 'EMPC');
+    assert.equal(res.status, 200, `in-scope manager reassign should succeed, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(storedLead(lead.id).assignedTo, 'EMPC');
+  });
+
+  it('a no-reports TEAM_LEAD still cannot reassign — DownTeam is not Manager scope', async () => {
+    // The managerScope arm reads the DEFAULT_VISIBILITY table,
+    // deliberately NOT the demo `isManagerLike` role list — so a
+    // no-reports TEAM_LEAD / BDM (DownTeam) still counts as an
+    // agent here and cannot reassign. Only FullTeam / Organization
+    // visibility counts as Manager scope.
+    seedTeam();
+    const loneTl = makeUser({ employeeId: 'TL999', role: 'TEAM_LEAD' });
+    fallbackStore.users.push(loneTl);
+    const lead = await createLeadAs(loneTl, '01700000111');
+    const res = await reassignAs(loneTl, lead.id, '01700000111', '');
+    assert.equal(res.status, 403, `no-reports team lead unassign should be 403, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(storedLead(lead.id).assignedTo, 'TL999');
   });
 
   it('a TL CAN unassign (has-subordinate arm, no target to place)', async () => {

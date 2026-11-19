@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -21,11 +21,23 @@ import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
-import { callerHasTeam } from '../../team/services/teamOverviewService';
+import { downlineOf, getSelfPerson } from '../../team/services/teamOverviewService';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import {
+  groupLeadsByTl,
+  leadCreatorEmployeeId,
+  myLeadsFor,
+  teamLeadsForRole,
+} from '../../workspace/utils/teamWorkspaceData';
+import { useCanReassign } from '../hooks/useCanReassign';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
+import { isTerminalStatus } from '../../workspace/utils/agentWorkspaceData';
+import type { TeamOverviewPerson } from '../../team/services/teamOverviewService';
+import type { TlLeadGroup } from '../../workspace/utils/teamWorkspaceData';
+import { Link } from 'react-router-dom';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
 
@@ -38,17 +50,108 @@ const getPriorityTone = (priority: string): string => {
   return '';
 };
 
-export default function LeadList() {
+/**
+ * Manager TL-group cards (2026-11-20, Mahadi: the Manager FIRST
+ * sees data grouped by Team Lead). One card per TL: their member
+ * count, lead count, open/converted split. Clicking drills to
+ * that TL's member-wise data (?tl=).
+ */
+function ManagerTlGroups(props: { groups: TlLeadGroup[]; people: TeamOverviewPerson[] }) {
+  const { groups, people } = props;
+  if (groups.length === 0) {
+    return <p className="ep-empty">No team leads in scope yet.</p>;
+  }
+  return (
+    <div className="ep-grid">
+      {groups.map(group => {
+        const memberCount = 1 + downlineOf(people, group.tl.employeeId).length;
+        const open = group.leads.filter(l => !isTerminalStatus(l.currentStatus)).length;
+        const converted = group.leads.filter(l => l.currentStatus === 'Converted').length;
+        return (
+          <Link
+            key={group.tl.employeeId}
+            to={`/leads?tl=${encodeURIComponent(group.tl.employeeId)}`}
+            className="ep-card ep-kpi-link"
+            aria-label={`Open ${group.tl.name}'s team leads`}
+          >
+            <div className="ep-metric-label">{group.tl.name}</div>
+            <div className="ep-metric">{group.leads.length}</div>
+            <div className="ep-trend">
+              {memberCount} member{memberCount === 1 ? '' : 's'} · {open} open · {converted} converted
+            </div>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Manager member-wise rows for one TL (the second drill-down
+ * level): each member's lead count, clicking through to their
+ * leads in the standard table (?tl= + ?member=).
+ */
+function ManagerTlMembers(props: {
+  tl: TeamOverviewPerson;
+  members: Array<{ person: TeamOverviewPerson; leads: Lead[] }>;
+}) {
+  const { tl, members } = props;
+  return (
+    <div className="ep-card">
+      <div className="ep-cardhead">
+        <div>
+          <h3>{tl.name}&rsquo;s team</h3>
+          <div className="ep-muted">{members.length} member{members.length === 1 ? '' : 's'} · click a member to see their leads</div>
+        </div>
+        <Link className="ep-viewall" to="/leads">← All teams</Link>
+      </div>
+      {members.length === 0 ? (
+        <p className="ep-empty">No members in this team yet.</p>
+      ) : (
+        <div className="ep-member-list">
+          {members.map(({ person, leads }) => {
+            const converted = leads.filter(l => l.currentStatus === 'Converted').length;
+            return (
+              <Link
+                key={person.userId}
+                to={`/leads?tl=${encodeURIComponent(tl.employeeId)}&member=${encodeURIComponent(person.employeeId)}`}
+                className="ep-member-row"
+                aria-label={`Open ${person.name}'s leads`}
+              >
+                <span className="ep-miniavatar" aria-hidden="true">
+                  {String(person.name || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?'}
+                </span>
+                <span className="ep-member-copy">
+                  <strong>{person.name}</strong>
+                  <small>
+                    {person.designation || person.roleName || 'Team member'}
+                    {` · ${leads.length} lead${leads.length === 1 ? '' : 's'} · ${converted} converted`}
+                  </small>
+                </span>
+                <span className="ep-member-pct">→</span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function LeadList(props: { scope?: 'default' | 'my' }) {
+  const listScope = props.scope ?? 'default';
   const { user } = useAuthStore();
+  const { role: displayRole, loading: displayLoading } = useEnterpriseDisplayRole();
+  const [searchParams] = useSearchParams();
   const { canAccess } = usePermissions();
   const canEditLead = canAccess('lead_tracking', 'edit');
   const canExportLeads = canAccess('lead_tracking', 'export');
-  // Reassign (2026-11-19, Mahadi): same gate as Lead360 — admin, or
-  // anyone with ≥1 subordinate, holding the leads.assign grant.
+  // Reassign (2026-11-19, extended 2026-11-20, Mahadi): same hook
+  // as Lead360 — Team Lead / Manager / Admin holding the
+  // leads.assign grant; a plain Agent (or a super admin previewing
+  // as Agent) never sees the button.
+  const canReassign = useCanReassign();
   const callerTeam = useCallerTeam();
-  const userRoleUpper = String(user?.role || '').toUpperCase();
-  const canReassign = (userRoleUpper === 'ADMIN' || userRoleUpper === 'SUPERADMIN' || callerHasTeam(callerTeam.overview?.people))
-    && canAccess('lead_tracking', 'reassign_global_leads');
   const [reassignLead, setReassignLead] = useState<Lead | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -124,6 +227,85 @@ export default function LeadList() {
     }
   };
 
+  // Scope split (2026-11-20, Mahadi): the server-visible set is
+  // narrowed client-side per display role — never widened.
+  //   TL /leads      = members-only (+ own-created unassigned)
+  //   TL /leads/my   = assigned-to-self OR created-by-self
+  //   Manager /leads = downline, TL-grouped (see below)
+  //   Admin /leads   = org-wide minus admin-assigned leads
+  //   Agent /leads   = unchanged (server scope is own-only)
+  // While the overview is still loading the list stays empty —
+  // the page spinner covers that window (see the loading check
+  // below), so no out-of-scope row ever flashes.
+  const self = useMemo(
+    () => (callerTeam.overview ? getSelfPerson(callerTeam.overview.people) : undefined),
+    [callerTeam.overview],
+  );
+  const people = useMemo(() => callerTeam.overview?.people ?? [], [callerTeam.overview]);
+  const peopleByUserId = useMemo(
+    () => new Map(people.map(p => [p.userId, p])),
+    [people],
+  );
+  const scopedLeads = useMemo(() => {
+    if (!self) return [];
+    if (listScope === 'my') return myLeadsFor(leads, people, self);
+    return teamLeadsForRole(leads, people, self, displayRole);
+  }, [leads, people, self, listScope, displayRole]);
+
+  // Manager drill-down (2026-11-20, Mahadi: Manager → TL → member
+  // → lead): ?tl=<empId> shows one TL's member-wise data;
+  // ?member=<empId> shows that member's leads in the standard
+  // table. A member's leads are the ones they own OR created.
+  const tlParam = searchParams.get('tl');
+  const memberParam = searchParams.get('member');
+  const isManagerView = displayRole === 'manager' && listScope === 'default';
+  const tlGroups = useMemo(
+    () => (isManagerView && self ? groupLeadsByTl(scopedLeads, people, self) : []),
+    [isManagerView, scopedLeads, people, self],
+  );
+  const selectedTlGroup = useMemo(
+    () => tlGroups.find(g => String(g.tl.employeeId).toUpperCase() === String(tlParam || '').toUpperCase()),
+    [tlGroups, tlParam],
+  );
+  const selectedMember = useMemo(
+    () => people.find(p => String(p.employeeId).toUpperCase() === String(memberParam || '').toUpperCase()),
+    [people, memberParam],
+  );
+  const memberFilteredLeads = useMemo(() => {
+    if (!memberParam) return scopedLeads;
+    const memberId = String(memberParam).toUpperCase();
+    return scopedLeads.filter(lead =>
+      String(lead.assignedTo || '').toUpperCase() === memberId
+      || leadCreatorEmployeeId(lead, peopleByUserId) === memberId
+    );
+  }, [scopedLeads, memberParam, peopleByUserId]);
+  const memberLeadIds = useMemo(
+    () => new Set(memberFilteredLeads.map(l => String(l.id))),
+    [memberFilteredLeads],
+  );
+  // Which Manager view renders: 'groups' (TL cards), 'members'
+  // (one TL's member rows), null (the standard table).
+  const managerGroupView: 'groups' | 'members' | null = !isManagerView
+    ? null
+    : memberParam
+      ? null
+      : tlParam
+        ? 'members'
+        : 'groups';
+  const selectedTlMembers = useMemo(() => {
+    if (!selectedTlGroup) return [];
+    const tl = selectedTlGroup.tl;
+    const members = [tl, ...downlineOf(people, tl.employeeId)];
+    return members.map(person => {
+      const memberId = String(person.employeeId).toUpperCase();
+      const memberLeads = selectedTlGroup.leads.filter(lead =>
+        String(lead.assignedTo || '').toUpperCase() === memberId
+        || leadCreatorEmployeeId(lead, peopleByUserId) === memberId
+      );
+      return { person, leads: memberLeads };
+    });
+  }, [selectedTlGroup, people, peopleByUserId]);
+
   const DEFAULT_STATUS_LIST: LeadStatus[] = [
     'New',
     'Contacted',
@@ -141,7 +323,7 @@ export default function LeadList() {
     'All',
     ...Array.from(new Set([
       ...(statusOptions.length ? statusOptions : DEFAULT_STATUS_LIST),
-      ...leads.map(lead => lead.currentStatus).filter(Boolean),
+      ...memberFilteredLeads.map(lead => lead.currentStatus).filter(Boolean),
     ])),
   ];
 
@@ -175,9 +357,9 @@ export default function LeadList() {
   // Priority list is configurable metadata, so no hardcoded set).
   const priorityOptions = useMemo(() => {
     const values = new Set<string>();
-    for (const lead of leads) if (lead.priority) values.add(lead.priority);
+    for (const lead of memberFilteredLeads) if (lead.priority) values.add(lead.priority);
     return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [leads]);
+  }, [memberFilteredLeads]);
 
   const createdLabel = (lead: Lead): string => {
     if (!lead.creationDate) return '—';
@@ -190,12 +372,18 @@ export default function LeadList() {
 
   const filteredLeads = (() => {
     // Authoritative source of rules-filtered leads from dynamic query builder
-    const baseList = advancedFilteredLeads.length > 0 || leads.length === 0 ? advancedFilteredLeads : leads;
+    const baseList = advancedFilteredLeads.length > 0 || scopedLeads.length === 0 ? advancedFilteredLeads : scopedLeads;
+
+    // Manager member drill-down: one member's leads only (the
+    // advanced filter ran over the scoped set, so narrow here).
+    const memberScoped = memberParam
+      ? baseList.filter(lead => memberLeadIds.has(String(lead.id)))
+      : baseList;
 
     // Narrow by server-computed Lead Quality band (never widens scope).
     const statusScoped = activeStatus === 'All'
-      ? baseList
-      : baseList.filter(lead => String(lead.currentStatus || '').toLowerCase() === activeStatus.toLowerCase());
+      ? memberScoped
+      : memberScoped.filter(lead => String(lead.currentStatus || '').toLowerCase() === activeStatus.toLowerCase());
     const qualityScoped =
       qualityBand === 'All'
         ? statusScoped
@@ -322,7 +510,16 @@ export default function LeadList() {
     );
   }
 
-  if (loading) {
+  // My Leads is a Team Lead page only — every other role lands on
+  // the standard list (the route gate cannot express a display-role
+  // rule, so the page gates itself). Only once the display role
+  // has settled — before that the derived role reads 'agent' and
+  // a real TL would be bounced off their own page.
+  if (listScope === 'my' && !displayLoading && displayRole !== 'teamLead') {
+    return <Navigate to="/leads" replace />;
+  }
+
+  if (loading || callerTeam.loading || displayLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
@@ -336,9 +533,10 @@ export default function LeadList() {
   return (
     <div className="ep-page">
       <EnterprisePageHeader
-        path="/leads"
+        path={listScope === 'my' ? '/leads/my' : '/leads'}
         actions={(
           <>
+            {managerGroupView === null && (
             <div className="lf-mobile-lead-tools" aria-label="Lead search and filters">
               <button
                 type="button"
@@ -361,7 +559,9 @@ export default function LeadList() {
                 <Filter size={19} />
               </button>
             </div>
+            )}
             <div className="lf-desktop-lead-actions flex items-center gap-2">
+              {managerGroupView === null && (
               <button
                 type="button"
                 onClick={() => {
@@ -376,6 +576,7 @@ export default function LeadList() {
                 <Filter className="w-3.5 h-3.5" />
                 Segment Matrix
               </button>
+              )}
               {canExportLeads && (
                 <button
                   type="button"
@@ -391,6 +592,36 @@ export default function LeadList() {
         )}
       />
 
+      {/* Manager drill-down views (2026-11-20): TL groups first,
+          then one TL's members; the standard table renders only
+          at the member level or for other roles. */}
+      {managerGroupView === 'groups' && (
+        <ManagerTlGroups groups={tlGroups} people={people} />
+      )}
+      {managerGroupView === 'members' && (
+        selectedTlGroup ? (
+          <ManagerTlMembers tl={selectedTlGroup.tl} members={selectedTlMembers} />
+        ) : (
+          <div className="ep-card" style={{ textAlign: 'center' }}>
+            <p className="ep-muted">That team lead is not in your scope.</p>
+            <Link className="ep-btn" to="/leads" style={{ marginTop: 12 }}>← All teams</Link>
+          </div>
+        )
+      )}
+      {isManagerView && memberParam && selectedMember && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            className="ep-btn"
+            onClick={() => navigate(tlParam ? `/leads?tl=${encodeURIComponent(tlParam)}` : '/leads')}
+          >
+            ← Back to {tlParam && selectedTlGroup ? `${selectedTlGroup.tl.name}'s team` : 'all teams'}
+          </button>
+        </div>
+      )}
+
+      {managerGroupView === null && (
+      <>
       {mobileSearchOpen && (
         <div className="lf-mobile-lead-search" id="mobile-lead-search">
           <Search className="lf-mobile-lead-search-icon" size={18} aria-hidden="true" />
@@ -447,8 +678,8 @@ export default function LeadList() {
       <div className="flex gap-2 overflow-x-auto border-b border-stone-100 pb-2" role="tablist" aria-label="Filter leads by status">
         {statusTabs.map(status => {
           const count = status === 'All'
-            ? leads.length
-            : leads.filter(lead => String(lead.currentStatus || '').toLowerCase() === status.toLowerCase()).length;
+            ? memberFilteredLeads.length
+            : memberFilteredLeads.filter(lead => String(lead.currentStatus || '').toLowerCase() === status.toLowerCase()).length;
           const active = activeStatus === status;
           return (
             <button
@@ -475,7 +706,7 @@ export default function LeadList() {
       {/* Advanced multi-criteria search and dynamic filtering builder */}
       <AdvancedFilterPanel 
         onFilterChange={setAdvancedFilteredLeads} 
-        allLeads={leads} 
+        allLeads={scopedLeads}
         className={cn(
           'ep-card lf-lead-advanced-filters',
           mobileFiltersOpen && 'is-mobile-open',
@@ -711,8 +942,10 @@ export default function LeadList() {
           paginated) — removed (Agent workspace rebuild). The real
           count line stays. */}
       <div className="px-4 py-6 flex items-center justify-between gap-6 mt-2 mx-1">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Showing {filteredLeads.length} of {leads.length} leads</p>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Showing {filteredLeads.length} of {memberFilteredLeads.length} leads</p>
       </div>
+      </>
+      )}
 
       {/* FIX-2 Export Dialog */}
       <AnimatePresence>

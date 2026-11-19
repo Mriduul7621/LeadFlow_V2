@@ -49,7 +49,10 @@ const HOMES = () =>
     .map(name => read(`src/modules/workspace/pages/${name}.tsx`))
     .join('\n');
 const AGENT_HOME = () => read('src/modules/workspace/pages/AgentHome.tsx');
-const MANAGER_HOME = () => read('src/modules/workspace/pages/ManagerHome.tsx');
+// Team Lead / Manager / Admin workspace (2026-11-20): the three
+// non-agent homes are thin wrappers over ONE shared component — the
+// KPI bindings live in the shared component, not ManagerHome.
+const TEAM_HOME = () => read('src/modules/workspace/pages/TeamOverviewHome.tsx');
 const ENTERPRISE_NAV = () => read('src/layouts/enterpriseNav.ts');
 const SERVICE = () => read('src/modules/dashboard/services/dashboardService.ts');
 const LAYOUT = () => read('src/layouts/AppLayout.tsx');
@@ -60,16 +63,24 @@ const FOLLOWUP = () => read('src/modules/leads/pages/FollowUpStrategy.tsx');
  * Secondary routes retained in the ENTERPRISE SIDEBAR (single source
  * of truth: src/layouts/enterpriseNav.ts) — they used to hang off
  * More → Reports, then off the old left sidebar.
+ *
+ * Team Lead / Manager / Admin workspace (2026-11-20): NCP Progress,
+ * Trends & Reports and Campaigns LEFT the sidebars (Mahadi's exact
+ * sidebar lists for the three roles) — they stay registered in
+ * FEATURE_ROUTES + App.tsx and live by URL, pinned below.
  */
 const SIDEBAR_ROUTES = [
   '/activities',
   '/task-calendar',
   '/follow-up',
   '/execution-intelligence',
+  '/team',
+];
+/** Live by URL, deliberately NOT sidebar entries since 2026-11-20. */
+const URL_ONLY_ROUTES = [
   '/ncp-progress',
   '/trend-charts',
   '/campaign-breakdown',
-  '/team',
 ];
 /** Administration directory routes. */
 const ADMIN_ROUTES = [
@@ -93,12 +104,19 @@ describe('Dashboard UX Step 5B — source guards', () => {
   it('A. dashboard KPI components consume the server dashboard response', () => {
     const body = dashboardLoadBody();
     assert.ok(body.includes('dashboardService.getDashboard'), 'loadDashboardData must call dashboardService.getDashboard');
-    const manager = MANAGER_HOME();
-    // KPI bindings derive from the server response object (`metrics`), never
-    // from a lead list. statusCounts now feeds the pipeline board page, which
-    // reads the same GET /api/dashboard payload.
-    assert.ok(manager.includes('metrics.converted'), 'conversion KPI must read metrics.converted');
-    assert.ok(manager.includes('metrics.totalLeads'), 'total leads must read metrics.totalLeads');
+    const team = TEAM_HOME();
+    // Team-scope KPI bindings derive from the SERVER-COMPUTED team
+    // overview totals (per-person rollups summed over the scope),
+    // never from a lead list — except Contacted, which is computed
+    // from the scoped leads list so admin-assigned leads can be
+    // excluded (the server dashboard totals cannot be filtered).
+    // statusCounts now feeds the pipeline board page, which reads
+    // the same GET /api/dashboard payload.
+    assert.ok(team.includes('summarizeTeamTotals(people)'), 'team KPI totals must come from the server overview rollups');
+    assert.ok(!team.includes('scopeTotals'), 'no duplicate summation helper (scopeTotals was removed)');
+    assert.ok(team.includes('totals.converted'), 'conversion KPI must read totals.converted');
+    assert.ok(team.includes('totals.totalLeads'), 'total leads must read totals.totalLeads');
+    assert.ok(team.includes('contactedCount(scopedLeads)'), 'Contacted is the one list-computed KPI (admin exclusion)');
     // Follow-up health comes from the hook's bounded queue buckets.
     assert.ok(HOOK().includes("getFollowUpQueue({ bucket: 'today', limit: 50 })"), 'follow-up health must read the today queue bucket');
     const pipeline = read('src/modules/dashboard/pages/SalesPipelinePage.tsx');
@@ -125,12 +143,21 @@ describe('Dashboard UX Step 5B — source guards', () => {
   it('D. no fabricated trend series restored', () => {
     // Enterprise Preview: the Home trend section died with Dashboard.tsx
     // (the "No trend data available" empty state with it — that assert is
-    // dropped, not weakened). The home chart is now built from the real
-    // follow-up queue buckets; no client-generated sample series may return.
+    // dropped, not weakened). Team Lead / Manager / Admin workspace
+    // (2026-11-20): the 7-day chart pipeline (chartDays /
+    // buildNext7Days) was removed — the homes chart team activity
+    // from the loaded leads list via activityBuckets; no
+    // client-generated sample series may return.
     const home = HOOK() + HOMES();
     assert.ok(!home.includes('CAMPAIGN_TREND_DATA'), 'must not ship a hardcoded trend series');
     assert.ok(!home.includes('value: metrics.totalLeads'), 'must not fabricate a trend series from current totals');
-    assert.ok(HOOK().includes('setChartDays(buildNext7Days([...today, ...upcoming]))'), 'the home chart must be built from the real queue buckets');
+    // (The hook's header comment documents the removal, so the
+    // negative checks run on comment-stripped code.)
+    const hookCode = HOOK().replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    assert.ok(!hookCode.includes('buildNext7Days'), 'the 7-day chart builder is gone from the hook');
+    assert.ok(!hookCode.includes('chartDays'), 'the hook carries no 7-day chart state anymore');
+    assert.ok(TEAM_HOME().includes('activityBuckets('), 'the shared home charts the loaded leads list');
+    assert.ok(AGENT_HOME().includes('activityBuckets('), 'the Agent home charts the loaded leads list');
   });
 
   it('E. no client getLeads/localStorage/localDb KPI authority (Step 5C: scheduled_activities is server-authoritative, KPIs still from dashboard)', () => {
@@ -159,8 +186,14 @@ describe('Dashboard UX Step 5B — source guards', () => {
   });
 
   it('G. follow-up queue navigation remains available', () => {
-    assert.ok(ENTERPRISE_NAV().includes("label: 'Follow-up Queue', path: '/follow-up'"), 'the sidebar must offer Follow-up Queue → /follow-up');
-    assert.ok(ENTERPRISE_NAV().includes("label: 'Daily Workbench', path: '/workbench'"), 'the sidebar must offer Daily Workbench → /workbench');
+    // Team Lead / Manager / Admin workspace (2026-11-20): the demo's
+    // sidebar label is "Follow-up Monitor" for TL/Manager/Admin;
+    // Agent keeps "Follow-up Queue". Daily Workbench left the
+    // sidebar — the Agent bottom bar keeps it as "Workbench".
+    assert.ok(ENTERPRISE_NAV().includes("label: 'Follow-up Monitor', path: '/follow-up'"), 'TL/Manager/Admin see Follow-up Monitor → /follow-up');
+    assert.ok(ENTERPRISE_NAV().includes("label: 'Follow-up Queue', path: '/follow-up'"), 'Agent sees Follow-up Queue → /follow-up');
+    assert.ok(!ENTERPRISE_NAV().includes("label: 'Daily Workbench', path: '/workbench'"), 'no sidebar item may offer Daily Workbench anymore');
+    assert.ok(ENTERPRISE_NAV().includes("label: 'Workbench', path: '/workbench'"), 'the Agent bottom bar still reaches /workbench');
     assert.ok(FOLLOWUP().includes('useSearchParams'), 'FollowUpStrategy must read ?bucket=');
     // The bucket deep-links moved off Home with the retired discipline card;
     // the queue page itself still owns the three buckets.
@@ -174,6 +207,15 @@ describe('Dashboard UX Step 5B — source guards', () => {
     const nav = ENTERPRISE_NAV();
     for (const route of SIDEBAR_ROUTES) {
       assert.ok(nav.includes(`path: '${route}'`), `the sidebar must retain ${route}`);
+    }
+    // URL-only since 2026-11-20: not sidebar entries, but the routes
+    // stay registered (Layer B) and live in App.tsx.
+    const access = read('src/layouts/featureRouteAccess.ts');
+    const app = read('src/App.tsx');
+    for (const route of URL_ONLY_ROUTES) {
+      assert.ok(!nav.includes(`path: '${route}'`), `the sidebar must NOT carry ${route} anymore`);
+      assert.ok(access.includes(`'${route}':`), `${route} stays registered in FEATURE_ROUTES`);
+      assert.ok(app.includes(`path: '${route}'`), `${route} stays live in App.tsx`);
     }
     const more = read('src/modules/navigation/pages/MorePages.tsx');
     for (const route of ADMIN_ROUTES) {

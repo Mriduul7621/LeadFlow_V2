@@ -30,6 +30,13 @@ import { rolesWithDefaultGrant } from '../modules/shared/access/roleGrantDefault
  *      code — but ONLY where no explicit `menuAccess` entry exists
  *      (rule 2 still wins). Without the tree fact the predicate
  *      cannot fire and the static fallback decides.
+ *   5. Manager predicate (2026-11-20): a route marked
+ *      `managerAllowed` also opens to a caller whose DERIVED
+ *      enterprise role is Manager (FullTeam/Organization scope) —
+ *      again only where no explicit `menuAccess` entry exists.
+ *      This is the route-level twin of the server's Manager-scope
+ *      arm (callerHasTeamScope): a no-reports Manager may upload
+ *      leads and manage their team's users.
  *
  * This is a UX/visibility gate, NOT a security boundary: the server
  * keeps enforcing canonical Action Permissions and Data Visibility on
@@ -110,6 +117,13 @@ export interface FeatureRouteEntry {
    * admin's per-role control is never overridden by it).
    */
   teamLeadAllowed?: boolean;
+  /**
+   * Manager predicate (2026-11-20): when true, a caller whose
+   * DERIVED enterprise role is Manager (FullTeam/Organization
+   * scope) may open the route — same gap-filling semantics as
+   * teamLeadAllowed (an explicit `menuAccess` entry still wins).
+   */
+  managerAllowed?: boolean;
 }
 
 /**
@@ -131,16 +145,28 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/task-calendar': { route: '/task-calendar', path: '/task-calendar', roles: EVERYONE },
   '/follow-up': { route: '/follow-up', path: '/follow-up', roles: EVERYONE },
   '/leads': { route: '/leads', path: '/leads', roles: EVERYONE },
+  // Team Lead My Leads (2026-11-20): own-only list. EVERYONE at the
+  // route level — the page itself gates to the Team Lead display
+  // role (other roles are redirected to /leads), because the route
+  // gate cannot express a display-role rule.
+  '/leads/my': { route: '/leads/my', path: '/leads', roles: EVERYONE },
   '/leads/new': { route: '/leads/new', path: '/leads/new', roles: EVERYONE },
-  // Team Lead lead upload (2026-11-19, Mahadi): Lead Intake opens to
-  // ADMIN or anyone with ≥1 subordinate (the teamLeadAllowed
-  // predicate) — a plain Agent stays blocked. The static ADMIN_ONLY
-  // fallback is unchanged: it decides only when the tree fact is
-  // unavailable, and an explicit menuAccess entry still wins.
-  '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY, teamLeadAllowed: true },
+  // Team Lead lead upload (2026-11-19, Mahadi; Manager arm added
+  // 2026-11-20): Lead Intake opens to ADMIN, anyone with ≥1
+  // subordinate (the teamLeadAllowed predicate), or a derived
+  // Manager (the managerAllowed predicate) — a plain Agent stays
+  // blocked. The static ADMIN_ONLY fallback is unchanged: it
+  // decides only when the tree/role facts are unavailable, and an
+  // explicit menuAccess entry still wins.
+  '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY, teamLeadAllowed: true, managerAllowed: true },
   '/leads/all': { route: '/leads/all', path: '/leads/all', roles: ADMIN_ONLY },
   '/leads/:id/update': { route: '/leads/:id/update', path: '/leads', roles: EVERYONE },
   '/execution-intelligence': { route: '/execution-intelligence', path: '/execution-intelligence', roles: INSIGHT_ROLES },
+  // Self Performance / My Performance (2026-11-20): the Agent
+  // performance layout on the caller's OWN leads. EVERYONE at the
+  // route level — the page gates to the Team Lead / Manager display
+  // roles (others are redirected to /execution-intelligence).
+  '/performance/self': { route: '/performance/self', path: '/execution-intelligence', roles: EVERYONE },
   '/ncp-progress': { route: '/ncp-progress', path: '/ncp-progress', roles: INSIGHT_ROLES },
   '/trend-charts': { route: '/trend-charts', path: '/trend-charts', roles: INSIGHT_ROLES },
   '/campaign-breakdown': { route: '/campaign-breakdown', path: '/campaign-breakdown', roles: INSIGHT_ROLES },
@@ -156,6 +182,13 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/team/kpi/:kpi': { route: '/team/kpi/:kpi', path: '/team', roles: EVERYONE },
   '/team/organogram': { route: '/team/organogram', path: '/team', roles: EVERYONE },
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
+  // Team User Management (2026-11-20): the TL/Manager team list +
+  // Employee add page. ADMIN_ONLY statically, opened by the same
+  // teamLeadAllowed / managerAllowed predicates as Lead Intake —
+  // and the page itself gates on the `users.add_employee` grant, so
+  // a team lead WITHOUT the grant never sees the add flow even
+  // though the route shell may open.
+  '/users/team': { route: '/users/team', path: '/users', roles: ADMIN_ONLY, teamLeadAllowed: true, managerAllowed: true },
   '/settings': { route: '/settings', path: '/settings', roles: EVERYONE },
   '/settings/system': { route: '/settings/system', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
   // Fix round (2026-11-19): the CONFIGURATION group's three pages
@@ -180,25 +213,29 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
  *
  * `context.hasSubordinates` is the tree fact for `teamLeadAllowed`
  * routes (from the caller's team overview): true opens the route when
- * no explicit `menuAccess` entry decides it. Omitted or false => the
- * predicate cannot fire and the static fallback decides.
+ * no explicit `menuAccess` entry decides it. `context.isManager` is
+ * the derived-enterprise-role fact for `managerAllowed` routes
+ * (FullTeam/Organization scope). Omitted or false => the predicate
+ * cannot fire and the static fallback decides.
  */
 export function resolveFeatureRouteAccess(
   routeKey: string,
   userRoleName: string | null | undefined,
   matchedPermission: RolePermission | undefined,
-  context?: { hasSubordinates?: boolean }
+  context?: { hasSubordinates?: boolean; isManager?: boolean }
 ): boolean {
   const entry = FEATURE_ROUTES[routeKey];
   if (!entry) return false; // unknown route key: fail closed
   const role = String(userRoleName || '').trim().toUpperCase();
   if (!role) return false; // no role: fail closed
   if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
-  // Team Lead predicate: the caller has a team AND no explicit
-  // menuAccess entry decides this route — the predicate only fills
-  // the gap where the admin has not configured the role. An
-  // explicit false still hides the route from a team lead.
-  if (entry.teamLeadAllowed && context?.hasSubordinates === true) {
+  // Team Lead / Manager predicates: the caller has a team (or
+  // Manager scope) AND no explicit menuAccess entry decides this
+  // route — the predicates only fill the gap where the admin has
+  // not configured the role. An explicit false still hides the
+  // route from a team lead or a manager.
+  if ((entry.teamLeadAllowed && context?.hasSubordinates === true)
+    || (entry.managerAllowed && context?.isManager === true)) {
     const explicit = matchedPermission?.menuAccess?.[entry.path];
     if (explicit === undefined) return true;
   }
@@ -271,7 +308,7 @@ export function canResolveRouteAccess(
   routeKey: string,
   userRoleName: string | null | undefined,
   matchedPermission: RolePermission | undefined,
-  context?: { teamSettled?: boolean }
+  context?: { teamSettled?: boolean; roleSettled?: boolean }
 ): boolean {
   const entry = FEATURE_ROUTES[routeKey];
   if (!entry) return true; // unknown route: fail closed now, do not wait
@@ -279,12 +316,22 @@ export function canResolveRouteAccess(
   if (!role) return true; // unauthenticated: ProtectedRoute handles it
   if (role === 'ADMIN' || role === 'SUPERADMIN') return true;
   if (entry.roles.includes(ANY_ROLE)) return true;
-  // Team Lead predicate routes: the answer may still change while the
-  // team overview is loading — but only when no explicit menuAccess
-  // entry already decides it (an explicit entry wins over the
-  // predicate, so the tree fact is irrelevant then). Callers that
-  // omit the context keep the old behaviour (matrix-only).
-  if (entry.teamLeadAllowed && context?.teamSettled === false) {
+  // Team Lead / Manager predicate routes: the answer may still
+  // change while the team overview is loading — but only when no
+  // explicit menuAccess entry already decides it (an explicit entry
+  // wins over the predicates, so the tree/role facts are irrelevant
+  // then). Callers that omit the context keep the old behaviour
+  // (matrix-only).
+  if ((entry.teamLeadAllowed || entry.managerAllowed) && context?.teamSettled === false) {
+    const explicit = matchedPermission?.menuAccess?.[entry.path];
+    if (explicit === undefined) return false;
+  }
+  // Manager predicate routes also wait for the enterprise-role
+  // derivation itself (isManager comes from the role matrix's
+  // dataVisibility, derived in the caller's own hook state — a
+  // one-render lag after the matrix settles would otherwise
+  // bounce a Manager out of Lead Intake on a cold load).
+  if (entry.managerAllowed && context?.roleSettled === false) {
     const explicit = matchedPermission?.menuAccess?.[entry.path];
     if (explicit === undefined) return false;
   }

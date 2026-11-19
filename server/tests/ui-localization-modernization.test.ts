@@ -43,6 +43,10 @@ describe('UI English-only & Design Modernization — source guards', () => {
     'src/modules/workspace/pages/AdminHome.tsx',
     'src/modules/workspace/pages/ManagerHome.tsx',
     'src/modules/workspace/pages/TeamLeadHome.tsx',
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers — the shared component
+    // carries the visible copy and must be English-only too.
+    'src/modules/workspace/pages/TeamOverviewHome.tsx',
     'src/modules/workspace/pages/AgentHome.tsx',
     'src/modules/workspace/pages/EnterpriseHome.tsx',
     'src/modules/workspace/hooks/useEnterpriseHomeData.ts',
@@ -112,9 +116,17 @@ describe('UI English-only & Design Modernization — source guards', () => {
     // (Enterprise Preview: the primary tabs retired; the labels live in
     // the enterprise nav module now.)
     const navSrc = stripComments(nav());
-    assert.ok(navSrc.includes("label: 'Overview'"), 'enterprise nav must use the English Overview label');
+    // Team Lead / Manager / Admin workspace (2026-11-20): the home
+    // label is "Team Overview" (TL/Manager/Admin) / "My Work"
+    // (Agent) — still fixed English, never runtime translation.
+    assert.ok(navSrc.includes("label: 'Team Overview'"), 'enterprise nav must use the English Team Overview label');
+    assert.ok(navSrc.includes("label: 'My Work'"), 'enterprise nav must use the English My Work label');
     assert.ok(navSrc.includes("label: 'Follow-up Queue'"), 'enterprise nav must use the English Follow-up Queue label');
-    assert.ok(navSrc.includes("label: 'Sales Pipeline'"), 'enterprise nav must use the English Sales Pipeline label');
+    assert.ok(navSrc.includes("label: 'Follow-up Monitor'"), 'enterprise nav must use the English Follow-up Monitor label');
+    assert.ok(navSrc.includes("label: 'Team Members'"), 'enterprise nav must use the English Team Members label');
+    // Sales Pipeline left the sidebars (2026-11-20) — the route stays
+    // live by URL, so the label survives only in the fallback map.
+    assert.ok(!navSrc.includes("label: 'Sales Pipeline'"), 'no sidebar item may carry the Sales Pipeline label anymore');
   });
 
   it('Role homes are English-only: no useTranslation/t(), polished literals, no leadflow-language', () => {
@@ -140,11 +152,18 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(agent.includes('My pipeline'), 'Agent home must have My pipeline');
     assert.ok(agent.includes('Weekly activity'), 'Agent home must have Weekly activity');
     assert.ok(agent.includes('Recent leads'), 'Agent home must have Recent leads');
-    const manager = stripComments(read('src/modules/workspace/pages/ManagerHome.tsx'));
-    assert.ok(manager.includes('Overview'), 'Manager home title must be Overview');
-    assert.ok(manager.includes('Welcome back'), 'Manager home must greet in English');
-    assert.ok(manager.includes('Follow-ups due'), 'Manager home must have the follow-ups chart in English');
-    assert.ok(manager.includes('Nothing needs attention right now.'), 'Manager home empty state must be English');
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers over ONE shared component —
+    // the visible copy lives in TeamOverviewHome (greeting-free per
+    // the demo: eyebrow + "Team Overview", no "Welcome back").
+    const team = stripComments(read('src/modules/workspace/pages/TeamOverviewHome.tsx'));
+    assert.ok(team.includes('Team Overview'), 'shared home title must be Team Overview');
+    assert.ok(team.includes('TEAM COMMAND CENTER'), 'shared home eyebrow must be English');
+    assert.ok(team.includes('Member performance'), 'shared home must have Member performance in English');
+    assert.ok(team.includes('Follow-up health'), 'shared home must have Follow-up health in English');
+    assert.ok(team.includes('At-risk leads'), 'shared home must have At-risk leads in English');
+    assert.ok(team.includes('Team activity'), 'shared home must have Team activity in English');
+    assert.ok(team.includes('No members in scope yet.'), 'shared home empty state must be English');
     // Failure copy lives in the shared hook + error panel now.
     assert.ok(stripComments(homeData()).includes('Dashboard data could not be loaded.'), 'home data hook must keep the neutral Dashboard data could not be loaded. error');
     const panel = stripComments(errorPanel());
@@ -204,9 +223,12 @@ describe('UI English-only & Design Modernization — source guards', () => {
   });
 
   it('Home keeps the personal sections and the calendar/pipeline live on their own pages', () => {
-    // Enterprise Preview (2026-11-19): the four role homes keep the
+    // Enterprise Preview (2026-11-19): the role homes keep the
     // same rule — no embedded calendar, no embedded pipeline board.
-    for (const file of ['src/modules/workspace/pages/AdminHome.tsx', 'src/modules/workspace/pages/ManagerHome.tsx', 'src/modules/workspace/pages/TeamLeadHome.tsx', 'src/modules/workspace/pages/AgentHome.tsx']) {
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers — the shared component is
+    // the one checked.
+    for (const file of ['src/modules/workspace/pages/TeamOverviewHome.tsx', 'src/modules/workspace/pages/AgentHome.tsx']) {
       const src = read(file);
       assert.ok(!src.includes('<TaskCalendar'), `${file} must not embed the calendar`);
       assert.ok(!src.includes('<SalesPipeline'), `${file} must not embed the pipeline board`);
@@ -215,7 +237,10 @@ describe('UI English-only & Design Modernization — source guards', () => {
     assert.ok(app.includes("path: '/task-calendar'"), '/task-calendar route preserved');
     assert.ok(app.includes("path: '/sales-pipeline'"), '/sales-pipeline route preserved');
     const navSrc = nav();
-    assert.ok(navSrc.includes("path: '/task-calendar'") && navSrc.includes("path: '/sales-pipeline'"), 'both pages are sidebar destinations');
+    assert.ok(navSrc.includes("path: '/task-calendar'"), 'the Task Calendar is a sidebar destination');
+    // Sales Pipeline left the sidebars (2026-11-20, Mahadi's exact
+    // sidebar lists) — the route stays live by URL.
+    assert.ok(!navSrc.includes("path: '/sales-pipeline'"), 'the Sales Pipeline is URL-only now, not a sidebar destination');
   });
 
   it('Calendar architecture from PR#21 preserved', () => {

@@ -56,13 +56,22 @@ describe('Lead workflow model', () => {
     const roleEditor = read('src/modules/users/pages/UserManagement.tsx');
     const app = read('src/App.tsx');
 
+    // Team Lead / Manager / Admin workspace (2026-11-20): the home
+    // label is "Team Overview" (TL/Manager/Admin) / "My Work"
+    // (Agent) — no plain "Overview" anymore; "Daily Workbench"
+    // left the sidebar (route stays live, asserted below); the
+    // /follow-up page is "Follow-up Monitor" for TL/Manager/Admin
+    // and "Follow-up Queue" for Agent; /leads is "Team Leads"
+    // (TL/Manager), "All Leads" (Admin), "My Leads" (Agent).
     for (const [label, route] of [
-      ['Overview', '/'],
-      ['Daily Workbench', '/workbench'],
+      ['Team Overview', '/'],
+      ['My Work', '/'],
+      ['Follow-up Monitor', '/follow-up'],
       ['Follow-up Queue', '/follow-up'],
       ['Add Lead', '/leads/new'],
       ['My Leads', '/leads'],
-      ['Leads', '/leads'],
+      ['Team Leads', '/leads'],
+      ['All Leads', '/leads'],
     ] as const) {
       assert.match(
         nav,
@@ -70,6 +79,8 @@ describe('Lead workflow model', () => {
         `sidebar item ${label} must keep route ${route}`,
       );
     }
+    // Daily Workbench left the sidebar but the route stays live.
+    assert.ok(app.includes("path: '/workbench'"), 'the /workbench route must survive the sidebar change');
     // The /more directory page keeps its route even though the new shell
     // gives it no sidebar entry (every destination is reachable elsewhere).
     assert.ok(app.includes("path: '/more'"), 'the /more route must survive the shell redesign');

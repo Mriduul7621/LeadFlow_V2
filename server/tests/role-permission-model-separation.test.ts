@@ -66,6 +66,10 @@ function canonicalPermissionCodes(): string[] {
   const src = [
     read('server/database/migrations/025_permissions.ts'),
     read('server/database/migrations/042_roadshows.ts'),
+    // 063 seeds users.add_employee (Team Lead / Manager workspace,
+    // 2026-11-20) as a params-array literal — the same `["code"`
+    // shape the regex below matches.
+    read('server/database/migrations/063_users_add_employee.ts'),
   ].join('\n');
   const codes: string[] = [];
   const re = /\[\s*"([a-z_.]+)"/g;

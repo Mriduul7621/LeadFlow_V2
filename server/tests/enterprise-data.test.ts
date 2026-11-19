@@ -10,11 +10,15 @@
  * the whole file holds under TZ=UTC and under TZ=Asia/Dhaka alike
  * (run it under both). The Dhaka-midnight edge — 18:00 UTC is
  * 00:00 the next day in Dhaka — is pinned at both sides.
+ *
+ * Removed 2026-11-20 (Team Lead / Manager / Admin workspace):
+ * buildNext7Days + DayBucket — the 7-day chart pipeline is gone
+ * (the homes chart team activity from the loaded leads list via
+ * activityBuckets), so its describe went with it.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNext7Days,
   conversionShare,
   dhakaDayKey,
   dhakaDayLabel,
@@ -28,14 +32,10 @@ import {
   money,
   resolveTerminalNames,
 } from '../../src/modules/workspace/utils/enterpriseData';
-import type { FollowUpQueueItem } from '../../src/modules/leads/services/leadService';
 import type { DropdownOption } from '../../src/modules/shared/types';
 
 // Noon Dhaka, Thursday 19 November 2026.
 const NOON_19_NOV = new Date('2026-11-19T06:00:00.000Z');
-
-const queueItem = (nextFollowUpAt: string): FollowUpQueueItem =>
-  ({ nextFollowUpAt }) as unknown as FollowUpQueueItem;
 
 const statusOption = (label: string, isTerminal?: boolean): DropdownOption =>
   ({
@@ -78,39 +78,6 @@ describe('enterpriseData — Dhaka day arithmetic', () => {
     assert.equal(formatDhakaShort('2026-11-12T00:00:00.000Z'), '12 Nov');
     // 04:30 UTC is 10:30 in Dhaka (en-GB hour12 renders "am").
     assert.match(formatDhakaTime('2026-11-19T04:30:00.000Z'), /^10:30\s?am$/i);
-  });
-});
-
-describe('enterpriseData — buildNext7Days (the 7-day follow-up chart)', () => {
-  it('always returns all seven days, today first, even at 0 (never-empty rule)', () => {
-    const days = buildNext7Days([], NOON_19_NOV);
-    assert.equal(days.length, 7);
-    assert.deepEqual(days.map(d => d.dayKey), [
-      '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22',
-      '2026-11-23', '2026-11-24', '2026-11-25',
-    ]);
-    assert.deepEqual(days.map(d => d.count), [0, 0, 0, 0, 0, 0, 0]);
-    assert.equal(days[0].isToday, true);
-    assert.ok(days.slice(1).every(d => d.isToday === false));
-    assert.equal(days[0].label, 'Thu 19');
-    assert.equal(days[6].label, 'Wed 25');
-  });
-
-  it('buckets items by their Dhaka due day; overdue, day-7 and invalid items are excluded', () => {
-    const days = buildNext7Days(
-      [
-        queueItem('2026-11-19T09:00:00.000Z'), // today 15:00 Dhaka -> day 0
-        queueItem('2026-11-20T04:00:00.000Z'), // tomorrow 10:00 Dhaka -> day 1
-        queueItem('2026-11-19T18:00:00.000Z'), // midnight Dhaka 20th -> day 1, not day 0
-        queueItem('2026-11-25T04:00:00.000Z'), // day 6, the last bucket
-        queueItem('2026-11-26T04:00:00.000Z'), // day 7: outside the chart
-        queueItem('2026-11-18T04:00:00.000Z'), // overdue: the caller keeps it in the overdue total
-        queueItem('2026-11-18T17:59:59.000Z'), // 23:59:59 Dhaka 18th: still yesterday
-        queueItem('not-a-date'), // unparseable: skipped, never counted
-      ],
-      NOON_19_NOV
-    );
-    assert.deepEqual(days.map(d => d.count), [1, 2, 0, 0, 0, 0, 1]);
   });
 });
 

@@ -33,9 +33,13 @@ const read = (rel: string) => readFileSync(`${repoRoot}${rel}`, 'utf8');
 
 const ALL_ROUTES = Object.keys(FEATURE_ROUTES);
 const NON_ADMIN_ROLES = ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH'];
-const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/sales-pipeline', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id'];
+// Team Lead / Manager / Admin workspace (2026-11-20): My Leads and
+// Self Performance are EVERYONE routes (their pages gate on the
+// display role themselves); User Management is ADMIN_ONLY with the
+// teamLeadAllowed / managerAllowed predicates (like Lead Intake).
+const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/sales-pipeline', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/leads/my', '/performance/self', '/settings', '/leads/:id'];
 const INSIGHT_ROUTES = ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'];
-const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/leads/upload', '/leads/all', '/users'];
+const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/leads/upload', '/leads/all', '/users', '/users/team'];
 
 describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   it('ADMIN and SUPERADMIN pass every registered route, even when menuAccess disables it', () => {
@@ -162,9 +166,23 @@ describe('enterprise sidebar navigation — route coverage', () => {
     assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
 
     const nav = read('src/layouts/enterpriseNav.ts');
-    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown', '/roadshows', '/sales-pipeline']) {
+    for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/roadshows']) {
       assert.ok(nav.includes(`path: '${p}'`), `the enterprise nav must include ${p}`);
       assert.ok(FEATURE_ROUTES[p], `nav path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
+    }
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi's
+    // sidebar lists): NCP Progress, Trends & Reports, Campaigns
+    // and Sales Pipeline left the TL/Manager/Admin sidebars (the
+    // agent never had them) — they are NOT sidebar entries
+    // anymore, but their routes stay registered in FEATURE_ROUTES
+    // and App.tsx, live by URL. The nav-coverage rule is now:
+    // every nav destination is registered; registered routes need
+    // not be nav destinations.
+    const appForNav = read('src/App.tsx');
+    for (const p of ['/ncp-progress', '/trend-charts', '/campaign-breakdown', '/sales-pipeline']) {
+      assert.ok(!nav.includes(`path: '${p}'`), `the enterprise nav must NOT include ${p} anymore`);
+      assert.ok(FEATURE_ROUTES[p], `${p} stays registered in FEATURE_ROUTES (live by URL)`);
+      assert.ok(appForNav.includes(`<FeatureGate route="${p}">`), `${p} stays wrapped in App.tsx`);
     }
 
     // `/` renders the derived role overview directly (no landing
@@ -187,12 +205,16 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     // disagree about which matrix they were reading. Both calls also
     // carry the team fact (2026-11-19): the `teamLeadAllowed`
     // predicate needs has-subordinate, and the wait-check needs to
-    // know whether the team overview has settled yet.
+    // know whether the team overview has settled yet. The
+    // `managerAllowed` predicate (2026-11-20) adds the derived
+    // enterprise-role fact the same way, with its own settle flag.
     assert.ok(src.includes('const matched = matchRole(roles, user);'), 'gate must resolve the role row once');
-    assert.ok(src.includes('canResolveRouteAccess(route, user.role, matched, { teamSettled })'), 'gate must check whether the decision is final yet');
-    assert.ok(src.includes('resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates })'), 'gate must use the shared pure decision');
+    assert.ok(src.includes('canResolveRouteAccess(route, user.role, matched, { teamSettled, roleSettled })'), 'gate must check whether the decision is final yet');
+    assert.ok(src.includes('resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates, isManager })'), 'gate must use the shared pure decision');
     assert.ok(src.includes('useCallerTeam()'), 'gate must read the team overview for the team-lead predicate');
     assert.ok(src.includes('callerHasTeam(callerTeam.overview?.people)'), 'gate must derive has-subordinate from the overview');
+    assert.ok(src.includes('useEnterpriseRole()'), 'gate must read the derived enterprise role for the manager predicate');
+    assert.ok(src.includes("enterpriseRole.role === 'manager'"), 'gate must derive isManager from the enterprise role');
     assert.ok(src.includes('<Navigate to="/" replace />'), 'deny must redirect, never render the page');
     assert.ok(src.includes('readSessionCache'), 'roles must come from the shared session cache');
     assert.ok(src.includes('adminService.getRoles()'), 'roles must load through the role API');
@@ -248,5 +270,64 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'MKTH', { menuAccess: { '/execution-intelligence': true } } as any), true);
     // ...while an explicit deny still hides them from a default holder.
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', { menuAccess: { '/execution-intelligence': false } } as any), false);
+  });
+});
+
+describe('the Team Lead / Manager / Admin workspace routes (2026-11-20)', () => {
+  it('My Leads and Self Performance are open to everyone (their pages gate on the display role)', () => {
+    for (const route of ['/leads/my', '/performance/self']) {
+      for (const role of ['RO', 'TEAM_LEAD', 'MANAGER', 'EMPLOYEE', 'ADMIN']) {
+        assert.equal(resolveFeatureRouteAccess(route, role, undefined), true, `${route} open for ${role}`);
+      }
+    }
+    // An explicit menuAccess deny still closes them (the pages are
+    // keyed to their parent modules).
+    assert.equal(resolveFeatureRouteAccess('/leads/my', 'RO', { menuAccess: { '/leads': false } } as any), false, 'My Leads inherits the /leads module toggle');
+    assert.equal(resolveFeatureRouteAccess('/performance/self', 'RO', { menuAccess: { '/execution-intelligence': false } } as any), false, 'Self Performance inherits the /execution-intelligence module toggle');
+  });
+
+  it('User Management is admin-only statically, and opens through the team-lead / manager predicates', () => {
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'RO', undefined), false, 'a plain agent cannot open User Management');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'TEAM_LEAD', undefined), false, 'no context, no predicate');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'TEAM_LEAD', undefined, { hasSubordinates: true }), true, 'a team lead with subordinates opens it');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'TEAM_LEAD', undefined, { hasSubordinates: false }), false, 'a team lead with no subordinates does not');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'MANAGER', undefined, { isManager: true }), true, 'a manager opens it');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'MANAGER', undefined, { isManager: false }), false, 'a non-manager does not');
+    // An explicit menuAccess entry wins over the predicates either way.
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'TEAM_LEAD', { menuAccess: { '/users': false } } as any, { hasSubordinates: true }), false, 'an explicit deny beats the predicate');
+    assert.equal(resolveFeatureRouteAccess('/users/team', 'RO', { menuAccess: { '/users': true } } as any), true, 'an explicit grant opens it for anyone');
+  });
+
+  it('Lead Intake opens for Managers too (managerAllowed), not just team leads', () => {
+    assert.equal(resolveFeatureRouteAccess('/leads/upload', 'MANAGER', undefined, { isManager: true }), true, 'a manager opens Lead Intake');
+    assert.equal(resolveFeatureRouteAccess('/leads/upload', 'MANAGER', undefined, { isManager: false, hasSubordinates: false }), false, 'a non-manager without a team does not');
+    assert.equal(resolveFeatureRouteAccess('/leads/upload', 'TEAM_LEAD', undefined, { hasSubordinates: true }), true, 'the team-lead arm still works');
+    assert.equal(resolveFeatureRouteAccess('/leads/upload', 'TEAM_LEAD', undefined, { hasSubordinates: false, isManager: false }), false, 'neither arm, no access');
+  });
+
+  it('canResolveRouteAccess waits for the enterprise-role derivation on managerAllowed routes', () => {
+    assert.equal(
+      canResolveRouteAccess('/leads/upload', 'MANAGER', undefined, { teamSettled: true, roleSettled: false }),
+      false,
+      'the manager fact is still loading — wait, never bounce',
+    );
+    assert.equal(
+      canResolveRouteAccess('/leads/upload', 'MANAGER', undefined, { teamSettled: true, roleSettled: true }),
+      false,
+      'even settled, the matrix itself is still missing — the wait continues',
+    );
+    assert.equal(
+      canResolveRouteAccess('/leads/upload', 'MANAGER', { menuAccess: {} } as any, { teamSettled: true, roleSettled: true }),
+      true,
+      'matrix + team + role settled — the decision runs',
+    );
+    // An explicit menuAccess entry decides without the role fact.
+    assert.equal(
+      canResolveRouteAccess('/leads/upload', 'MANAGER', { menuAccess: { '/leads/upload': true } } as any, { teamSettled: false, roleSettled: false }),
+      true,
+      'an explicit entry wins — no wait needed',
+    );
+    // Non-predicate routes never wait on the role fact.
+    assert.equal(canResolveRouteAccess('/leads', 'RO', undefined, { teamSettled: true, roleSettled: false }), true, 'ANY_ROLE routes decide immediately');
   });
 });

@@ -20,10 +20,13 @@
  *     guards, plus navigate() calls and query strings).
  *
  * Deliberately NOT restyled (closest sample-aligned layout kept):
- * the LeadQualitySnapshot shared component, TeamOverview's tree
- * rows + StatCard tiles, the org-chart node cards, LeadList's
- * mobile list + status tabs, the calendar grids, and the shared
- * UserBulkImportModal / EnterpriseAccessPanel components.
+ * the LeadQualitySnapshot shared component, the org-chart node
+ * cards, LeadList's mobile list + status tabs, the calendar
+ * grids, and the shared UserBulkImportModal / EnterpriseAccessPanel
+ * components. (TeamOverview's tree rows + StatCard tiles left
+ * with the 2026-11-20 Team Members rebuild — Mahadi called the
+ * old page "ekta faltu design" — replaced by the roster + drill-
+ * down; the org chart itself still lives on /team/organogram.)
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -48,6 +51,11 @@ const SIDEBAR_PAGES: [string, string][] = [
   ['/execution-intelligence', 'src/modules/dashboard/pages/ExecutionIntelligence.tsx'],
   ['/follow-up', 'src/modules/leads/pages/FollowUpStrategy.tsx'],
   ['/leads', 'src/modules/leads/pages/LeadList.tsx'],
+  // Team Lead / Manager / Admin workspace (2026-11-20): My Leads
+  // (own-only), Self Performance, Team User Management.
+  ['/leads/my', 'src/modules/leads/pages/LeadList.tsx'],
+  ['/performance/self', 'src/modules/dashboard/pages/SelfPerformance.tsx'],
+  ['/users/team', 'src/modules/users/pages/TeamUserManagement.tsx'],
   ['/leads/all', 'src/modules/leads/pages/AllLeads.tsx'],
   ['/leads/new', 'src/modules/leads/pages/LeadGenerate.tsx'],
   ['/leads/upload', 'src/modules/leads/pages/LeadUpload.tsx'],
@@ -80,9 +88,16 @@ describe('inner pages — every sidebar page renders the sample heading', () => 
       // renders EnterprisePageHeader); More itself uses the header
       // directly. Either form counts — both render the sample's
       // heading for the path.
+      //
+      // /leads and /leads/my are the exceptions to the literal
+      // check: LeadList renders ONE header whose path is a ternary
+      // (`listScope === 'my' ? '/leads/my' : '/leads'`), so the
+      // file contains both routes as string literals, not as
+      // path="…". Accept the literal there.
       const heading =
         code.includes(`<PageHeading path="${route}"`) ||
-        (code.includes('<EnterprisePageHeader') && code.includes(`path="${route}"`));
+        (code.includes('<EnterprisePageHeader') && code.includes(`path="${route}"`)) ||
+        ((route === '/leads/my' || route === '/leads') && code.includes('<EnterprisePageHeader') && code.includes(`'${route}'`));
       assert.ok(heading, `${file} renders the sample heading for ${route}`);
     });
   }
@@ -158,7 +173,7 @@ describe('inner pages — every link target is a real App.tsx route', () => {
   };
 
   it('App.tsx registers the routes the inner pages link to', () => {
-    for (const route of ['/', '/users', '/team', '/team/organogram', '/leads', '/leads/new', '/leads/:id', '/workbench', '/task-calendar', '/roadshows', '/sales-pipeline', '/ncp-progress', '/team/kpi/:kpi', '/settings/status-pipeline', '/settings/products-campaigns', '/settings/system']) {
+    for (const route of ['/', '/users', '/team', '/team/organogram', '/leads', '/leads/new', '/leads/:id', '/leads/my', '/performance/self', '/users/team', '/workbench', '/task-calendar', '/roadshows', '/sales-pipeline', '/ncp-progress', '/team/kpi/:kpi', '/settings/status-pipeline', '/settings/products-campaigns', '/settings/system']) {
       assert.ok(appRoutes.includes(route), `App.tsx registers ${route}`);
     }
   });
@@ -180,21 +195,35 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/dashboard/pages/NcpProgress.tsx': 0,
     'src/modules/roadshows/pages/RoadshowPage.tsx': 0,
     'src/modules/leads/pages/LeadUpload.tsx': 0,
-    'src/modules/team/pages/TeamOverview.tsx': 1,
+    // Team Members rebuild (2026-11-20): 7 — the Organogram link,
+    // the Invite member link, the All-teams back link, the member
+    // detail's lead rows, the member detail's follow-up rows, the
+    // TL-group link, and the roster row (template, /team?member=…).
+    'src/modules/team/pages/TeamOverview.tsx': 7,
     'src/modules/hierarchy/pages/TeamHierarchy.tsx': 0,
     // Agent workspace rebuild (2026-11-20): 6 — the ?leadId= deep
     // link, the mobile row open, the mobile update, the mobile
     // chevron, the desktop row open, the desktop update. (The
     // Timeline and Edit buttons are gone; the quick view lives in
-    // LeadQuickViewModal.tsx.)
-    'src/modules/leads/pages/LeadList.tsx': 6,
+    // LeadQuickViewModal.tsx.) Team Lead / Manager / Admin
+    // workspace (2026-11-20): +5 — the Manager TL-group link, the
+    // Manager member link, the two All-teams back links, and the
+    // /leads/my page-gate redirect.
+    'src/modules/leads/pages/LeadList.tsx': 11,
     'src/modules/leads/pages/AllLeads.tsx': 1,
     'src/modules/workbench/pages/DailyWorkbench.tsx': 16,
     'src/modules/auth/pages/TaskCalendar.tsx': 5,
     'src/modules/users/pages/UserManagement.tsx': 0,
     'src/modules/leads/pages/LeadGenerate.tsx': 0,
     'src/modules/settings/pages/PerformanceDiagnostics.tsx': 1,
-    'src/modules/dashboard/pages/ExecutionIntelligence.tsx': 0,
+    // Team Lead / Manager / Admin workspace (2026-11-20): 1 — the
+    // Manager breakdown table's TL link (/team?tl=…).
+    'src/modules/dashboard/pages/ExecutionIntelligence.tsx': 1,
+    // New pages (2026-11-20): 1 each — the page-gate redirect
+    // (SelfPerformance -> /execution-intelligence,
+    // TeamUserManagement -> /).
+    'src/modules/dashboard/pages/SelfPerformance.tsx': 1,
+    'src/modules/users/pages/TeamUserManagement.tsx': 1,
     'src/modules/settings/pages/Settings.tsx': 1,
   };
 
