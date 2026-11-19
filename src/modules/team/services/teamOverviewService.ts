@@ -117,6 +117,48 @@ export function callerHasTeam(people: TeamOverviewPerson[] | null | undefined): 
 }
 
 /**
+ * The caller's full downline from the scoped overview people list —
+ * every descendant in the reporting tree (direct reports, their
+ * reports, and so on), the caller themself excluded. Walks the
+ * `managerEmployeeId` links out from the caller, cycle-guarded, and
+ * matches employee ids case-insensitively. The overview carries the
+ * caller's VISIBLE set, which for a FullTeam caller is the whole
+ * department — the walk is what makes this exactly the downline.
+ * The reassign target picker runs on this (2026-11-19, Mahadi: a
+ * team lead reassigns to anyone in the full downline, A → B and
+ * grand-reports included).
+ */
+export function downlineOf(
+  people: TeamOverviewPerson[] | null | undefined,
+  selfEmployeeId: string | null | undefined
+): TeamOverviewPerson[] {
+  if (!people || !selfEmployeeId) return [];
+  const self = String(selfEmployeeId).toUpperCase();
+  const byManager = new Map<string, TeamOverviewPerson[]>();
+  for (const person of people) {
+    const manager = String(person.managerEmployeeId || '').toUpperCase();
+    if (!manager) continue;
+    const list = byManager.get(manager) ?? [];
+    list.push(person);
+    byManager.set(manager, list);
+  }
+  const result: TeamOverviewPerson[] = [];
+  const visited = new Set<string>([self]);
+  const queue: string[] = [self];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const report of byManager.get(current) ?? []) {
+      const key = String(report.employeeId).toUpperCase();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      queue.push(key);
+      result.push(report);
+    }
+  }
+  return result;
+}
+
+/**
  * The "sees a team" fact the TL+ landing decision runs on
  * (owner-approved 2026-11-13): the caller gets the team-first home
  * whenever they can see MORE than just themself — the scoped

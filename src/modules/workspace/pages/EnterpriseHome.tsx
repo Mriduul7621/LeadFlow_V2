@@ -14,7 +14,7 @@ import { HomeSkeleton } from '../components/EnterprisePrimitives';
  * There is no switcher for ordinary users, no landing redirect
  * and no Workbench-first bounce: the role overview IS the landing
  * page, and the Daily Workbench stays one tap away in the sidebar
- * ("Follow-up Queue") and in the Team/My-work toggle on the
+ * ("Daily Workbench") and in the Team/My-work toggle on the
  * Workbench itself.
  *
  * The four homes are lazy chunks (the route-level code-splitting

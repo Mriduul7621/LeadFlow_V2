@@ -3,7 +3,7 @@
  * ------------------------------------------------------------------
  * Verifies:
  * - /workbench route exists and is protected
- * - enterprise sidebar includes Follow-up Queue / Daily Workbench
+ * - enterprise sidebar includes Daily Workbench
  * - permission/menu visibility preserved
  * - no full lead list fetch, no N+1
  * - queue composition, ordering, filters, empty/error, Dhaka, dedup
@@ -15,8 +15,10 @@
  * (src/modules/workspace/pages/*) fed by useEnterpriseHomeData,
  * and the sidebar is src/layouts/enterpriseNav.ts. The primary
  * tabs (My Work tab, visiblePrimaryItems) are retired with the old
- * shell; the Workbench is reached as "Follow-up Queue" in the
- * sidebar, and the agent home keeps the "My Work" title.
+ * shell; the Workbench is reached as "Daily Workbench" in the
+ * sidebar (the 2026-11-19 label fix: the old "Follow-up Queue"
+ * label belonged to /follow-up, not /workbench), and the agent home
+ * keeps the "My Work" title.
  */
 
 import { describe, it } from 'node:test';
@@ -57,13 +59,15 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(src.includes('DailyWorkbench'), 'App must import DailyWorkbench');
   });
 
-  it('enterprise sidebar includes Follow-up Queue / Daily Workbench', () => {
+  it('enterprise sidebar includes Daily Workbench', () => {
     // The primary tabs are retired with the old shell: the Workbench is
-    // reached as "Follow-up Queue" in the role-based enterprise sidebar
+    // reached as "Daily Workbench" in the role-based enterprise sidebar
     // (single source of truth: src/layouts/enterpriseNav.ts), and the
-    // agent home keeps the "My Work" title.
+    // agent home keeps the "My Work" title. "Follow-up Queue" is the
+    // /follow-up page (2026-11-19 label fix), never /workbench.
     const nav = enterpriseNav();
-    assert.ok(nav.includes("label: 'Follow-up Queue', path: '/workbench'"), 'the sidebar must offer Follow-up Queue → /workbench');
+    assert.ok(nav.includes("label: 'Daily Workbench', path: '/workbench'"), 'the sidebar must offer Daily Workbench → /workbench');
+    assert.ok(nav.includes("label: 'Follow-up Queue', path: '/follow-up'"), 'the sidebar must offer Follow-up Queue → /follow-up');
     assert.ok(read('src/modules/workspace/pages/AgentHome.tsx').includes('title="My Work"'), 'the agent home must keep the My Work title');
     // The workspace pages live in the sidebar (not in More).
     for (const route of ['/activities', '/task-calendar', '/follow-up']) {
@@ -406,13 +410,15 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(wb.includes('Daily Workbench'), 'title must be Daily Workbench');
     // Fix round 1 (2026-11-19): the hand-rolled header (subtitle
     // "Manage today's calls…") is replaced by the sample's heading
-    // via EnterprisePageHeader — the sample's "Follow-up Queue"
-    // label + "Prioritize overdue and upcoming follow-ups."
-    // description for /workbench. The page name survives in the
-    // no-access copy above.
+    // via EnterprisePageHeader. Label fix (2026-11-19): /workbench
+    // is "Daily Workbench" with its own description; the sample's
+    // "Follow-up Queue" label + "Prioritize overdue and upcoming
+    // follow-ups." description belong to /follow-up. The page name
+    // survives in the no-access copy above.
     assert.ok(wb.includes('path="/workbench"'), 'the heading comes from the sample via EnterprisePageHeader');
     const nav = read('src/layouts/enterpriseNav.ts');
-    assert.ok(nav.includes("'Follow-up Queue': 'Prioritize overdue and upcoming follow-ups.'"), 'the sample description for /workbench');
+    assert.ok(nav.includes("'Daily Workbench': 'Your day at a glance"), 'the Daily Workbench description for /workbench');
+    assert.ok(nav.includes("'Follow-up Queue': 'Prioritize overdue and upcoming follow-ups.'"), 'the sample description for /follow-up');
     // Brand tokens via class names
     assert.ok(wb.includes('rounded-[12px]') || wb.includes('rounded-[10px]'), 'must use 10-12px radii');
     assert.ok(wb.includes('bg-white') && wb.includes('border'), 'must use warm neutral surfaces');

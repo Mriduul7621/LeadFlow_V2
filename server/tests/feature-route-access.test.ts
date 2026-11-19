@@ -184,10 +184,15 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     const src = read('src/modules/auth/components/FeatureGate.tsx');
     // The gate resolves the caller's role row once and hands the SAME value
     // to the wait-check and to the decision, so both layers can never
-    // disagree about which matrix they were reading.
+    // disagree about which matrix they were reading. Both calls also
+    // carry the team fact (2026-11-19): the `teamLeadAllowed`
+    // predicate needs has-subordinate, and the wait-check needs to
+    // know whether the team overview has settled yet.
     assert.ok(src.includes('const matched = matchRole(roles, user);'), 'gate must resolve the role row once');
-    assert.ok(src.includes('canResolveRouteAccess(route, user.role, matched)'), 'gate must check whether the decision is final yet');
-    assert.ok(src.includes('resolveFeatureRouteAccess(route, user.role, matched)'), 'gate must use the shared pure decision');
+    assert.ok(src.includes('canResolveRouteAccess(route, user.role, matched, { teamSettled })'), 'gate must check whether the decision is final yet');
+    assert.ok(src.includes('resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates })'), 'gate must use the shared pure decision');
+    assert.ok(src.includes('useCallerTeam()'), 'gate must read the team overview for the team-lead predicate');
+    assert.ok(src.includes('callerHasTeam(callerTeam.overview?.people)'), 'gate must derive has-subordinate from the overview');
     assert.ok(src.includes('<Navigate to="/" replace />'), 'deny must redirect, never render the page');
     assert.ok(src.includes('readSessionCache'), 'roles must come from the shared session cache');
     assert.ok(src.includes('adminService.getRoles()'), 'roles must load through the role API');

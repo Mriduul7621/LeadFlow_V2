@@ -4,6 +4,8 @@ import { useAuthStore } from '../store/authStore';
 import { adminService } from '../../admin/services/adminService';
 import { readSessionCache, writeSessionCache } from '../../shared/api/sessionCache';
 import { ROLES_CACHE_CHANGED_EVENT } from '../../shared/utils/localCacheEvents';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { callerHasTeam } from '../../team/services/teamOverviewService';
 import type { RolePermission } from '../../shared/types';
 import {
   canResolveRouteAccess,
@@ -23,6 +25,12 @@ import {
  *     AppLayout / adminService, shared by coalesced GET /api/roles),
  *   - refreshed on the same-tab roles-cache-changed event so an admin
  *     save takes effect on the next render without a reload.
+ *   - the session-cached team overview (useCallerTeam, shared with
+ *     AppLayout's role derivation — no extra network request): the
+ *     `teamLeadAllowed` predicate needs the has-subordinate fact, and
+ *     deciding before it lands would bounce a team lead out of Lead
+ *     Intake on a cold load. The wait below covers the team fetch
+ *     exactly like the matrix fetch.
  *
  * Three outcomes, not two:
  *   granted -> render the page
@@ -33,7 +41,9 @@ import {
  *              placeholder (instead of redirecting) is what makes a
  *              direct URL / hard reload work: the cold-load bounce to
  *              Home came from deciding on that guess. Admin, unknown
- *              routes and ANY_ROLE routes never wait.
+ *              routes and ANY_ROLE routes never wait. (The same
+ *              applies to the team overview on `teamLeadAllowed`
+ *              routes: undecided means wait, never bounce.)
  *
  * This is a visibility gate, not a security boundary: the server keeps
  * enforcing canonical Action Permissions and Data Visibility on every
@@ -60,6 +70,14 @@ function AccessResolving() {
 export default function FeatureGate({ route, children }: { route: string; children: React.ReactNode }) {
   const user = useAuthState();
   const userId = user?.id;
+  // The tree fact for `teamLeadAllowed` routes (Lead Intake). The
+  // overview is session-cached and shared with AppLayout, so this
+  // hook adds no network request; `teamSettled` is true once the
+  // fetch attempt finished (success or failure — a failed load
+  // settles as no team, fail closed, exactly like the matrix).
+  const callerTeam = useCallerTeam();
+  const hasSubordinates = callerHasTeam(callerTeam.overview?.people);
+  const teamSettled = !callerTeam.loading;
   // Seed from the session cache synchronously: an in-session navigation
   // (and a reload in a tab that already fetched the matrix) decides on the
   // first paint, with no placeholder frame.
@@ -115,14 +133,15 @@ export default function FeatureGate({ route, children }: { route: string; childr
 
   const matched = matchRole(roles, user);
 
-  if (!canResolveRouteAccess(route, user.role, matched)) {
-    // Nothing to decide on yet — wait, do NOT redirect. `settled` marks a
-    // finished fetch attempt, so this can never hang: once the attempt
-    // resolves (success or failure) the decision below runs.
-    if (!settled) return <AccessResolving />;
+  if (!canResolveRouteAccess(route, user.role, matched, { teamSettled })) {
+    // Nothing to decide on yet — wait, do NOT redirect. `settled`
+    // marks a finished matrix fetch attempt and `teamSettled` a
+    // finished team fetch attempt, so this can never hang: once both
+    // attempts resolve (success or failure) the decision below runs.
+    if (!settled || !teamSettled) return <AccessResolving />;
   }
 
-  if (!resolveFeatureRouteAccess(route, user.role, matched)) {
+  if (!resolveFeatureRouteAccess(route, user.role, matched, { hasSubordinates })) {
     return <Navigate to="/" replace />;
   }
 

@@ -85,7 +85,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // every render (see resolveDisplayRole). Declared before the
   // display-role derivation below (TDZ).
   const [previewRole, setPreviewRole] = useState<EnterpriseRole | null>(null);
-  const { role: enterpriseRole, loading: roleLoading } = useEnterpriseRole();
+  const { role: enterpriseRole, loading: roleLoading, hasSubordinates } = useEnterpriseRole();
   // The role the shell DISPLAYS: the caller's own derived role,
   // unless a super admin is previewing another role (display
   // only — data and route access still use the real user).
@@ -449,7 +449,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const sidebarGroups = roleLoading
     ? []
     : buildEnterpriseNavGroups({
-        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
+        // The teamLeadAllowed predicate (Lead Intake for team leads)
+        // needs the tree fact; roleLoading already waits for the
+        // overview, so hasSubordinates is settled whenever the nav
+        // renders at all.
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates }),
         canAccess,
         role: displayRole,
       });
@@ -463,7 +467,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const bottomNavTabs = roleLoading
     ? []
     : buildEnterpriseBottomNavTabs({
-        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission),
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates }),
         canAccess,
         role: displayRole,
       });

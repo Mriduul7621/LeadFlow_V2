@@ -29,11 +29,13 @@ import type { EnterpriseRole } from './enterpriseRole';
  * ------------------------------------------------------------------
  * The sample prototype's sidebar, rebuilt on LeadFlow's real routes
  * and real permissions. Group titles, item labels and page subtitles
- * are the sample's EXACT words; every item links to a real LeadFlow
- * page. The nav is ROLE-based, never a role-switcher: the caller sees
- * exactly one workspace (admin / manager / team lead / agent),
- * derived from their real scope and role by deriveEnterpriseRole —
- * there is no control that switches it.
+ * are the sample's EXACT words — except where Mahadi renamed a label
+ * to match its page (see "Follow-up Queue" below); every item links
+ * to a real LeadFlow page. The nav is ROLE-based, never a
+ * role-switcher: the caller sees exactly one workspace (admin /
+ * manager / team lead / agent), derived from their real scope and
+ * role by deriveEnterpriseRole — there is no control that switches
+ * it.
  *
  * Sample items with NO real LeadFlow page are OMITTED (never a dead
  * link, never a fake page):
@@ -58,13 +60,19 @@ import type { EnterpriseRole } from './enterpriseRole';
  *
  * Two additions are NOT in the sample and are added so no kept
  * feature loses its only entry point (both reported in the PR body):
- *   - "Follow-up Strategy" (/follow-up) in every role's work group:
- *     the sample's "Follow-up Queue" maps to the Daily Workbench
- *     (/workbench), but Follow-up Strategy is a second, distinct
- *     queue page (bucket deep-links, linked from the Sales Pipeline
- *     page) with no other nav home. The old sidebar carried it as
- *     "Follow-up Queue"; it keeps its real page name here so the
- *     two queues are never confused.
+ *   - "Follow-up Queue" (/follow-up) in every role's work group:
+ *     the sample's "Follow-up Queue" label originally mapped to the
+ *     Daily Workbench (/workbench), but Mahadi (2026-11-19) found
+ *     the two names did not match their pages — the labels were
+ *     effectively swapped. The fix renamed the labels to match the
+ *     pages and moved NO data: /workbench is "Daily Workbench" (My
+ *     numbers, Daily Summary, Roadshows today, Execution Queue,
+ *     Completed Today, Tomorrow Preview) and /follow-up is
+ *     "Follow-up Queue" (Overdue / Due Today / Upcoming buckets —
+ *     its own H1 already said so). The old "Follow-up Strategy"
+ *     label is gone: strategy config lives in Settings (Strategy
+ *     Parameters), not on a queue page. The mobile bottom bar
+ *     shortens "Daily Workbench" to "Workbench" (tab width).
  *   - ADMINISTRATION (Admin role only) with Administration
  *     (/administration): the Administration page is the only route
  *     to Performance Diagnostics, so it stays one tap away for
@@ -118,7 +126,7 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   Teams: 'Compare managed teams and workload.',
   Leads: 'Search and inspect leads within your authorized scope.',
   'Follow-up Queue': 'Prioritize overdue and upcoming follow-ups.',
-  'Follow-up Strategy': 'Work the follow-up queue by bucket: overdue, today, upcoming.',
+  'Daily Workbench': 'Your day at a glance — numbers, follow-ups due, roadshows and tomorrow.',
   'Sales Pipeline': 'Understand stage volume and conversion bottlenecks.',
   Performance: 'Review target pacing and activity performance.',
   Campaigns: 'Compare lead volume and campaign outcomes.',
@@ -168,7 +176,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
           { label: 'Teams & Hierarchy', path: '/team', icon: Network },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
           { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
-          { label: 'Follow-up Strategy', path: '/follow-up', icon: Clock },
+          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
         ],
       },
       {
@@ -197,7 +205,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
           { label: 'Overview', path: '/', icon: LayoutDashboard },
           { label: 'Teams', path: '/team', icon: Users },
           { label: 'Leads', path: '/leads', icon: ClipboardList },
-          { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
+          { label: 'Daily Workbench', path: '/workbench', icon: Clock },
           { label: 'Sales Pipeline', path: '/sales-pipeline', icon: FileText },
         ],
       },
@@ -214,7 +222,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         title: 'FIELD EXECUTION',
         items: [
           { label: 'Roadshow Follow-up', path: '/roadshows', icon: MapPinned },
-          { label: 'Follow-up Strategy', path: '/follow-up', icon: Clock },
+          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
           { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
         ],
       },
@@ -228,8 +236,15 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         items: [
           { label: 'Overview', path: '/', icon: LayoutDashboard },
           { label: 'Team Members', path: '/team', icon: Users },
-          { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
-          { label: 'Follow-up Strategy', path: '/follow-up', icon: FileText },
+          // Team Lead lead creation (2026-11-19, Mahadi): a team lead
+          // uploads sheets (Lead Intake, gated by the teamLeadAllowed
+          // route predicate) and adds single leads (Add Lead, already
+          // open to everyone) — new leads default to the creator, and
+          // the lead list shows the TL's own + assigned leads first.
+          { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
+          { label: 'Add Lead', path: '/leads/new', icon: Plus },
+          { label: 'Daily Workbench', path: '/workbench', icon: Clock },
+          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
           { label: 'Activities', path: '/activities', icon: Activity },
           { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
         ],
@@ -251,8 +266,8 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         { label: 'Overview', path: '/', icon: LayoutDashboard },
         { label: 'My Leads', path: '/leads', icon: ClipboardList },
         { label: 'Add Lead', path: '/leads/new', icon: ClipboardList },
-        { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
-        { label: 'Follow-up Strategy', path: '/follow-up', icon: FileText },
+        { label: 'Daily Workbench', path: '/workbench', icon: Clock },
+        { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
         { label: 'Activities', path: '/activities', icon: Activity },
         { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
       ],
@@ -333,12 +348,12 @@ const BOTTOM_NAV_TABS: Record<EnterpriseRole, BottomNavTabDef[]> = {
     { label: 'Overview', path: '/', icon: LayoutDashboard },
     { label: 'Team Members', path: '/team', icon: Users },
     { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
-    { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
+    { label: 'Workbench', path: '/workbench', icon: Clock },
   ],
   agent: [
     { label: 'My Work', path: '/', icon: LayoutDashboard },
     { label: 'My Leads', path: '/leads', icon: ClipboardList },
-    { label: 'Follow-up Queue', path: '/workbench', icon: Clock },
+    { label: 'Workbench', path: '/workbench', icon: Clock },
     { label: 'Add Lead', path: '/leads/new', icon: Plus },
   ],
 };
@@ -394,8 +409,8 @@ const FALLBACK_LABELS: Record<string, string> = {
   '/team/organogram': 'Teams & Hierarchy',
   '/team': 'Team',
   '/users': 'Users & Roles',
-  '/workbench': 'Follow-up Queue',
-  '/follow-up': 'Follow-up Strategy',
+  '/workbench': 'Daily Workbench',
+  '/follow-up': 'Follow-up Queue',
   '/activities': 'Activities',
   '/task-calendar': 'Task Calendar',
   '/roadshows': 'Roadshow Follow-up',

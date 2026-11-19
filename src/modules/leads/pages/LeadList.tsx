@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Edit2,
   Target,
+  UserCog,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -27,6 +28,9 @@ import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { callerHasTeam } from '../../team/services/teamOverviewService';
+import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
 
@@ -37,6 +41,13 @@ export default function LeadList() {
   const { canAccess } = usePermissions();
   const canEditLead = canAccess('lead_tracking', 'edit');
   const canExportLeads = canAccess('lead_tracking', 'export');
+  // Reassign (2026-11-19, Mahadi): same gate as Lead360 — admin, or
+  // anyone with ≥1 subordinate, holding the leads.assign grant.
+  const callerTeam = useCallerTeam();
+  const userRoleUpper = String(user?.role || '').toUpperCase();
+  const canReassign = (userRoleUpper === 'ADMIN' || userRoleUpper === 'SUPERADMIN' || callerHasTeam(callerTeam.overview?.people))
+    && canAccess('lead_tracking', 'reassign_global_leads');
+  const [reassignLead, setReassignLead] = useState<Lead | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -496,6 +507,17 @@ export default function LeadList() {
           <Target size={17} />
         </button>
       )}
+      {canReassign && (
+        <button
+          type="button"
+          className="lf-row-action"
+          onClick={() => setReassignLead(lead)}
+          aria-label={'Reassign lead for ' + (lead.prospectName || 'lead')}
+          title="Reassign"
+        >
+          <UserCog size={17} />
+        </button>
+      )}
       <button
         type="button"
         className="lf-row-action"
@@ -619,6 +641,16 @@ export default function LeadList() {
                        >
                         <Phone className="w-3.5 h-3.5" />
                        </button>
+                       {canReassign && (
+                         <button
+                           onClick={(e) => { e.stopPropagation(); setReassignLead(lead); }}
+                           className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
+                           title="Reassign lead"
+                           aria-label={'Reassign lead for ' + (lead.prospectName || 'lead')}
+                         >
+                          <UserCog className="w-3.5 h-3.5" />
+                         </button>
+                       )}
                     </div>
                   </td>
                 </motion.tr>
@@ -801,6 +833,12 @@ export default function LeadList() {
           </div>
         )}
       </AnimatePresence>
+
+      <ReassignLeadDialog
+        lead={reassignLead ? { id: reassignLead.id, prospectName: reassignLead.prospectName, assignedTo: reassignLead.assignedTo } : null}
+        onClose={() => setReassignLead(null)}
+        onReassigned={() => { setReassignLead(null); void loadLeads(); }}
+      />
 
     </div>
   );

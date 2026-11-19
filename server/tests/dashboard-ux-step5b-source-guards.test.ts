@@ -159,8 +159,8 @@ describe('Dashboard UX Step 5B — source guards', () => {
   });
 
   it('G. follow-up queue navigation remains available', () => {
-    assert.ok(ENTERPRISE_NAV().includes("path: '/follow-up'"), 'the sidebar must offer the Follow-up Strategy queue');
-    assert.ok(ENTERPRISE_NAV().includes("label: 'Follow-up Queue', path: '/workbench'"), 'the sidebar must offer Follow-up Queue → /workbench');
+    assert.ok(ENTERPRISE_NAV().includes("label: 'Follow-up Queue', path: '/follow-up'"), 'the sidebar must offer Follow-up Queue → /follow-up');
+    assert.ok(ENTERPRISE_NAV().includes("label: 'Daily Workbench', path: '/workbench'"), 'the sidebar must offer Daily Workbench → /workbench');
     assert.ok(FOLLOWUP().includes('useSearchParams'), 'FollowUpStrategy must read ?bucket=');
     // The bucket deep-links moved off Home with the retired discipline card;
     // the queue page itself still owns the three buckets.

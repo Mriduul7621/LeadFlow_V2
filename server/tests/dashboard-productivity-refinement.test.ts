@@ -18,7 +18,7 @@
  *       the shared hook reads only the three bounded queue buckets;
  *   (b) the Add Lead action exists and is gated on
  *       canAccess('lead_generate', 'create');
- *   (c) every queue bucket stays reachable via Follow-up Strategy
+ *   (c) every queue bucket stays reachable via Follow-up Queue
  *       (/follow-up in every role's enterprise nav, bucket deep links
  *       honoured);
  *   (d) the retired FollowUpDiscipline card stays retired.
@@ -99,7 +99,7 @@ describe('Enterprise Preview home — Add Lead action (PR #24b)', () => {
 });
 
 describe('Enterprise Preview home — queue buckets stay reachable (PR #24c)', () => {
-  it('Follow-up Strategy is in every role\'s enterprise nav', () => {
+  it('Follow-up Queue is in every role\'s enterprise nav', () => {
     const roles: EnterpriseRole[] = ['admin', 'manager', 'teamLead', 'agent'];
     for (const role of roles) {
       const groups = buildEnterpriseNavGroups({
@@ -110,7 +110,7 @@ describe('Enterprise Preview home — queue buckets stay reachable (PR #24c)', (
       const items = groups.flatMap(g => g.items);
       const strategy = items.find(item => item.path === '/follow-up');
       assert.ok(strategy, `${role} nav must include /follow-up`);
-      assert.equal(strategy!.label, 'Follow-up Strategy', `${role} nav must label it Follow-up Strategy`);
+      assert.equal(strategy!.label, 'Follow-up Queue', `${role} nav must label it Follow-up Queue`);
     }
   });
 
