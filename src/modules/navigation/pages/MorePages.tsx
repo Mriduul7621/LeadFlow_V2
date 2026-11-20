@@ -11,6 +11,7 @@ import {
   LogOut,
   Settings,
   Shield,
+  Trash2,
   Upload,
   UserRound,
   Users,
@@ -144,6 +145,7 @@ export function AdministrationPage() {
     { label: 'Team', description: 'Team-wise leads: managers, team leaders, members', path: '/team', icon: Users },
     { label: 'Lead Upload', description: 'Import leads from a file', path: '/leads/upload', icon: Upload },
     { label: 'Lead Pool', description: 'Review and assign available leads', path: '/leads/all', icon: Database },
+    { label: 'Delete Requests', description: 'Review lead deletion requests', path: '/leads/delete-requests', icon: Trash2 },
     { label: 'System', description: 'Strategy, forms, workflow, sync and system tools', path: '/settings/system', icon: Settings },
     // Performance Diagnostics moved here from the retired Reports directory —
     // it is an administration tool, not a report a sales user reads.
@@ -248,13 +250,20 @@ export function NotificationsPage() {
                 </span>
               </>
             );
-            return notification.leadId ? (
+            return notification.leadId || notification.eventType === 'lead-delete-request' ? (
               <button
                 key={notification.id}
                 type="button"
                 onClick={() => {
                   void markRead(notification);
-                  navigate(`/leads/${encodeURIComponent(notification.leadId)}`);
+                  // A delete-request notification opens the admin
+                  // review page (the lead itself is not the action);
+                  // every other notification keeps the Lead360 link.
+                  if (notification.eventType === 'lead-delete-request') {
+                    navigate('/leads/delete-requests');
+                  } else {
+                    navigate(`/leads/${encodeURIComponent(notification.leadId)}`);
+                  }
                 }}
                 className="flex w-full items-start gap-3 px-4 py-4 text-left hover:bg-stone-50 sm:px-5"
               >

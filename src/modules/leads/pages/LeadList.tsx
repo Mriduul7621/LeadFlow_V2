@@ -8,6 +8,7 @@ import {
   XCircle,
   RefreshCw,
   Target,
+  Trash2,
   UserCog,
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
@@ -31,6 +32,7 @@ import {
 } from '../../workspace/utils/teamWorkspaceData';
 import { useCanReassign } from '../hooks/useCanReassign';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
+import RequestDeleteDialog from '../components/RequestDeleteDialog';
 import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
@@ -153,6 +155,17 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   const canReassign = useCanReassign();
   const callerTeam = useCallerTeam();
   const [reassignLead, setReassignLead] = useState<Lead | null>(null);
+
+  // Delete request (migration 062): clicking the trash icon opens the
+  // shared request dialog — it files a REQUEST for admin review, it
+  // never deletes the lead at once. A pending lead shows a
+  // "Delete requested" marker and the icon is disabled until the
+  // admin reviews it.
+  const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
+
+  const markDeleteRequested = (leadId: string) => {
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, deleteRequested: true } : l)));
+  };
   const location = useLocation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -788,6 +801,9 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           <strong>{lead.prospectName || 'Unknown Prospect'}</strong>
           <small>{lead.mobile || 'No mobile'}{lead.area ? ' · ' + lead.area : ''}</small>
           <span className="lf-mobile-lead-status">{lead.currentStatus || 'New'}</span>
+          {lead.deleteRequested && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-sm self-start">Delete requested</span>
+          )}
         </span>
       </button>
       {/* Quick status update straight from the list (same rule as Lead 360:
@@ -812,6 +828,27 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           title="Reassign"
         >
           <UserCog size={17} />
+        </button>
+      )}
+      {lead.deleteRequested ? (
+        <button
+          type="button"
+          disabled
+          className="lf-row-action"
+          aria-label="Delete requested — waiting for admin review"
+          title="Delete requested"
+        >
+          <Trash2 size={17} className="text-amber-500" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="lf-row-action"
+          onClick={() => setDeleteTarget(lead)}
+          aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
+          title="Request deletion"
+        >
+          <Trash2 size={17} />
         </button>
       )}
       <button
@@ -870,6 +907,11 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                         <p className="ep-cellsub">
                           {lead.id} · {lead.mobile || 'No mobile'}
                         </p>
+                        {lead.deleteRequested && (
+                          <span className="text-[8px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-sm uppercase tracking-wider shrink-0">
+                            Delete requested
+                          </span>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -916,6 +958,26 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                            aria-label={'Reassign lead for ' + (lead.prospectName || 'lead')}
                          >
                           <UserCog className="w-3.5 h-3.5" />
+                         </button>
+                       )}
+                       {lead.deleteRequested ? (
+                         <button
+                           disabled
+                           onClick={(e) => e.stopPropagation()}
+                           className="p-2 border border-amber-200 bg-amber-50 text-amber-500 rounded-sm shadow-xs transition-all cursor-not-allowed opacity-80"
+                           title="Delete requested — waiting for admin review"
+                           aria-label={'Delete requested for ' + (lead.prospectName || 'lead')}
+                         >
+                          <Trash2 className="w-3.5 h-3.5" />
+                         </button>
+                       ) : (
+                         <button
+                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); }}
+                           className="p-2 border border-slate-100 hover:border-red-300 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
+                           title="Request deletion — an admin reviews it"
+                           aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
+                         >
+                          <Trash2 className="w-3.5 h-3.5" />
                          </button>
                        )}
                     </div>
@@ -1089,6 +1151,12 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
         lead={reassignLead ? { id: reassignLead.id, prospectName: reassignLead.prospectName, assignedTo: reassignLead.assignedTo } : null}
         onClose={() => setReassignLead(null)}
         onReassigned={() => { setReassignLead(null); void loadLeads(); }}
+      />
+
+      <RequestDeleteDialog
+        lead={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onRequested={markDeleteRequested}
       />
 
       {quickViewLead && (

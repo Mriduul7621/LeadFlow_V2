@@ -71,6 +71,7 @@ import { up as userDesignationBackfill } from "./migrations/058_user_designation
 import { up as formFieldsTimestamps } from "./migrations/059_form_fields_timestamps.js";
 import { up as stageRulesTerminal } from "./migrations/060_stage_rules_terminal.js";
 import { up as rmRoleGrantScope } from "./migrations/061_rm_role_grant_scope.js";
+import { up as leadDeleteRequests } from "./migrations/062_lead_delete_requests.js";
 import { up as usersAddEmployee } from "./migrations/063_users_add_employee.js";
 
 import {
@@ -194,6 +195,11 @@ const migrations: Migration[] = [
     { id: "059_form_fields_timestamps", name: "Form Fields Timestamps (schema drift repair)", run: formFieldsTimestamps },
     { id: "060_stage_rules_terminal", name: "DZ-6 Stage Rules + Terminal Unification", run: stageRulesTerminal },
     { id: "061_rm_role_grant_scope", name: "Narrow RM Default Action Permissions", run: rmRoleGrantScope },
+    // 062 was already applied to the production database by the
+    // #158 preview boot (its table exists and the ledger records
+    // this id), so the pending filter below skips it there. Its DDL
+    // is IF NOT EXISTS, so a re-run would be a no-op anyway.
+    { id: "062_lead_delete_requests", name: "Lead Delete Requests", run: leadDeleteRequests },
     { id: "063_users_add_employee", name: "Users Add-Employee Permission (TL/Manager user add)", run: usersAddEmployee },
 
 ];
@@ -234,16 +240,19 @@ export async function runMigrations(): Promise<MigrationRunResult> {
     if (ledger.createdNow && ledger.applied.size === 0) {
         // First boot with the ledger: adopt an already-current legacy
         // database instead of replaying 226 round trips of DDL.
-        // Migration 061 is a data-only permission correction: it has no
-        // schema sentinel, so legacy adoption must leave it pending and run it
-        // once after adopting the pre-existing schema baseline.
-        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope");
+        // Migrations 061 and 062 have no adoption sentinel (the sentinels
+        // are the leads/roadshows/users tables + the 041 index), so legacy
+        // adoption must leave them pending and run them once after
+        // adopting the pre-existing schema baseline. 061 is a data-only
+        // permission correction; 062's DDL is IF NOT EXISTS, so its run
+        // is a no-op when the table is already there.
+        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope" && id !== "062_lead_delete_requests");
         result.adopted = await tryAdoptLegacySchema(adoptionIds);
         if (result.adopted) {
             console.log(
                 `✅ Schema ledger adopted ${adoptionIds.length} existing migrations; pending post-adoption migrations will now run`
             );
-            // Do not return: migration 061 intentionally remains unrecorded.
+            // Do not return: migrations 061 and 062 intentionally remain unrecorded.
             // The locked pending pass below re-reads the ledger and runs it.
         }
     }

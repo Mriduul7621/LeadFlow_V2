@@ -363,9 +363,12 @@ describe('migration 045 — default role access', () => {
       'and registered in the ledger so it runs once'
     );
     // 061 is data-only with no schema sentinel: legacy adoption must leave
-    // it pending so it runs once after the baseline is adopted.
+    // it pending so it runs once after the baseline is adopted. The check
+    // matches the exclusion alone (not the whole filter expression), so
+    // the filter may combine exclusions — 062 joined it in the
+    // delete-request port, and both must stay excluded.
     assert.ok(
-      runner.includes('MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope")'),
+      runner.includes('id !== "061_rm_role_grant_scope"'),
       'legacy adoption must exclude 061 so it still runs on adopted databases'
     );
     // 061 sits in chronological order (between 060 and 063); 063 stays the tail.
