@@ -197,7 +197,13 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/settings/pages/ProfileSettings.tsx': 0,
     'src/modules/dashboard/pages/CampaignBreakdown.tsx': 0,
     'src/modules/dashboard/pages/TrendCharts.tsx': 0,
-    'src/modules/navigation/pages/MorePages.tsx': 2,
+    // Branding + About/Help (2026-11-20): 12 — the logout navigate
+    // (/login), the notification lead navigate (template, /leads/…),
+    // and the Help page's 10 inline links (/leads/new, /leads,
+    // /follow-up, /task-calendar, /roadshows, /leads/upload,
+    // /performance/self, /execution-intelligence, /notifications,
+    // /settings).
+    'src/modules/navigation/pages/MorePages.tsx': 12,
     'src/modules/dashboard/pages/NcpProgress.tsx': 0,
     'src/modules/roadshows/pages/RoadshowPage.tsx': 0,
     'src/modules/leads/pages/LeadUpload.tsx': 0,

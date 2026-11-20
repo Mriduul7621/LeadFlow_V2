@@ -282,13 +282,92 @@ export function HelpPage() {
     <div className="ep-page" style={{ maxWidth: 720 }}>
       <PageHeading path="/help" />
       <div className="ep-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <p className="px-4 pt-5 text-[11px] font-bold uppercase tracking-wider text-stone-400 sm:px-5">Leads</p>
         <section className="px-4 py-5 sm:px-5">
-          <h2 className="text-sm font-semibold text-stone-800">Find and update a lead</h2>
-          <p className="mt-1 text-sm leading-6 text-stone-600">Open Leads, search or filter the list, then select a lead to view its details and available actions.</p>
+          <h2 className="text-sm font-semibold text-stone-800">Add a lead</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Open <Link to="/leads/new" className="font-semibold text-[#756c1b]">Add Lead</Link>, enter the customer&apos;s details and save.
+            The lead appears in My Leads, ready for follow-up.
+          </p>
         </section>
         <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
-          <h2 className="text-sm font-semibold text-stone-800">Review today’s work</h2>
+          <h2 className="text-sm font-semibold text-stone-800">Find and update a lead</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Open <Link to="/leads" className="font-semibold text-[#756c1b]">Leads</Link>, search or filter the list, then select a lead to view
+            its details and available actions.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Edit a lead</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">Open a lead and use Edit to correct its details, then save to return to the lead.</p>
+        </section>
+        <p className="px-4 pt-5 text-[11px] font-bold uppercase tracking-wider text-stone-400 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>Follow-ups &amp; meetings</p>
+        <section className="px-4 py-5 sm:px-5">
+          <h2 className="text-sm font-semibold text-stone-800">Follow-up Queue</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            The <Link to="/follow-up" className="font-semibold text-[#756c1b]">Follow-up Queue</Link> lists today&apos;s due calls and visits.
+            Open an item to complete it, or reschedule it to a new date.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">WhatsApp a customer</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">From a lead, use WhatsApp to message the customer directly — pick a suggested message or write your own.</p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Meetings and Task Calendar</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Book meetings and see your schedule on the <Link to="/task-calendar" className="font-semibold text-[#756c1b]">Task Calendar</Link>.
+            Meetings you are invited to appear there with your RSVP.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Roadshows</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            <Link to="/roadshows" className="font-semibold text-[#756c1b]">Roadshows</Link> list team field events — check the schedule
+            and who is assigned before the day.
+          </p>
+        </section>
+        <p className="px-4 pt-5 text-[11px] font-bold uppercase tracking-wider text-stone-400 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>Data &amp; reports</p>
+        <section className="px-4 py-5 sm:px-5">
+          <h2 className="text-sm font-semibold text-stone-800">Import leads in bulk</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            <Link to="/leads/upload" className="font-semibold text-[#756c1b]">Lead Intake</Link> imports many leads at once from a spreadsheet.
+            A mobile number is required for every row.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Reports and performance</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            <Link to="/performance/self" className="font-semibold text-[#756c1b]">My Performance</Link> shows your own results;{' '}
+            <Link to="/execution-intelligence" className="font-semibold text-[#756c1b]">Team Performance</Link> shows your team&apos;s.
+            Both update from your lead activity.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Notifications</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Reminders for due follow-ups and meetings arrive as notifications. Open{' '}
+            <Link to="/notifications" className="font-semibold text-[#756c1b]">Notifications</Link> to review them.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Review today&apos;s work</h2>
           <p className="mt-1 text-sm leading-6 text-stone-600">Use My Work to review due calls, meetings, follow-ups and tasks. Select an item to see its details.</p>
+        </section>
+        <p className="px-4 pt-5 text-[11px] font-bold uppercase tracking-wider text-stone-400 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>Account</p>
+        <section className="px-4 py-5 sm:px-5">
+          <h2 className="text-sm font-semibold text-stone-800">Your password</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            Change your password from <Link to="/settings" className="font-semibold text-[#756c1b]">Profile &amp; Settings</Link>.
+            If you forget your password, ask your workspace administrator to reset it — there is no self-service reset.
+          </p>
+        </section>
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
+          <h2 className="text-sm font-semibold text-stone-800">Locked out?</h2>
+          <p className="mt-1 text-sm leading-6 text-stone-600">
+            After 10 failed sign-in attempts your account is locked for 30 minutes. Wait for the lock to lift, then try again —
+            or ask your workspace administrator for help.
+          </p>
         </section>
         <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
           <h2 className="text-sm font-semibold text-stone-800">Access or data questions</h2>
@@ -304,9 +383,30 @@ export function AboutPage() {
     <div className="ep-page" style={{ maxWidth: 720 }}>
       <PageHeading path="/about" />
       <div className="ep-card">
-        <p className="text-base font-semibold text-stone-800">LeadFlow</p>
+        <p className="text-base font-semibold text-stone-800">LeadFlow — Lead Management System</p>
         <p className="mt-2 max-w-prose text-sm leading-6 text-stone-600">
-          LeadFlow helps sales teams manage prospects, lead follow-ups, scheduled activities and conversion reporting in one role-scoped workspace.
+          LeadFlow is Shanta Life&apos;s lead workspace for the field force. It helps sales teams manage prospects,
+          lead follow-ups, scheduled activities and conversion reporting in one role-scoped workspace.
+        </p>
+        <h2 className="mt-6 text-sm font-semibold text-stone-800">What LeadFlow covers</h2>
+        <ul className="mt-2 max-w-prose list-disc space-y-1 pl-5 text-sm leading-6 text-stone-600">
+          <li><strong className="font-semibold text-stone-800">Leads</strong> — add, find and update prospects, and track each one through to conversion.</li>
+          <li><strong className="font-semibold text-stone-800">Follow-ups</strong> — a daily queue of due calls and visits, with reminders so nothing slips.</li>
+          <li><strong className="font-semibold text-stone-800">Meetings</strong> — book meetings and keep them on the Task Calendar.</li>
+          <li><strong className="font-semibold text-stone-800">Roadshows</strong> — team field events and who is assigned to each one.</li>
+          <li><strong className="font-semibold text-stone-800">Performance &amp; reports</strong> — your own results and your team&apos;s, drawn from lead activity.</li>
+        </ul>
+        <h2 className="mt-6 text-sm font-semibold text-stone-800">Who it serves</h2>
+        <p className="mt-2 max-w-prose text-sm leading-6 text-stone-600">
+          Agents manage their own leads and follow-ups; Team Leads see their team as well as their own work;
+          Managers see their whole subtree; Admins oversee the organisation.
+        </p>
+        <h2 className="mt-6 text-sm font-semibold text-stone-800">Your data</h2>
+        <p className="mt-2 max-w-prose text-sm leading-6 text-stone-600">
+          What you see follows your role and your reporting line — you only ever see the leads, follow-ups and reports your role allows. If a page or action is missing for you, your workspace administrator can help.
+        </p>
+        <p className="mt-6 max-w-prose border-t border-stone-100 pt-4 text-xs leading-5 text-stone-500">
+          Built by the Training &amp; Development Department, Shanta Life Insurance PLC.
         </p>
       </div>
     </div>

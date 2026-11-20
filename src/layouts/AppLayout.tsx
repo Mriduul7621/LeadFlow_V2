@@ -491,7 +491,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         aria-label="Sidebar navigation"
       >
         <div className="ep-brand">
-          <div className="ep-logo" aria-hidden="true">L</div>
+          {/* The original Shanta Life logo (Mahadi, 2026-11-20): the
+              enterprise redesign's 'L' monogram tile was replaced —
+              the logo was in the sidebar before the redesign. */}
+          <img className="ep-logo" src="/shanta-life-logo.png" alt="Shanta Life" />
           <div>
             <strong>LeadFlow</strong>
             <small>Sales workspace</small>

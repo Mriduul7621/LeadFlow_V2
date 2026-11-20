@@ -191,7 +191,7 @@ export default function Login() {
             <div className="leadflow-login-content">
               <div className="leadflow-login-heading">
                 <h1>{isFirstTimeSetup ? 'Welcome' : 'Welcome Back'}</h1>
-                <p>{isFirstTimeSetup ? 'Set up your LeadFlow account' : 'Sign in to your LeadFlow account'}</p>
+                <p>{isFirstTimeSetup ? 'Set up your Lead Management System' : 'Sign in to your Lead Management System'}</p>
               </div>
               <div className="leadflow-login-form">
                 {isFirstTimeSetup ? (

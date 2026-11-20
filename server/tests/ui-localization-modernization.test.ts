@@ -78,8 +78,8 @@ describe('UI English-only & Design Modernization — source guards', () => {
     // the old hero/status/CTA marketing block; the English-only guarantee is
     // what this test protects, so it asserts the copy that actually renders.
     assert.ok(visible.includes('Welcome Back'), 'Login must show Welcome Back');
-    assert.ok(visible.includes('Sign in to your LeadFlow account'), 'Login subtitle must be English');
-    assert.ok(visible.includes('Set up your LeadFlow account'), 'first-time setup subtitle must be English');
+    assert.ok(visible.includes('Sign in to your Lead Management System'), 'Login subtitle must be English');
+    assert.ok(visible.includes('Set up your Lead Management System'), 'first-time setup subtitle must be English');
     assert.ok(visible.includes('Employee ID'), 'Login must label Employee ID in English');
     assert.ok(visible.includes('Password'), 'Login must label Password in English');
     assert.ok(visible.includes('Remember Me'), 'Login must have the English Remember Me option');
