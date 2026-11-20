@@ -271,6 +271,10 @@ export interface Lead {
   documents?: LeadDocument[];
   /** Server-computed Lead Quality (compact on lists, full on details). */
   leadQuality?: LeadQuality;
+  /** A delete request is pending for this lead (list flag, migration 062). */
+  deleteRequested?: boolean;
+  /** The pending delete request on this lead, if any (detail read, migration 062). */
+  deleteRequest?: { id: string; requestedBy: string; requestedAt: string | null } | null;
 }
 
 export interface FollowUp {
@@ -348,6 +352,9 @@ export interface SystemNotification {
   title: string;
   message: string;
   leadId: string;
+  /** Server event type (e.g. 'lead-delete-request') — drives the
+   *  click destination. Optional: legacy/demo rows carry none. */
+  eventType?: string;
   read: boolean;
   date: string;
 }

@@ -598,6 +598,27 @@ export const leadService = {
     localDb.deleteLead(leadId);
   },
 
+  /**
+   * Request deletion of a lead (migration 062, 2026-11-18). This does
+   * NOT delete the lead: it files a request the admins review, and
+   * only an approval actually deletes it. The server notifies every
+   * active admin in-app (no email), refuses a second pending request
+   * (409), and 404s for leads outside the caller's scope. The local
+   * cache is updated to carry the pending marker so the list shows
+   * it without a refetch.
+   */
+  async requestDelete(leadId: string, reason?: string): Promise<void> {
+    await apiRequest(`/api/leads/${encodeURIComponent(leadId)}/delete-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason || undefined }),
+    });
+    const cached = localDb.getLead(leadId);
+    if (cached) {
+      cacheLead({ ...cached, deleteRequested: true });
+    }
+  },
+
   async deleteLeadsByCampaign(campaignName: string): Promise<void> {
     // Server safety rail: the purge is refused (400) unless the body
     // repeats the exact campaign name as the typed confirmation.

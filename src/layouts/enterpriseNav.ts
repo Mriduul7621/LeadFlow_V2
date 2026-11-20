@@ -196,6 +196,7 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   'My Performance': 'Track progress, activity and conversion trends.',
   'Add Lead': 'Capture a prospect with the required details.',
   'Audit Log': 'Review administrative and sensitive system activity.',
+  'Delete Requests': 'Review lead deletion requests — approve to delete, reject to keep.',
   'Edit lead': 'Correct this lead\u2019s details \u2014 status and assignment stay unchanged.',
   // Team Lead / Manager / Admin workspace (2026-11-20): sample-voice
   // descriptions for the new labels, so their headings never render
@@ -496,6 +497,7 @@ export function enterpriseBottomNavActivePath(tabs: EnterpriseBottomNavTab[], pa
 const FALLBACK_LABELS: Record<string, string> = {
   '/leads/new': 'Add Lead',
   '/leads/:id/edit': 'Edit lead',
+  '/leads/delete-requests': 'Delete Requests',
   '/leads/upload': 'Lead Intake',
   '/leads/all': 'Lead Pool',
   '/leads/my': 'My Leads',

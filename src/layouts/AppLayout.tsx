@@ -297,6 +297,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     syncNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
   };
 
+  /** Notification click: a lead-delete-request notification opens
+   *  the admin review page (the lead itself is not the action);
+   *  every other notification keeps the lead-list deep link. */
+  const handleNotificationClick = (notif: SystemNotification) => {
+    handleMarkAsRead(notif.id);
+    if (notif.eventType === 'lead-delete-request') {
+      navigate('/leads/delete-requests');
+    } else if (notif.leadId) {
+      navigate(`/leads?leadId=${notif.leadId}`);
+    }
+    setIsNotifOpen(false);
+  };
+
   const handleMarkAllRead = async () => {
     if (!user) return;
     try {
@@ -694,14 +707,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                         notifications.map((notif) => (
                           <div
                             key={notif.id}
-                            onClick={() => { handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); }}
+                            onClick={() => handleNotificationClick(notif)}
                             className={cn(
                               "p-4 hover:bg-stone-50 transition-colors cursor-pointer text-left",
                               !notif.read ? "bg-[#978C21]/[0.06] border-l-[3px] border-l-[#978C21]" : ""
                             )}
                             role="button"
                             tabIndex={0}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleMarkAsRead(notif.id); if (notif.leadId) navigate(`/leads?leadId=${notif.leadId}`); setIsNotifOpen(false); } }}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleNotificationClick(notif); } }}
                           >
                             <div className="flex justify-between items-start gap-2">
                               <h5 className="text-sm font-semibold text-stone-800 leading-tight">{notif.title}</h5>

@@ -203,8 +203,9 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     // and the Help page's 10 inline links (/leads/new, /leads,
     // /follow-up, /task-calendar, /roadshows, /leads/upload,
     // /performance/self, /execution-intelligence, /notifications,
-    // /settings).
-    'src/modules/navigation/pages/MorePages.tsx': 12,
+    // /settings). Delete requests (2026-11-20): 13 — plus the
+    // notification delete-request navigate (/leads/delete-requests).
+    'src/modules/navigation/pages/MorePages.tsx': 13,
     'src/modules/dashboard/pages/NcpProgress.tsx': 0,
     'src/modules/roadshows/pages/RoadshowPage.tsx': 0,
     'src/modules/leads/pages/LeadUpload.tsx': 0,

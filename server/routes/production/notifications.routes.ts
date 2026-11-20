@@ -62,6 +62,10 @@ function mapNotificationRow(row: any) {
     title: row.title,
     message: row.message,
     leadId: row.lead_code || row.reference_id || '',
+    // eventType drives the click destination: a lead-delete-request
+    // notification opens the admin review page, everything else
+    // keeps the lead-list deep link (see AppLayout).
+    eventType: row.event_type || '',
     read: row.is_read === true,
     date: row.created_at,
   };

@@ -42,6 +42,7 @@ const TaskCalendar = lazy(() => import('./modules/auth/pages/TaskCalendar'));
 const Activities = lazy(() => import('./modules/leads/pages/Activities'));
 const DailyWorkbench = lazy(() => import('./modules/workbench/pages/DailyWorkbench'));
 const Lead360 = lazy(() => import('./modules/leads/pages/Lead360'));
+const DeleteRequests = lazy(() => import('./modules/leads/pages/DeleteRequests'));
 const LeadUpdate = lazy(() => import('./modules/leads/pages/LeadUpdate'));
 const UserManagement = lazy(() => import('./modules/users/pages/UserManagement'));
 const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy'));
@@ -169,6 +170,14 @@ const router = createBrowserRouter([
   {
     path: '/leads/all',
     element: <ProtectedRoute><FeatureGate route="/leads/all"><LazyPage page={<AllLeads />} /></FeatureGate></ProtectedRoute>,  },
+  {
+    // Delete-request review (migration 062, 2026-11-20): admin-only
+    // review page, declared before /leads/:id like the other static
+    // /leads/* routes (react-router ranks static above dynamic
+    // anyway, so "delete-requests" can never match :id).
+    path: '/leads/delete-requests',
+    element: <ProtectedRoute><FeatureGate route="/leads/delete-requests"><LazyPage page={<AdminRoute><DeleteRequests /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
   {
     path: '/follow-up',
     element: <ProtectedRoute><FeatureGate route="/follow-up"><LazyPage page={<FollowUpStrategy />} /></FeatureGate></ProtectedRoute>,  },

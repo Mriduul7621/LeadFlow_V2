@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, MapPin, Briefcase, User as UserIcon,
-  Clock, UserCog, FileText, Bell, Plus, Edit2, ChevronRight, Target
+  Clock, UserCog, FileText, Bell, Plus, Edit2, ChevronRight, Target, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
@@ -16,6 +16,7 @@ import LeadQualityBadge from '../components/LeadQualityBadge';
 import WhatsAppAction from '../components/WhatsAppAction';
 import LeadQualityPanel from '../components/LeadQualityPanel';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
+import RequestDeleteDialog from '../components/RequestDeleteDialog';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useCanReassign } from '../hooks/useCanReassign';
 
@@ -44,6 +45,16 @@ export default function Lead360() {
   const { canAccess } = usePermissions();
   const [lead, setLead] = useState<Lead | null>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
+  // Delete request (migration 062): the Request button sits next to
+  // Edit (desktop + mobile) and opens the shared request dialog.
+  // It is deliberately NOT gated on leads.edit — the server rule is
+  // leads.view + in-scope visibility, so anyone who can see the lead
+  // may ask; the approval IS the control. A pending lead shows the
+  // amber marker instead of the button.
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const markDeleteRequested = () => {
+    setLead(prev => prev ? { ...prev, deleteRequest: { id: 'pending', requestedBy: '', requestedAt: null } } : prev);
+  };
   // Reassign (2026-11-19, extended 2026-11-20, Mahadi): Team
   // Lead / Manager / Admin holding the leads.assign grant may move
   // this lead — a plain Agent never sees the button, and a super
@@ -419,6 +430,25 @@ export default function Lead360() {
                 </button>
               </>
             )}
+            {lead.deleteRequest ? (
+              <span
+                className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-amber-200 bg-amber-50 text-amber-500"
+                title="Delete requested — waiting for admin review"
+                aria-label="Delete requested — waiting for admin review"
+              >
+                <Trash2 className="h-[18px] w-[18px]" />
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setDeleteDialogOpen(true)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-stone-200 bg-white text-stone-700 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                aria-label="Request deletion"
+                title="Request deletion — an admin reviews it"
+              >
+                <Trash2 className="h-[18px] w-[18px]" />
+              </button>
+            )}
             {canReassign && (
               <button
                 type="button"
@@ -432,6 +462,14 @@ export default function Lead360() {
             )}
           </div>
         </div>
+        {lead.deleteRequest && (
+          <div className="mt-6 flex items-center gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
+            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+            <p className="text-xs font-semibold text-amber-800">
+              Delete requested — waiting for admin review. The lead stays in place until an admin approves the request.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-50">
           <div>
             <p className="text-xs font-medium text-slate-500">Assigned To</p>
@@ -501,6 +539,25 @@ export default function Lead360() {
                   </button>
                 </>
               )}
+              {lead.deleteRequest ? (
+                <span
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-500"
+                  title="Delete requested — waiting for admin review"
+                  aria-label="Delete requested — waiting for admin review"
+                >
+                  <Trash2 className="h-[18px] w-[18px]" />
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
+                  aria-label="Request deletion"
+                  title="Request deletion — an admin reviews it"
+                >
+                  <Trash2 className="h-[18px] w-[18px]" />
+                </button>
+              )}
               {canReassign && (
                 <button
                   type="button"
@@ -535,6 +592,14 @@ export default function Lead360() {
             <span>Lead quality</span>
             <span className="flex items-center gap-2"><LeadQualityBadge quality={lead.leadQuality} /><ChevronRight className="h-3.5 w-3.5" /></span>
           </button>
+          {lead.deleteRequest && (
+            <div className="mt-4 flex items-center gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+              <p className="text-xs font-semibold text-amber-800">
+                Delete requested — waiting for admin review. The lead stays in place until an admin approves the request.
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Lead details sections">
           {([
@@ -729,6 +794,13 @@ export default function Lead360() {
           lead={reassignOpen ? { id: lead.id, prospectName: lead.prospectName, assignedTo: lead.assignedTo } : null}
           onClose={() => setReassignOpen(false)}
           onReassigned={() => void load()}
+        />
+      )}
+      {lead && (
+        <RequestDeleteDialog
+          lead={deleteDialogOpen ? lead : null}
+          onClose={() => setDeleteDialogOpen(false)}
+          onRequested={markDeleteRequested}
         />
       )}
     </div>
