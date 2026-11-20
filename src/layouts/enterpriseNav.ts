@@ -10,6 +10,7 @@ import {
   MapPinned,
   Plus,
   Settings as SettingsIcon,
+  ShieldCheck,
   SlidersHorizontal,
   TrendingUp,
   Upload,
@@ -40,8 +41,9 @@ import type { EnterpriseRole } from './enterpriseRole';
  *   Assignment Rules (Admin) — auto-assignment is a Metadata Engine
  *     flag with no dedicated page; its switch lives in System
  *     settings, which the Admin nav already reaches.
- *   Audit Log (Admin) — audit rows are written server-side but no
- *     audit-viewer UI exists anywhere in the app.
+ *   Audit Log (Admin) — added 2026-11-20 (port from the enterprise
+ *     UX chain): /audit-log in the ADMINISTRATION group, gated on
+ *     `audit.view` at the route + server layers.
  *   Lead Distribution (Team Lead) — the Team Members page (/team)
  *     already IS the workload/allocation view; a second item to the
  *     same route would be a duplicate.
@@ -193,6 +195,7 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   'My Leads': 'Manage your assigned leads and next actions.',
   'My Performance': 'Track progress, activity and conversion trends.',
   'Add Lead': 'Capture a prospect with the required details.',
+  'Audit Log': 'Review administrative and sensitive system activity.',
   'Edit lead': 'Correct this lead\u2019s details \u2014 status and assignment stay unchanged.',
   // Team Lead / Manager / Admin workspace (2026-11-20): sample-voice
   // descriptions for the new labels, so their headings never render
@@ -232,6 +235,15 @@ type NavItemDef = EnterpriseNavItem & {
 /** Admin-only addition (not in the sample — see the header note). */
 const ADMIN_ITEMS: NavItemDef[] = [
   { label: 'Administration', path: '/administration', icon: Wrench },
+  // Audit Log (2026-11-20): deliberately NO `grant` field here. The
+  // item is admin-only by sidebar construction (this group renders
+  // only for the admin role), and the route + server enforce
+  // `audit.view` with the ADMIN/SUPERADMIN bypass. A grant gate
+  // would hide the item from SUPERADMIN: migration 026 seeds the
+  // full grant set for the ADMIN role only, so a superadmin's sheet
+  // never holds audit.view even though the route and the endpoint
+  // both admit them.
+  { label: 'Audit Log', path: '/audit-log', icon: ShieldCheck },
 ];
 
 function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavItemDef[] }> {

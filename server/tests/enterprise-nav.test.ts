@@ -11,8 +11,9 @@
  * prototype's EXACT words — except where Mahadi renamed a label
  * to match its page or his demo screenshots; every item links to
  * a real LeadFlow page. Sample items with no real page
- * (Assignment Rules, Audit Log, Lead Distribution) are omitted,
- * never dead-linked.
+ * (Assignment Rules, Lead Distribution) are omitted, never
+ * dead-linked. (Audit Log left this list on 2026-11-20, when the
+ * audit-viewer UI was ported from PR #161.)
  *
  * The sidebar is a UX surface, never a security boundary: entries
  * are filtered by the SAME resolvers the router uses
@@ -105,18 +106,18 @@ describe('buildEnterpriseNavGroups — Admin', () => {
     assert.equal(new Set(config.items.map(i => i.path)).size, 3, 'three distinct destinations');
   });
 
-  it('ADMINISTRATION carries Administration', () => {
-    assert.deepEqual(groupLabels(groupsFor('admin'), 'ADMINISTRATION'), ['Administration']);
-    assert.equal(
-      groupsFor('admin').find(g => g.title === 'ADMINISTRATION')!.items[0].path,
-      '/administration'
-    );
+  it('ADMINISTRATION carries Administration and Audit Log', () => {
+    assert.deepEqual(groupLabels(groupsFor('admin'), 'ADMINISTRATION'), ['Administration', 'Audit Log']);
+    const items = groupsFor('admin').find(g => g.title === 'ADMINISTRATION')!.items;
+    assert.equal(items[0].path, '/administration');
+    assert.equal(items[1].path, '/audit-log');
   });
 
   it('omits the sample items with no real page (never a dead link)', () => {
     const all = labels(groupsFor('admin'));
     assert.ok(!all.includes('Assignment Rules'), 'auto-assignment has no dedicated page');
-    assert.ok(!all.includes('Audit Log'), 'no audit-viewer UI exists');
+    // Audit Log is NO LONGER in this list: the audit-viewer UI exists
+    // since the 2026-11-20 port from PR #161 (see the test above).
     assert.ok(!all.includes('Lead Distribution'), 'the Team Members page already is that view');
   });
 

@@ -57,6 +57,7 @@ const Settings = lazy(() => import('./modules/settings/pages/Settings'));
 const ProfileSettings = lazy(() => import('./modules/settings/pages/ProfileSettings'));
 const MorePage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.MorePage })));
 const AdministrationPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AdministrationPage })));
+const AuditLogPage = lazy(() => import('./modules/admin/pages/AuditLogPage'));
 const NotificationsPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.NotificationsPage })));
 const HelpPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.HelpPage })));
 const AboutPage = lazy(() => import('./modules/navigation/pages/MorePages').then(module => ({ default: module.AboutPage })));
@@ -129,6 +130,10 @@ const router = createBrowserRouter([
   {
     path: '/administration',
     element: <ProtectedRoute><FeatureGate route="/administration"><LazyPage page={<AdminRoute><AdministrationPage /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
+  },
+  {
+    path: '/audit-log',
+    element: <ProtectedRoute><FeatureGate route="/audit-log"><LazyPage page={<AdminRoute><AuditLogPage /></AdminRoute>} /></FeatureGate></ProtectedRoute>,
   },
   {
     path: '/notifications',
