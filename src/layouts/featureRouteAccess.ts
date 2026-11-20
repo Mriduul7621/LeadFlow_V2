@@ -135,6 +135,7 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/': { route: '/', path: '/', roles: EVERYONE },
   '/more': { route: '/more', path: '/more', roles: EVERYONE },
   '/administration': { route: '/administration', path: '/administration', roles: DIAGNOSTICS_ADMIN_ROLES },
+  '/audit-log': { route: '/audit-log', path: '/audit-log', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/notifications': { route: '/notifications', path: '/notifications', roles: EVERYONE },
   '/help': { route: '/help', path: '/help', roles: EVERYONE },
   '/about': { route: '/about', path: '/about', roles: EVERYONE },

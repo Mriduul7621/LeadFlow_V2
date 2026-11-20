@@ -3092,8 +3092,14 @@ router.get('/audit-logs', requireAuth, requirePermissionCode('audit.view'), asyn
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
     const result = await getPool().query(
-      `SELECT id, action_code, entity_type, entity_id, actor_user_id, metadata, created_at
-       FROM audit_logs ORDER BY created_at DESC LIMIT $1`,
+      `SELECT al.id, al.action_code, al.entity_type, al.entity_id,
+              al.actor_user_id, actor.full_name AS actor_name, actor.employee_id AS actor_employee_id,
+              al.target_user_id, target.full_name AS target_name, target.employee_id AS target_employee_id,
+              al.metadata, al.created_at
+         FROM audit_logs al
+         LEFT JOIN users actor ON actor.id = al.actor_user_id
+         LEFT JOIN users target ON target.id = al.target_user_id
+        ORDER BY al.created_at DESC LIMIT $1`,
       [limit]
     );
     return sendJson(res, 200, { success: true, data: result.rows });

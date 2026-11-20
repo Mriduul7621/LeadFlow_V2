@@ -47,6 +47,7 @@ const stripComments = (src: string): string =>
 const SIDEBAR_PAGES: [string, string][] = [
   ['/activities', 'src/modules/leads/pages/Activities.tsx'],
   ['/administration', 'src/modules/navigation/pages/MorePages.tsx'],
+  ['/audit-log', 'src/modules/admin/pages/AuditLogPage.tsx'],
   ['/campaign-breakdown', 'src/modules/dashboard/pages/CampaignBreakdown.tsx'],
   ['/execution-intelligence', 'src/modules/dashboard/pages/ExecutionIntelligence.tsx'],
   ['/follow-up', 'src/modules/leads/pages/FollowUpStrategy.tsx'],
