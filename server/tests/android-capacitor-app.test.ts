@@ -139,12 +139,27 @@ describe('Android app — Capacitor release shell (remote-load)', () => {
     assert.ok(workflow.includes('retention-days: 90'), 'artifact retention is 90 days');
   });
 
-  it('the workflow publishes the stable `latest` release for the web download link', () => {
+  it('the workflow publishes the friendly-named APK to `latest` (exactly one)', () => {
     assert.ok(workflow.includes('gh release upload latest'), 'each dispatch publishes to the rolling latest release');
-    assert.ok(workflow.includes('leadflow-android-latest.apk'), 'the asset filename is stable across releases');
+    assert.ok(
+      workflow.includes('LeadFlow-V-$VERSION.$CODE.apk'),
+      'the published file carries the app name + version (LeadFlow-V-<versionName>.<versionCode>.apk)',
+    );
     assert.ok(workflow.includes('gh release create latest'), 'a missing latest release is created first');
     assert.ok(workflow.includes('--clobber'), 'a re-run replaces the files instead of failing');
     assert.ok(workflow.includes('contents: write'), 'the publish job needs write permission');
+    // The asset name changes with every version, so --clobber alone
+    // would leave stale names piling up in `latest` — the previous
+    // version's assets must be deleted before the new one uploads.
+    assert.ok(workflow.includes('gh release delete-asset'), 'the previous version\u2019s assets are deleted first');
+    assert.ok(
+      workflow.includes('endswith(".apk") or endswith(".apk.sha256")'),
+      'the cleanup deletes both the old APK and its .sha256 sidecar',
+    );
+    assert.ok(
+      workflow.indexOf('gh release delete-asset') < workflow.indexOf('gh release upload latest'),
+      'cleanup happens BEFORE the upload',
+    );
   });
 
   it('assetlinks names the new package with no fingerprint recorded yet', () => {
@@ -287,7 +302,8 @@ describe('Android app — Capacitor release shell (remote-load)', () => {
     assert.ok(docs.includes('remote-load') || docs.includes('live production LeadFlow'), 'the doc must say the app remote-loads');
     assert.ok(docs.includes('com.shantalife.leadflow'), 'the doc must name the new app id');
     assert.ok(docs.includes('version.properties'), 'the doc must name the version source');
-    assert.ok(docs.includes('leadflow-android-latest.apk'), 'the doc must name the stable download asset');
+    assert.ok(docs.includes('/api/download-apk'), 'the doc must name the download route (the permanent link)');
+    assert.ok(docs.includes('LeadFlow-V-'), 'the doc must name the friendly downloaded filename');
     assert.ok(releaseDocs.includes('LEADFLOW_KEYSTORE_B64'), 'the release guide must name the signing secrets');
     assert.ok(releaseDocs.includes('uninstall'), 'the release guide must carry the one-time uninstall migration');
     assert.ok(releaseDocs.includes('only works AFTER the first'), 'the release guide must carry the first-run sequencing caveat');

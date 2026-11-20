@@ -3,18 +3,24 @@
  * ------------------------------------------------------------------
  * The LeadFlow Android APK is published to a rolling `latest` GitHub
  * release on every Android workflow dispatch (see
- * .github/workflows/android.yml). The asset filename is STABLE across
- * releases — the version goes in the release notes, not the filename.
+ * .github/workflows/android.yml). The downloaded file carries the app
+ * name + version — "LeadFlow-V-1.0.0.1.apk" (Mahadi 2026-11-21) —
+ * so the asset name changes with every version.
  *
  * THE DOWNLOAD URL IS ONE CONSTANT — `ANDROID_APK_DOWNLOAD_URL` below.
- * It points at the GitHub `latest` release asset, which is publicly
- * downloadable with no login needed (the repo is public). The popup
- * and the login link both read this one constant, so the download
- * destination changes in exactly one place if it ever moves.
+ * It points at LeadFlow's own download route, which redirects to the
+ * newest .apk asset in `latest` (see server/routes/downloadApk.ts).
+ * The route is same-origin, so the constant works on preview and on
+ * production, never changes across versions, and never 404s through
+ * a version change. The download itself is public — no login needed
+ * (the repo is public). The popup and the login link both read this
+ * one constant, so the download destination changes in exactly one
+ * place if it ever moves.
  *
- * SEQUENCING: the URL 404s until the first workflow run publishes the
- * first `latest` release — ship the promo and run the workflow before
- * telling users about the download (docs/ANDROID_RELEASE.md §6).
+ * SEQUENCING: until the first workflow run publishes the first
+ * `latest` release, the route lands on the releases page instead —
+ * ship the promo and run the workflow before telling users about the
+ * download (docs/ANDROID_RELEASE.md §6).
  *
  * Visibility rules (all of them, in one place — the component and the
  * login link both read this module, and the tests pin it):
@@ -38,15 +44,14 @@
  * THE download URL for the latest LeadFlow Android APK — the popup and
  * the login link both read this one constant.
  *
- * The GitHub `latest` release asset (public — no login needed to
- * download, the repo is public). The asset filename is stable across
- * releases; the version goes in the release notes, never the filename.
+ * LeadFlow's own download route (same-origin relative — works on
+ * preview and on production). It redirects to the newest .apk asset
+ * in the public `latest` GitHub release, served under its friendly
+ * stored name ("LeadFlow-V-<versionName>.<versionCode>.apk"). The
+ * download is public — no login needed (the repo is public) — and
+ * the URL never changes across versions.
  */
-export const ANDROID_APK_DOWNLOAD_URL =
-  'https://github.com/Mriduul7621/LeadFlow_V2/releases/download/latest/leadflow-android-latest.apk';
-
-/** The stable asset filename published to the `latest` GitHub release. */
-export const ANDROID_APK_ASSET_NAME = 'leadflow-android-latest.apk';
+export const ANDROID_APK_DOWNLOAD_URL = '/api/download-apk';
 
 /**
  * localStorage flag for "the user dismissed the Android promo".

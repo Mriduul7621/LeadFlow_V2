@@ -166,25 +166,39 @@ retired pipeline dying); deleting the workflow file stops it.
 ## 6. GitHub Releases `latest` + the web download popup
 
 Every dispatch publishes the APK to the rolling `latest` release
-(public — no GitHub login needed to download). The asset filename is
-**stable across releases** (`leadflow-android-latest.apk`) — the
-version goes in the release notes, never the filename — so the
-download URL never changes:
+(public — no GitHub login needed to download). The downloaded file
+carries the app name + version (Mahadi 2026-11-21):
+`LeadFlow-V-1.0.0.1.apk` — `LeadFlow-V-<versionName>.<versionCode>.apk`,
+set by the workflow's Publish step (the `.sha256` file carries the
+same base name). Dashes, not spaces: GitHub turns spaces into dots in
+release asset names (verified live on the Agent Hub), so a spaced
+name would be served with dots. Because the asset name changes with
+every version,
+the web app does NOT link to GitHub directly: from one constant
+(`ANDROID_APK_DOWNLOAD_URL` in `src/native/androidPromo.ts`) it links
+to LeadFlow's own download route:
 
-`https://github.com/Mriduul7621/LeadFlow_V2/releases/download/latest/leadflow-android-latest.apk`
+`/api/download-apk`
 
-The web app links to that URL from one constant
-(`ANDROID_APK_DOWNLOAD_URL` in `src/native/androidPromo.ts`).
+The route (`server/routes/downloadApk.ts`) asks the GitHub Releases
+API for the `latest` release and redirects to its newest `.apk`
+asset, which GitHub serves under its friendly stored name — so the
+LeadFlow link never changes across versions and never 404s through a
+version change. `latest` holds exactly one APK: the workflow deletes
+the previous version's `.apk`/`.apk.sha256` assets before uploading
+the new one. If GitHub is unreachable or no release exists yet, the
+route sends the user to the releases page instead of failing.
 
 **Sequencing:** the popup's download link only works AFTER the first
 workflow dispatch publishes the first `latest` release. Until that
-run, the URL 404s — so ship the popup and run the workflow before
-telling users about the download.
+run, the route lands on the releases page — so ship the popup and run
+the workflow before telling users about the download.
 
 **Popup behaviour:** when a user opens LeadFlow in a browser on an
 Android phone (and is signed in), a one-time popup appears —
-"Android app download koro", one line, a Download button (plain link
-to the `latest` APK; Android Chrome downloads it directly) and a
+"Get the Android App", with the line "Install the app for one-tap
+access from your home screen.", a Download button (plain link to
+`/api/download-apk`; Android Chrome downloads the APK directly) and a
 close control. Tapping Download also dismisses the popup. It never
 shows inside the native app itself (Capacitor native-platform
 detection), never on iOS, never on desktop. Dismissal is stored in

@@ -17,6 +17,7 @@ import {
   createApiNotFoundHandler,
 } from './server/middleware.js';
 import { buildReadinessReport, describeReadiness } from './server/health.js';
+import { downloadApkHandler } from './server/routes/downloadApk.js';
 import { summarizeConfigValidation, validateProductionConfig } from './server/config/env.js';
 import { logReadinessCheck } from './server/observability/events.js';
 
@@ -159,6 +160,12 @@ const readinessHandler = async (_req: express.Request, res: express.Response) =>
 };
 app.get('/health/readiness', readinessHandler);
 app.get('/api/health/readiness', readinessHandler);
+
+// APK download redirect (additive; see server/routes/downloadApk.ts).
+// Same contract on the standalone path as on Vercel: 302 to the
+// newest APK asset in the public `latest` release, or to the
+// releases page when GitHub cannot be asked. No database, no auth.
+app.get('/api/download-apk', downloadApkHandler);
 
 /**
  * Unknown /api/* routes return the same JSON 404 as the Vercel function

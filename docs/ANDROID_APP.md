@@ -20,9 +20,14 @@ the goal workspace (`files/leadflow-android/`).
 ## Get the release APK
 
 - **Download link (permanent, never changes):**
-  https://github.com/Mriduul7621/LeadFlow_V2/releases/download/latest/leadflow-android-latest.apk
+  https://lead-flow-jet.vercel.app/api/download-apk
 - **Or build artifacts:** Actions tab → "Android release APK" run →
   artifact `leadflow-android-<version>-<code>` (valid 90 days).
+
+The download route redirects to the newest APK in the rolling
+`latest` GitHub release — the file carries the app name + version,
+`LeadFlow-V-<versionName>.<versionCode>.apk` (e.g.
+`LeadFlow-V-1.0.0.1.apk`).
 
 The workflow runs **only on manual dispatch** (Actions → Android
 release APK → Run workflow) — no APK is ever produced by accident.
@@ -31,7 +36,8 @@ release and uploads it as a workflow artifact. The run summary prints
 the version and SHA-256.
 
 **The download link only works after the first workflow run** — until
-then the `latest` release does not exist and the URL 404s.
+then no `latest` release exists and the route lands on the releases
+page.
 
 ## What the app is, and what it needs
 

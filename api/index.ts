@@ -17,6 +17,7 @@ import {
   validateProductionConfig,
 } from '../server/config/env.js';
 import { logReadinessCheck } from '../server/observability/events.js';
+import { downloadApkHandler } from '../server/routes/downloadApk.js';
 
 dotenv.config();
 
@@ -164,6 +165,13 @@ const readinessHandler = async (_req: express.Request, res: express.Response) =>
 };
 app.get('/health/readiness', readinessHandler);
 app.get('/api/health/readiness', readinessHandler);
+
+// APK download redirect (additive; see server/routes/downloadApk.ts).
+// Registered here — before the lazy `/api` dispatch below — so it is
+// available immediately on cold start and does not depend on the
+// production router having loaded. No database, no auth: the route
+// redirects to the newest APK asset in the public `latest` release.
+app.get('/api/download-apk', downloadApkHandler);
 
 // All API routes - load after DB init
 let productionRouter: express.Router | null = null;

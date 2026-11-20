@@ -6,10 +6,10 @@
  *
  * These tests pin the visibility rules (Android shows, iOS hides,
  * native hides, dismissed stays hidden), the download URL (one
- * constant, currently the stable GitHub `latest` release asset), and
+ * constant, the same-origin /api/download-apk redirect route), and
  * the wiring (the popup is mounted in App, the link is on the login
- * page, the workflow publishes the exact asset the constant points
- * at).
+ * page, the workflow publishes the friendly-named asset the route
+ * redirects to).
  *
  * The decision logic lives in src/native/androidPromo.ts — deliberately
  * free of React and Capacitor imports so it is unit-testable here.
@@ -22,7 +22,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ANDROID_APK_ASSET_NAME,
   ANDROID_APK_DOWNLOAD_URL,
   ANDROID_PROMO_DISMISSED_KEY,
   isAndroidBrowser,
@@ -100,15 +99,17 @@ describe('Android download promo — visibility rules', () => {
 });
 
 describe('Android download promo — the download URL', () => {
-  it('is one constant, currently the stable GitHub latest-release asset', () => {
+  it('is one constant, the same-origin download route (never a GitHub URL)', () => {
+    assert.equal(ANDROID_APK_DOWNLOAD_URL, '/api/download-apk');
     assert.equal(
-      ANDROID_APK_DOWNLOAD_URL,
-      'https://github.com/Mriduul7621/LeadFlow_V2/releases/download/latest/leadflow-android-latest.apk',
+      ANDROID_APK_DOWNLOAD_URL.startsWith('/api/'),
+      true,
+      'same-origin relative — works on preview and on production, and never changes across versions',
     );
-    assert.equal(ANDROID_APK_ASSET_NAME, 'leadflow-android-latest.apk');
-    assert.ok(
-      ANDROID_APK_DOWNLOAD_URL.endsWith(`/${ANDROID_APK_ASSET_NAME}`),
-      'the URL ends with the stable asset name',
+    assert.equal(
+      ANDROID_APK_DOWNLOAD_URL.includes('github.com'),
+      false,
+      'the web app never links to GitHub directly — the asset name changes with every version, so the route resolves it',
     );
   });
 
@@ -145,12 +146,16 @@ describe('Android download promo — the download URL', () => {
     );
   });
 
-  it('the workflow publishes the same stable asset to the latest release', () => {
+  it('the workflow publishes the friendly-named asset the route redirects to', () => {
     const workflow = read('.github/workflows/android.yml');
     assert.ok(workflow.includes('gh release upload latest'), 'each dispatch publishes to the rolling latest release');
     assert.ok(
-      workflow.includes(ANDROID_APK_ASSET_NAME),
-      'the workflow publishes the exact asset name the constant points at',
+      workflow.includes('LeadFlow-V-$VERSION.$CODE.apk'),
+      'the published file carries the app name + version (LeadFlow-V-<versionName>.<versionCode>.apk)',
+    );
+    assert.ok(
+      workflow.includes('gh release delete-asset'),
+      'latest holds exactly one APK: the previous version\u2019s assets are deleted before the new one is uploaded',
     );
   });
 
