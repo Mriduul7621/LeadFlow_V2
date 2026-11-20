@@ -103,9 +103,16 @@ describe('LeadGenerate — capability gate must not change the hook order (#310)
   it('A. the gate is evaluated into a constant and returned AFTER every hook', () => {
     const page = PAGE();
     const lines = page.split(/\r?\n/);
-    const gateConst = lines.findIndex((l) => /const mayCreateLead = canAccess\('lead_generate', 'create'\)/.test(l));
-    const gateReturn = lines.findIndex((l) => /if \(!mayCreateLead\) \{/.test(l));
-    assert.ok(gateConst !== -1, 'LeadGenerate must resolve the capability into mayCreateLead');
+    // Two modes, one gate (2026-11-20): create resolves
+    // lead_generate.create, edit resolves lead_tracking.edit, and
+    // mayUseForm picks the one for the current mode.
+    const createConst = lines.findIndex((l) => /const mayCreateLead = canAccess\('lead_generate', 'create'\)/.test(l));
+    const editConst = lines.findIndex((l) => /const mayEditLead = canAccess\('lead_tracking', 'edit'\)/.test(l));
+    const gateConst = lines.findIndex((l) => /const mayUseForm = isEditMode \? mayEditLead : mayCreateLead;/.test(l));
+    const gateReturn = lines.findIndex((l) => /if \(!mayUseForm\) \{/.test(l));
+    assert.ok(createConst !== -1, 'LeadGenerate must resolve the create capability into mayCreateLead');
+    assert.ok(editConst !== -1, 'LeadGenerate must resolve the edit capability into mayEditLead');
+    assert.ok(gateConst !== -1, 'LeadGenerate must resolve the mode-aware gate into mayUseForm');
     assert.ok(gateReturn !== -1, 'LeadGenerate must keep the capability gate');
 
     const hookLines = lines
@@ -142,12 +149,12 @@ describe('LeadGenerate — capability gate must not change the hook order (#310)
     const effect = page.slice(page.indexOf('const loadOptions'), page.indexOf('loadOptions();'));
     assert.ok(effect.length > 0, 'the metadata effect must still exist');
     assert.ok(
-      /if \(!mayCreateLead\) return;/.test(page),
-      'the effect must bail out for users who cannot create leads',
+      /if \(!mayUseForm\) return;/.test(page),
+      'the effect must bail out for users who cannot use the form in its current mode',
     );
     assert.ok(
-      /\}, \[mayCreateLead\]\)/.test(page),
-      'the effect must depend on mayCreateLead so the options load once access is known',
+      /\}, \[mayUseForm\]\)/.test(page),
+      'the effect must depend on mayUseForm so the options load once access is known',
     );
   });
 
@@ -155,14 +162,18 @@ describe('LeadGenerate — capability gate must not change the hook order (#310)
     const page = PAGE();
     assert.ok(page.includes('Access Denied'), 'the same denial screen renders');
     assert.ok(
-      page.includes('Strict Security Level: Feature lead_generate.create Required'),
-      'the denial screen still names the required capability',
+      page.includes("Strict Security Level: Feature {isEditMode ? 'lead_tracking.edit' : 'lead_generate.create'} Required"),
+      'the denial screen still names the required capability — the one for the current mode',
     );
     assert.ok(page.includes("t('accessDeniedMsg')"), 'the bilingual denial message stays');
-    // The capability is still consulted with the SAME code pair.
+    // The capability is still consulted with the SAME code pairs.
     assert.ok(
       page.includes("canAccess('lead_generate', 'create')"),
       'the gate must keep checking lead_generate.create',
+    );
+    assert.ok(
+      page.includes("canAccess('lead_tracking', 'edit')"),
+      'the gate must keep checking lead_tracking.edit in edit mode',
     );
   });
 

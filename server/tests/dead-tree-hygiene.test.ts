@@ -8,9 +8,11 @@
  *         nothing imported, kept alive only by `src/hooks/*` and `src/utils/*`
  *         copies of the shared helpers. A dead copy is worse than no copy: an
  *         edit lands in the file the app never renders. The whole tree (plus
- *         the unreachable `/leads/:id/edit` page) is gone; only
+ *         the unreachable standalone `LeadEdit.tsx` page) is gone; only
  *         `src/utils/chunkRecovery.ts` survives because the chunk boundary
- *         imports it for real.
+ *         imports it for real. (2026-11-20: the `/leads/:id/edit` ROUTE came
+ *         back — legitimately — as LeadGenerate in edit mode; the dead
+ *         part was the separate LeadEdit component, which must stay gone.)
  *   F15 — POST /users/bulk/validate and /users/bulk/commit validated the
  *         payload BEFORE checking the caller's permission, so an unprivileged
  *         caller got `400 No rows supplied` for an empty body and only got the
@@ -73,12 +75,25 @@ describe('Dead code hygiene — F14', () => {
     }
   });
 
-  it('F14. the unreachable /leads/:id/edit page and route are gone', () => {
+  it('F14. the unreachable standalone LeadEdit page stays gone — the edit route is LeadGenerate in edit mode', () => {
     assert.equal(exists('src/modules/leads/pages/LeadEdit.tsx'), false, 'LeadEdit.tsx must be deleted');
     for (const rel of ['src/App.tsx', 'src/layouts/featureRouteAccess.ts']) {
       assert.ok(!read(rel).includes('LeadEdit'), `${rel} must not reference LeadEdit`);
-      assert.ok(!read(rel).includes("/leads/:id/edit"), `${rel} must not define the edit route`);
     }
+    // 2026-11-20: the /leads/:id/edit ROUTE exists again — Lead360's
+    // Edit button has always navigated there — but it renders the
+    // Add Lead form in edit mode, not a separate page.
+    const app = read('src/App.tsx');
+    const editIdx = app.indexOf("path: '/leads/:id/edit'");
+    assert.ok(editIdx !== -1, 'the edit route must exist');
+    assert.ok(
+      app.slice(editIdx, editIdx + 400).includes('<LeadGenerate />'),
+      'the edit route must render LeadGenerate, not a standalone edit page',
+    );
+    assert.ok(
+      read('src/layouts/featureRouteAccess.ts').includes("'/leads/:id/edit'"),
+      'the edit route must have a feature-route entry',
+    );
     // The canonical entry point survives.
     assert.ok(read('src/App.tsx').includes("path: '/leads/:id/update'"), 'the update route must still exist');
   });
