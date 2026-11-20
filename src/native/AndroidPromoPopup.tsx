@@ -59,7 +59,7 @@ export default function AndroidPromoPopup(): React.ReactElement | null {
       <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <h2 id="android-promo-title" className="text-lg font-bold text-[#263238]">
-            Android app download koro
+            Get the Android App
           </h2>
           <button
             type="button"
@@ -71,7 +71,7 @@ export default function AndroidPromoPopup(): React.ReactElement | null {
           </button>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-[#575756]">
-          LeadFlow ekhon Android app-e — home screen theke ek tap-e khulbe, ar browser-e khujte hobe na.
+          Install the app for one-tap access from your home screen.
         </p>
         <a
           href={ANDROID_APK_DOWNLOAD_URL}

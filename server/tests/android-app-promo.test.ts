@@ -138,7 +138,11 @@ describe('Android download promo — the download URL', () => {
     const popup = read('src/native/AndroidPromoPopup.tsx');
     assert.ok(popup.includes('dismissAndroidPromo'), 'the popup writes the dismissal flag');
     assert.ok(popup.includes('onClick={dismiss}'), 'both the Download button and the close control dismiss');
-    assert.ok(popup.includes('Android app download koro'), 'the popup title is the agreed Bangla line');
+    assert.ok(popup.includes('Get the Android App'), 'the popup title is the agreed English line');
+    assert.ok(
+      popup.includes('Install the app for one-tap access from your home screen.'),
+      'the popup subtitle is the agreed English line',
+    );
   });
 
   it('the workflow publishes the same stable asset to the latest release', () => {
