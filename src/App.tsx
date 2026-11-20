@@ -13,6 +13,8 @@ import { initializeAuthSession } from './modules/auth/services/authFlow';
 import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
+import AndroidPromoPopup from './native/AndroidPromoPopup';
+import { registerAppNavigator } from './native/appNavigation';
 
 /**
  * Route-level code splitting (Performance Phase 2)
@@ -274,6 +276,13 @@ const router = createBrowserRouter([
   }
 ]);
 
+// FCM push taps navigate from outside React (the tap listener lives
+// at module level in src/native/pushNotifications.ts), so the
+// router's navigate is registered here once, at module scope.
+registerAppNavigator((path: string) => {
+  void router.navigate(path);
+});
+
 export default function App() {
   // 15-minute idle tracker (it defers itself until auth initialization
   // settles, so a stale localStorage timestamp can never race the startup
@@ -294,6 +303,7 @@ export default function App() {
     <>
       <RouterProvider router={router} />
       <Toaster position="top-right" richColors expand={true} />
+      <AndroidPromoPopup />
     </>
   );
 }

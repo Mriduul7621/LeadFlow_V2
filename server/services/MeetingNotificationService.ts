@@ -56,6 +56,7 @@ import {
 } from './NotificationService.js';
 import { getNotificationSettings } from './NotificationSettingsService.js';
 import { sendPushToUser, type PushToUserSummary } from './PushReminderService.js';
+import { fcmRouteForNotification, publishToUserTopic } from './FcmService.js';
 
 export const MEETING_INVITED_EVENT = 'meeting-invited';
 export const MEETING_MOVED_EVENT = 'meeting-moved';
@@ -173,6 +174,18 @@ async function deliver(opts: {
         idempotencyKey: opts.idempotencyKey,
       });
       created = true;
+      // FCM fan-out (fire-and-forget). The DB branch below gets its
+      // publish from the insertNotificationWithIdempotency hook, so
+      // only the demo branch publishes here — never both.
+      void publishToUserTopic({
+        employeeId: opts.recipient.employeeId,
+        title: opts.title,
+        body: opts.message,
+        route: fcmRouteForNotification({
+          eventType: opts.eventType,
+          referenceType: 'scheduled_activity',
+        }),
+      }).catch(() => undefined);
     }
   } else {
     const row = await insertNotificationWithIdempotency(getPool(), {

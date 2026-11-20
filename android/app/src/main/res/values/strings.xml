@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- Launcher label: the short name the previous install used. The full
+         name ("Shanta Life LeadFlow") lives in capacitor.config.ts. -->
+    <string name="app_name">LeadFlow</string>
+    <string name="title_activity_main">LeadFlow</string>
+    <string name="package_name">com.shantalife.leadflow</string>
+    <string name="custom_url_scheme">com.shantalife.leadflow</string>
+</resources>

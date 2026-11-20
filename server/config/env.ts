@@ -147,6 +147,12 @@ export const ENV_VAR_SPECS: EnvVarSpec[] = [
     description:
       'Bearer secret guarding the daily push-reminder cron endpoint (GET /api/notifications/push/cron-daily). Vercel Cron sends it automatically as "Authorization: Bearer <CRON_SECRET>". When unset, the cron endpoint is disabled.',
   },
+  {
+    name: 'FIREBASE_SERVICE_ACCOUNT_B64',
+    classification: 'OPTIONAL',
+    description:
+      'Firebase service-account JSON (base64), from the "Shanta Life Apps" Firebase project (Project settings → Service accounts → Generate new private key). Powers FCM mobile push to the installed Android app (topic user-{employeeId}) and the POST /api/notifications/push/fcm-subscribe route. Same env var + value as the Agent Hub and Learning Hub. Server-only secret — the JSON contains a private key, never commit it or paste it into chat. When unset, every FCM entry point degrades to a no-op (mirroring the VAPID pattern) and the app behaves exactly as before.',
+  },
 ];
 
 /* ==================================================================== */

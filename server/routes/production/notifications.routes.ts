@@ -26,6 +26,12 @@ import {
 } from '../../services/PushReminderService.js';
 import { runMeetingReminders } from '../../services/MeetingNotificationService.js';
 import {
+  fcmRouteForNotification,
+  publishToUserTopic,
+  subscribeTokenToUserTopic,
+} from '../../services/FcmService.js';
+import { userPushTopic } from '../../../src/native/pushRouting.js';
+import {
   getNotificationSettings,
   setNotificationSettings,
   type NotificationSettings,
@@ -215,6 +221,20 @@ router.post('/notifications', requireAuth, async (req, res) => {
       date: payload.date || new Date().toISOString(),
     };
     fallbackStore.notifications.push(item);
+    // FCM fan-out (fire-and-forget): the installed app gets the
+    // same notification. The topic needs the employee id — resolve
+    // it from the demo roster, falling back to the ref the caller
+    // passed (a UUID that matches nobody yields no topic and the
+    // publish silently no-ops).
+    const demoUser = fallbackStore.users.find(
+      (u: any) => u.id === userIdRef || u.employeeId === userIdRef
+    );
+    void publishToUserTopic({
+      employeeId: String((demoUser as any)?.employeeId || userIdRef),
+      title,
+      body: message || '',
+      route: fcmRouteForNotification({ leadId: clean(payload.leadId) }),
+    }).catch(() => undefined);
     return sendJson(res, 200, { success: true, data: item });
   }
 
@@ -231,6 +251,26 @@ router.post('/notifications', requireAuth, async (req, res) => {
       [resolvedUserId, userIdRef, title, message || null, clean(payload.leadId).slice(0, 50) || null,
         asUuid(payload.leadId), !!payload.read]
     );
+    // FCM fan-out (fire-and-forget). The topic needs the recipient's
+    // employee id, which the insert does not return — one lookup.
+    // Only the lookup is awaited; the FCM POST itself runs in the
+    // background and can never delay or fail this response.
+    try {
+      const empRow = await getPool().query(
+        `SELECT employee_id FROM users WHERE id = $1 LIMIT 1`,
+        [resolvedUserId]
+      );
+      const employeeId = String(empRow.rows[0]?.employee_id || '');
+      void publishToUserTopic({
+        employeeId,
+        title,
+        body: message || '',
+        route: fcmRouteForNotification({ leadId: clean(payload.leadId) }),
+      }).catch(() => undefined);
+    } catch {
+      // Employee lookup failed — the notification row is already
+      // saved; push is best-effort and the request still succeeds.
+    }
     return sendJson(res, 201, { success: true, data: mapNotificationRow(result.rows[0]) });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Notification save failed' });
@@ -346,6 +386,63 @@ router.post('/notifications/push/subscribe', requireAuth, async (req, res) => {
     });
   } catch (error: any) {
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Push subscription failed' });
+  }
+});
+
+/**
+ * FCM topic subscription for the installed Android app.
+ * ------------------------------------------------------------------
+ * POST /api/notifications/push/fcm-subscribe { token }
+ *
+ * The @capacitor/push-notifications plugin has no topic API, so the
+ * app POSTs its FCM token here and the server subscribes it to the
+ * caller's topic (`user-{employeeId}`) through FCM's IID API. The
+ * topic is derived from the VERIFIED session — never from the
+ * request body — so a user can only subscribe their own device to
+ * their own topic. The token is used in this one request and
+ * forgotten: never logged, never stored, never returned (there is
+ * no unsubscribe route — the app's unregister() deletes the token,
+ * and FCM drops a dead token from every topic).
+ *
+ * 200 { ok: true } — subscribed. 400 — missing/invalid token or an
+ * employee id that cannot form a topic. 403 — account not found.
+ * 503 push_not_configured — no service account on the server.
+ * 502 push_subscribe_failed — FCM rejected the subscribe call.
+ */
+router.post('/notifications/push/fcm-subscribe', requireAuth, async (req, res) => {
+  const token = String(req.body?.token || '');
+  if (token.length === 0 || token.length > 1024 || /\s/.test(token)) {
+    return sendJson(res, 400, { success: false, message: 'A valid FCM token is required.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    if (!userPushTopic(caller.employee_id)) {
+      return sendJson(res, 400, { success: false, message: 'Your account has no employee id for push topics.' });
+    }
+    const result = await subscribeTokenToUserTopic({ employeeId: caller.employee_id, token });
+    // NOTE: failure-first with `=== false` — the project's tsconfig
+    // runs without strict mode, where a truthiness check (`if
+    // (result.ok)`) does NOT narrow a discriminated union, but an
+    // equality check against the literal does (same pattern as the
+    // validatePushSubscriptionInput call sites).
+    if (result.ok === false) {
+      if (result.error === 'push_not_configured') {
+        return sendJson(res, 503, {
+          success: false, code: 'push_not_configured',
+          message: 'Mobile push is not configured on this server.',
+        });
+      }
+      return sendJson(res, 502, {
+        success: false, code: 'push_subscribe_failed',
+        message: 'Mobile push subscription failed. Please try again.',
+      });
+    }
+    return sendJson(res, 200, { success: true, data: { ok: true } });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Mobile push subscription failed' });
   }
 });
 

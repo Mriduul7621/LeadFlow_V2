@@ -22,6 +22,7 @@
 
 import { getPool, isDatabaseConfigured } from '../database/connection.js';
 import { fallbackStore, createId } from '../fallbackStore.js';
+import { fcmRouteForNotification, publishToUserTopic } from './FcmService.js';
 import {
   ASSIGNEE_ALERTS_OPTION_VALUE,
   ASSIGNMENT_ALERTS_OPTION_VALUE,
@@ -205,6 +206,12 @@ export async function resolveUplineRecipients(
  * NOTE: This function does NOT catch errors. Callers must wrap the call
  * in a SAVEPOINT so that a notification failure (e.g. missing table in
  * test DB) does not abort the parent business transaction.
+ *
+ * FCM: a row that was actually created is ALSO published to the
+ * recipient's FCM topic (fire-and-forget — see FcmService.ts). An
+ * idempotent skip publishes nothing, so a retried mutation never
+ * re-pushes. The publish never throws and never blocks the caller;
+ * see the pre-commit note in FcmService.ts.
  */
 export async function insertNotificationWithIdempotency(
   exec: { query: Function },
@@ -232,7 +239,24 @@ export async function insertNotificationWithIdempotency(
       input.referenceType || 'lead',
     ],
   );
-  return result.rows[0] || null; // null = already existed (idempotent skip)
+  const row = result.rows[0] || null; // null = already existed (idempotent skip)
+  if (row) {
+    // FCM fan-out (fire-and-forget): only a genuinely new row
+    // publishes. publishToUserTopic never throws; the trailing
+    // catch is belt-and-braces against an unhandled rejection.
+    void publishToUserTopic({
+      employeeId: input.recipientKey,
+      title: input.title,
+      body: input.message,
+      route: fcmRouteForNotification({
+        eventType: input.eventType,
+        referenceType: input.referenceType || 'lead',
+        leadId: input.leadId,
+        leadCode: input.leadCode,
+      }),
+    }).catch(() => undefined);
+  }
+  return row;
 }
 
 // ── Batch Assignment Notifications ──────────────────────────────────
@@ -412,6 +436,13 @@ export function createAssignmentNotificationsDemo(
         idempotencyKey: assigneeKey,
       });
       created++;
+      // FCM fan-out (fire-and-forget), mirroring the DB path.
+      void publishToUserTopic({
+        employeeId: assignedToEmployeeId,
+        title: 'New Lead Assigned',
+        body: `Lead '${prospectName}' has been assigned to you by ${changedByEmployeeId}.`,
+        route: fcmRouteForNotification({ eventType, referenceType: 'lead', leadId }),
+      }).catch(() => undefined);
     } else {
       skipped++;
     }
@@ -454,6 +485,13 @@ export function createAssignmentNotificationsDemo(
           idempotencyKey: mgrKey,
         });
         created++;
+        // FCM fan-out (fire-and-forget), mirroring the DB path.
+        void publishToUserTopic({
+          employeeId: String(manager.employeeId),
+          title: 'Team Lead Assigned Upline Alert',
+          body: `Lead '${prospectName}' under your team tracking has been routed to assignee: ${assignedToEmployeeId} by ${changedByEmployeeId}.`,
+          route: fcmRouteForNotification({ eventType, referenceType: 'lead', leadId }),
+        }).catch(() => undefined);
       } else {
         skipped++;
       }

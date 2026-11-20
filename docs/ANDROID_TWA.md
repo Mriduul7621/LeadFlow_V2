@@ -1,4 +1,13 @@
-# Android APK (Trusted Web Activity)
+# Android APK (Trusted Web Activity) — HISTORY, not current
+
+> **This document describes the ORIGINAL wrapper (Oct 2026), which has
+> not been current since PR #84 replaced it with a Capacitor build —
+> and the Capacitor build itself has since been replaced by the
+> release-signed remote-load shell (see `docs/ANDROID_APP.md` and
+> `docs/ANDROID_RELEASE.md`). Do not follow the instructions below;
+> they are kept as background only. The TWA opened
+> `app.saudalmahi.com`, which had no DNS — the launcher showed the
+> browser's error page, which is why the wrapper was replaced.**
 
 LeadFlow ships as a **TWA** — a thin, zero-webview Android wrapper that opens
 `https://app.saudalmahi.com` full-screen with the Shanta Life brand icon.

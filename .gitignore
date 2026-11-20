@@ -9,9 +9,17 @@ coverage/
 !.env.example
 .arena/
 
-# Android TWA build outputs
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-/android/
+# Android: the generated android/ tree IS committed (Capacitor shell —
+# the signing config, version file and icon wiring are reviewable, not
+# generated blind in CI). Build outputs and local config live in
+# android/.gitignore.
+#
+# Keystores and installers — NEVER commit. The release keystore lives
+# offline with its custodian + as base64 in GitHub Secrets. (The old
+# debug keystore was committed to this public repo — see
+# docs/ANDROID_RELEASE.md §5 — which is why these rules exist.)
+*.jks
+*.keystore
+*.apk
+*.aab
+google-services.json

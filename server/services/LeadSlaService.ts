@@ -60,6 +60,7 @@ import {
   insertNotificationWithIdempotency,
   resolveUplineRecipients,
 } from './NotificationService.js';
+import { fcmRouteForNotification, publishToUserTopic } from './FcmService.js';
 
 /* ====================================================================
    Configuration (Metadata Engine options; fails closed to OFF / 24h)
@@ -474,6 +475,19 @@ function alertBreachDemo(
     });
     summary.alerted++;
     existingKeys.add(assigneeKey);
+    // FCM fan-out (fire-and-forget), mirroring the DB path.
+    void publishToUserTopic({
+      employeeId: breach.assigneeEmployeeId,
+      title: 'First-Contact SLA Breached',
+      body:
+        `Lead '${breach.customerName}' (${breach.leadCode}) was assigned ${overdueH}h ago ` +
+        `past the ${config.firstContactHours}h first-contact SLA and still has no recorded contact. ` +
+        `Please contact the customer now.`,
+      route: fcmRouteForNotification({
+        eventType: SLA_BREACH_EVENT, referenceType: 'lead',
+        leadId: breach.leadId, leadCode: breach.leadCode,
+      }),
+    }).catch(() => undefined);
   } else {
     summary.deduped++;
   }
@@ -508,6 +522,18 @@ function alertBreachDemo(
       });
       summary.escalated++;
       existingKeys.add(mgrKey);
+      // FCM fan-out (fire-and-forget), mirroring the DB path.
+      void publishToUserTopic({
+        employeeId: String(manager.employeeId),
+        title: 'Team First-Contact SLA Breach',
+        body:
+          `Lead '${breach.customerName}' (${breach.leadCode}) assigned to ${breach.assigneeEmployeeId} ` +
+          `has passed the ${config.firstContactHours}h first-contact SLA by ${overdueH}h with no recorded contact.`,
+        route: fcmRouteForNotification({
+          eventType: SLA_ESCALATION_EVENT, referenceType: 'lead',
+          leadId: breach.leadId, leadCode: breach.leadCode,
+        }),
+      }).catch(() => undefined);
     } else {
       summary.deduped++;
     }

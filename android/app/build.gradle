@@ -1,0 +1,98 @@
+apply plugin: 'com.android.application'
+
+// Version truth lives in the checked-in android/version.properties —
+// never in CI counters (see the bump rule in that file).
+def versionProps = new Properties()
+def versionPropsFile = rootProject.file('version.properties')
+if (versionPropsFile.exists()) {
+    versionProps.load(new FileInputStream(versionPropsFile))
+}
+def appVersionCode = (versionProps['versionCode'] ?: '1').toInteger()
+def appVersionName = versionProps['versionName'] ?: '1.0.0'
+
+android {
+    namespace = "com.shantalife.leadflow"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.shantalife.leadflow"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode appVersionCode
+        versionName appVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            // Release signing reads ONLY from the environment (CI secrets).
+            // No keystore, alias or password may ever appear in this file.
+            // The keystore file itself is restored from the
+            // LEADFLOW_KEYSTORE_B64 secret by the workflow; the guard below
+            // fails a release build fast if it is missing, so a release APK
+            // can never be produced unsigned (or debug-signed) by accident.
+            def keystorePath = System.getenv('LEADFLOW_KEYSTORE_PATH')
+            if (keystorePath != null && !keystorePath.isEmpty()) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('LEADFLOW_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LEADFLOW_KEY_ALIAS')
+                keyPassword System.getenv('LEADFLOW_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// Fail a release build fast when the signing keystore is absent —
+// debug builds are unaffected (they use the debug key, local only,
+// and their output is never distributed).
+gradle.taskGraph.whenReady { graph ->
+    def isRelease = graph.hasTask(':app:assembleRelease') || graph.hasTask('assembleRelease')
+    if (isRelease) {
+        def keystorePath = System.getenv('LEADFLOW_KEYSTORE_PATH')
+        if (keystorePath == null || keystorePath.isEmpty() || !file(keystorePath).exists()) {
+            throw new GradleException(
+                'assembleRelease needs LEADFLOW_KEYSTORE_PATH pointing at the release keystore. ' +
+                'CI restores it from the LEADFLOW_KEYSTORE_B64 secret — see docs/ANDROID_RELEASE.md.'
+            )
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
