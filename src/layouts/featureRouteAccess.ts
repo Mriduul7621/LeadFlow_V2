@@ -54,9 +54,15 @@ const EVERYONE: string[] = [ANY_ROLE];
  * already granted MANAGER / SM / RM / TEAM_LEAD / BDM / ASM `reports.view`
  * while this fallback only listed ADMIN/RO/RM/CEO, hiding from a manager
  * the very reports the server was willing to serve. ADMIN/SUPERADMIN need
- * no entry here (bypass above); RO/BE/SBE/EMPLOYEE carry no `reports.view`
- * in the default table and therefore stay out — an admin who wants a
- * frontline role to see reports grants it in Roles & Access.
+ * no entry here (bypass above).
+ *
+ * Enterprise Preview (2026-11-19): the field roles (RO/BE/SBE/EMPLOYEE)
+ * now carry `reports.view` in the default table too, because the
+ * sample's Agent nav includes MY PERFORMANCE → Performance and NCP
+ * Progress. The list below derives from the table, so it picked the
+ * field roles up automatically — no hardcoded list to keep in sync.
+ * An admin who wants a frontline role NOT to see reports revokes
+ * `reports.view` in Roles & Access (its Reports module).
  */
 const INSIGHT_ROLES: string[] = [
   UserRole.ADMIN,
@@ -133,6 +139,11 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/users': { route: '/users', path: '/users', roles: ADMIN_ONLY },
   '/settings': { route: '/settings', path: '/settings', roles: EVERYONE },
   '/settings/system': { route: '/settings/system', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
+  // Fix round (2026-11-19): the CONFIGURATION group's three pages
+  // are three distinct routes, all in the same admin-only module
+  // as /settings/system (same menuAccess key, same fallback).
+  '/settings/status-pipeline': { route: '/settings/status-pipeline', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
+  '/settings/products-campaigns': { route: '/settings/products-campaigns', path: '/settings', roles: DIAGNOSTICS_ADMIN_ROLES },
   '/settings/performance-diagnostics': {
     route: '/settings/performance-diagnostics',
     path: '/settings/performance-diagnostics',
@@ -207,8 +218,12 @@ export const WORKBENCH_HOME_PATH = '/workbench';
  * is the Roles & Access editor's feature-permission default, itself
  * derived from menuAccess.
  *
- * Pure and directly unit-testable; the once-per-session application of
- * this decision lives in HomeLanding (modules/auth/components).
+ * Pure and directly unit-testable. Its once-per-session application used
+ * to live in HomeLanding (modules/auth/components); the Enterprise
+ * Preview redesign (2026-11-19) retired that component and the
+ * Workbench-first bounce with it — `/` now renders the role overview
+ * directly. This helper and the WORKBENCH_HOME_PATH / DASHBOARD_HOME_PATH
+ * constants stay as tested utilities; removing them is later cleanup.
  */
 export function resolveHomePath(
   userRoleName: string | null | undefined,

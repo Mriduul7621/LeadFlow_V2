@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -23,6 +23,7 @@ import { usePermissions } from '../../shared/hooks/usePermissions';
 import type { SystemNotification } from '../../shared/types';
 import { notificationService } from '../../notifications/services/notificationService';
 import { resolveFeatureRouteAccess } from '../../../layouts/featureRouteAccess';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 type IconComponent = ComponentType<LucideProps>;
 
@@ -33,24 +34,26 @@ interface DirectoryItem {
   icon: IconComponent;
 }
 
-function PageHeading({ title, backTo = '/more' }: { title: string; backTo?: string }) {
+function PageHeading({ path, backTo = '/more', actions }: { path: string; backTo?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-6 flex items-center gap-3">
-      <Link
-        to={backTo}
-        aria-label="Back"
-        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition-colors hover:bg-stone-50"
-      >
-        <ArrowLeft className="h-4 w-4" />
-      </Link>
-      <h1 className="text-2xl font-bold tracking-tight text-brand-text">{title}</h1>
-    </div>
+    <EnterprisePageHeader
+      path={path}
+      actions={(
+        <>
+          {actions}
+          <Link to={backTo} className="ep-btn" aria-label="Back">
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Link>
+        </>
+      )}
+    />
   );
 }
 
 function DirectoryList({ items }: { items: DirectoryItem[] }) {
   return (
-    <nav className="divide-y divide-stone-100 border-y border-stone-100 bg-white" aria-label="More options">
+    <nav className="ep-card" style={{ padding: 0, overflow: 'hidden' }} aria-label="More options">
       {items.map(item => (
         <Link
           key={item.path}
@@ -99,10 +102,10 @@ export function MorePage() {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <h1 className="text-2xl font-bold tracking-tight text-brand-text">More</h1>
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <EnterprisePageHeader path="/more" />
       {user && (
-        <div className="flex items-center gap-3 border-b border-stone-100 pb-5">
+        <div className="ep-card flex items-center gap-3" style={{ marginBottom: 16 }}>
           <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-[#978C21]/10 text-base font-bold text-[#756c1b]">
             {user.avatarUrl
               ? <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
@@ -112,14 +115,15 @@ export function MorePage() {
             <p className="truncate text-sm font-semibold text-stone-800">{user.name}</p>
             <p className="truncate text-xs text-stone-500">{user.email}</p>
           </div>
-          <span className="ml-auto rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-medium text-stone-600">{user.role}</span>
+          <span className="ep-pill ml-auto">{user.role}</span>
         </div>
       )}
       <DirectoryList items={items} />
       <button
         type="button"
         onClick={() => { logout(); navigate('/login'); }}
-        className="flex min-h-12 w-full items-center gap-3 border-b border-stone-100 px-4 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50"
+        className="ep-btn ep-btn-danger"
+        style={{ width: '100%', justifyContent: 'center', marginTop: 16 }}
       >
         <LogOut className="h-[18px] w-[18px]" strokeWidth={1.8} />
         Log out
@@ -149,9 +153,9 @@ export function AdministrationPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <PageHeading title="Administration" />
-      <p className="max-w-prose text-sm leading-6 text-stone-600">
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <PageHeading path="/administration" />
+      <p className="ep-muted" style={{ marginBottom: 16 }}>
         Manage access and lead operations. System settings are grouped separately from your personal profile.
       </p>
       <DirectoryList items={items} />
@@ -206,25 +210,29 @@ export function NotificationsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <div className="flex items-center justify-between gap-3">
-        <PageHeading title="Notifications" />
-        <button
-          type="button"
-          onClick={() => void markAllRead()}
-          disabled={!notifications.some(item => !item.read)}
-          className="mb-6 shrink-0 text-xs font-semibold text-[#756c1b] disabled:cursor-not-allowed disabled:text-stone-400"
-        >
-          Mark all read
-        </button>
-      </div>
-      {loading ? <p className="py-8 text-center text-sm text-stone-500">Loading notifications…</p> : null}
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <PageHeading
+        path="/notifications"
+        actions={(
+          <button
+            type="button"
+            onClick={() => void markAllRead()}
+            disabled={!notifications.some(item => !item.read)}
+            className="ep-btn"
+          >
+            Mark all read
+          </button>
+        )}
+      />
+      {loading ? <p className="ep-empty" style={{ textAlign: 'center', padding: '24px 0' }}>Loading notifications…</p> : null}
       {error ? <p role="alert" className="py-8 text-center text-sm text-red-600">{error}</p> : null}
       {!loading && !error && notifications.length === 0 ? (
-        <p className="border-y border-stone-100 bg-white px-4 py-8 text-center text-sm text-stone-500">You’re all caught up.</p>
+        <div className="ep-card">
+          <p className="ep-empty" style={{ textAlign: 'center' }}>You’re all caught up.</p>
+        </div>
       ) : null}
       {!loading && !error && notifications.length > 0 ? (
-        <div className="divide-y divide-stone-100 border-y border-stone-100 bg-white">
+        <div className="ep-card" style={{ padding: 0, overflow: 'hidden' }}>
           {notifications.map(notification => {
             const content = (
               <>
@@ -271,18 +279,18 @@ export function NotificationsPage() {
 
 export function HelpPage() {
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <PageHeading title="Help & Support" />
-      <div className="divide-y divide-stone-100 border-y border-stone-100 bg-white">
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <PageHeading path="/help" />
+      <div className="ep-card" style={{ padding: 0, overflow: 'hidden' }}>
         <section className="px-4 py-5 sm:px-5">
           <h2 className="text-sm font-semibold text-stone-800">Find and update a lead</h2>
           <p className="mt-1 text-sm leading-6 text-stone-600">Open Leads, search or filter the list, then select a lead to view its details and available actions.</p>
         </section>
-        <section className="px-4 py-5 sm:px-5">
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
           <h2 className="text-sm font-semibold text-stone-800">Review today’s work</h2>
           <p className="mt-1 text-sm leading-6 text-stone-600">Use My Work to review due calls, meetings, follow-ups and tasks. Select an item to see its details.</p>
         </section>
-        <section className="px-4 py-5 sm:px-5">
+        <section className="px-4 py-5 sm:px-5" style={{ borderTop: '1px solid #f0f0eb' }}>
           <h2 className="text-sm font-semibold text-stone-800">Access or data questions</h2>
           <p className="mt-1 text-sm leading-6 text-stone-600">Contact your workspace administrator if a page or action is unavailable for your role.</p>
         </section>
@@ -293,9 +301,9 @@ export function HelpPage() {
 
 export function AboutPage() {
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <PageHeading title="About LeadFlow" />
-      <div className="border-y border-stone-100 bg-white px-4 py-5 sm:px-5">
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <PageHeading path="/about" />
+      <div className="ep-card">
         <p className="text-base font-semibold text-stone-800">LeadFlow</p>
         <p className="mt-2 max-w-prose text-sm leading-6 text-stone-600">
           LeadFlow helps sales teams manage prospects, lead follow-ups, scheduled activities and conversion reporting in one role-scoped workspace.

@@ -50,16 +50,14 @@ describe('Insight pages — client fallback derived from the default grant table
   });
 
   it('the roles the decision named behave as agreed', () => {
-    const open = ['MANAGER', 'SM', 'RM', 'TEAM_LEAD', 'BDM', 'ASM', 'CEO', 'BH'];
-    const closed = ['EMPLOYEE', 'SBE', 'BE', 'RO'];
+    // Enterprise Preview (2026-11-19): FIELD_EXEC carries reports.view
+    // by default, so the field roles open the insight pages too — the
+    // agent's MY PERFORMANCE nav needs them. Every standard role in
+    // DEFAULT_GRANTS now holds the grant; only custom codes fail closed.
+    const open = ['MANAGER', 'SM', 'RM', 'TEAM_LEAD', 'BDM', 'ASM', 'CEO', 'BH', 'RO', 'BE', 'SBE', 'EMPLOYEE'];
     for (const role of open) {
       for (const route of INSIGHT_ROUTES) {
         assert.equal(resolveFeatureRouteAccess(route, role, undefined), true, `${route} open for ${role}`);
-      }
-    }
-    for (const role of closed) {
-      for (const route of INSIGHT_ROUTES) {
-        assert.equal(resolveFeatureRouteAccess(route, role, undefined), false, `${route} closed for ${role}`);
       }
     }
     // ADMIN/SUPERADMIN bypass, and a custom code starts fail-closed.
@@ -88,7 +86,7 @@ describe('Insight pages — client fallback derived from the default grant table
     for (const role of ['RO', 'BE', 'SBE', 'EMPLOYEE']) {
       assert.ok(
         !new RegExp(`['"]${role}['"]`).test(block),
-        `${role} holds no reports.view default and must not be listed in the insight fallback`
+        `${role} must not be hardcoded in the derived insight fallback (the list comes from rolesWithDefaultGrant)`
       );
     }
   });

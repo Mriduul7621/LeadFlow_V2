@@ -53,6 +53,7 @@ import DangerZoneHierarchyRules from '../components/DangerZoneHierarchyRules';
 import { DropdownOption, MetadataType, FormField, FormFieldType, WorkflowRule, UserRole } from '../../shared/types';
 import { toast } from 'sonner';
 import { cn } from '../../../lib/utils';
+import { OverviewHeading } from '../../workspace/components/EnterprisePrimitives';
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -64,13 +65,40 @@ const STATUS_COLOR_HEX: Record<string, string> = {
   yellow: '#eab308', green: '#22c55e', red: '#ef4444',
 };
 
-export default function Settings() {
+/**
+ * Which System-settings page this component renders (fix round,
+ * 2026-11-19 — Mahadi found all three CONFIGURATION nav items
+ * landing on the same page): 'system' is the full page at
+ * /settings/system; 'status-pipeline' is the Status & Pipeline
+ * page (/settings/status-pipeline: lead statuses + workflow
+ * rules); 'products-campaigns' is the Products & Campaigns page
+ * (/settings/products-campaigns: the Product + Campaign metadata
+ * types). Each variant shows ONLY its own content.
+ */
+export type SettingsVariant = 'system' | 'status-pipeline' | 'products-campaigns';
+
+/** The metadata types each filtered variant may show. */
+export const SETTINGS_VARIANT_DROPDOWN_TYPES: Record<
+  Exclude<SettingsVariant, 'system'>,
+  string[]
+> = {
+  'status-pipeline': ['FollowUpStatus'],
+  'products-campaigns': ['Product', 'Campaign'],
+};
+
+export default function Settings({ variant = 'system' }: { variant?: SettingsVariant }) {
   const { user, logout, login, isOfflineMode } = useAuthStore();
   const { canAccess } = usePermissions();
   const navigate = useNavigate();
   const userRoleNormalized = (user?.role || '').toUpperCase();
   const isSystemAdmin = ['ADMIN', 'SUPERADMIN'].includes(userRoleNormalized);
-  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>('overview');
+  // Filtered variants start on the tab their content comes from, so
+  // the existing activeTab load effect fetches their data (the
+  // status-pipeline page additionally loads the metadata options
+  // for its FollowUpStatus editor — see the variant effect below).
+  const [activeTab, setActiveTab] = useState<'overview' | 'dropdowns' | 'formbuilder' | 'workflow'>(
+    variant === 'status-pipeline' ? 'workflow' : variant === 'products-campaigns' ? 'dropdowns' : 'overview'
+  );
   const [options, setOptions] = useState<DropdownOption[]>([]);
   const [metadataTypes, setMetadataTypes] = useState<MetadataType[]>([]);
   const [editingOption, setEditingOption] = useState<{type: string, value: string}>({ type: 'Area', value: '' });
@@ -800,6 +828,28 @@ export default function Settings() {
     }
   }, [activeTab]);
 
+  // Filtered variants have no tab bar: the status-pipeline page
+  // shows the workflow rules AND the FollowUpStatus editor, so it
+  // loads the metadata options itself (the activeTab effect above
+  // already loads the workflow rules for it).
+  useEffect(() => {
+    if (variant === 'status-pipeline') {
+      void loadOptions();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variant]);
+
+  // Keep the "add option" type inside the variant's visible set:
+  // the default type ('Area') is not one of the filtered pages'
+  // types, and an add must never land on a hidden type.
+  useEffect(() => {
+    if (variant === 'system' || metadataTypes.length === 0) return;
+    const visible = SETTINGS_VARIANT_DROPDOWN_TYPES[variant];
+    if (!visible.includes(editingOption.type)) {
+      setEditingOption(prev => ({ ...prev, type: visible[0] }));
+    }
+  }, [variant, metadataTypes, editingOption.type]);
+
   const loadOptions = async () => {
     setLoading(true);
     try {
@@ -1108,6 +1158,273 @@ export default function Settings() {
     }
   };
 
+  /**
+   * The Strategy Parameters (metadata) editor, optionally filtered
+   * to one page's types (fix round, 2026-11-19): the Products &
+   * Campaigns page shows only Product + Campaign, the Status &
+   * Pipeline page only FollowUpStatus. `null` = every type (the
+   * System Settings page). Creating a new TYPE stays a System
+   * Settings action, so the button hides when filtered.
+   */
+  const renderDropdownsBody = (visibleTypeKeys: string[] | null) => {
+    const visibleTypes = visibleTypeKeys
+      ? metadataTypes.filter(t => visibleTypeKeys.includes(t.key))
+      : metadataTypes;
+    return (
+        <motion.div
+          key="dropdowns"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          className="ep-card ep-tablecard"
+        >
+          <div className="p-5 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
+            <div className="space-y-4 flex-1 max-w-md">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Parameter Category</label>
+              <select
+                value={editingOption.type}
+                onChange={(e) => setEditingOption({ ...editingOption, type: e.target.value })}
+                className="ep-search w-full"
+              >
+                {visibleTypes.map(t => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-4 flex-1 max-w-md">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Matrix Property</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editingOption.value}
+                  onChange={(e) => setEditingOption({ ...editingOption, value: e.target.value })}
+                  placeholder="ENTER VALUE..."
+                  className="ep-search flex-1"
+                />
+                <button
+                  onClick={handleAddOption}
+                  className="ep-btn ep-btn-primary"
+                >
+                  <Plus className="w-4 h-4" />
+                  Inject
+                </button>
+              </div>
+            </div>
+            {visibleTypeKeys === null && (
+    <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">&nbsp;</label>
+                <button
+                  onClick={() => setIsAddingType(v => !v)}
+                  className="ep-btn"
+                >
+                  <Plus className="w-4 h-4" />
+                  New Field Type
+                </button>
+              </div>
+            )}
+          </div>
+
+          {visibleTypeKeys === null && isAddingType && (
+            <div className="px-10 py-6 border-b border-slate-50 bg-white flex flex-col md:flex-row items-end gap-4">
+              <div className="flex-1 space-y-2 w-full">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Type Name</label>
+                <input
+                  type="text"
+                  value={newTypeForm.label}
+                  onChange={(e) => setNewTypeForm({ ...newTypeForm, label: e.target.value })}
+                  placeholder="e.g. Industry, Referral Channel..."
+                  className="ep-search w-full"
+                />
+              </div>
+              <div className="flex-1 space-y-2 w-full">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Description (optional)</label>
+                <input
+                  type="text"
+                  value={newTypeForm.description}
+                  onChange={(e) => setNewTypeForm({ ...newTypeForm, description: e.target.value })}
+                  placeholder="What is this field for?"
+                  className="ep-search w-full"
+                />
+              </div>
+              <button
+                onClick={handleAddType}
+                className="ep-btn ep-btn-primary"
+              >
+                Create Type
+              </button>
+            </div>
+          )}
+
+          <div className="p-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {visibleTypes.map((t) => {
+                const values = options
+                  .filter(o => o.type === t.key)
+                  .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                return (
+                  <div key={t.key} className="space-y-4">
+                    <div className="flex items-center justify-between border-b-2 border-[#978C21]/20 pb-2">
+                      <div className="flex items-center gap-2">
+                        <h5 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] italic">{t.label}</h5>
+                        {t.isSystem && (
+                          <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">System</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-500">{values.length} Entries</span>
+                        {!t.isSystem && (
+                          <button
+                            onClick={() => handleDeleteType(t)}
+                            title="Delete this metadata type"
+                            className="text-slate-300 hover:text-red-500 transition-all"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                      {values.map((option, i) => (
+                        <div
+                          key={option.id || i}
+                          className={cn(
+                            "flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-100 rounded-sm group hover:bg-white hover:border-[#978C21]/30 transition-all gap-2",
+                            option.status !== 'Active' && "opacity-50"
+                          )}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {t.key === 'FollowUpStatus' && (
+                              <select
+                                value={option.meta?.color || 'slate'}
+                                onChange={(e) => handleSetStatusColor(option, e.target.value)}
+                                style={{ backgroundColor: STATUS_COLOR_HEX[option.meta?.color || 'slate'] }}
+                                className="w-5 h-5 rounded-full border-0 text-[0px] shrink-0 cursor-pointer appearance-none"
+                                title="Status color"
+                              >
+                                {STATUS_COLOR_CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            )}
+                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight truncate">{option.label || option.value}</span>
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+                            <button onClick={() => handleMove(t.key, i, -1)} disabled={i === 0} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleMove(t.key, i, 1)} disabled={i === values.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleToggleActive(option)} title={option.status === 'Active' ? 'Deactivate' : 'Activate'} className="p-1 text-slate-300 hover:text-[#978C21]">
+                              <Power className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteOption(option)}
+                              className="p-1 text-slate-300 hover:text-red-500 transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {values.length === 0 && (
+                        <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-4 text-center">No values yet</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </motion.div>
+    );
+  };
+
+  /** The Workflow tab body (lead status pipeline rules). */
+  const renderWorkflowBody = () => {
+    return (
+        <motion.div
+          key="workflow"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          className="ep-card ep-tablecard"
+        >
+          <div className="p-5 border-b border-slate-50 bg-[#FBFAF8]">
+            <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Status Pipeline & Workflow Rules</h5>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
+              For each status, control which statuses a lead can move to next, and what information is required to enter that status.
+              By default every status can move to any other status.
+            </p>
+          </div>
+
+          <div className="p-5 space-y-6">
+            {allStatuses.map(status => {
+              const rule = getRuleForStatus(status);
+              const isRestricted = !!(rule?.allowedNextStatuses && rule.allowedNextStatuses.length > 0);
+              return (
+                <div key={status} className="border border-slate-100 rounded-sm overflow-hidden">
+                  <div className="px-6 py-4 bg-slate-50 flex items-center justify-between flex-wrap gap-3">
+                    <h6 className="text-[12px] font-black text-brand-text uppercase tracking-[0.15em]">{status}</h6>
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                        <input type="checkbox" checked={!!rule?.requiresLossReason} onChange={() => handleToggleRequirement(status, 'requiresLossReason')} />
+                        Requires Loss Reason
+                      </label>
+                      <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                        <input type="checkbox" checked={!!rule?.requiresMeetingType} onChange={() => handleToggleRequirement(status, 'requiresMeetingType')} />
+                        Requires Meeting Type
+                      </label>
+                      <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                        <input type="checkbox" checked={!!rule?.requiresFollowUpType} onChange={() => handleToggleRequirement(status, 'requiresFollowUpType')} />
+                        Requires Follow-up Type
+                      </label>
+                      <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
+                        <input type="checkbox" checked={!!rule?.requiresNote} onChange={() => handleToggleRequirement(status, 'requiresNote')} />
+                        Requires Note
+                      </label>
+                    </div>
+                  </div>
+                  <div className="p-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                        Can move to {isRestricted ? `(${rule!.allowedNextStatuses!.length} allowed)` : '(any status - unrestricted)'}
+                      </p>
+                      {isRestricted && (
+                        <button onClick={() => handleResetToUnrestricted(status)} className="text-[9px] font-black text-[#978C21] uppercase tracking-widest hover:underline">
+                          Reset to Unrestricted
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {allStatuses.filter(s => s !== status).map(target => {
+                        const isAllowed = !isRestricted || rule!.allowedNextStatuses!.includes(target);
+                        return (
+                          <button
+                            key={target}
+                            onClick={() => handleToggleNextStatus(status, target)}
+                            className={cn(
+                              "px-3 py-1.5 rounded-sm text-[9px] font-black uppercase tracking-widest border transition-all",
+                              isAllowed ? "ep-pill" : "ep-pill opacity-40"
+                            )}
+                          >
+                            {target}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {allStatuses.length === 0 && (
+              <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-8 text-center">
+                No lead statuses found. Add some under Strategy Parameters first.
+              </p>
+            )}
+          </div>
+        </motion.div>
+    );
+  };
+
   const sections = [
     { id: 'notifications', label: 'Push Intelligence', icon: Bell, desc: 'Review real-time lead alert settings', allowed: isSystemAdmin || canAccess('settings_control', 'view_notifications') },
     { id: 'operations', label: 'Operations & Limits', icon: SlidersHorizontal, desc: 'Import row caps and image upload limit', allowed: isSystemAdmin || canAccess('settings_control', 'view_system') },
@@ -1117,20 +1434,48 @@ export default function Settings() {
     { id: 'danger-zone', label: 'Danger Zone', icon: ShieldAlert, desc: 'System rules — super admin only, password required', allowed: isSystemAdmin },
   ].filter(section => section.allowed);
 
-  return (
-    <div className="max-w-6xl mx-auto space-y-8 pb-20">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-[#978C21]/5 rounded-sm border border-[#978C21]/10 flex items-center justify-center text-[#978C21]">
-            <SettingsIcon className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800">System</h1>
-            <p className="text-sm text-slate-500 mt-1">Administration and workspace configuration</p>
-          </div>
+  // Filtered variants: each shows ONLY its own content — no tab
+  // bar, no overview sections — under the sample's heading.
+  if (variant === 'status-pipeline') {
+    return (
+      <div className="ep-page">
+        <OverviewHeading
+          eyebrow="Admin workspace"
+          title="Status & Pipeline"
+          sub="Review lead stages and status definitions."
+        />
+        <div className="space-y-6">
+          {renderDropdownsBody(SETTINGS_VARIANT_DROPDOWN_TYPES['status-pipeline'])}
+          {renderWorkflowBody()}
         </div>
+      </div>
+    );
+  }
 
-        <div className="flex gap-2 bg-slate-50 p-1 rounded-sm border border-slate-100 italic">
+  if (variant === 'products-campaigns') {
+    return (
+      <div className="ep-page">
+        <OverviewHeading
+          eyebrow="Admin workspace"
+          title="Products & Campaigns"
+          sub="Review catalog and campaign information."
+        />
+        {renderDropdownsBody(SETTINGS_VARIANT_DROPDOWN_TYPES['products-campaigns'])}
+      </div>
+    );
+  }
+
+  return (
+    <div className="ep-page">
+      <OverviewHeading
+        eyebrow="Admin workspace"
+        title="System Settings"
+        sub="Review protected platform configuration."
+      />
+
+      {/* Mobile fix (fix round, 2026-11-19): the four tabs overflowed
+          a 390px screen as a non-wrapping row — they now wrap. */}
+      <div className="flex flex-wrap gap-2 bg-slate-50 p-1 rounded-sm border border-slate-100 italic mb-6">
           <button 
             onClick={() => setActiveTab('overview')}
             className={cn(
@@ -1174,7 +1519,6 @@ export default function Settings() {
             </button>
           )}
         </div>
-      </div>
 
       <AnimatePresence mode="wait">
         {activeTab === 'overview' ? (
@@ -2446,168 +2790,7 @@ export default function Settings() {
             </div>
           </motion.div>
         ) : activeTab === 'dropdowns' ? (
-          <motion.div 
-            key="dropdowns"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
-          >
-            <div className="p-10 border-b border-slate-50 bg-[#FBFAF8] flex flex-col md:flex-row md:items-end justify-between gap-6">
-              <div className="space-y-4 flex-1 max-w-md">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Parameter Category</label>
-                <select 
-                  value={editingOption.type}
-                  onChange={(e) => setEditingOption({ ...editingOption, type: e.target.value })}
-                  className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none"
-                >
-                  {metadataTypes.map(t => (
-                    <option key={t.key} value={t.key}>{t.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-4 flex-1 max-w-md">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Matrix Property</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="text"
-                    value={editingOption.value}
-                    onChange={(e) => setEditingOption({ ...editingOption, value: e.target.value })}
-                    placeholder="ENTER VALUE..."
-                    className="flex-1 bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
-                  />
-                  <button 
-                    onClick={handleAddOption}
-                    className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Inject
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">&nbsp;</label>
-                <button
-                  onClick={() => setIsAddingType(v => !v)}
-                  className="border border-[#978C21]/30 text-[#978C21] px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-[#978C21]/5 transition-all flex items-center gap-2"
-                >
-                  <Plus className="w-4 h-4" />
-                  New Field Type
-                </button>
-              </div>
-            </div>
-
-            {isAddingType && (
-              <div className="px-10 py-6 border-b border-slate-50 bg-white flex flex-col md:flex-row items-end gap-4">
-                <div className="flex-1 space-y-2 w-full">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">New Type Name</label>
-                  <input
-                    type="text"
-                    value={newTypeForm.label}
-                    onChange={(e) => setNewTypeForm({ ...newTypeForm, label: e.target.value })}
-                    placeholder="e.g. Industry, Referral Channel..."
-                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
-                  />
-                </div>
-                <div className="flex-1 space-y-2 w-full">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Description (optional)</label>
-                  <input
-                    type="text"
-                    value={newTypeForm.description}
-                    onChange={(e) => setNewTypeForm({ ...newTypeForm, description: e.target.value })}
-                    placeholder="What is this field for?"
-                    className="w-full bg-white border border-slate-200 rounded-sm px-4 py-3 text-[11px] font-black uppercase tracking-widest focus:ring-2 focus:ring-[#978C21]/10 outline-none placeholder:opacity-30"
-                  />
-                </div>
-                <button
-                  onClick={handleAddType}
-                  className="bg-[#978C21] text-white px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg whitespace-nowrap"
-                >
-                  Create Type
-                </button>
-              </div>
-            )}
-
-            <div className="p-10">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {metadataTypes.map((t) => {
-                  const values = options
-                    .filter(o => o.type === t.key)
-                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-                  return (
-                    <div key={t.key} className="space-y-4">
-                      <div className="flex items-center justify-between border-b-2 border-[#978C21]/20 pb-2">
-                        <div className="flex items-center gap-2">
-                          <h5 className="text-[11px] font-black text-brand-text uppercase tracking-[0.2em] italic">{t.label}</h5>
-                          {t.isSystem && (
-                            <span className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider">System</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-slate-500">{values.length} Entries</span>
-                          {!t.isSystem && (
-                            <button
-                              onClick={() => handleDeleteType(t)}
-                              title="Delete this metadata type"
-                              className="text-slate-300 hover:text-red-500 transition-all"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                        {values.map((option, i) => (
-                          <div 
-                            key={option.id || i}
-                            className={cn(
-                              "flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-100 rounded-sm group hover:bg-white hover:border-[#978C21]/30 transition-all gap-2",
-                              option.status !== 'Active' && "opacity-50"
-                            )}
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              {t.key === 'FollowUpStatus' && (
-                                <select
-                                  value={option.meta?.color || 'slate'}
-                                  onChange={(e) => handleSetStatusColor(option, e.target.value)}
-                                  style={{ backgroundColor: STATUS_COLOR_HEX[option.meta?.color || 'slate'] }}
-                                  className="w-5 h-5 rounded-full border-0 text-[0px] shrink-0 cursor-pointer appearance-none"
-                                  title="Status color"
-                                >
-                                  {STATUS_COLOR_CHOICES.map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
-                              )}
-                              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight truncate">{option.label || option.value}</span>
-                            </div>
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
-                              <button onClick={() => handleMove(t.key, i, -1)} disabled={i === 0} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
-                                <ArrowUp className="w-3.5 h-3.5" />
-                              </button>
-                              <button onClick={() => handleMove(t.key, i, 1)} disabled={i === values.length - 1} className="p-1 text-slate-300 hover:text-[#978C21] disabled:opacity-20 disabled:cursor-not-allowed">
-                                <ArrowDown className="w-3.5 h-3.5" />
-                              </button>
-                              <button onClick={() => handleToggleActive(option)} title={option.status === 'Active' ? 'Deactivate' : 'Activate'} className="p-1 text-slate-300 hover:text-[#978C21]">
-                                <Power className="w-3.5 h-3.5" />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteOption(option)}
-                                className="p-1 text-slate-300 hover:text-red-500 transition-all"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                        {values.length === 0 && (
-                          <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-4 text-center">No values yet</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </motion.div>
+          renderDropdownsBody(null)
         ) : activeTab === 'formbuilder' ? (
           <motion.div 
             key="formbuilder"
@@ -2791,89 +2974,7 @@ export default function Settings() {
               })}
             </div>
           </motion.div>
-        ) : (
-          <motion.div 
-            key="workflow"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden italic"
-          >
-            <div className="p-10 border-b border-slate-50 bg-[#FBFAF8]">
-              <h5 className="text-[13px] font-black text-brand-text uppercase tracking-[0.15em]">Lead Status Pipeline & Workflow Rules</h5>
-              <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-2 not-italic">
-                For each status, control which statuses a lead can move to next, and what information is required to enter that status.
-                By default every status can move to any other status.
-              </p>
-            </div>
-
-            <div className="p-10 space-y-6">
-              {allStatuses.map(status => {
-                const rule = getRuleForStatus(status);
-                const isRestricted = !!(rule?.allowedNextStatuses && rule.allowedNextStatuses.length > 0);
-                return (
-                  <div key={status} className="border border-slate-100 rounded-sm overflow-hidden">
-                    <div className="px-6 py-4 bg-slate-50 flex items-center justify-between flex-wrap gap-3">
-                      <h6 className="text-[12px] font-black text-brand-text uppercase tracking-[0.15em]">{status}</h6>
-                      <div className="flex items-center gap-4 flex-wrap">
-                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
-                          <input type="checkbox" checked={!!rule?.requiresLossReason} onChange={() => handleToggleRequirement(status, 'requiresLossReason')} />
-                          Requires Loss Reason
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
-                          <input type="checkbox" checked={!!rule?.requiresMeetingType} onChange={() => handleToggleRequirement(status, 'requiresMeetingType')} />
-                          Requires Meeting Type
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
-                          <input type="checkbox" checked={!!rule?.requiresFollowUpType} onChange={() => handleToggleRequirement(status, 'requiresFollowUpType')} />
-                          Requires Follow-up Type
-                        </label>
-                        <label className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500 cursor-pointer">
-                          <input type="checkbox" checked={!!rule?.requiresNote} onChange={() => handleToggleRequirement(status, 'requiresNote')} />
-                          Requires Note
-                        </label>
-                      </div>
-                    </div>
-                    <div className="p-6">
-                      <div className="flex items-center justify-between mb-3">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                          Can move to {isRestricted ? `(${rule!.allowedNextStatuses!.length} allowed)` : '(any status - unrestricted)'}
-                        </p>
-                        {isRestricted && (
-                          <button onClick={() => handleResetToUnrestricted(status)} className="text-[9px] font-black text-[#978C21] uppercase tracking-widest hover:underline">
-                            Reset to Unrestricted
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {allStatuses.filter(s => s !== status).map(target => {
-                          const isAllowed = !isRestricted || rule!.allowedNextStatuses!.includes(target);
-                          return (
-                            <button
-                              key={target}
-                              onClick={() => handleToggleNextStatus(status, target)}
-                              className={cn(
-                                "px-3 py-1.5 rounded-sm text-[9px] font-black uppercase tracking-widest border transition-all",
-                                isAllowed ? "bg-[#978C21]/10 text-[#978C21] border-[#978C21]/30" : "bg-slate-50 text-slate-300 border-slate-100"
-                              )}
-                            >
-                              {target}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {allStatuses.length === 0 && (
-                <p className="text-[10px] text-slate-300 uppercase tracking-widest italic py-8 text-center">
-                  No lead statuses found. Add some under Strategy Parameters first.
-                </p>
-              )}
-            </div>
-          </motion.div>
-        )}
+        ) : renderWorkflowBody()}
       </AnimatePresence>
     </div>
   );

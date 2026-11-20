@@ -502,7 +502,9 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
   });
 
   it('T. dashboard client/page does not derive authoritative totals from localStorage/localDb/getLeads()', async () => {
-    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+    // Enterprise Preview: Dashboard.tsx is deleted; the KPI loader lives
+    // in the shared home hook (loadDashboardData then loadQueue).
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/workspace/hooks/useEnterpriseHomeData.ts'), 'utf-8');
     assert.ok(page.includes('dashboardService.getDashboard'));
     assert.ok(page.includes('Authoritative metrics from GET /api/dashboard') || page.includes('getDashboard'));
     // loadDashboardData must call dashboardService, not compute from getLeads first
@@ -512,7 +514,7 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     // made indexOf return -1 and slice(start, -1) silently swallow the whole
     // file tail — the slice assertions only passed by accident. Anchor on the
     // real boundary and fail loudly if it ever disappears again.
-    const loadEnd = page.indexOf('const loadDailyExecution');
+    const loadEnd = page.indexOf('const loadQueue');
     assert.ok(loadStart >= 0 && loadEnd > loadStart, 'loadDashboardData boundary markers must exist');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(loadBody.includes('dashboardService.getDashboard'));
@@ -595,17 +597,20 @@ describe('Dashboard metrics — GET /api/dashboard (Step 5)', () => {
     assert.ok(Array.isArray(res.body.data.trendData));
     assert.equal(res.body.data.trendData.length, 0);
 
-    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+    const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/workspace/hooks/useEnterpriseHomeData.ts'), 'utf-8');
     const loadStart = page.indexOf('const loadDashboardData');
     // The end marker must be a declaration that still exists: it used to be
     // 'const formattedDateRange' (removed by the dashboard redesign), which
     // made indexOf return -1 and slice(start, -1) silently swallow the whole
     // file tail — the slice assertions only passed by accident. Anchor on the
     // real boundary and fail loudly if it ever disappears again.
-    const loadEnd = page.indexOf('const loadDailyExecution');
+    const loadEnd = page.indexOf('const loadQueue');
     assert.ok(loadStart >= 0 && loadEnd > loadStart, 'loadDashboardData boundary markers must exist');
     const loadBody = page.slice(loadStart, loadEnd);
     assert.ok(!loadBody.includes('value: metrics.totalLeads'), 'page still fabricates trend from totalLeads');
-    assert.ok(page.includes('No trend data available') || loadBody.includes('setTrendData([])') || loadBody.includes('metrics.trendData'));
+    // Enterprise Preview: the "No trend data available" empty state died
+    // with Dashboard.tsx (that disjunct is dropped, not weakened). The
+    // home chart is now built from the real follow-up queue buckets.
+    assert.ok(page.includes('setChartDays(buildNext7Days([...today, ...upcoming]))'), 'the home chart must be built from the real queue buckets');
   });
 });

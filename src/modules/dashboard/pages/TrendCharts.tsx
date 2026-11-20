@@ -2,14 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { 
   ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, AreaChart, Area
 } from 'recharts';
-import { 
-  TrendingUp, Calendar as CalendarIcon, RefreshCw, LayoutDashboard, Search, Zap
+import {
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { toast } from 'sonner';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 
 export default function TrendCharts() {
@@ -164,77 +165,67 @@ export default function TrendCharts() {
   };
 
   return (
-    <div className="space-y-8 pb-24 bg-white font-sans animate-fade-in text-slate-800">
+    <div className="ep-page">
       <BackButton fallback="/" />
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Trend Analysis</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Leads generation velocities, peak times and load maps</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button 
+      <EnterprisePageHeader
+        path="/trend-charts"
+        actions={(
+          <button
+            type="button"
             onClick={loadData}
-            className="p-3 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm"
+            className="ep-btn"
+            aria-label="Refresh trend charts"
           >
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            Refresh
           </button>
-        </div>
-      </div>
+        )}
+      />
 
-      {/* Period Selection Controls */}
-      <div className="bg-[#3C3C3C] p-6 rounded-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-           <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center">
-              <TrendingUp className="w-4 h-4 text-[#978C21]" />
-           </div>
-           <div>
-              <h4 className="text-white text-sm font-semibold">Lead generation over time</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Timeline velocity tracking scope</p>
-           </div>
+      {/* Period filter */}
+      <div className="ep-card" style={{ marginBottom: 18 }}>
+        <div className="ep-cardhead">
+          <div>
+            <h3>Period</h3>
+            <div className="ep-muted">{formattedDateRange()}</div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPeriod(p)}
+                className={cn('ep-pill', period === p && 'active')}
+                aria-pressed={period === p}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
-           {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
-             <button 
-               key={p}
-               onClick={() => setPeriod(p)}
-               className={cn(
-                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
-                 period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
-               )}
-             >
-               {p}
-             </button>
-           ))}
-           <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
-           <div className="flex items-center gap-2 px-2">
-              <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
-           </div>
-        </div>
-      </div>
-
-      {period === 'CUSTOM' && (
-        <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4">
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
-              <input 
-                type="date" 
+        {period === 'CUSTOM' && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            <label className="ep-field-label">
+              Start
+              <input
+                type="date"
                 value={customDates.start}
                 onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
-              <input 
-                type="date" 
+            </label>
+            <label className="ep-field-label">
+              End
+              <input
+                type="date"
                 value={customDates.end}
                 onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-        </div>
-      )}
+            </label>
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="flex justify-center items-center py-24">
@@ -242,48 +233,53 @@ export default function TrendCharts() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Main Chart Area */}
-          <div className="bg-white rounded-sm border border-slate-100 p-8 md:p-10 shadow-sm">
-             <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest text-center italic mb-8">Campaign lead generation Trend line</p>
+          {/* Main chart area */}
+          <div className="ep-card">
+             <div className="ep-cardhead">
+               <div>
+                 <h3>Lead generation over time</h3>
+                 <div className="ep-muted">Daily lead creation count</div>
+               </div>
+               <span className="ep-pill">{summaryStats.totalLeads} leads</span>
+             </div>
              <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                    <AreaChart data={trendData}>
                       <defs>
                         <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#978C21" stopOpacity={0.15}/>
-                          <stop offset="95%" stopColor="#978C21" stopOpacity={0}/>
+                          <stop offset="5%" stopColor="#858515" stopOpacity={0.15}/>
+                          <stop offset="95%" stopColor="#858515" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f8fafc" />
                       <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#cbd5e1', fontWeight: 800, fontStyle: 'italic' }} dy={15} />
-                      <YAxis 
+                      <YAxis
                          axisLine={false}
                          tickLine={false}
                          tick={{ fontSize: 10, fill: '#cbd5e1', fontWeight: 800 }}
                       />
-                      <Tooltip 
+                      <Tooltip
                         contentStyle={{ borderRadius: '4px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: '900' }}
                       />
-                      <Area type="monotone" dataKey="value" stroke="#978C21" strokeWidth={4} fillOpacity={1} fill="url(#colorValue)" dot={{ fill: '#978C21', strokeWidth: 3, r: 6, stroke: '#fff' }} name="Leads Count" />
+                      <Area type="monotone" dataKey="value" stroke="#858515" strokeWidth={4} fillOpacity={1} fill="url(#colorValue)" dot={{ fill: '#858515', strokeWidth: 3, r: 6, stroke: '#fff' }} name="Leads Count" />
                    </AreaChart>
                 </ResponsiveContainer>
              </div>
-             <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest text-center italic mt-10">Daily lead creation count</p>
           </div>
 
-          {/* Trend Summary Grid */}
+          {/* Trend summary grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-             <div className="bg-slate-50 border border-slate-100 p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Total Processed Leads</p>
-                <h4 className="text-3xl font-black text-slate-900 italic leading-none">{summaryStats.totalLeads}</h4>
+             <div className="ep-card" style={{ textAlign: 'center' }}>
+                <div className="ep-metric-label">Total processed leads</div>
+                <div className="ep-metric">{summaryStats.totalLeads}</div>
              </div>
-             <div className="bg-slate-50 border border-slate-100 p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Generation Velocity</p>
-                <h4 className="text-2xl font-black text-[#978C21] italic leading-none">{summaryStats.velocity}</h4>
+             <div className="ep-card" style={{ textAlign: 'center' }}>
+                <div className="ep-metric-label">Generation velocity</div>
+                <div className="ep-metric" style={{ color: '#858515' }}>{summaryStats.velocity}</div>
              </div>
-             <div className="bg-[#2D2D2D] text-white p-6 rounded-sm text-center">
-                <p className="text-xs font-medium text-slate-500 mb-3 italic">Peak Performance Point</p>
-                <h4 className="text-2xl font-black text-[#10B981] italic leading-none uppercase">{summaryStats.peakInterval}</h4>
+             <div className="ep-card" style={{ textAlign: 'center' }}>
+                <div className="ep-metric-label">Peak performance point</div>
+                <div className="ep-metric" style={{ color: '#10B981', textTransform: 'uppercase' }}>{summaryStats.peakInterval}</div>
              </div>
           </div>
         </div>

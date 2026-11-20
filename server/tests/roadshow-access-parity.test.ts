@@ -12,11 +12,17 @@
  * is a single shared hook that ORs both, so the row can never appear on
  * one page and vanish on the other for the same user.
  *
+ * Enterprise Preview (2026-11-19): Dashboard.tsx is deleted and the role
+ * homes (src/modules/workspace/pages/*) show no roadshow row at all, so
+ * the Daily Workbench is now the hook's ONLY caller. The parity
+ * invariant therefore narrows to: the Workbench asks the shared hook,
+ * and no home re-implements (or re-introduces) a roadshow read.
+ *
  *   1. Behavior — `resolveMenuVisibility` honours the ANY_ROLE sentinel and
  *      an explicit menuAccess still wins; `hasMenuAccessFor` reads only
  *      explicit grants.
- *   2. Source guards — both callers use the shared hook, and the hook ORs
- *      the two signals.
+ *   2. Source guards — the Workbench uses the shared hook, the hook ORs
+ *      the two signals, and no home touches roadshow access.
  *   3. Contract — a denied read keeps hiding the row (never a fabricated 0).
  */
 import { describe, it } from 'node:test';
@@ -66,8 +72,10 @@ describe('menuVisibility — ANY_ROLE sentinel', () => {
 });
 
 describe('roadshow access — shared predicate', () => {
-  it('D. both pages ask the same hook', () => {
-    for (const file of ['src/modules/dashboard/pages/Dashboard.tsx', 'src/modules/workbench/pages/DailyWorkbench.tsx']) {
+  it('D. the Workbench asks the shared hook (the only remaining caller)', () => {
+    // Dashboard.tsx is deleted (Enterprise Preview 2026-11-19): the
+    // Workbench is the only page that still shows a roadshow row.
+    for (const file of ['src/modules/workbench/pages/DailyWorkbench.tsx']) {
       const src = read(file);
       assert.ok(src.includes("from '../../shared/hooks/useRoadshowAccess'"), `${file} must import the shared hook`);
       assert.ok(src.includes('const canViewRoadshows = useRoadshowAccess();'), `${file} must resolve roadshow access through the hook`);
@@ -83,13 +91,29 @@ describe('roadshow access — shared predicate', () => {
     assert.ok(!hook.includes('fetch('), 'the hook stays a pure predicate — the pages own their reads');
   });
 
-  it('F. a denied/failed read still hides the row (no fabricated 0)', () => {
-    const home = read('src/modules/dashboard/pages/Dashboard.tsx');
-    // Home: the counts state is null when access is absent OR the read fails.
-    assert.ok(home.includes('setRoadshowCounts(null)'), 'a failed read must clear the counts');
-    assert.ok(home.includes('canViewRoadshows'), 'the read is still gated by the predicate');
+  it('F. a denied/failed read still hides the row on My Work (no fabricated 0)', () => {
+    // The Dashboard half of this contract died with Dashboard.tsx
+    // (Enterprise Preview 2026-11-19): the homes show no roadshow row
+    // at all, so there is no Home count left to clear. The Workbench
+    // half is unchanged.
     const workbench = read('src/modules/workbench/pages/DailyWorkbench.tsx');
     assert.ok(workbench.includes('roadshowsToday: canViewRoadshows ? roadshowsToday.length : 0'),
       'My Work falls back to a hidden row, never a stale count');
+  });
+
+  it('G. the Enterprise Preview homes never ask for roadshow access', () => {
+    for (const file of [
+      'src/modules/workspace/pages/EnterpriseHome.tsx',
+      'src/modules/workspace/pages/AdminHome.tsx',
+      'src/modules/workspace/pages/ManagerHome.tsx',
+      'src/modules/workspace/pages/TeamLeadHome.tsx',
+      'src/modules/workspace/pages/AgentHome.tsx',
+      'src/modules/workspace/hooks/useEnterpriseHomeData.ts',
+    ]) {
+      const src = read(file);
+      assert.ok(!src.includes('useRoadshowAccess'), `${file} must not use the roadshow hook`);
+      assert.ok(!src.includes("canAccess('roadshow_follow_up'"), `${file} must not re-implement the roadshow capability check`);
+      assert.ok(!/roadshow/i.test(src), `${file} must not reference roadshows at all`);
+    }
   });
 });

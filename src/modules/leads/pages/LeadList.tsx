@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 import { leadService, type LeadExportScope, type LeadExportBasis } from '../services/leadService';
 import { settingsService } from '../../../services/settingsService';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
@@ -257,9 +258,11 @@ export default function LeadList() {
 
   if (!canAccess('lead_tracking', 'view')) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-100 rounded-sm shadow-sm max-w-xl mx-auto space-y-3">
-        <h2 className="text-xl font-bold text-slate-800">Lead Workspace unavailable</h2>
-        <p className="text-sm text-slate-500">Your current Feature Access does not include the Lead Workspace.</p>
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ textAlign: 'center', marginTop: 48 }}>
+          <h2 className="text-xl font-bold text-slate-800">Lead Workspace unavailable</h2>
+          <p className="ep-muted" style={{ marginTop: 8 }}>Your current Feature Access does not include the Lead Workspace.</p>
+        </div>
       </div>
     );
   }
@@ -276,61 +279,62 @@ export default function LeadList() {
   }
 
   return (
-    <div className="space-y-6 pb-20 bg-white min-h-screen">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-1">
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-800">Lead Workspace</h1>
-            <p className="text-sm text-slate-500 mt-1">Manage assigned leads, update progress, and schedule the next action.</p>
-          </div>
-          <div className="lf-mobile-lead-tools" aria-label="Lead search and filters">
-            <button
-              type="button"
-              onClick={() => setMobileSearchOpen((open) => !open)}
-              className={cn('lf-mobile-lead-tool', mobileSearchOpen && 'is-active')}
-              aria-label={mobileSearchOpen ? 'Close lead search' : 'Search leads'}
-              aria-expanded={mobileSearchOpen}
-              aria-controls="mobile-lead-search"
-            >
-              <Search size={19} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileFiltersOpen((open) => !open)}
-              className={cn('lf-mobile-lead-tool', mobileFiltersOpen && 'is-active')}
-              aria-label={mobileFiltersOpen ? 'Close lead filters' : 'Filter leads'}
-              aria-expanded={mobileFiltersOpen}
-              aria-controls="mobile-lead-filters"
-            >
-              <Filter size={19} />
-            </button>
-          </div>
-        </div>
-        <div className="lf-desktop-lead-actions flex items-center gap-2">
-          <button 
-            onClick={() => {
-              const panelBtn = document.getElementById('btn-advanced-filter-toggle');
-              if (panelBtn) {
-                panelBtn.click();
-                panelBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              }
-            }}
-            className="flex items-center gap-2 px-4 py-2 border border-slate-100 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-sm group cursor-pointer"
-          >
-            <Filter className="w-3.5 h-3.5 text-slate-400 group-hover:text-primary" />
-            Segment Matrix
-          </button>
-          {canExportLeads && (
-            <button
-              onClick={openExportDialog}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-widest transition-all rounded-sm shadow-md"
-            >
-              <Download className="w-3.5 h-3.5 text-[#978C21]" />
-              Export
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/leads"
+        actions={(
+          <>
+            <div className="lf-mobile-lead-tools" aria-label="Lead search and filters">
+              <button
+                type="button"
+                onClick={() => setMobileSearchOpen((open) => !open)}
+                className={cn('lf-mobile-lead-tool', mobileSearchOpen && 'is-active')}
+                aria-label={mobileSearchOpen ? 'Close lead search' : 'Search leads'}
+                aria-expanded={mobileSearchOpen}
+                aria-controls="mobile-lead-search"
+              >
+                <Search size={19} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileFiltersOpen((open) => !open)}
+                className={cn('lf-mobile-lead-tool', mobileFiltersOpen && 'is-active')}
+                aria-label={mobileFiltersOpen ? 'Close lead filters' : 'Filter leads'}
+                aria-expanded={mobileFiltersOpen}
+                aria-controls="mobile-lead-filters"
+              >
+                <Filter size={19} />
+              </button>
+            </div>
+            <div className="lf-desktop-lead-actions flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const panelBtn = document.getElementById('btn-advanced-filter-toggle');
+                  if (panelBtn) {
+                    panelBtn.click();
+                    panelBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }
+                }}
+                className="ep-btn"
+              >
+                <Filter className="w-3.5 h-3.5" />
+                Segment Matrix
+              </button>
+              {canExportLeads && (
+                <button
+                  type="button"
+                  onClick={openExportDialog}
+                  className="ep-btn ep-btn-primary"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      />
 
       {mobileSearchOpen && (
         <div className="lf-mobile-lead-search" id="mobile-lead-search">
@@ -409,23 +413,24 @@ export default function LeadList() {
         onFilterChange={setAdvancedFilteredLeads} 
         allLeads={leads} 
         className={cn(
-          'mx-1 shadow-sm bg-white border border-slate-100 rounded-sm lf-lead-advanced-filters',
+          'ep-card lf-lead-advanced-filters',
           mobileFiltersOpen && 'is-mobile-open',
         )}
         isOpen={mobileFiltersOpen}
         onOpenChange={setMobileFiltersOpen}
       />
 
-      <div className="bg-white rounded-sm border border-slate-100 shadow-sm overflow-hidden mx-1">
-        <div className="lf-desktop-lead-controls p-6 border-b border-slate-50 flex flex-col md:flex-row md:items-center gap-6 bg-[#FBFAF8]">
+      <div className="ep-card ep-tablecard">
+        <div className="lf-desktop-lead-controls p-6 border-b border-slate-50 flex flex-col md:flex-row md:items-center gap-6">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
               type="text" 
-              placeholder="Search Intelligence Matrix..." 
+              placeholder="Search name, phone, area..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-white border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] outline-none transition-all shadow-sm italic placeholder:text-slate-300"
+              className="ep-search"
+              style={{ width: '100%', paddingLeft: 36 }}
             />
           </div>
           <div className="flex items-center gap-4">
@@ -435,7 +440,7 @@ export default function LeadList() {
               value={qualityBand}
               onChange={(e) => setQualityBand(e.target.value)}
               title="Filter by server-computed Lead Quality band"
-              className="bg-white border border-slate-100 rounded-sm px-4 py-2.5 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 outline-none shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
+              className="ep-select"
             >
               <option value="All">All Quality</option>
               <option value="Hot">Hot</option>
@@ -449,7 +454,7 @@ export default function LeadList() {
             <select 
               value={sortLogic}
               onChange={(e) => setSortLogic(e.target.value as any)}
-              className="bg-white border border-slate-100 rounded-sm px-4 py-2.5 text-[10px] font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/5 outline-none shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
+              className="ep-select"
             >
               <option value="Recency">Recency</option>
               <option value="Economic Potential">Economic Potential</option>
@@ -504,17 +509,17 @@ export default function LeadList() {
   )) : <div className="lf-mobile-lead-empty">No prospects match your filters.</div>}
 </div>
 
-<div className="lf-desktop-lead-table overflow-x-auto">
+<div className="lf-desktop-lead-table ep-tablewrap">
   <table className="w-full text-left">
             <thead>
-              <tr className="bg-[#F8F8F5] text-slate-600">
-                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Prospect</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Owner / Next Action</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Campaign / Source</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Current Status</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Quality</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] border-r border-white/5">Last Activity</th>
-                <th className="px-6 py-6 text-[10px] font-black uppercase tracking-[0.2em] text-right">Actions</th>
+              <tr>
+                <th>Prospect</th>
+                <th>Owner / Next Action</th>
+                <th>Campaign / Source</th>
+                <th>Current Status</th>
+                <th>Quality</th>
+                <th>Last Activity</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -676,16 +681,18 @@ export default function LeadList() {
               exit={{ opacity: 0, scale: 0.95, y: 16 }}
               className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
             >
-              <div className="bg-[#3C3C3C] px-6 py-5 flex items-center justify-between">
+              <div className="px-6 py-5 flex items-center justify-between border-b border-slate-100">
                 <div>
-                  <h3 className="text-white text-lg font-black uppercase tracking-tight">Export Leads</h3>
-                  <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Excel workbook — lead details + history</p>
+                  <h3 className="text-lg font-black uppercase tracking-tight text-slate-800">Export Leads</h3>
+                  <p className="ep-muted">Excel workbook — lead details + history</p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => !exportBusy && setExportOpen(false)}
-                  className="p-2 hover:bg-white/5 rounded-sm text-slate-400 hover:text-white transition-all"
+                  className="ep-btn"
+                  aria-label="Close export dialog"
                 >
-                  <XCircle className="w-6 h-6" />
+                  <XCircle className="w-5 h-5" />
                 </button>
               </div>
 
@@ -777,14 +784,14 @@ export default function LeadList() {
                 <button
                   onClick={() => setExportOpen(false)}
                   disabled={exportBusy}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+                  className="ep-btn"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={runExport}
                   disabled={exportBusy}
-                  className="flex items-center gap-2 px-5 py-2 bg-slate-900 hover:bg-black text-white text-[11px] font-black uppercase tracking-widest rounded-sm shadow-md transition-all disabled:opacity-60"
+                  className="ep-btn ep-btn-primary"
                 >
                   <Download className="w-3.5 h-3.5 text-[#978C21]" />
                   {exportBusy ? 'Preparing…' : 'Download Excel'}

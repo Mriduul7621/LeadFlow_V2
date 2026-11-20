@@ -2,14 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip
 } from 'recharts';
-import { 
-  Database, Calendar as CalendarIcon, RefreshCw, LayoutDashboard, Filter, ChevronRight
+import {
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { useAuthStore } from '../../auth/store/authStore';
 import { Lead } from '../../shared/types';
 import { leadService } from '../../leads/services/leadService';
 import { toast } from 'sonner';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 
 export default function CampaignBreakdown() {
@@ -111,84 +112,74 @@ export default function CampaignBreakdown() {
   };
 
   return (
-    <div className="space-y-8 pb-24 bg-white font-sans text-slate-800 animate-fade-in">
+    <div className="ep-page">
       <BackButton fallback="/" />
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-slate-100 pb-8">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800 leading-none">Campaign Breakdown</h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em] mt-3 italic">Campaign distributions, statuses, conversion rates and shares</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button 
+      <EnterprisePageHeader
+        path="/campaign-breakdown"
+        actions={(
+          <button
+            type="button"
             onClick={loadData}
-            className="p-3 border border-slate-100 rounded-sm hover:text-[#978C21] hover:bg-slate-50 transition-all shadow-sm"
+            className="ep-btn"
+            aria-label="Refresh campaign breakdown"
           >
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            Refresh
           </button>
-        </div>
-      </div>
+        )}
+      />
 
-      {/* Period Selection */}
-      <div className="bg-[#3C3C3C] p-6 rounded-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-           <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center">
-              <Database className="w-5 h-5 text-[#978C21]" />
-           </div>
-           <div>
-              <h4 className="text-white text-sm font-semibold">Campaign-wise lead distribution</h4>
-              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Campaign details reporting scope</p>
-           </div>
+      {/* Period filter */}
+      <div className="ep-card" style={{ marginBottom: 18 }}>
+        <div className="ep-cardhead">
+          <div>
+            <h3>Period</h3>
+            <div className="ep-muted">{formattedDateRange()}</div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPeriod(p)}
+                className={cn('ep-pill', period === p && 'active')}
+                aria-pressed={period === p}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center flex-wrap gap-1 bg-white/5 p-1 rounded-sm">
-           {['TODAY', 'THIS MONTH', 'LAST MONTH', 'CUSTOM'].map(p => (
-             <button 
-               key={p}
-               onClick={() => setPeriod(p)}
-               className={cn(
-                 "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
-                 period === p ? "bg-white text-brand-text" : "text-slate-400 hover:text-white"
-               )}
-             >
-               {p}
-             </button>
-           ))}
-           <div className="hidden md:block h-6 w-px bg-white/10 mx-2" />
-           <div className="flex items-center gap-2 px-2">
-              <CalendarIcon className="w-3 h-3 text-slate-400" />
-              <span className="text-xs font-medium text-slate-500">{formattedDateRange()}</span>
-           </div>
-        </div>
-      </div>
-
-      {period === 'CUSTOM' && (
-        <div className="bg-slate-50 px-6 py-4 border border-slate-100 rounded-sm flex items-center gap-4">
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">Start:</span>
-              <input 
-                type="date" 
+        {period === 'CUSTOM' && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            <label className="ep-field-label">
+              Start
+              <input
+                type="date"
                 value={customDates.start}
                 onChange={(e) => setCustomDates({ ...customDates, start: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-           <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">End Date:</span>
-              <input 
-                type="date" 
+            </label>
+            <label className="ep-field-label">
+              End
+              <input
+                type="date"
                 value={customDates.end}
                 onChange={(e) => setCustomDates({ ...customDates, end: e.target.value })}
-                className="bg-white border border-slate-200 rounded-sm px-2 py-1 text-[10px] font-black uppercase outline-none focus:border-[#978C21]"
+                className="ep-search"
               />
-           </div>
-        </div>
-      )}
+            </label>
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="flex justify-center items-center py-24">
           <div className="w-12 h-12 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin"></div>
         </div>
       ) : (
-        <div className="bg-white rounded-sm border border-slate-100 p-8 md:p-10 shadow-sm">
+        <div className="ep-card">
            <div className="flex flex-col lg:flex-row items-center justify-between gap-16">
               {/* Left Side: Interactive Pie Chart Dial */}
               <div className="h-80 w-80 relative flex-shrink-0 flex items-center justify-center">

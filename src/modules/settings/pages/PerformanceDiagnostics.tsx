@@ -28,6 +28,7 @@ import {
   summarizeApiDiagnostics,
 } from '../../shared/api/diagnostics';
 import { useAuthStore } from '../../auth/store/authStore';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { resolveAdminAccess } from '../../auth/components/AdminRoute';
 
 /**
@@ -273,30 +274,22 @@ export default function PerformanceDiagnostics() {
   };
 
   return (
-    <div className="mx-auto max-w-xl space-y-4 px-3 py-4 sm:px-4" data-testid="performance-diagnostics">
-      {/* Header */}
-      <div className="flex items-start gap-3">
-        <div className="rounded-[10px] bg-[#978C21]/10 p-2">
-          <Gauge size={20} className="text-[#978C21]" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-lg font-bold text-stone-900">Performance Diagnostics</h1>
-          <p className="text-xs text-stone-500">
-            Admin-only · read-only · temporary tool. Session started {formatTimestamp(summary.sessionStartedAt)}.
-          </p>
-        </div>
-        <span
-          className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
-            isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-          }`}
-        >
-          {isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
-          {isOnline ? 'online' : 'offline'}
-        </span>
-      </div>
+    <div className="ep-page" style={{ maxWidth: 640 }} data-testid="performance-diagnostics">
+      <EnterprisePageHeader
+        path="/settings/performance-diagnostics"
+        actions={(
+          <span className="ep-pill" style={isOnline ? { color: '#047857' } : { color: '#dc2626' }}>
+            {isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {isOnline ? 'online' : 'offline'}
+          </span>
+        )}
+      />
+      <p className="ep-muted">
+        Admin-only · read-only · temporary tool. Session started {formatTimestamp(summary.sessionStartedAt)}.
+      </p>
 
       {/* Summary */}
-      <div className="rounded-[12px] border border-stone-100 bg-white p-3">
+      <div className="ep-card" style={{ padding: 12 }}>
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-[10px] bg-stone-50 p-2">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">Slowest request</p>
@@ -341,21 +334,21 @@ export default function PerformanceDiagnostics() {
         <button
           type="button"
           onClick={handleCopy}
-          className="inline-flex items-center gap-1.5 rounded-[10px] bg-[#978C21] px-3 py-2 text-xs font-semibold text-white active:opacity-80"
+          className="ep-btn ep-btn-primary"
         >
           <Copy size={13} /> Copy summary
         </button>
         <button
           type="button"
           onClick={handleRefresh}
-          className="inline-flex items-center gap-1.5 rounded-[10px] border border-stone-200 bg-white px-3 py-2 text-xs font-semibold text-stone-700 active:opacity-80"
+          className="ep-btn"
         >
           <RefreshCw size={13} /> Refresh
         </button>
         <button
           type="button"
           onClick={handleClear}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-[10px] border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 active:opacity-80"
+          className="ep-btn ep-btn-danger" style={{ marginLeft: 'auto' }}
         >
           <Trash2 size={13} /> Clear diagnostics
         </button>
@@ -371,7 +364,7 @@ export default function PerformanceDiagnostics() {
         </div>
 
         {entries.length === 0 && (
-          <div className="rounded-[12px] border border-dashed border-stone-200 bg-white p-6 text-center">
+          <div className="ep-empty" style={{ padding: '24px 16px' }}>
             <Timer size={20} className="mx-auto mb-2 text-stone-300" />
             <p className="text-sm font-medium text-stone-600">No API requests recorded yet.</p>
             <p className="mt-1 text-xs text-stone-400">
@@ -392,7 +385,7 @@ export default function PerformanceDiagnostics() {
       </div>
 
       {/* Privacy note */}
-      <div className="flex items-start gap-2 rounded-[12px] border border-stone-100 bg-white p-3">
+      <div className="ep-card flex items-start gap-2" style={{ padding: 12 }}>
         <ShieldCheck size={16} className="mt-0.5 shrink-0 text-green-600" />
         <p className="text-[11px] leading-relaxed text-stone-500">
           Timings only. Tokens, passwords, request/response bodies and customer data are never

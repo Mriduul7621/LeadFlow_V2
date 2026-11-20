@@ -36,6 +36,7 @@ import { leadService } from '../../leads/services/leadService';
 import { orgService } from '../services/orgService';
 import { UserRole, User, Lead } from '../../shared/types';
 import { toast } from 'sonner';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
 
 // Auto-generated organogram node (server derives the tree from users.manager_id)
@@ -296,82 +297,74 @@ export default function TeamHierarchy() {
   };
 
   return (
-    <div className="space-y-6 pb-24 bg-white font-sans min-h-screen">
+    <div className="ep-page">
       <BackButton fallback="/" />
-      {/* 1. Header Section */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 border-b border-slate-100 pb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">
-            {t('teamHierarchyTitle')}
-          </h1>
-          <p className="text-slate-400 font-bold text-[10px] uppercase tracking-[0.25em] mt-1.5 italic">
-            Establish dynamic department levels, designations, and employee routing maps
-          </p>
-        </div>
-
-        {/* Top Control Bar */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Tab Selection toggle */}
-          <div className="flex p-1 bg-slate-100 rounded-lg border border-slate-200">
-            <button
-              onClick={() => setActiveTab('chart')}
-              className={cn(
-                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
-                activeTab === 'chart' 
-                  ? "bg-white text-[#978C21] shadow-xs" 
-                  : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              {t('orgChart')}
-            </button>
-            <button
-              onClick={() => setActiveTab('list')}
-              className={cn(
-                "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
-                activeTab === 'list' 
-                  ? "bg-white text-[#978C21] shadow-xs" 
-                  : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <Users className="w-3.5 h-3.5" />
-              {t('listView')}
-            </button>
-          </div>
-
-          {/* Search tool for Chart */}
-          {activeTab === 'chart' && (
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg w-64 shadow-xs">
-              <Search className="w-3.5 h-3.5 text-slate-400" />
-              <input 
-                type="text" 
-                placeholder={t("searchPlaceholder")} 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-transparent border-none text-[11px] font-bold uppercase text-slate-700 placeholder-slate-400 outline-none w-full"
-              />
-              {searchQuery && (
-                <button onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600">
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+      <EnterprisePageHeader
+        path="/team/organogram"
+        actions={(
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Tab selection toggle */}
+            <div className="flex p-1 bg-slate-100 rounded-lg border border-slate-200">
+              <button
+                onClick={() => setActiveTab('chart')}
+                className={cn(
+                  "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
+                  activeTab === 'chart'
+                    ? "bg-white text-[#978C21] shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                {t('orgChart')}
+              </button>
+              <button
+                onClick={() => setActiveTab('list')}
+                className={cn(
+                  "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
+                  activeTab === 'list'
+                    ? "bg-white text-[#978C21] shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                <Users className="w-3.5 h-3.5" />
+                {t('listView')}
+              </button>
             </div>
-          )}
 
-          {/* Refresh organogram */}
-          {activeTab === 'chart' && (
-            <button
-              type="button"
-              onClick={() => loadAllData()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[#978C21] hover:bg-[#857b1c] text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all"
-              title="The chart is generated automatically from reporting links"
-            >
-              <RotateCcw className="w-4 h-4" />
-              Refresh
-            </button>
-          )}
-        </div>
-      </div>
+            {/* Search tool for Chart */}
+            {activeTab === 'chart' && (
+              <div className="flex items-center gap-2">
+                <Search className="w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder={t("searchPlaceholder")}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="ep-search"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600" aria-label="Clear search">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Refresh organogram */}
+            {activeTab === 'chart' && (
+              <button
+                type="button"
+                onClick={() => loadAllData()}
+                className="ep-btn ep-btn-primary"
+                title="The chart is generated automatically from reporting links"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Refresh
+              </button>
+            )}
+          </div>
+        )}
+      />
 
       {/* Loading animation */}
       {loading ? (
@@ -389,7 +382,7 @@ export default function TeamHierarchy() {
               className="space-y-4"
             >
               {/* Zoom and Drag notice toolbar */}
-              <div className="flex items-center justify-between bg-slate-50 border border-slate-200 px-4 py-3 rounded-xl">
+              <div className="ep-card flex items-center justify-between" style={{ padding: '12px 16px' }}>
                 <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2">
                   <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
                   ← Scroll horizontally to explore chart →
@@ -425,7 +418,7 @@ export default function TeamHierarchy() {
               </div>
 
               {/* main Tree Stage */}
-              <div className="w-full overflow-auto max-h-[75vh] border border-slate-100 bg-[#F9F9F4] rounded-2xl shadow-inner p-12 custom-scrollbar">
+              <div className="ep-card w-full overflow-auto custom-scrollbar" style={{ maxHeight: '75vh', background: '#F9F9F4', padding: 48 }}>
                 <div 
                   className="org-tree transition-transform duration-200 ease-out" 
                   style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
@@ -454,8 +447,9 @@ export default function TeamHierarchy() {
               className="space-y-6"
             >
               {teamMembers.length === 0 ? (
-                <div className="text-center py-24 border border-dashed border-slate-200 rounded-2xl bg-[#F9F9F4] text-slate-400 font-bold uppercase tracking-widest text-[11px] italic">
-                  No direct reports in your reporting line.
+                <div className="ep-card" style={{ textAlign: 'center', padding: '48px 16px' }}>
+                  <p className="ep-empty">
+                  No direct reports in your reporting line.</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -480,7 +474,7 @@ export default function TeamHierarchy() {
                           role: member.user.role
                         }).then(leads => setSelectedMemberLeads(leads)).catch(() => setSelectedMemberLeads([]));
                       }}
-                      className="bg-white border border-slate-200/80 hover:border-[#978C21]/30 hover:shadow-md hover:scale-[1.01] transition-all rounded-xl p-6 cursor-pointer shadow-xs flex flex-col justify-between group"
+                      className="ep-card ep-kpi-btn flex flex-col justify-between group"
                     >
                       <div>
                         <div className="flex items-center justify-between mb-4">
@@ -587,26 +581,26 @@ export default function TeamHierarchy() {
                   <>
                     {/* Stats bento layout */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-                      <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-xl text-center">
+                      <div className="ep-card" style={{ padding: 12, textAlign: 'center' }}>
                         <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">Assigned Leads</p>
                         <h4 className="text-2xl font-extrabold text-slate-800 leading-none">{selectedMemberStats?.totalLeads ?? 0}</h4>
                       </div>
-                      <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-xl text-center">
+                      <div className="ep-card" style={{ padding: 12, textAlign: 'center' }}>
                         <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">Contacted</p>
                         <h4 className="text-2xl font-extrabold text-brand-blue leading-none">{selectedMemberStats?.contactedCalls ?? 0}</h4>
                       </div>
-                      <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-xl text-center">
+                      <div className="ep-card" style={{ padding: 12, textAlign: 'center' }}>
                         <p className="text-[8px] font-bold text-emerald-600 uppercase tracking-widest mb-1">Collected NCP</p>
                         <h4 className="text-2xl font-extrabold text-emerald-600 leading-none">৳{(selectedMemberStats?.collectedNCP ?? 0).toLocaleString()}</h4>
                       </div>
-                      <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-xl text-center">
+                      <div className="ep-card" style={{ padding: 12, textAlign: 'center' }}>
                         <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">Conversion %</p>
                         <h4 className="text-2xl font-extrabold text-slate-800 leading-none">{selectedMemberStats?.conversionRate ?? '0%'}</h4>
                       </div>
                     </div>
 
                     {/* Member Profile Details card */}
-                    <div className="p-5 border border-slate-200/60 rounded-xl bg-slate-50/50 space-y-3.5 mb-6 text-xs text-slate-600">
+                    <div className="ep-card space-y-3.5 mb-6 text-xs text-slate-600">
                       <h4 className="text-sm font-semibold text-slate-700">{t('profileSummary')}</h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="flex items-center gap-2">
@@ -634,32 +628,32 @@ export default function TeamHierarchy() {
                         {t('latestLeads')}
                       </h4>
                       
-                      <div className="border border-slate-200/80 rounded-xl overflow-hidden shadow-xs bg-white">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left">
-                            <thead className="bg-[#FBFAF8] text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200/60">
+                      <div className="ep-card ep-tablecard">
+                        <div className="ep-tablewrap">
+                          <table>
+                            <thead>
                               <tr>
-                                <th className="px-5 py-3.5">Client Name</th>
-                                <th className="px-5 py-3.5">Area</th>
-                                <th className="px-5 py-3.5 text-right">NCP Collected</th>
-                                <th className="px-5 py-3.5 text-center">Status</th>
+                                <th>Client Name</th>
+                                <th>Area</th>
+                                <th style={{ textAlign: 'right' }}>NCP Collected</th>
+                                <th style={{ textAlign: 'center' }}>Status</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-100 text-[11px]">
+                            <tbody>
                               {selectedMemberLeads.length === 0 ? (
                                 <tr>
-                                  <td colSpan={4} className="text-center py-12 text-slate-400 font-bold uppercase tracking-widest text-[9px] italic">
+                                  <td colSpan={4} className="ep-td-empty">
                                     No active lead rows registered
                                   </td>
                                 </tr>
                               ) : (
                                 selectedMemberLeads.slice(0, 10).map((lead, index) => (
-                                  <tr key={index} className="hover:bg-slate-50/40 transition-colors">
-                                    <td className="px-5 py-3 font-bold text-slate-700">{lead.prospectName || 'Unknown'}</td>
-                                    <td className="px-5 py-3 text-slate-400 font-medium">{lead.area}</td>
-                                    <td className="px-5 py-3 font-extrabold text-slate-800 text-right">৳{(lead.collectedNCP || 0).toLocaleString()}</td>
-                                    <td className="px-5 py-3 text-center">
-                                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-sm text-[8px] font-black uppercase">
+                                  <tr key={index}>
+                                    <td><strong>{lead.prospectName || 'Unknown'}</strong></td>
+                                    <td>{lead.area}</td>
+                                    <td style={{ textAlign: 'right' }}><strong>৳{(lead.collectedNCP || 0).toLocaleString()}</strong></td>
+                                    <td style={{ textAlign: 'center' }}>
+                                      <span className="ep-pill">
                                         {lead.currentStatus}
                                       </span>
                                     </td>
@@ -682,7 +676,8 @@ export default function TeamHierarchy() {
                     setSelectedMember(null);
                     setSelectedMemberStats(null);
                   }}
-                  className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase tracking-widest text-[10px] rounded-lg shadow-md transition-colors"
+                  className="ep-btn ep-btn-primary"
+                  style={{ width: '100%', justifyContent: 'center', padding: '12px' }}
                 >
                   {t('closeDetails')}
                 </button>

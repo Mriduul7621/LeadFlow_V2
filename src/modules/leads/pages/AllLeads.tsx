@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Search, 
-  Trash2, 
-  Edit3, 
-  UserPlus, 
-  ChevronRight, 
-  Database,
+import {
+  Search,
+  Trash2,
+  Edit3,
+  UserPlus,
+  ChevronRight,
   Calendar,
   AlertTriangle,
   X,
@@ -15,12 +14,10 @@ import {
   User,
   MapPin,
   Clipboard,
-  Sliders,
   DollarSign,
   History,
-  TrendingUp,
-  Inbox,
-  UserCheck
+  UserCheck,
+  RefreshCw
 } from 'lucide-react';
 import { useAuthStore } from '../../auth/store/authStore';
 import { cn } from '../../../lib/utils';
@@ -34,6 +31,7 @@ import { toast } from 'sonner';
 import AdvancedFilterPanel from '../../shared/components/AdvancedFilterPanel';
 import NoAccessYet from '../../shared/components/NoAccessYet';
 import { isForbiddenError } from '../../shared/api/forbidden';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 export default function AllLeads() {
   const { user } = useAuthStore();
@@ -237,7 +235,8 @@ export default function AllLeads() {
 
   if (!canAccess('all_leads', 'view')) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white border border-slate-100 rounded-sm shadow-xs max-w-xl mx-auto space-y-6 animate-in fade-in duration-300">
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ textAlign: 'center', marginTop: 48 }}>
         <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-[#978C21] shrink-0 transform hover:rotate-12 transition-transform">
           <AlertTriangle className="w-8 h-8" />
         </div>
@@ -250,6 +249,7 @@ export default function AllLeads() {
         </div>
         <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none">
           Feature Access: all_leads · canonical leads.view required
+        </div>
         </div>
       </div>
     );
@@ -345,23 +345,20 @@ export default function AllLeads() {
   const uniqueCampaignsCount = Array.from(new Set(leads.map(l => l.campaignName).filter(Boolean))).length;
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto">
-      {/* Title & Top Meta Row */}
-      <div className="border-b border-slate-100 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-           <span className="text-[9px] font-black tracking-[0.25em] text-[#978C21] uppercase italic">Lead intake and routing console</span>
-           <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight italic mt-1">Lead Pool</h1>
-           <p className="text-xs text-slate-500 mt-1">Route intake, review server-visible lead records, correct permitted details, and open the operational workspace.</p>
-        </div>
-        <div className="flex gap-3">
-          <button 
-             onClick={loadData}
-             className="px-5 py-3 border border-slate-200 hover:bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-700 bg-white shadow-sm rounded-sm transition-all flex items-center gap-2"
+    <div className="ep-page">
+      <EnterprisePageHeader
+        path="/leads/all"
+        actions={(
+          <button
+            type="button"
+            onClick={loadData}
+            className="ep-btn"
           >
-             🔄 Reload Data
+            <RefreshCw className="w-4 h-4" />
+            Reload data
           </button>
-        </div>
-      </div>
+        )}
+      />
 
       {/* Canonical intake tabs. Classification is based only on assignedTo. */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -375,11 +372,10 @@ export default function AllLeads() {
             type="button"
             onClick={() => { setPoolTab(tab.id); setSelectedLeadIds([]); }}
             className={cn(
-              'text-left p-4 border rounded-sm transition-all',
-              poolTab === tab.id
-                ? 'border-[#978C21] bg-[#978C21]/5 shadow-sm'
-                : 'border-slate-100 bg-white hover:border-slate-300'
+              'ep-card ep-kpi-btn',
+              poolTab === tab.id && 'active'
             )}
+            aria-pressed={poolTab === tab.id}
           >
             <div className="flex items-center justify-between gap-3">
               <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">{tab.label}</span>
@@ -392,46 +388,34 @@ export default function AllLeads() {
 
       {/* Lead Pool summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-         <div className="p-6 bg-[#FBFAF8] border border-slate-100 rounded-sm shadow-sm relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-5 text-slate-900 group-hover:scale-110 transition-transform">
-               <Database className="w-16 h-16" />
-            </div>
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">Pool Records</p>
-            <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{totalLeadsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">uploaded entities cataloged</span>
+         <div className="ep-card">
+            <div className="ep-metric-label">Pool records</div>
+            <div className="ep-metric">{totalLeadsCount}</div>
+            <div className="ep-trend">leads in the pool</div>
          </div>
 
-         <div className="p-6 bg-amber-50/50 border border-amber-100 rounded-sm shadow-sm relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-5 text-amber-500">
-               <Inbox className="w-16 h-16" />
-            </div>
-            <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest italic">Pending Assignment</p>
-            <p className="text-3xl font-black text-amber-800 italic tracking-tighter leading-none mt-2">{unassignedLeadsCount}</p>
-            <span className="text-[9px] text-amber-600 font-bold mt-2 block lowercase italic">requires operator routing</span>
+         <div className="ep-card">
+            <div className="ep-metric-label">Pending assignment</div>
+            <div className="ep-metric" style={{ color: '#b45309' }}>{unassignedLeadsCount}</div>
+            <div className="ep-trend warn">waiting to be assigned</div>
          </div>
 
-         <div className="p-6 bg-[#978C21]/5 border border-[#978C21]/10 rounded-sm shadow-sm relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-5 text-[#978C21]">
-               <Sliders className="w-16 h-16" />
-            </div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest italic">Live Campaign Channels</p>
-            <p className="text-3xl font-black text-slate-900 italic tracking-tighter leading-none mt-2">{uniqueCampaignsCount}</p>
-            <span className="text-[9px] text-[#978C21] font-bold mt-2 block lowercase italic">active generation funnels</span>
+         <div className="ep-card">
+            <div className="ep-metric-label">Live campaign channels</div>
+            <div className="ep-metric">{uniqueCampaignsCount}</div>
+            <div className="ep-trend">campaigns in this pool</div>
          </div>
 
-         <div className="p-6 bg-emerald-50/50 border border-emerald-100 rounded-sm shadow-sm relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-5 text-emerald-500">
-               <TrendingUp className="w-16 h-16" />
-            </div>
-            <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest italic">Converted Acquisitions</p>
-            <p className="text-3xl font-black text-emerald-900 italic tracking-tighter leading-none mt-2">{conversionRateCount}</p>
-            <span className="text-[9px] text-emerald-600 font-bold mt-2 block lowercase italic">converted pipeline targets</span>
+         <div className="ep-card">
+            <div className="ep-metric-label">Converted acquisitions</div>
+            <div className="ep-metric" style={{ color: '#047857' }}>{conversionRateCount}</div>
+            <div className="ep-trend">converted leads</div>
          </div>
       </div>
 
       {/* Secondary danger zone: destructive purge is never the primary workflow. */}
       {canPurgeCampaign && (
-      <div className="p-6 bg-red-50/30 border border-red-100/60 rounded-sm shadow-sm">
+      <div className="ep-card" style={{ borderColor: '#e8b4b0', background: '#fdf6f5' }}>
          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="space-y-1 max-w-2xl">
                <div className="flex items-center gap-2">
@@ -445,7 +429,7 @@ export default function AllLeads() {
                <select
                  value={targetCampaignToDelete}
                  onChange={(e) => setTargetCampaignToDelete(e.target.value)}
-                 className="bg-white border border-slate-200 text-[11px] font-black uppercase tracking-wider px-4 py-3 rounded-sm focus:ring-1 focus:ring-red-500 outline-none"
+                 className="ep-select"
                >
                   <option value="">-- CHOOSE TARGET CAMPAIGN --</option>
                   {Array.from(new Set(leads.map(l => l.campaignName).filter(Boolean))).map(camp => (
@@ -461,7 +445,7 @@ export default function AllLeads() {
                    }
                    setIsConfirmDeleteCampOpen(true);
                  }}
-                 className="px-5 py-3.5 bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-md flex items-center gap-2"
+                 className="ep-btn ep-btn-danger"
                >
                   <Trash2 className="w-3.5 h-3.5" />
                   Erase Lead
@@ -475,13 +459,13 @@ export default function AllLeads() {
       <AdvancedFilterPanel 
         onFilterChange={setAdvancedFilteredLeads} 
         allLeads={leads} 
-        className="shadow-sm bg-white"
+        className="ep-card"
       />
 
       {/* Main Grid Workspace */}
-      <div className="bg-white border border-slate-100/80 rounded-sm shadow-sm overflow-hidden">
+      <div className="ep-card ep-tablecard">
          {/* Live Search and Control Panel */}
-         <div className="p-6 border-b border-slate-55 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
+         <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="relative flex-1 max-w-md">
                <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
                <input 
@@ -489,7 +473,8 @@ export default function AllLeads() {
                  placeholder="Search by candidate name, mobile, active assignee, or campaign name..."
                  value={searchQuery}
                  onChange={(e) => setSearchQuery(e.target.value)}
-                 className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200/85 text-[11px] font-black uppercase tracking-wider focus:ring-1 focus:ring-[#978C21] rounded-sm placeholder:opacity-50 outline-none"
+                 className="ep-search"
+                 style={{ width: '100%', paddingLeft: 36 }}
                />
             </div>
             <div className="text-[10px] text-slate-400 font-extrabold uppercase italic tracking-widest">
@@ -513,7 +498,7 @@ export default function AllLeads() {
                   <select
                     value={bulkAssigneeId}
                     onChange={(e) => setBulkAssigneeId(e.target.value)}
-                    className="bg-white border border-slate-200 text-[10px] font-black uppercase py-2 px-3 rounded-sm outline-none focus:ring-1 focus:ring-[#978C21] cursor-pointer"
+                    className="ep-select"
                   >
                      <option value="">-- SELECT RE-ROUTE HANDLER --</option>
                      <option value="unassign">-- MARK AS UNASSIGNED --</option>
@@ -526,13 +511,13 @@ export default function AllLeads() {
                   <button
                     onClick={handleBulkAssign}
                     disabled={bulkAssigning}
-                    className="bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-[0.15em] px-5 py-2.5 rounded-sm transition-all disabled:opacity-50 cursor-pointer shadow-md"
+                    className="ep-btn ep-btn-primary"
                   >
                      {bulkAssigning ? 'Synchronizing edits...' : 'Assign Selection'}
                   </button>
                   <button
                     onClick={() => setSelectedLeadIds([])}
-                    className="text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-widest px-2 cursor-pointer border-l border-slate-200 pl-4 py-1"
+                    className="ep-btn"
                   >
                      Cancel Selection
                   </button>
@@ -541,11 +526,11 @@ export default function AllLeads() {
          )}
 
          {/* Core Master Table View */}
-         <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+         <div className="ep-tablewrap">
+            <table>
                <thead>
-                  <tr className="border-b border-slate-100 bg-[#FBFAF8] text-[9px] font-black text-slate-400 uppercase tracking-widest italic divide-x divide-slate-100/50">
-                     <th className="p-4 px-6 text-center select-none w-14">
+                  <tr>
+                     <th style={{ textAlign: 'center' }} className="select-none w-14">
                         <input 
                           type="checkbox"
                           checked={canAssign && filteredLeads.length > 0 && selectedLeadIds.length === filteredLeads.length}
@@ -561,13 +546,13 @@ export default function AllLeads() {
                           className="cursor-pointer accent-[#978C21] h-3.5 w-3.5 rounded border-slate-300 focus:ring-0 disabled:cursor-not-allowed disabled:opacity-40"
                         />
                      </th>
-                     <th className="p-4 px-6 text-slate-900">Demographic Name</th>
-                     <th className="p-4 px-6 text-slate-900">Mobile Connection</th>
-                     <th className="p-4 px-6 text-slate-900">Campaign</th>
-                     <th className="p-4 px-6 text-slate-[#978C21]">Assignee ID / Status (Tab)</th>
-                     <th className="p-4 px-6 text-slate-900">Current Status</th>
-                     <th className="p-4 px-6 text-slate-900">Upload Date</th>
-                     <th className="p-4 px-6 text-center text-slate-900">Control Actions</th>
+                     <th>Demographic name</th>
+                     <th>Mobile connection</th>
+                     <th>Campaign</th>
+                     <th>Assignee ID / Status</th>
+                     <th>Current status</th>
+                     <th>Upload date</th>
+                     <th style={{ textAlign: 'center' }}>Control actions</th>
                   </tr>
                </thead>
                <tbody className="divide-y divide-slate-50 text-[11px] text-slate-700 font-medium">
@@ -579,14 +564,14 @@ export default function AllLeads() {
                      </tr>
                   ) : loading ? (
                      <tr>
-                        <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
-                           🔄 Cataloging operational records data...
+                        <td colSpan={8} className="ep-td-empty">
+                           Loading lead records…
                         </td>
                      </tr>
                   ) : filteredLeads.length === 0 ? (
                      <tr>
-                        <td colSpan={8} className="p-12 text-center text-[10px] text-slate-400 font-black uppercase tracking-widest italic leading-none">
-                           📭 No matching lead registers discovered
+                        <td colSpan={8} className="ep-td-empty">
+                           No matching leads found
                         </td>
                      </tr>
                   ) : (
@@ -642,7 +627,7 @@ export default function AllLeads() {
                                     <select
                                       value={inlineAssigneeId}
                                       onChange={(e) => setInlineAssigneeId(e.target.value)}
-                                      className="bg-white border border-slate-200 text-[10px] font-black uppercase tracking-tight py-1.5 px-2 rounded-sm focus:ring-1 focus:ring-[#978C21] outline-none"
+                                      className="ep-select"
                                     >
                                        <option value="unassign">-- UNASSIGNED --</option>
                                        {pickerUsersFor(inlineAssigneeId).map(u => (
@@ -735,7 +720,7 @@ export default function AllLeads() {
       {/* Global Campaign Destruction Safeguard Confirmation Modal */}
       {isConfirmDeleteCampOpen && (
          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50">
-            <div className="bg-white rounded-sm border border-slate-100 p-8 shadow-2xl max-w-md w-full animate-in fade-in zoom-in-95 duration-200">
+            <div className="ep-card max-w-md w-full animate-in fade-in zoom-in-95 duration-200" style={{ padding: 24 }}>
                <div className="flex items-start gap-4">
                   <div className="p-3 bg-red-100 text-red-600 rounded-sm">
                      <AlertTriangle className="w-6 h-6" />
@@ -754,7 +739,7 @@ export default function AllLeads() {
                           type="password"
                           value={deleteConfirmPassword}
                           onChange={(e) => setDeleteConfirmPassword(e.target.value)}
-                          className="w-full px-4 py-3 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-tight focus:ring-1 focus:ring-[#978C21] focus:border-[#978C21] outline-none animate-none"
+                          className="ep-input"
                           placeholder="ENTER YOUR PASSWORD"
                         />
                      </div>

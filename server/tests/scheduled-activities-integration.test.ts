@@ -11,7 +11,9 @@
  *   - Visibility: Own, DownTeam, Organization
  *   - Validation: missing lead, invalid type/status/date, authz
  *   - Range filtering (from/to) + leadId + type + status
- *   - Client source guards (TaskCalendar + Dashboard use scheduled_activities)
+ *   - Client source guards (TaskCalendar uses scheduled_activities;
+ *     the Enterprise Preview homes load no scheduled activities and
+ *     never fetch the full lead list)
  */
 
 import { describe, it, before, after, beforeEach } from 'node:test';
@@ -317,12 +319,13 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
     }
   });
 
-  it('J. client source guards — TaskCalendar and Dashboard use scheduled_activities', async () => {
-    const dash = fs.readFileSync(path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx'), 'utf-8');
+  it('J. client source guards — TaskCalendar uses scheduled_activities', async () => {
+    // Dashboard.tsx is deleted (Enterprise Preview 2026-11-19): the
+    // role homes load no scheduled activities, so the Dashboard
+    // asserts are gone with it. TaskCalendar + the service are
+    // unchanged.
     const cal = fs.readFileSync(path.join(process.cwd(), 'src/modules/auth/pages/TaskCalendar.tsx'), 'utf-8');
     const svc = fs.readFileSync(path.join(process.cwd(), 'src/modules/scheduledActivities/services/scheduledActivityService.ts'), 'utf-8');
-    assert.ok(dash.includes('scheduledActivityService'), 'Dashboard must import scheduledActivityService');
-    assert.ok(dash.includes('scheduled_activities'), 'Dashboard must reference scheduled_activities');
     assert.ok(cal.includes('scheduledActivityService'), 'TaskCalendar must import scheduledActivityService');
     assert.ok(!cal.includes('leadService.getLeads'), 'TaskCalendar must not derive events from leadService.getLeads');
     assert.ok(svc.includes('/api/scheduled-activities'), 'service must hit /api/scheduled-activities');
@@ -345,7 +348,7 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
   // Blocker coverage — Step 5C contract
   // ------------------------------------------------------------------
 
-  it('L. TASK type — create/list/filter Dashboard+Calendar', async () => {
+  it('L. TASK type — create/list/filter (Calendar + API)', async () => {
     const leadId = await insertLead({ code: 'task_l', name: 'Task Lead', mobile: '01710000015', assignedTo: employeeA.id });
     const iso = futureIso(1);
     let r = await request(app).post('/api/scheduled-activities').set('Authorization', `Bearer ${token(employeeA)}`).send({ leadId, activityType: 'task', scheduledAt: iso, title: 'Task title', priority: 'HIGH', meetingType: 'onsite', location: 'Dhaka' });
@@ -580,11 +583,26 @@ describe('Scheduled Activities — server-authoritative calendar (Step 5C)', () 
     assert.ok(svcText.includes('fetchScheduledPage') || svcText.includes('single-request') || svcText.includes('Single-request'), 'should use single-request helper');
   });
 
-  it('X. dashboard/calendar no getLeads — performance guard', async () => {
-    const dashPath = path.join(process.cwd(), 'src/modules/dashboard/pages/Dashboard.tsx');
-    const dashText = fs.readFileSync(dashPath, 'utf-8');
-    // Daily Execution panel should use scheduledActivityService, not getLeads for calendar
-    assert.ok(dashText.includes('scheduledActivityService'), 'Dashboard should use scheduledActivityService');
+  it('X. homes/calendar no getLeads — performance guard', async () => {
+    // Dashboard.tsx is deleted (Enterprise Preview 2026-11-19): the
+    // Daily Execution panel died with it, so the Dashboard asserts
+    // are gone. The homes that replaced it must never fetch the full
+    // lead list (bounded queue buckets only) and must not load
+    // scheduled activities at all.
+    const homeFiles = [
+      'src/modules/workspace/pages/EnterpriseHome.tsx',
+      'src/modules/workspace/pages/AdminHome.tsx',
+      'src/modules/workspace/pages/ManagerHome.tsx',
+      'src/modules/workspace/pages/TeamLeadHome.tsx',
+      'src/modules/workspace/pages/AgentHome.tsx',
+      'src/modules/workspace/hooks/useEnterpriseHomeData.ts',
+      'src/modules/workspace/components/EnterprisePrimitives.tsx',
+    ];
+    for (const rel of homeFiles) {
+      const text = fs.readFileSync(path.join(process.cwd(), rel), 'utf-8');
+      assert.equal(text.includes('getLeads'), false, `${rel} must never fetch the full lead list`);
+      assert.equal(text.includes('scheduledActivityService'), false, `${rel} must not load scheduled activities`);
+    }
     // Ensure TaskCalendar does not import getLeads for calendar
     const calPath = path.join(process.cwd(), 'src/modules/auth/pages/TaskCalendar.tsx');
     const calText = fs.readFileSync(calPath, 'utf-8');

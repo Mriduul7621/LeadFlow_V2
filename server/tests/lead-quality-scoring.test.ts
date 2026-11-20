@@ -644,7 +644,15 @@ describe('Lead Quality — frontend never scores (source guards)', () => {
     'src/modules/leads/pages/LeadList.tsx',
     'src/modules/leads/pages/Lead360.tsx',
     'src/modules/workbench/pages/DailyWorkbench.tsx',
-    'src/modules/dashboard/pages/Dashboard.tsx',
+    // Enterprise Preview (2026-11-19): Dashboard.tsx retired — the four
+    // role homes + the shared home-data hook + the home primitives take
+    // its place in the forbidden-token scan.
+    'src/modules/workspace/pages/AdminHome.tsx',
+    'src/modules/workspace/pages/ManagerHome.tsx',
+    'src/modules/workspace/pages/TeamLeadHome.tsx',
+    'src/modules/workspace/pages/AgentHome.tsx',
+    'src/modules/workspace/hooks/useEnterpriseHomeData.ts',
+    'src/modules/workspace/components/EnterprisePrimitives.tsx',
     'src/modules/dashboard/services/dashboardService.ts',
     'src/modules/leads/services/leadService.ts',
     'src/modules/scheduledActivities/services/scheduledActivityService.ts',
@@ -697,10 +705,22 @@ describe('Lead Quality — frontend never scores (source guards)', () => {
   it('the pipeline page consumes only the server aggregate, Home renders none', () => {
     // The snapshot moved off Home onto the Sales Pipeline page; the property
     // that matters did not change: one server aggregate, never per-item reads.
-    const home = stripComments(read('src/modules/dashboard/pages/Dashboard.tsx'));
-    assert.ok(!home.includes('LeadQualitySnapshot'), 'Home must not render the quality snapshot');
-    assert.ok(!home.includes('metrics?.quality'), 'Home must not read the quality aggregate');
-    assert.ok(!home.includes('getLeadQuality('), 'Home must never fetch per-item quality');
+    // Enterprise Preview (2026-11-19): Home is now four role homes + a
+    // shared data hook + the home primitives — none of them may render or
+    // read quality.
+    for (const file of [
+      'src/modules/workspace/pages/AdminHome.tsx',
+      'src/modules/workspace/pages/ManagerHome.tsx',
+      'src/modules/workspace/pages/TeamLeadHome.tsx',
+      'src/modules/workspace/pages/AgentHome.tsx',
+      'src/modules/workspace/hooks/useEnterpriseHomeData.ts',
+      'src/modules/workspace/components/EnterprisePrimitives.tsx',
+    ]) {
+      const home = stripComments(read(file));
+      assert.ok(!home.includes('LeadQualitySnapshot'), `${file} must not render the quality snapshot`);
+      assert.ok(!home.includes('metrics?.quality'), `${file} must not read the quality aggregate`);
+      assert.ok(!home.includes('getLeadQuality('), `${file} must never fetch per-item quality`);
+    }
     const pipeline = stripComments(read('src/modules/dashboard/pages/SalesPipelinePage.tsx'));
     assert.ok(pipeline.includes('LeadQualitySnapshot'), 'the pipeline page must render the quality snapshot');
     assert.ok(pipeline.includes('metrics?.quality'), 'the pipeline page must read metrics.quality');

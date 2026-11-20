@@ -39,7 +39,9 @@ describe('Performance Phase 2 — route-level code splitting', () => {
 
   /** Every heavy feature page that must be a lazy chunk. */
   const LAZY_PAGES = [
-    ['Dashboard', 'modules/dashboard/pages/Dashboard'],
+    // Enterprise Preview: Dashboard.tsx is deleted; the root route
+    // lazy-loads the EnterpriseHome dispatcher instead.
+    ['EnterpriseHome', 'modules/workspace/pages/EnterpriseHome'],
     ['LeadGenerate', 'modules/leads/pages/LeadGenerate'],
     ['LeadList', 'modules/leads/pages/LeadList'],
     ['LeadUpload', 'modules/leads/pages/LeadUpload'],
@@ -61,9 +63,8 @@ describe('Performance Phase 2 — route-level code splitting', () => {
   it('A. every feature page is loaded via React.lazy, none is statically imported', () => {
     const app = APP();
     for (const [name, rel] of LAZY_PAGES) {
-      // lazy(() => import( './modules/<rel>' )) — the space after `import`
-      // in Dashboard.tsx is deliberate (see that file's note); normalize
-      // whitespace so both spellings are accepted here.
+      // lazy(() => import('./modules/<rel>')) — normalize whitespace
+      // so both `import (` and `import(` spellings are accepted here.
       const re = new RegExp(
         `const\\s+${name}\\s*=\\s*lazy\\(\\s*\\(\\s*\\)\\s*=>\\s*import\\s*\\(\\s*['"]\\./${rel.replace(/\//g, '\\/')}['"]\\s*\\)`
       );
@@ -97,12 +98,14 @@ describe('Performance Phase 2 — route-level code splitting', () => {
     // Every gated page route keeps BOTH gates — no route may render the
     // lazy page outside the ProtectedRoute + FeatureGate chain.
     //
-    // Phase 2 PR #3 sanctioned exception: the ROOT route wraps its
-    // LazyPage in <HomeLanding> (the once-per-session Workbench-first
+    // Phase 2 PR #3 sanctioned exception: the ROOT route used to wrap
+    // its LazyPage in <HomeLanding> (the once-per-session Workbench-first
     // landing decision) BETWEEN FeatureGate and the LazyPage. The
-    // guarantee is unchanged — the Dashboard's LazyPage still renders
-    // below both gates inside the same Suspense boundary whenever it
-    // renders at all — so the chain pattern allows that one wrapper.
+    // Enterprise Preview deleted HomeLanding — `/` now renders
+    // EnterpriseHome directly — but the chain pattern keeps the wrapper
+    // optional, so the guarantee is unchanged: the home's LazyPage still
+    // renders below both gates inside the same Suspense boundary whenever
+    // it renders at all.
     //
     // The counts are derived from the route table itself instead of the
     // previous hardcoded 18: the mobile navigation redesign (PR #52/#53)
@@ -140,37 +143,50 @@ describe('Performance Phase 2 — route-level code splitting', () => {
 /* ==================================================================== */
 
 describe('Performance Phase 2 — the Task Calendar is a route of its own', () => {
-  const DASHBOARD = () => read('src/modules/dashboard/pages/Dashboard.tsx');
+  // Enterprise Preview: Dashboard.tsx is deleted; the home pages are
+  // the four role homes fed by the shared home hook.
+  const HOMES = () =>
+    ['AdminHome', 'ManagerHome', 'TeamLeadHome', 'AgentHome']
+      .map(name => read(`src/modules/workspace/pages/${name}.tsx`))
+      .join('\n');
+  const HOOK = () => read('src/modules/workspace/hooks/useEnterpriseHomeData.ts');
 
   it('E. Home no longer embeds the calendar: it is lazy, route-level only', () => {
-    const d = DASHBOARD();
+    const homes = HOMES();
     // The mobile-shell change removed the embedded calendar from Home. The
     // heavy component must now exist ONLY behind its own lazy route, so Home
     // never pays for its chunk and cannot regress into a static import.
-    assert.doesNotMatch(d, /import\s+TaskCalendar\s+from/, 'no static TaskCalendar import in Dashboard');
-    assert.ok(!d.includes('TaskCalendar'), 'Dashboard must not reference the embedded calendar at all');
-    assert.doesNotMatch(d, /lazy\(\s*\(\s*\)\s*=>\s*import\s*\(?\s*'[^']*TaskCalendar'/, 'the calendar must not be lazy-loaded into Dashboard either');
+    assert.doesNotMatch(homes, /import\s+TaskCalendar\s+from/, 'no static TaskCalendar import in any role home');
+    assert.ok(!homes.includes('TaskCalendar'), 'no role home must reference the embedded calendar at all');
+    assert.doesNotMatch(homes, /lazy\(\s*\(\s*\)\s*=>\s*import\s*\(?\s*'[^']*TaskCalendar'/, 'the calendar must not be lazy-loaded into a home either');
     const app = read('src/App.tsx');
     assert.match(app, /TaskCalendar\s*=\s*lazy\(\s*\(\s*\)\s*=>\s*import\(\s*'\.\/modules\/auth\/pages\/TaskCalendar'\s*\)/, 'TaskCalendar must stay a lazy route chunk');
     assert.ok(app.includes("path: '/task-calendar'"), 'the /task-calendar route must remain');
   });
 
   it('F. the calendar is reachable from the sidebar and nothing else on Home waits on it', () => {
-    const sidebar = read('src/layouts/sidebarNav.ts');
-    assert.ok(sidebar.includes("path: '/task-calendar'"), 'the sidebar must offer the Task Calendar');
-    const d = DASHBOARD();
-    assert.ok(!d.includes('calendarReady'), 'the deferred-mount flag is obsolete once Home stops embedding the calendar');
-    for (const marker of ['ExecutiveSnapshot', 'TodayTomorrowPanel', 'PerformanceInsights']) {
-      assert.ok(d.includes(marker), `primary section ${marker} must remain on the dashboard`);
+    const nav = read('src/layouts/enterpriseNav.ts');
+    assert.ok(nav.includes("path: '/task-calendar'"), 'the sidebar must offer the Task Calendar');
+    const homes = HOMES();
+    assert.ok(!homes.includes('calendarReady'), 'the deferred-mount flag is obsolete once Home stops embedding the calendar');
+    // ExecutiveSnapshot / TodayTomorrowPanel / PerformanceInsights died
+    // with Dashboard.tsx — those markers are dropped, not weakened. The
+    // homes' own primary sections (heading + KPI cards + chart) must
+    // remain on every role home.
+    for (const name of ['AdminHome', 'ManagerHome', 'TeamLeadHome', 'AgentHome']) {
+      const src = read(`src/modules/workspace/pages/${name}.tsx`);
+      assert.ok(src.includes('<OverviewHeading'), `${name} must keep its overview heading`);
+      assert.ok(src.includes('<KpiCard'), `${name} must keep its KPI cards`);
+      assert.ok(src.includes('<ChartCard'), `${name} must keep its chart card`);
     }
   });
 
   it('G. dashboard KPI authority is untouched (no new client-side sources)', () => {
-    const d = DASHBOARD();
-    const start = d.indexOf('const loadDashboardData');
-    const end = d.indexOf('const loadDailyExecution');
+    const hook = HOOK();
+    const start = hook.indexOf('const loadDashboardData');
+    const end = hook.indexOf('const loadQueue');
     assert.ok(start >= 0 && end > start);
-    const body = d.slice(start, end);
+    const body = hook.slice(start, end);
     assert.ok(body.includes('dashboardService.getDashboard'));
     assert.ok(!body.includes('localStorage'));
     assert.ok(!body.includes('localDb'));

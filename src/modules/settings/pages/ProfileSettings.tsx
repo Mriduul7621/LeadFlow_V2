@@ -9,6 +9,7 @@ import {
   type PushReminderState,
 } from '../../notifications/services/pushService';
 import { toast } from 'sonner';
+import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
 export default function ProfileSettings() {
   const { user, login, isOfflineMode } = useAuthStore();
@@ -127,57 +128,60 @@ export default function ProfileSettings() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 pb-10">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-brand-text">Profile & settings</h1>
-        <p className="mt-1 text-sm text-stone-500">Keep your contact details and sign-in information current.</p>
-      </div>
+    <div className="ep-page" style={{ maxWidth: 720 }}>
+      <EnterprisePageHeader path="/settings" />
 
-      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
-        <h2 className="text-base font-semibold text-stone-800">Personal details</h2>
-        <form onSubmit={saveProfile} className="mt-5 space-y-4">
+      <section className="ep-card" style={{ marginBottom: 16 }}>
+        <div className="ep-cardhead">
+          <h3>Personal details</h3>
+        </div>
+        <form onSubmit={saveProfile} className="space-y-4">
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Name</span>
-            <input autoComplete="name" value={name} onChange={event => setName(event.target.value)} className="input-standard" required />
+            <input autoComplete="name" value={name} onChange={event => setName(event.target.value)} className="ep-input" required />
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Mobile number</span>
-            <input type="tel" autoComplete="tel" maxLength={20} value={phone} onChange={event => setPhone(event.target.value)} className="input-standard" />
+            <input type="tel" autoComplete="tel" maxLength={20} value={phone} onChange={event => setPhone(event.target.value)} className="ep-input" />
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Email address</span>
-            <input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} className="input-standard" required />
+            <input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} className="ep-input" required />
           </label>
-          <button type="submit" disabled={savingProfile} className="btn-primary min-h-11 normal-case tracking-normal">
+          <button type="submit" disabled={savingProfile} className="ep-btn ep-btn-primary">
             {savingProfile ? 'Saving…' : 'Save changes'}
           </button>
         </form>
       </section>
 
-      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
-        <h2 className="text-base font-semibold text-stone-800">Password</h2>
-        <form onSubmit={savePassword} className="mt-5 space-y-4">
+      <section className="ep-card" style={{ marginBottom: 16 }}>
+        <div className="ep-cardhead">
+          <h3>Password</h3>
+        </div>
+        <form onSubmit={savePassword} className="space-y-4">
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Current password</span>
-            <input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} className="input-standard" required />
+            <input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} className="ep-input" required />
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">New password</span>
-            <input type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} className="input-standard" minLength={6} required />
+            <input type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} className="ep-input" minLength={6} required />
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-stone-600">Confirm new password</span>
-            <input type="password" autoComplete="new-password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className="input-standard" minLength={6} required />
+            <input type="password" autoComplete="new-password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className="ep-input" minLength={6} required />
           </label>
-          <button type="submit" disabled={savingPassword} className="btn-secondary min-h-11 normal-case tracking-normal">
+          <button type="submit" disabled={savingPassword} className="ep-btn">
             {savingPassword ? 'Updating…' : 'Update password'}
           </button>
         </form>
       </section>
 
-      <section className="border-y border-stone-100 bg-white px-4 py-5 sm:px-6">
-        <h2 className="text-base font-semibold text-stone-800">Follow-up reminders</h2>
-        <p className="mt-1 text-sm text-stone-500">
+      <section className="ep-card">
+        <div className="ep-cardhead">
+          <h3>Follow-up reminders</h3>
+        </div>
+        <p className="text-sm text-stone-500">
           Get one free push notification on this device each morning with your follow-ups due
           today and overdue. Tapping it opens My Work. Nothing is sent to customers.
         </p>

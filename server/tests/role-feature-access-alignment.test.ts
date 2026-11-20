@@ -226,10 +226,16 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(p.includes("'/workbench'"), 'workbench must map to /workbench');
   });
 
-  it('primary navigation still lists Daily Workbench under My Work', () => {
-    const l = layout();
-    assert.ok(l.includes("label: 'My Work'"), 'primary navigation must keep the My Work label');
-    assert.ok(l.includes("path: '/workbench'"), 'primary navigation must keep the /workbench path');
+  it('the sidebar still lists the Daily Workbench, and the Agent home keeps the My Work title', () => {
+    // Enterprise Preview (2026-11-19): the primary tabs are retired —
+    // the Workbench is now the sidebar's "Follow-up Queue" item, and
+    // "My Work" survives as the Agent overview's H1 (the sample's one
+    // H1 exception). The route is unchanged.
+    const nav = read('src/layouts/enterpriseNav.ts');
+    assert.match(nav, /label: 'Follow-up Queue'[^}]*path: '\/workbench'/,
+      'the sidebar must keep the Workbench reachable as Follow-up Queue');
+    const agentHome = read('src/modules/workspace/pages/AgentHome.tsx');
+    assert.ok(agentHome.includes('title="My Work"'), 'the Agent home must keep the My Work title');
   });
 
   /* ---------- Granular canonical action control ---------- */

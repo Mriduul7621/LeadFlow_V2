@@ -7,11 +7,11 @@
  *   1. resolveFeatureRouteAccess is a pure, fail-closed decision:
  *      ADMIN/SUPERADMIN pass (established bypass); an explicit dynamic
  *      menuAccess entry wins (true OR false); otherwise the static role
- *      fallback — identical to primary navigation and More directories;
+ *      fallback — identical to the enterprise sidebar navigation;
  *   2. a disabled Feature Access module blocks its page route (typing the
  *      URL cannot bypass the sidebar);
- *   3. the registry, the routes wrapped in App.tsx, and the AppLayout
- *      primary navigation stay in lockstep (no drift, no ungated page route);
+ *   3. the registry, the routes wrapped in App.tsx, and the enterprise
+ *      sidebar navigation stay in lockstep (no drift, no ungated page route);
  *   4. FeatureGate redirects (never renders) when the decision denies.
  *
  * This is a VISIBILITY gate: the server keeps enforcing canonical Action
@@ -35,7 +35,7 @@ const ALL_ROUTES = Object.keys(FEATURE_ROUTES);
 const NON_ADMIN_ROLES = ['RO', 'RM', 'ASM', 'BDM', 'BE', 'BH'];
 const WORKSPACE_ROUTES = ['/', '/more', '/notifications', '/help', '/about', '/sales-pipeline', '/workbench', '/activities', '/task-calendar', '/follow-up', '/leads', '/leads/new', '/settings', '/leads/:id'];
 const INSIGHT_ROUTES = ['/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown'];
-const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/leads/upload', '/leads/all', '/users'];
+const ADMIN_ONLY_ROUTES = ['/administration', '/settings/system', '/settings/status-pipeline', '/settings/products-campaigns', '/leads/upload', '/leads/all', '/users'];
 
 describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   it('ADMIN and SUPERADMIN pass every registered route, even when menuAccess disables it', () => {
@@ -64,12 +64,12 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
     // Insight/report pages follow the DEFAULT `reports.view` grant table
     // (decided 2026-10-15): the client fallback derives from it, so the
     // page gate cannot disagree with the server permission again.
+    // Enterprise Preview (2026-11-19): FIELD_EXEC now carries
+    // `reports.view` by default, so the field roles open the insight
+    // pages too — the agent's MY PERFORMANCE nav needs them.
     for (const route of INSIGHT_ROUTES) {
-      for (const role of ['MANAGER', 'SM', 'RM', 'TEAM_LEAD', 'BDM', 'ASM', 'CEO', 'BH']) {
+      for (const role of ['MANAGER', 'SM', 'RM', 'TEAM_LEAD', 'BDM', 'ASM', 'CEO', 'BH', 'RO', 'BE', 'SBE', 'EMPLOYEE']) {
         assert.equal(resolveFeatureRouteAccess(route, role, undefined), true, `${route} open for ${role} (holds reports.view)`);
-      }
-      for (const role of ['RO', 'BE', 'SBE', 'EMPLOYEE']) {
-        assert.equal(resolveFeatureRouteAccess(route, role, undefined), false, `${route} closed for ${role} (no reports.view)`);
       }
     }
 
@@ -147,27 +147,31 @@ describe('resolveFeatureRouteAccess — pure Layer B decision', () => {
   });
 });
 
-describe('primary navigation and More directories — route coverage', () => {
-  it('primary tabs keep their five entries and the secondary pages live in the left sidebar', () => {
+describe('enterprise sidebar navigation — route coverage', () => {
+  it('the retired primary tabs are gone; the enterprise nav owns every secondary page', () => {
     const layout = read('src/layouts/AppLayout.tsx');
-    const start = layout.indexOf('const PRIMARY_NAV_ITEMS');
-    const end = layout.indexOf('const MORE_NAV_PATHS');
-    assert.ok(start >= 0 && end > start, 'primary navigation config must exist');
-    const menuPaths = Array.from(layout.slice(start, end).matchAll(/path: '([^']+)'/g), m => m[1]);
-    assert.deepEqual(menuPaths, ['/', '/workbench', '/leads/new', '/leads', '/more']);
-    assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
+    // Enterprise Preview (2026-11-19): the five primary tabs retired
+    // with the old shell — the role-based enterprise sidebar
+    // (src/layouts/enterpriseNav.ts) is the only navigation surface now.
+    assert.ok(!layout.includes('PRIMARY_NAV_ITEMS'), 'the primary-tab config must stay retired');
+    assert.ok(!layout.includes('MORE_NAV_PATHS'), 'the More-directory config must stay retired');
+    assert.ok(layout.includes('buildEnterpriseNavGroups('), 'the sidebar must come from the enterprise nav module, not a hardcoded list');
+    assert.ok(layout.includes('resolveFeatureRouteAccess('), 'entries must be filtered by the route Feature Access module');
+    assert.ok(layout.includes('sidebarGroups.map('), 'the sidebar must render the resolved groups');
     assert.ok(layout.includes('isSidebarOpen'), 'the left sidebar drawer owns the shell drawer state');
+    assert.doesNotMatch(layout, /<motion\.aside|isMobileMenuOpen/, 'no legacy drawer implementation may return');
 
-    // The retired More → Reports directory is replaced by the permission-
-    // filtered left sidebar (src/layouts/sidebarNav.ts).
-    const sidebar = read('src/layouts/sidebarNav.ts');
+    const nav = read('src/layouts/enterpriseNav.ts');
     for (const p of ['/activities', '/task-calendar', '/follow-up', '/team', '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown', '/roadshows', '/sales-pipeline']) {
-      assert.ok(sidebar.includes(`path: '${p}'`), `the sidebar must include ${p}`);
+      assert.ok(nav.includes(`path: '${p}'`), `the enterprise nav must include ${p}`);
+      assert.ok(FEATURE_ROUTES[p], `nav path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
     }
 
-    for (const p of menuPaths) {
-      assert.ok(FEATURE_ROUTES[p], `menu path ${p} must have a FEATURE_ROUTES entry (page route gate)`);
-    }
+    // `/` renders the derived role overview directly (no landing
+    // redirect, no Workbench-first bounce).
+    const app = read('src/App.tsx');
+    assert.ok(app.includes('page={<EnterpriseHome />}'), 'the / route must render EnterpriseHome directly');
+
     for (const [route, entry] of Object.entries(FEATURE_ROUTES)) {
       assert.ok(route, `route ${route} is registered`);
       assert.ok(entry.path, `route ${route} has a menuAccess key`);
@@ -226,13 +230,18 @@ describe('FeatureGate source guard (deny never renders the page)', () => {
     // Roadshows are a deliberate grant, not an org-wide default.
     assert.equal(resolveFeatureRouteAccess('/roadshows', 'EMPLOYEE', undefined), false, 'employees need the roadshow grant');
     assert.equal(resolveFeatureRouteAccess('/roadshows', 'MANAGER', undefined), true, 'managers carry the roadshow default');
-    // Reports: managers and team leads open them by default (they hold
-    // reports.view), frontline roles do not until an admin grants it.
+    // Reports: every standard role opens them by default — managers and
+    // team leads hold reports.view, and since the Enterprise Preview
+    // (2026-11-19) the field roles do too (FIELD_EXEC carries it).
+    // A custom code still fails closed until an admin grants the page.
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'CEO', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'MANAGER', undefined), true);
     assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'TEAM_LEAD', undefined), true);
-    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', undefined), false);
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', undefined), true);
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'MKTH', undefined), false, 'custom roles fail closed');
     // ...and an explicit toggle still opens them for anyone.
-    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', { menuAccess: { '/execution-intelligence': true } } as any), true);
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'MKTH', { menuAccess: { '/execution-intelligence': true } } as any), true);
+    // ...while an explicit deny still hides them from a default holder.
+    assert.equal(resolveFeatureRouteAccess('/execution-intelligence', 'EMPLOYEE', { menuAccess: { '/execution-intelligence': false } } as any), false);
   });
 });
