@@ -1,7 +1,7 @@
 import type { Lead } from '../../shared/types';
 import type { FollowUpQueueItem } from '../../leads/services/leadService';
 import type { TeamOverviewPerson } from '../../team/services/teamOverviewService';
-import { downlineOf, summarizeTeamTotals } from '../../team/services/teamOverviewService';
+import { downlineOf, summarizeTeamTotals, type TeamTotals } from '../../team/services/teamOverviewService';
 import { CONTACTED_STATUSES, completedToday, isTerminalStatus, onTimeRate } from './agentWorkspaceData';
 import { dhakaDayStartMs, dhakaYmdParts } from './enterpriseData';
 import type { EnterpriseRole } from '../../../layouts/enterpriseRole';
@@ -19,11 +19,20 @@ import type { EnterpriseRole } from '../../../layouts/enterpriseRole';
  * Scope model (Mahadi's words):
  *   Team Lead  = self + full reporting subtree (the whole
  *                downline, not just direct reports).
- *   Manager    = self + full downline, grouped by Team Lead.
+ *   Manager    = self + full downline. On the Team Members page
+ *                the drill-down starts at the Manager's IMMEDIATE
+ *                subordinates (Mahadi 2026-11-20 06:12: "Manager
+ *                der jonno tar immediate nicher member gulo") and
+ *                goes tier by tier — the TL grouping below still
+ *                serves Team Leads, Follow-up Monitor and Team
+ *                Performance, NOT /team anymore.
  *   Admin      = the whole organisation, EXCLUDING admin-role
  *                users from every member list, KPI and aggregate
  *                (an admin is never a sales employee and never
- *                appears in report data).
+ *                appears in report data). On the Team Members
+ *                page the drill-down starts at the DEPARTMENT
+ *                HEADS (Mahadi 2026-11-20 06:10), each with their
+ *                full team's data, then tier by tier.
  *
  * Creator matching is dual-space: `createdByEmployeeId` (the
  * roster employee ID, exposed by the server since this build)
@@ -399,6 +408,151 @@ export function groupLeadsByTl(
   }
   result.sort((a, b) => a.tl.name.localeCompare(b.tl.name));
   return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* Team Members drill-down (Head-first, 2026-11-20)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Direct reports of one employee within a people list — the TREE
+ * fact, not the overview row's `directReports` count (that count
+ * can cover people outside the caller's scoped roster). Sorted by
+ * name. Case-insensitive; a self-manager link is ignored.
+ */
+export function directReportsOf(
+  people: TeamOverviewPerson[],
+  employeeId: string,
+): TeamOverviewPerson[] {
+  const manager = empId(employeeId);
+  return people
+    .filter(p => empId(p.managerEmployeeId) === manager && empId(p.employeeId) !== manager)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The whole subtree of one employee, INCLUDING themself — the
+ * person plus every descendant in the reporting tree. Empty when
+ * the id is not in the list. Cycle-guarded (via downlineOf),
+ * case-insensitive.
+ */
+export function subtreeOf(
+  people: TeamOverviewPerson[],
+  employeeId: string,
+): TeamOverviewPerson[] {
+  const root = people.find(p => empId(p.employeeId) === empId(employeeId));
+  if (!root) return [];
+  return [root, ...downlineOf(people, employeeId)];
+}
+
+/** True when the person's designation or role says CEO (the top of the tree). */
+export function isCeoPerson(person: TeamOverviewPerson): boolean {
+  for (const field of [person.designation, person.roleName]) {
+    const text = ` ${String(field || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+    if (text.includes(' ceo ') || text.includes(' chief executive ')) return true;
+  }
+  return false;
+}
+
+/**
+ * Department Heads of the visible org — the Admin/CEO top level
+ * of the Team Members page (Mahadi 2026-11-20 06:10: the list
+ * starts with the department heads, each with their full team's
+ * data, then drills tier by tier).
+ *
+ * Heads are found STRUCTURALLY — designations are free text and
+ * unreliable, while the reporting tree is the source of truth
+ * for the drill-down itself. The people at the top of the
+ * visible tree are the Heads: when a CEO-designated root is
+ * visible, their direct reports are the Heads (the CEO themself
+ * is never a Head row); when no CEO row is visible — the CEO is
+ * not a LeadFlow user, or is an admin-role user already filtered
+ * from the roster — the roots themselves are the Heads. A root
+ * with no reports (an orphaned employee whose manager is not
+ * visible) still appears as its own top-level row, so nobody is
+ * ever dropped from the page. Admin-role users are filtered out
+ * here too (defence in depth — the caller passes the scoped
+ * roster, which already excludes them). When the tree has no roots at all
+ * (a manager cycle swallowed every link), the fallback is the
+ * people with reports, else everyone — sorted by name either
+ * way.
+ */
+export function departmentHeadsOf(people: TeamOverviewPerson[]): TeamOverviewPerson[] {
+  const sellers = people.filter(p => !isAdminPerson(p));
+  const ids = new Set(sellers.map(p => empId(p.employeeId)));
+  const heads: TeamOverviewPerson[] = [];
+  const seen = new Set<string>();
+  const add = (person: TeamOverviewPerson) => {
+    const key = empId(person.employeeId);
+    if (seen.has(key) || isCeoPerson(person)) return;
+    seen.add(key);
+    heads.push(person);
+  };
+  const roots = sellers.filter(p => {
+    const manager = empId(p.managerEmployeeId);
+    return !manager || !ids.has(manager);
+  });
+  for (const root of roots) {
+    if (isCeoPerson(root)) {
+      for (const report of directReportsOf(sellers, root.employeeId)) add(report);
+    } else {
+      add(root);
+    }
+  }
+  if (heads.length === 0 && sellers.length > 0) {
+    // No roots — a manager cycle swallowed every link. Fall back
+    // to the people with reports (group nodes), else everyone.
+    const withReports = sellers.filter(p => directReportsOf(sellers, p.employeeId).length > 0);
+    for (const person of withReports.length > 0 ? withReports : sellers) add(person);
+  }
+  return heads.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export interface SubtreeAggregate {
+  /** The subtree, root person included. */
+  members: TeamOverviewPerson[];
+  /** Whole-subtree totals (the same sums the roster header shows). */
+  totals: TeamTotals;
+  /** Follow-ups completed today across the subtree. */
+  completed: number;
+  /** Follow-up completion % over the subtree, null when nothing was due or done. */
+  pct: number | null;
+  /** Follow-ups due (due today + overdue) across the subtree. */
+  followUpsDue: number;
+  /** True when any follow-up in the subtree is overdue. */
+  needsAttention: boolean;
+}
+
+/**
+ * Honest metrics over one person's WHOLE subtree (themself
+ * included) — the group-row numbers on the Team Members page.
+ * The completion % is the SAME definition as the member % (ONE
+ * definition): completed-today / (completed + due-today +
+ * overdue), summed over the subtree — null when the denominator
+ * is 0, so the UI shows "—". The completions map comes from
+ * memberCompletions over the scoped roster (computed once by
+ * the page). No targets anywhere (Phase 3 undecided).
+ */
+export function aggregateSubtree(
+  people: TeamOverviewPerson[],
+  rootEmployeeId: string,
+  completions: Map<string, MemberCompletion>,
+): SubtreeAggregate {
+  const members = subtreeOf(people, rootEmployeeId);
+  const totals = summarizeTeamTotals(members);
+  let completed = 0;
+  for (const member of members) {
+    completed += completions.get(empId(member.employeeId))?.completed ?? 0;
+  }
+  const denominator = completed + totals.dueToday + totals.overdue;
+  return {
+    members,
+    totals,
+    completed,
+    pct: denominator === 0 ? null : Math.round((completed / denominator) * 100),
+    followUpsDue: totals.dueToday + totals.overdue,
+    needsAttention: totals.overdue > 0,
+  };
 }
 
 /** Roster status: honest and simple — overdue work needs attention. */

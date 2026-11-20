@@ -12,11 +12,14 @@ import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import {
+  aggregateSubtree,
+  departmentHeadsOf,
+  directReportsOf,
   memberCompletions,
   memberStatus,
   scopeLeadsByAssignee,
   scopePeople,
-  tlAncestorOf,
+  type SubtreeAggregate,
 } from '../../workspace/utils/teamWorkspaceData';
 import { formatDhakaShort } from '../../workspace/utils/enterpriseData';
 import type { Lead } from '../../shared/types';
@@ -24,7 +27,7 @@ import type { Lead } from '../../shared/types';
 /**
  * TeamOverview — the Team Members page (Team Lead / Manager /
  * Admin workspace rebuild, 2026-11-20, Mahadi's demo
- * screenshot 4).
+ * screenshot 4; Head-first drill-down, 2026-11-20 06:10).
  * ------------------------------------------------------------------
  * Mahadi called the old page "ekta faltu design" (an org tree +
  * tier groups fed by GET /api/team/tree). The rebuild follows the
@@ -33,6 +36,37 @@ import type { Lead } from '../../shared/types';
  * member's detail (their KPIs, leads and follow-ups due) → click
  * a lead → Lead360. The organogram chart still lives at
  * /team/organogram (linked from the header).
+ *
+ * Head-first drill-down (Mahadi 2026-11-20 06:10 + 06:12):
+ *   Admin / CEO: the top level is the DEPARTMENT HEADS, each row
+ *     showing that Head's FULL team's data; clicking a Head
+ *     drills into the next tier, tier by tier, down to individual
+ *     members → the member detail. Heads are found structurally
+ *     (departmentHeadsOf): the top of the visible tree, with a
+ *     CEO root contributing their direct reports instead.
+ *   Manager: the top level is the Manager's IMMEDIATE
+ *     subordinates ("Manager der jonno tar immediate nicher
+ *     member gulo") — uniform for every Manager, including one
+ *     who is themself a Head — each row showing that person's
+ *     full subtree, drilling tier by tier the same way. This
+ *     REPLACES the Manager TL grouping (?tl=) from the rebuild;
+ *     ?tl= survives only as a legacy alias for ?node= (Team
+ *     Performance linked /team?tl=… before this change).
+ *   Team Lead: the current direct roster, unchanged (Mahadi
+ *     scoped the drill-down to Manager / Admin / CEO only).
+ *
+ * One consistent pattern: every row with reports in the scoped
+ * roster is a GROUP row (click → that person's direct reports,
+ * ?node=<employeeId>); every leaf is a MEMBER row (click → the
+ * member detail, ?member=, keeping ?node= so Back returns to the
+ * same tier). A breadcrumb climbs back up the tiers. Group rows
+ * aggregate the SAME honest metrics over the whole subtree
+ * (aggregateSubtree): active leads, follow-up completion % (ONE
+ * definition — completed-today / (completed + due-today +
+ * overdue)), follow-ups due. No targets anywhere (Phase 3
+ * undecided). The drill-down never widens scope: every tier is
+ * computed over the scoped roster, and a ?node= outside it (or
+ * a leaf, or the caller themself) falls back to the top level.
  *
  * Data comes from the ONE scoped overview payload (GET
  * /api/team/overview via useCallerTeam) + the caller's visible
@@ -51,16 +85,15 @@ import type { Lead } from '../../shared/types';
  *               (a plain count).
  *   Avg. conversion = team converted / team total leads.
  * Status is honest and simple: "Needs attention" when the
- * member has any overdue follow-up, else "On track".
+ * member has any overdue follow-up, else "On track" — for a
+ * group row, when anything in the subtree is overdue.
  *
- * Manager grouping (Mahadi): a Manager FIRST sees TL groups;
- * clicking a Team Lead drills to that TL's member-wise roster
- * (?tl=), then to a member (?member=). Admin-role users never
- * appear in the roster or any aggregate (an admin is never a
- * sales employee). "+ Invite member" is the Add user flow and
- * shows ONLY with the admin-granted `users.add_employee` grant
- * (and only once the server permission sheet has settled, so
- * it never flashes in for an ungranted TL).
+ * Admin-role users never appear in the roster or any aggregate
+ * (an admin is never a sales employee). "+ Invite member" is
+ * the Add user flow and shows ONLY with the admin-granted
+ * `users.add_employee` grant (and only once the server
+ * permission sheet has settled, so it never flashes in for an
+ * ungranted TL).
  */
 
 function initialsOf(name: string): string {
@@ -79,10 +112,14 @@ interface RosterRowProps {
   pct: number | null;
   followUpsDue: number;
   to: string;
+  /** Small text under the name (default: the employee ID). Group rows show the team size. */
+  sub?: string;
+  /** Accessible label override (group rows open a team, not a detail). */
+  ariaLabel?: string;
 }
 
-const RosterRow: FC<RosterRowProps> = ({ person, pct, followUpsDue, to }) => (
-  <Link to={to} className="ep-roster-row" aria-label={`Open ${person.name}'s detail`}>
+const RosterRow: FC<RosterRowProps> = ({ person, pct, followUpsDue, to, sub, ariaLabel }) => (
+  <Link to={to} className="ep-roster-row" aria-label={ariaLabel ?? `Open ${person.name}'s detail`}>
     <span className="ep-roster-member">
       <span className="ep-miniavatar" aria-hidden="true">{initialsOf(person.name)}</span>
       <span className="ep-roster-copy">
@@ -90,7 +127,7 @@ const RosterRow: FC<RosterRowProps> = ({ person, pct, followUpsDue, to }) => (
           {person.name}
           {person.isSelf && <span className="ep-roster-you">You</span>}
         </strong>
-        <small>{person.employeeId}</small>
+        <small>{sub ?? person.employeeId}</small>
       </span>
     </span>
     <span className="ep-roster-role">{person.designation || person.roleName || 'Team member'}</span>
@@ -113,7 +150,10 @@ export default function TeamOverview() {
   const [queueLoading, setQueueLoading] = useState(true);
 
   const memberParam = searchParams.get('member');
-  const tlParam = searchParams.get('tl');
+  // ?node= is the drill node (show this person's direct reports).
+  // ?tl= is the legacy alias: Team Performance linked /team?tl=…
+  // before the Head-first drill-down, and it means the same node.
+  const nodeParam = searchParams.get('node') || searchParams.get('tl');
 
   const loadQueue = useCallback(async () => {
     setQueueLoading(true);
@@ -163,28 +203,114 @@ export default function TeamOverview() {
 
   const canAddUser = serverPermissionsSettled && canAccess('user_management', 'add_employee');
 
-  // Manager TL grouping (?tl= drills one TL's member-wise roster).
+  // Head-first drill-down (Admin / Manager only — the Team Lead
+  // keeps the flat roster below). Every tier is computed over the
+  // SCOPED roster, so drilling can never show someone outside the
+  // caller's visibility. childrenOf is the memoized form of
+  // directReportsOf over that roster.
+  const isAdminView = displayRole === 'admin';
   const isManagerView = displayRole === 'manager';
-  const tlGroups = useMemo(() => {
-    if (!isManagerView || !self) return [];
-    const groups = new Map<string, { tl: TeamOverviewPerson; members: TeamOverviewPerson[] }>();
+  const isDrillView = isAdminView || isManagerView;
+  const childrenByManager = useMemo(() => {
+    const map = new Map<string, TeamOverviewPerson[]>();
     for (const person of roster) {
-      const tl = tlAncestorOf(people, person.employeeId, self.employeeId) ?? self;
-      const key = String(tl.employeeId).toUpperCase();
-      const group = groups.get(key) ?? { tl, members: [] };
-      group.members.push(person);
-      groups.set(key, group);
+      const manager = String(person.managerEmployeeId || '').toUpperCase();
+      if (!manager) continue;
+      const list = map.get(manager) ?? [];
+      list.push(person);
+      map.set(manager, list);
     }
-    return [...groups.values()].sort((a, b) => a.tl.name.localeCompare(b.tl.name));
-  }, [isManagerView, roster, people, self]);
-  const selectedTlGroup = useMemo(
-    () => tlGroups.find(g => String(g.tl.employeeId).toUpperCase() === String(tlParam || '').toUpperCase()),
-    [tlGroups, tlParam],
+    for (const list of map.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+    return map;
+  }, [roster]);
+  const childrenOf = useCallback(
+    (employeeId: string) => childrenByManager.get(String(employeeId).toUpperCase()) ?? [],
+    [childrenByManager],
   );
-  const visibleRoster = useMemo(() => {
-    if (!isManagerView || !tlParam) return roster;
-    return selectedTlGroup ? selectedTlGroup.members : [];
-  }, [isManagerView, tlParam, roster, selectedTlGroup]);
+
+  // Top level: Department Heads (Admin, org-wide) or the
+  // Manager's immediate subordinates — never the caller.
+  const topLevel = useMemo(() => {
+    if (!self) return [];
+    if (isAdminView) return departmentHeadsOf(roster);
+    if (isManagerView) return directReportsOf(roster, self.employeeId);
+    return roster;
+  }, [isAdminView, isManagerView, roster, self]);
+
+  // The drill node, validated against the scoped roster: a node
+  // outside it, a leaf (nothing to drill into), or the caller
+  // themself falls back to the top level.
+  const currentNode = useMemo(() => {
+    if (!isDrillView || !nodeParam) return undefined;
+    const node = roster.find(p => String(p.employeeId).toUpperCase() === String(nodeParam).toUpperCase());
+    if (!node || node.isSelf) return undefined;
+    return childrenOf(node.employeeId).length > 0 ? node : undefined;
+  }, [isDrillView, nodeParam, roster, childrenOf]);
+
+  const visibleRows = useMemo(() => {
+    if (!isDrillView) return roster;
+    if (currentNode) return childrenOf(currentNode.employeeId);
+    return topLevel;
+  }, [isDrillView, currentNode, roster, topLevel, childrenOf]);
+
+  // Breadcrumb: the ancestor chain from the current node up to a
+  // top-level node (the caller's own row is the root, never a
+  // crumb). Cycle-guarded, roster-bound.
+  const crumbs = useMemo(() => {
+    if (!currentNode) return [];
+    const topIds = new Set(topLevel.map(p => String(p.employeeId).toUpperCase()));
+    const byId = new Map<string, TeamOverviewPerson>(roster.map(p => [String(p.employeeId).toUpperCase(), p]));
+    const chain: TeamOverviewPerson[] = [];
+    const seen = new Set<string>();
+    let cursor: TeamOverviewPerson | undefined = currentNode;
+    while (cursor && !seen.has(String(cursor.employeeId).toUpperCase())) {
+      seen.add(String(cursor.employeeId).toUpperCase());
+      chain.unshift(cursor);
+      if (topIds.has(String(cursor.employeeId).toUpperCase())) break;
+      const managerId = String(cursor.managerEmployeeId || '').toUpperCase();
+      cursor = managerId ? byId.get(managerId) : undefined;
+      if (cursor && cursor.isSelf) break;
+    }
+    return chain;
+  }, [currentNode, roster, topLevel]);
+
+  // Subtree aggregates for the group rows in this tier (leaf rows
+  // use their own overview row + completion, as before).
+  const aggregates = useMemo(() => {
+    const map = new Map<string, SubtreeAggregate>();
+    if (!isDrillView) return map;
+    for (const row of visibleRows) {
+      if (childrenOf(row.employeeId).length > 0) {
+        map.set(
+          String(row.employeeId).toUpperCase(),
+          aggregateSubtree(roster, row.employeeId, completions),
+        );
+      }
+    }
+    return map;
+  }, [isDrillView, visibleRows, roster, childrenOf, completions]);
+
+  const listTitle = !isDrillView
+    ? 'Team roster'
+    : currentNode
+      ? `${currentNode.name}'s team`
+      : isAdminView
+        ? 'Department heads'
+        : 'Your direct reports';
+  const listSub = !isDrillView
+    ? `${visibleRows.length} member${visibleRows.length === 1 ? '' : 's'} · click a member to see their leads and follow-ups`
+    : currentNode
+      ? `${visibleRows.length} ${visibleRows.length === 1 ? 'person' : 'people'} · click a team to drill down, or a member to see their leads and follow-ups`
+      : isAdminView
+        ? `${visibleRows.length} department head${visibleRows.length === 1 ? '' : 's'} · click a head to drill into their team`
+        : `${visibleRows.length} direct report${visibleRows.length === 1 ? '' : 's'} · click to drill into their team`;
+  const backLabel = currentNode
+    ? `${currentNode.name}'s team`
+    : isAdminView
+      ? 'department heads'
+      : isManagerView
+        ? 'direct reports'
+        : 'team members';
 
   const selectedMember = useMemo(
     () => roster.find(p => String(p.employeeId).toUpperCase() === String(memberParam || '').toUpperCase()),
@@ -256,7 +382,7 @@ export default function TeamOverview() {
       ) : selectedMember ? (
         <>
           <button type="button" className="ep-btn" onClick={closeMember} style={{ marginBottom: 12 }}>
-            ← Back to {isManagerView && tlParam && selectedTlGroup ? `${selectedTlGroup.tl.name}'s team` : 'team members'}
+            ← Back to {backLabel}
           </button>
           <div className="ep-card">
             <div className="ep-cardhead">
@@ -358,93 +484,94 @@ export default function TeamOverview() {
       ) : (
         <>
           <div className="ep-grid">
-            <KpiCard label="Team members" value={roster.length} foot="People in scope, including you" />
+            <KpiCard
+              label="Team members"
+              value={roster.length}
+              foot={isAdminView ? 'People in scope across the organisation' : 'People in scope, including you'}
+            />
             <KpiCard label="Active leads" value={totals.open} foot="Open leads across the team" />
             <KpiCard label="Avg. conversion" value={`${avgConversion}%`} foot={`${totals.converted} of ${totals.totalLeads} converted`} />
             <KpiCard label="Avg. active leads" value={avgActiveLeads} foot="Open leads per member" />
           </div>
 
-          {isManagerView && !tlParam ? (
-            <div className="ep-card">
-              <div className="ep-cardhead">
-                <div>
-                  <h3>Teams by team lead</h3>
-                  <div className="ep-muted">Click a team lead to see their members</div>
-                </div>
+          {isDrillView && currentNode && (
+            <div className="ep-muted" style={{ marginBottom: 12, fontSize: 12 }}>
+              <Link className="ep-viewall" to="/team">{isAdminView ? 'All departments' : 'All direct reports'}</Link>
+              {crumbs.map(crumb => (
+                <span key={crumb.employeeId}>
+                  {' / '}
+                  {String(crumb.employeeId).toUpperCase() === String(currentNode.employeeId).toUpperCase() ? (
+                    <strong>{crumb.name}</strong>
+                  ) : (
+                    <Link className="ep-viewall" to={`/team?node=${encodeURIComponent(crumb.employeeId)}`}>{crumb.name}</Link>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="ep-card">
+            <div className="ep-cardhead">
+              <div>
+                <h3>{listTitle}</h3>
+                <div className="ep-muted">{listSub}</div>
               </div>
-              {tlGroups.length === 0 ? (
-                <p className="ep-empty">No team leads in scope yet.</p>
-              ) : (
-                <div className="ep-member-list">
-                  {tlGroups.map(group => {
-                    const groupTotals = summarizeTeamTotals(group.members);
+            </div>
+            {visibleRows.length === 0 ? (
+              <p className="ep-empty">
+                {isManagerView && !currentNode
+                  ? 'No direct reports yet — people who report to you will appear here.'
+                  : 'No team members in scope yet.'}
+              </p>
+            ) : (
+              <>
+                <div className="ep-roster-head" aria-hidden="true">
+                  <span>Member</span>
+                  <span>Role</span>
+                  <span>Active leads</span>
+                  <span>Follow-up completion</span>
+                  <span>Follow-ups due</span>
+                  <span>Status</span>
+                </div>
+                <div className="ep-roster-list">
+                  {visibleRows.map(person => {
+                    const key = String(person.employeeId).toUpperCase();
+                    const aggregate = aggregates.get(key);
+                    const params = new URLSearchParams(searchParams);
+                    params.set('member', person.employeeId);
+                    // Group rows drill into the person's reports
+                    // (?node=); leaf rows open the member detail
+                    // (?member=, keeping ?node= so Back returns to
+                    // this tier). The URL is built in a variable —
+                    // the link-site guard in
+                    // enterprise-inner-pages.test.ts cannot see it,
+                    // so the two shapes are pinned in
+                    // team-members-head-drilldown.test.ts instead.
+                    const rowTo = aggregate
+                      ? `/team?node=${encodeURIComponent(person.employeeId)}`
+                      : `/team?${params.toString()}`;
+                    // A group row shows the subtree numbers (the
+                    // pill reads overdue, so the display person
+                    // carries the subtree's open + overdue).
+                    const displayPerson = aggregate
+                      ? { ...person, openLeads: aggregate.totals.open, overdue: aggregate.totals.overdue }
+                      : person;
                     return (
-                      <Link
-                        key={group.tl.employeeId}
-                        to={`/team?tl=${encodeURIComponent(group.tl.employeeId)}`}
-                        className="ep-member-row"
-                        aria-label={`Open ${group.tl.name}'s team`}
-                      >
-                        <span className="ep-miniavatar" aria-hidden="true">{initialsOf(group.tl.name)}</span>
-                        <span className="ep-member-copy">
-                          <strong>{group.tl.name}</strong>
-                          <small>
-                            {group.tl.designation || group.tl.roleName || 'Team Lead'}
-                            {` · ${group.members.length} member${group.members.length === 1 ? '' : 's'} · ${groupTotals.open} active leads`}
-                          </small>
-                        </span>
-                        <span className="ep-member-pct">→</span>
-                      </Link>
+                      <RosterRow
+                        key={person.userId}
+                        person={displayPerson}
+                        pct={aggregate ? aggregate.pct : (completions.get(key)?.pct ?? null)}
+                        followUpsDue={aggregate ? aggregate.followUpsDue : person.dueToday + person.overdue}
+                        to={rowTo}
+                        sub={aggregate ? `${person.employeeId} · ${aggregate.members.length} in team` : undefined}
+                        ariaLabel={aggregate ? `Open ${person.name}'s team` : undefined}
+                      />
                     );
                   })}
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="ep-card">
-              <div className="ep-cardhead">
-                <div>
-                  <h3>{isManagerView && tlParam && selectedTlGroup ? `${selectedTlGroup.tl.name}'s team` : 'Team roster'}</h3>
-                  <div className="ep-muted">
-                    {visibleRoster.length} member{visibleRoster.length === 1 ? '' : 's'} · click a member to see their leads and follow-ups
-                  </div>
-                </div>
-                {isManagerView && tlParam && (
-                  <Link className="ep-viewall" to="/team">← All teams</Link>
-                )}
-              </div>
-              {visibleRoster.length === 0 ? (
-                <p className="ep-empty">No team members in scope yet.</p>
-              ) : (
-                <>
-                  <div className="ep-roster-head" aria-hidden="true">
-                    <span>Member</span>
-                    <span>Role</span>
-                    <span>Active leads</span>
-                    <span>Follow-up completion</span>
-                    <span>Follow-ups due</span>
-                    <span>Status</span>
-                  </div>
-                  <div className="ep-roster-list">
-                    {visibleRoster.map(person => {
-                      const completion = completions.get(String(person.employeeId).toUpperCase());
-                      const params = new URLSearchParams(searchParams);
-                      params.set('member', person.employeeId);
-                      return (
-                        <RosterRow
-                          key={person.userId}
-                          person={person}
-                          pct={completion?.pct ?? null}
-                          followUpsDue={person.dueToday + person.overdue}
-                          to={`/team?${params.toString()}`}
-                        />
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
