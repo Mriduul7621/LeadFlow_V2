@@ -203,25 +203,3 @@ export function summarizeTeamTotals(people: TeamOverviewPerson[]): TeamTotals {
     { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 }
   );
 }
-
-/**
- * "Team follow-ups today": everyone with work due today or already
- * overdue, worst first (most overdue, then most due today, then
- * name) — the order a lead should work through their team.
- */
-export function teamFollowUpsToday(people: TeamOverviewPerson[]): TeamOverviewPerson[] {
-  return people
-    .filter(p => p.dueToday > 0 || p.overdue > 0)
-    .sort((a, b) => b.overdue - a.overdue || b.dueToday - a.dueToday || a.name.localeCompare(b.name));
-}
-
-/**
- * Stale-lead radar: the members carrying the most overdue follow-ups
- * (top `limit`), most overdue first. Empty when nobody is overdue.
- */
-export function staleLeadRadar(people: TeamOverviewPerson[], limit = 5): TeamOverviewPerson[] {
-  return people
-    .filter(p => p.overdue > 0)
-    .sort((a, b) => b.overdue - a.overdue || b.openLeads - a.openLeads || a.name.localeCompare(b.name))
-    .slice(0, limit);
-}

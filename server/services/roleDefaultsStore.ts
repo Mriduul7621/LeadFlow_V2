@@ -204,6 +204,15 @@ export async function getEffectiveRoleDefaults(): Promise<RoleDefaults> {
  * reference (B1: definitions stay migration-owned). Empty when the
  * table cannot be read; validation then refuses every code
  * (fail closed) rather than guessing.
+ *
+ * Columns are the PRODUCTION ones from migration 025
+ * (permission_code, module_name, action_name): there is no
+ * `permission_name` column in the table — selecting it threw on
+ * every call, the catch returned [], and the Danger Zone editor
+ * wrongly reported "No permission codes were found in the
+ * database" (audit 2026-11-20). The display name is derived from
+ * module + action ("Reports — VIEW"); the editor uses it only as
+ * a tooltip, the code is the label.
  */
 export async function getKnownPermissionCodes(): Promise<Array<{ code: string; name: string | null }>> {
   if (!isDatabaseConfigured()) return [];
@@ -217,11 +226,16 @@ export async function getKnownPermissionCodes(): Promise<Array<{ code: string; n
     );
     if (!probe.rows[0]?.exists) return [];
     const result = await getPool().query(
-      `SELECT permission_code, permission_name FROM permissions ORDER BY permission_code`
+      `SELECT permission_code, module_name, action_name FROM permissions ORDER BY permission_code`
     );
     return result.rows.map((row: any) => ({
       code: String(row.permission_code),
-      name: row.permission_name ? String(row.permission_name) : null,
+      name:
+        row.module_name && row.action_name
+          ? `${String(row.module_name)} — ${String(row.action_name)}`
+          : row.module_name
+            ? String(row.module_name)
+            : null,
     }));
   } catch {
     return [];

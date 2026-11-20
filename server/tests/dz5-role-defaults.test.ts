@@ -98,7 +98,10 @@ async function setupSchema(pool: any) {
   await pool.query(`CREATE TABLE IF NOT EXISTS roles (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), role_code VARCHAR(100) UNIQUE, role_name VARCHAR(255), hierarchy_level INT DEFAULT 0, description TEXT, is_active BOOLEAN DEFAULT TRUE, data_visibility VARCHAR(30) DEFAULT 'Own', menu_access JSONB, actions JSONB, feature_permissions JSONB, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW());`);
   await pool.query(`CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), employee_id VARCHAR(30) UNIQUE NOT NULL, full_name VARCHAR(150) NOT NULL, email VARCHAR(150) UNIQUE NOT NULL, phone VARCHAR(20), password VARCHAR(255) NOT NULL, role_id UUID NOT NULL, department_id UUID, team_id UUID, manager_id UUID, designation VARCHAR(100), joining_date DATE, profile_photo TEXT, last_login TIMESTAMP, is_active BOOLEAN DEFAULT TRUE, account_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', failed_login_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_login_attempts >= 0), locked_until TIMESTAMP, password_changed_at TIMESTAMP, employee_record_id UUID, must_change_password BOOLEAN DEFAULT FALSE, reporting_chain JSONB DEFAULT '[]'::jsonb, subordinates JSONB DEFAULT '[]'::jsonb, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), CONSTRAINT fk_users_role FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE RESTRICT);`);
   await pool.query(`CREATE TABLE IF NOT EXISTS hierarchies (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL UNIQUE, manager_id UUID, level INTEGER NOT NULL DEFAULT 1, path TEXT, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW());`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS permissions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), permission_code VARCHAR(100) UNIQUE NOT NULL, permission_name VARCHAR(255));`);
+  // Production shape from migration 025: there is NO permission_name
+  // column (a fixture with one hid the getKnownPermissionCodes bug —
+  // audit 2026-11-20). module_name / action_name are the real columns.
+  await pool.query(`CREATE TABLE IF NOT EXISTS permissions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), permission_code VARCHAR(100) UNIQUE NOT NULL, module_name VARCHAR(100) NOT NULL, action_name VARCHAR(30) NOT NULL, description TEXT, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT NOW(), updated_at TIMESTAMP NOT NULL DEFAULT NOW());`);
   await pool.query(`CREATE TABLE IF NOT EXISTS role_permissions (role_id UUID NOT NULL, permission_id UUID NOT NULL, is_allowed BOOLEAN NOT NULL DEFAULT TRUE, PRIMARY KEY (role_id, permission_id));`);
   await pool.query(`CREATE TABLE IF NOT EXISTS user_permissions (user_id UUID NOT NULL, permission_id UUID NOT NULL, is_allowed BOOLEAN NOT NULL DEFAULT TRUE, PRIMARY KEY (user_id, permission_id));`);
   await pool.query(`CREATE TABLE IF NOT EXISTS audit_logs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), actor_user_id UUID, target_user_id UUID, action_code VARCHAR(100) NOT NULL, entity_type VARCHAR(100) NOT NULL, entity_id UUID, metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT NOW());`);
@@ -171,9 +174,11 @@ describe('DZ-5 — Role defaults in the Danger Zone', () => {
 
     const permIds: Record<string, string> = {};
     for (const code of ALL_CODES) {
+      // Mirror the 025/042 seeds: Title-case module, UPPER action.
+      const [mod, act] = code.split('.');
       permIds[code] = (await pool.query(
-        `INSERT INTO permissions (permission_code, permission_name) VALUES ($1, $1) RETURNING id`,
-        [code]
+        `INSERT INTO permissions (permission_code, module_name, action_name) VALUES ($1, $2, $3) RETURNING id`,
+        [code, mod.charAt(0).toUpperCase() + mod.slice(1), act.toUpperCase()]
       )).rows[0].id;
     }
     const grant = async (roleId: string, codes: string[]) => {
@@ -312,6 +317,11 @@ describe('DZ-5 — Role defaults in the Danger Zone', () => {
       assert.equal(data.permissionCodes.length, 35, 'all canonical codes listed');
       assert.ok(data.permissionCodes.some((c: any) => c.code === 'leads.export'));
       assert.ok(data.permissionCodes.some((c: any) => c.code === 'users.lock'));
+      assert.equal(
+        data.permissionCodes.find((c: any) => c.code === 'reports.view')?.name,
+        'Reports — VIEW',
+        'display name derives from the production module/action columns'
+      );
       const unconfigured = data.unconfiguredRoles.map((r: any) => r.roleCode);
       assert.ok(unconfigured.includes('RO'), 'zero-grant RO listed');
       assert.ok(unconfigured.includes('TEAM_LEAD'), 'zero-grant TEAM_LEAD listed');

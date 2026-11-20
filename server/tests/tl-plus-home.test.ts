@@ -70,9 +70,7 @@ import {
 import { resetSessionCacheForTests } from '../../src/modules/shared/api/sessionCache';
 import {
   callerHasTeam,
-  staleLeadRadar,
   summarizeTeamTotals,
-  teamFollowUpsToday,
   type TeamOverviewPerson,
 } from '../../src/modules/team/services/teamOverviewService';
 import { KpiCard } from '../../src/modules/workspace/components/EnterprisePrimitives';
@@ -431,19 +429,6 @@ describe('teamOverviewService — team facts and shaping', () => {
     assert.deepEqual(summarizeTeamTotals([]), { open: 0, dueToday: 0, overdue: 0, converted: 0, totalLeads: 0, todayCollection: 0, noAction: 0 });
   });
 
-  it('teamFollowUpsToday lists only members with due/overdue work, worst first', () => {
-    const rows = teamFollowUpsToday(fixturePeople);
-    assert.deepEqual(rows.map(p => p.employeeId), ['EMP-002', 'EMP-003', 'EMP-001', 'EMP-004'],
-      'overdue desc, then due-today desc; the idle member is absent');
-  });
-
-  it('staleLeadRadar ranks the most overdue and caps the list', () => {
-    const rows = staleLeadRadar(fixturePeople);
-    assert.deepEqual(rows.map(p => p.employeeId), ['EMP-002', 'EMP-003', 'EMP-001'],
-      'overdue desc; the 5-overdue tie breaks on open leads (9 before 4)');
-    assert.equal(staleLeadRadar(fixturePeople, 2).length, 2, 'limit honoured');
-    assert.deepEqual(staleLeadRadar([person({ overdue: 0 })]), [], 'nobody overdue -> empty radar');
-  });
 });
 
 /* ================================================================ */
