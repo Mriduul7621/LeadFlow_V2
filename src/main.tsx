@@ -6,8 +6,13 @@ import { installAuthenticatedFetch } from './lib/apiClient';
 import { installGlobalChunkRecovery } from './utils/chunkRecovery';
 import { registerPushServiceWorker } from './modules/notifications/services/pushService';
 import { installFollowUpOutboxSync } from './modules/leads/services/followUpSync';
+import { initAndroidBackButton } from './native/backButton';
 
 installAuthenticatedFetch();
+
+// Android back button (Capacitor shell only — inert in the browser):
+// walks router history, exits only at the app root.
+initAndroidBackButton();
 
 // Web Push reminders (public/sw.js): registration only — permission is
 // requested solely from the explicit opt-in toggle in Profile settings,

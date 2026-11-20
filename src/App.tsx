@@ -13,6 +13,7 @@ import { initializeAuthSession } from './modules/auth/services/authFlow';
 import ChunkErrorBoundary from './modules/shared/components/ChunkErrorBoundary';
 import { Toaster } from 'sonner';
 import { useSessionTimeout } from './modules/shared/hooks/useSessionTimeout';
+import AndroidPromoPopup from './native/AndroidPromoPopup';
 
 /**
  * Route-level code splitting (Performance Phase 2)
@@ -294,6 +295,7 @@ export default function App() {
     <>
       <RouterProvider router={router} />
       <Toaster position="top-right" richColors expand={true} />
+      <AndroidPromoPopup />
     </>
   );
 }

@@ -1,44 +1,69 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 /**
- * capacitor.config.ts — the Android app is the WEB APP, bundled.
+ * capacitor.config.ts — the Android app is the LIVE WEB APP, remote-loaded.
  * ------------------------------------------------------------------
- * The previous wrapper was a Trusted Web Activity: a shell that opened a remote
- * URL, which meant the app was only as alive as that host's DNS. It was not —
- * the launcher showed the browser's error page and the install looked broken.
+ * History, briefly (see docs/ANDROID_RELEASE.md for the full story):
  *
- * This configuration bundles the built web assets INSIDE the APK instead
- * (`webDir: 'dist'`), so the shell always starts: no domain has to resolve for
- * the app itself to open. Only the API is remote, and where it lives is baked
- * into the bundle by `VITE_API_BASE_URL` at build time (src/lib/apiBase.ts) —
- * the CI workflow passes the live production origin.
+ * - The first wrapper was a Trusted Web Activity opening app.saudalmahi.com.
+ *   That host had no DNS, so the launcher showed the browser's error page.
+ * - The second wrapper (PR #84, Oct 2026) bundled the built web assets
+ *   INSIDE the APK (webDir `dist`) and baked the API origin in at build
+ *   time. It fixed the DNS failure, but every UI change then needed a new
+ *   APK — and LeadFlow's web layer ships several times a day.
+ * - This configuration reverses that deliberately: the shell loads the live
+ *   production LeadFlow in its WebView (`server.url`). The web layer ships
+ *   constantly, so bundling would recreate the version-fragmentation problem
+ *   the app-deployment programme exists to remove. Remote-load also needs
+ *   zero code changes: the client calls `/api/*` relative same-origin
+ *   (src/lib/apiBase.ts falls back to same origin when VITE_API_BASE_URL is
+ *   unset) and the CORS middleware passes same-origin traffic untouched.
+ *   `webDir` therefore holds only the minimal local error page
+ *   (`android-web/`), shown when the remote load fails — never a copy of
+ *   the app. `server.url` MUST be the production URL, never a preview.
  *
- * Consequences worth stating plainly, because they are the price of this:
- *   - UI changes ship with a NEW APK (the assets are not fetched from the web);
- *   - the API origin is fixed at build time — pointing the app at another
- *     backend is a rebuild with a different `api_base` input;
- *   - the API must allow the WebView origin (see the CORS middleware in
- *     server/middleware.ts; the WebView runs as https://localhost).
+ * Identity (Mahadi, 2026-11-21): this is a NEW app, not an update to the
+ * old debug build. The old app (`com.saudalmahi.leadflow`) was signed with
+ * a debug keystore that was committed to this public repo — compromised by
+ * publication — so no release-signed build can ever update those installs
+ * in place. The new app id is `com.shantalife.leadflow`; the old app is
+ * uninstalled from field phones (see docs/ANDROID_RELEASE.md §5). The
+ * package id can never change after the first release.
  *
- * `appId` and `appName` match what the product already ships, so an install of
- * this build REPLACES the previous wrapper (same package, higher versionCode)
- * instead of sitting next to it.
+ * - `server.androidScheme: 'https'` is BLOCKING: the page must be a secure
+ *   context (service worker registration, clipboard, secure-context APIs).
+ *   A non-HTTPS scheme would break those on every launch.
+ *
+ * - `server.allowNavigation` is EMPTY — deliberately. LeadFlow is a
+ *   single-origin app: everything the user navigates to lives on
+ *   lead-flow-jet.vercel.app. The only external navigation is wa.me
+ *   (WhatsApp, opened via target="_blank"), which must open in the system
+ *   browser and deep-link into WhatsApp — never inside the WebView. Never
+ *   add wa.me (or any wildcard) here.
+ *
+ * - `server.errorPath` is the built-in no-connection screen: on a
+ *   main-frame load error Capacitor loads this local page (served from the
+ *   synced `webDir` at https://localhost/) instead of a blank WebView.
+ *   The page's Retry is a full navigation to the live URL, which also
+ *   clears any stale deployment the WebView was pinned to.
+ *
+ * - Back button: the @capacitor/app plugin walks WebView history natively
+ *   when no JS listener is registered, and the web app registers a
+ *   listener (src/native/backButton.ts) that exits only at the app root.
+ *   Back never closes the app on first press.
  */
 const config: CapacitorConfig = {
-  appId: 'com.saudalmahi.leadflow',
+  appId: 'com.shantalife.leadflow',
   appName: 'Shanta Life LeadFlow',
-  webDir: 'dist',
-  // Bundled assets are served to the WebView from https://localhost. Keeping
-  // the https scheme (the Capacitor default) means the page is a secure
-  // context — service workers, clipboard and geolocation APIs behave the same
-  // way they do on the web deployment.
-  server: {
-    androidScheme: 'https',
-  },
+  webDir: 'android-web',
   android: {
-    // The API is https; mixed content stays off so a mistaken http:// base
-    // fails loudly in development instead of being silently downgraded.
     allowMixedContent: false,
+    backgroundColor: '#F7F7F2',
+  },
+  server: {
+    url: 'https://lead-flow-jet.vercel.app',
+    androidScheme: 'https',
+    errorPath: 'index.html',
   },
 };
 

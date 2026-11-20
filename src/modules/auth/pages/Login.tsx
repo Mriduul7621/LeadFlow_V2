@@ -14,6 +14,7 @@ import { activateSession, loginWithCredentials } from '../services/authFlow';
 import { User, UserRole } from '../../shared/types';
 import { preloadLeadStatuses, invalidateLeadStatusCache } from '../../workflow/utils/leadStatusMeta';
 import { waitForShellStartup } from '../../shared/api/startupPriority';
+import AndroidAppDownloadLink from '../../../native/AndroidAppDownloadLink';
 
 function detectRoleFromEmployeeId(empId: string): UserRole {
   const norm = empId.trim().toUpperCase();
@@ -212,6 +213,7 @@ export default function Login() {
                   </form>
                 )}
                 <p className="leadflow-login-help">Don’t have an account? Contact your admin</p>
+                <AndroidAppDownloadLink />
               </div>
             </div>
             <footer className="leadflow-auth-footer">© 2026 Shanta Life Insurance. All Rights Reserved.</footer>
