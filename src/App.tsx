@@ -181,6 +181,14 @@ const router = createBrowserRouter([
     element: <ProtectedRoute><FeatureGate route="/leads/:id/update"><LazyPage page={<LeadUpdate />} /></FeatureGate></ProtectedRoute>,
   },
   {
+    // Lead details edit (2026-11-20): Lead360's Edit button has
+    // navigated here since the enterprise merge, but the route did
+    // not exist — the catch-all sent the user home. The same form
+    // as Add Lead, in edit mode (LeadGenerate detects :id).
+    path: '/leads/:id/edit',
+    element: <ProtectedRoute><FeatureGate route="/leads/:id/edit"><LazyPage page={<LeadGenerate />} /></FeatureGate></ProtectedRoute>,
+  },
+  {
   },
   {
     path: '/leads/:id',

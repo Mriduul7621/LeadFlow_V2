@@ -161,6 +161,11 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/leads/upload': { route: '/leads/upload', path: '/leads/upload', roles: ADMIN_ONLY, teamLeadAllowed: true, managerAllowed: true },
   '/leads/all': { route: '/leads/all', path: '/leads/all', roles: ADMIN_ONLY },
   '/leads/:id/update': { route: '/leads/:id/update', path: '/leads', roles: EVERYONE },
+  // Lead details edit (2026-11-20): same as /leads/:id/update —
+  // the route is open to every role and the page itself gates on
+  // leads.edit (lead_tracking.edit), with the server re-checking
+  // the grant and visibility on the save.
+  '/leads/:id/edit': { route: '/leads/:id/edit', path: '/leads', roles: EVERYONE },
   '/execution-intelligence': { route: '/execution-intelligence', path: '/execution-intelligence', roles: INSIGHT_ROLES },
   // Self Performance / My Performance (2026-11-20): the Agent
   // performance layout on the caller's OWN leads. EVERYONE at the

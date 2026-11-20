@@ -78,6 +78,9 @@ const SIDEBAR_PAGES: [string, string][] = [
 const LINKED_PAGES: [string, string][] = [
   ['/team/organogram', 'src/modules/hierarchy/pages/TeamHierarchy.tsx'],
   ['/settings/performance-diagnostics', 'src/modules/settings/pages/PerformanceDiagnostics.tsx'],
+  // Lead details edit (2026-11-20): one click from Lead360, the
+  // same form as Add Lead in edit mode.
+  ['/leads/:id/edit', 'src/modules/leads/pages/LeadGenerate.tsx'],
 ];
 
 describe('inner pages — every sidebar page renders the sample heading', () => {
@@ -93,11 +96,14 @@ describe('inner pages — every sidebar page renders the sample heading', () => 
       // check: LeadList renders ONE header whose path is a ternary
       // (`listScope === 'my' ? '/leads/my' : '/leads'`), so the
       // file contains both routes as string literals, not as
-      // path="…". Accept the literal there.
+      // path="…". Accept the literal there. Same for /leads/new
+      // and /leads/:id/edit: LeadGenerate renders ONE header whose
+      // path is a ternary on isEditMode.
+      const ternaryRoutes = ['/leads/my', '/leads', '/leads/new', '/leads/:id/edit'];
       const heading =
         code.includes(`<PageHeading path="${route}"`) ||
         (code.includes('<EnterprisePageHeader') && code.includes(`path="${route}"`)) ||
-        ((route === '/leads/my' || route === '/leads') && code.includes('<EnterprisePageHeader') && code.includes(`'${route}'`));
+        (ternaryRoutes.includes(route) && code.includes('<EnterprisePageHeader') && code.includes(`'${route}'`));
       assert.ok(heading, `${file} renders the sample heading for ${route}`);
     });
   }
@@ -217,7 +223,9 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/workbench/pages/DailyWorkbench.tsx': 16,
     'src/modules/auth/pages/TaskCalendar.tsx': 5,
     'src/modules/users/pages/UserManagement.tsx': 0,
-    'src/modules/leads/pages/LeadGenerate.tsx': 0,
+    // Lead details edit (2026-11-20): 3 — save → Lead360, Cancel
+    // → Lead360, and the load-error screen's Back to Leads.
+    'src/modules/leads/pages/LeadGenerate.tsx': 3,
     'src/modules/settings/pages/PerformanceDiagnostics.tsx': 1,
     // Team Lead / Manager / Admin workspace (2026-11-20): 1 — the
     // Manager breakdown table's TL link (/team?node=…).
