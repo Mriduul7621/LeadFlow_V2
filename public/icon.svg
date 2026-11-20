@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="LeadFlow">
+  <title>LeadFlow</title>
+  <!-- LeadFlow app icon: funnel (leads flowing in) + flow line (pipeline) + orange
+       drop (the converted lead), Shanta Life palette — Olive #978C21, Sunset Orange
+       #F37021, canvas cream #F7F2E9. Same olive rounded-tile treatment as the
+       PremiumPulse icon so the apps look related side by side in the Agent Hub;
+       the funnel motif is LeadFlow's own. The orange drop echoes the orange dot
+       of the Shanta Life wordmark. -->
+  <rect width="512" height="512" rx="112" fill="#978C21"/>
+  <path d="M148 104 L364 104 Q388 104 380 126 L288 264 L288 340 Q288 364 264 364 L248 364 Q224 364 224 340 L224 264 L132 126 Q124 104 148 104 Z" fill="#F7F2E9"/>
+  <line x1="256" y1="152" x2="256" y2="348" stroke="#978C21" stroke-width="26" stroke-linecap="round"/>
+  <circle cx="256" cy="400" r="26" fill="#F7F2E9"/>
+  <circle cx="256" cy="400" r="18" fill="#F37021"/>
+</svg>

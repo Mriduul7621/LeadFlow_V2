@@ -28,8 +28,8 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'LeadFlow — ফলো-আপ রিমাইন্ডার';
   const options = {
     body: payload.body || '',
-    icon: '/android-chrome-192x192.png',
-    badge: '/android-chrome-192x192.png',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
     data: { url: payload.url || '/workbench' },
   };
   event.waitUntil(self.registration.showNotification(title, options));
