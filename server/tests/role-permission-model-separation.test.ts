@@ -11,7 +11,10 @@
  * Guards:
  *  1. Feature Access and Action Permissions are separate concepts in the
  *     editor (distinct constants; APP_FEATURES carries no child toggles).
- *  2. Feature Access UI contains module visibility only.
+ *  2. The checklist keeps the layers separate in the MODEL (distinct
+ *     constants, no suboptions) while merging them in the UI: enabling a
+ *     feature reveals its actions inline; the feature toggle never
+ *     touches action grants.
  *  3. Legacy action-like duplicate sub-options are no longer exposed.
  *  4. Every canonical code exposed in the UI exists in the migration-025
  *     permission catalog across its canonical migrations (no invented codes).
@@ -21,8 +24,9 @@
  *  6. Admin-only capabilities stay requireAdmin (role matrix GET/PUT,
  *     fine-permissions, campaign delete / clear-all).
  *  7. Self-service password change is NOT modeled as users.edit.
- *  8. Dependency rule: hidden module => action group marked inactive
- *     (grants preserved), with the documented helper text.
+ *  8. Dependency rule: a disabled feature hides its actions outright
+ *     (grants preserved, counted note shown), with the documented helper
+ *     text; the old module→features activity map is gone.
  *  9. usePermissions: self-service settings keys bypass the canonical
  *     fail-closed lookup; configure_* resolves settings.manage.
  * 10. adminService defaults are sub-option free; workbench stays
@@ -56,7 +60,7 @@ function appFeaturesBlock(): string {
 function actionGroupsBlock(): string {
   const src = userMgmt();
   const start = src.indexOf('const ACTION_PERMISSION_GROUPS');
-  const end = src.indexOf('const ACTION_MODULE_FEATURE_KEYS');
+  const end = src.indexOf('const FEATURE_ACTION_CODES');
   assert.ok(start >= 0 && end > start, 'ACTION_PERMISSION_GROUPS must exist');
   return src.slice(start, end);
 }
@@ -118,16 +122,32 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     );
   });
 
-  it('2. Feature Access UI contains module visibility only (no child toggles)', () => {
+  it('2. The checklist keeps the layers separate in the MODEL while merging them in the UI', () => {
     const src = userMgmt();
     const block = appFeaturesBlock();
     assert.ok(!block.includes('suboptions'), 'APP_FEATURES must not declare suboptions');
     // The module-visibility-only contract is documented at the APP_FEATURES declaration.
     assert.ok(src.includes('MODULE / PAGE VISIBILITY ONLY'), 'the module-visibility-only contract must be documented');
-    // Editor renders a plain enable/disable toggle per feature, no checkbox children.
-    const renderBlock = src.slice(src.indexOf('3. Feature Access'), src.indexOf('4. Action Permissions'));
-    assert.ok(renderBlock.includes('✓ Enabled'), 'feature toggles must render the enable/disable control');
-    assert.ok(!renderBlock.includes("type=\"checkbox\""), 'Feature Access panel must not render checkbox children');
+    // Checklist redesign (2026-11-20, Mahadi): the old separate "3. Feature
+    // Access" / "4. Action Permissions" panels are gone — the editor is ONE
+    // checklist where enabling a feature reveals its actions inline as
+    // checkboxes. The MODEL separation is unchanged (distinct constants,
+    // no suboptions); only the presentation merged.
+    assert.ok(!src.includes('3. Feature Access'), 'the old separate Feature Access panel must be gone');
+    assert.ok(!src.includes('4. Action Permissions'), 'the old separate Action Permissions panel must be gone');
+    const checklistIdx = src.indexOf('2. Access Checklist');
+    assert.ok(checklistIdx >= 0, 'the checklist heading must exist');
+    const checklist = src.slice(checklistIdx);
+    assert.ok(checklist.includes("'✓ Enabled'"), 'feature toggles must render the enable/disable control');
+    assert.ok(checklist.includes('FEATURE_ACTION_CODES[feature.key]'), 'the checklist must look up actions per feature');
+    assert.ok(checklist.includes('type="checkbox"'), 'action checkboxes must render inline under their feature');
+    // The feature toggle only ever touches feature visibility — it must
+    // never clear (or set) action grants.
+    const toggleIdx = checklist.indexOf('[feature.key]: { ...feat, view: !enabled }');
+    assert.ok(toggleIdx >= 0, 'the feature toggle must update only the feature view flag');
+    const toggleSlice = checklist.slice(Math.max(0, toggleIdx - 400), toggleIdx + 100);
+    assert.ok(toggleSlice.includes('setRoleFormFeatures'), 'the feature toggle must write roleFormFeatures');
+    assert.ok(!toggleSlice.includes('setRoleFormActions'), 'the feature toggle must never touch roleFormActions');
   });
 
   it('3. Legacy action-like duplicate sub-options are no longer exposed', () => {
@@ -284,25 +304,35 @@ describe('Role Permission Model — three-layer separation (source guards)', () 
     // (asserted in test 6's requireAdmin retention list).
   });
 
-  it('8. Dependency rule: hidden modules mark action groups inactive (grants preserved)', () => {
+  it('8. Dependency rule: a disabled feature hides its actions (grants preserved)', () => {
     const src = userMgmt();
-    assert.ok(src.includes('const ACTION_MODULE_FEATURE_KEYS'), 'module→group activity mapping must exist');
-    // A hidden module must disable its checkboxes. The exact expression may grow
-    // extra arms (e.g. Phase F locks ADMIN's toggles because that role bypasses
-    // the matrix), so the guard matches the CONDITION rather than one literal:
-    // whatever else is in there, `!groupActive` has to be part of it.
-    assert.match(
-      src,
-      /disabled=\{[^}]*!groupActive[^}]*\}/,
-      'inactive groups must disable the checkboxes visually'
+    // Checklist redesign (2026-11-20): the old module→features activity
+    // map (ACTION_MODULE_FEATURE_KEYS) and its dimmed-checkbox groups are
+    // gone. The checklist maps feature → actions instead, and a disabled
+    // feature hides its actions outright — the grants stay saved in
+    // roleFormActions and are saved unchanged.
+    assert.ok(!src.includes('ACTION_MODULE_FEATURE_KEYS'), 'the old module→features activity map must be removed, not orphaned');
+    assert.ok(src.includes('const FEATURE_ACTION_CODES'), 'the feature→actions checklist mapping must exist');
+    assert.ok(!src.includes('!groupActive'), 'the old group-activity gating must be gone');
+    // Actions render only under an enabled feature.
+    assert.ok(
+      src.includes('{enabled && actionCodes.length > 0 && ('),
+      'action checkboxes must render only when their feature is enabled'
     );
-    // The wording must stay accurate: hiding a module only removes UI reach.
+    // The wording must stay accurate: hiding a feature only removes UI reach.
     // It must NOT claim grants "have no effect" — the API still enforces
     // saved grants regardless of Feature Access.
     assert.ok(src.includes("the role can't reach these actions in the UI. Grants stay saved and still apply at the API."), 'the UI must state accurately that grants are preserved and still enforced at the API');
     assert.ok(!src.includes('have no effect'), 'the UI must not claim hidden-module grants have no effect');
+    // A disabled feature with saved grants says so (counted), so the admin
+    // never mistakes "hidden" for "lost".
+    assert.ok(src.includes('savedActionCount'), 'the checklist must count saved actions on a disabled feature');
+    assert.ok(src.includes('stay') && src.includes('saved — enable this feature to view'), 'the disabled-feature note must offer re-enabling to view the saved actions');
     // Toggling one action never mutates its siblings.
     assert.ok(src.includes('setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })'), 'each action must toggle independently');
+    // The ADMIN/SUPERADMIN bypass still locks the checkboxes (every action
+    // always allowed, cannot be switched off).
+    assert.ok(src.includes('disabled={editingBypassRole}'), 'bypass roles must still lock the action checkboxes');
   });
 
   it('9. the editor shows the Feature Access vs Action Permissions helper text', () => {

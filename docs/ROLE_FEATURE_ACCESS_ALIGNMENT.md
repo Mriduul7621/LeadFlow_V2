@@ -1,45 +1,49 @@
 # Role Feature Access Alignment
 
 This document records how the **Role Feature Access** administration UI
-(the "Roles & Access" tab under **Users → User Management**) is aligned with
-the live five-tab navigation, More directories, routes, Dashboard, and Daily
-Workbench.
+(the "Roles & Access" tab under **Users & Roles**) is aligned with the
+live enterprise workspace navigation (sidebar groups, page titles),
+routes, and Daily Workbench.
 
 - Editor: `src/modules/users/pages/UserManagement.tsx` (`APP_FEATURES` + `handleSaveRole`)
 - Role defaults / reconciliation: `src/modules/admin/services/adminService.ts`
-- Primary navigation source: `src/layouts/AppLayout.tsx`
-- More directory source: `src/modules/navigation/pages/MorePages.tsx`
+- Navigation source: `src/layouts/enterpriseNav.ts` (sidebar labels + `FALLBACK_LABELS` page titles)
 - Live route source of truth: `src/App.tsx`
 
 ---
 
 ## Canonical navigation & routes
 
-The primary tabs are **Home**, **My Work**, **Leads**, **Add Lead**, and
-**More**. Secondary pages are grouped into More directories:
+The enterprise workspace sidebar has one **WORKSPACE** group per role
+(Admin adds **CONFIGURATION** and **ADMINISTRATION** groups), a profile
+block with a settings gear, and a Help/About footer. Notifications live
+behind the topbar bell. Pages below marked "URL only" have no sidebar
+item; their routes stay live.
 
 | Navigation group | Visible label | Route |
 | --- | --- | --- |
-| Primary navigation | Home | `/` |
-| Primary navigation | My Work | `/workbench` |
-| Primary navigation | Leads | `/leads` |
-| Primary navigation | Add Lead | `/leads/new` |
-| Primary navigation | More | `/more` |
-| More | Profile & settings | `/settings` |
-| More | Notifications | `/notifications` |
-| More | Help & Support | `/help` |
-| More | About LeadFlow | `/about` |
-| More → Reports | Reports | `/reports` |
-| More → Reports | Activities | `/activities` |
-| More → Reports | Task Calendar | `/task-calendar` |
-| More → Reports | Follow-up Queue | `/follow-up` |
-| More → Reports | Performance / NCP Progress / Trends / Campaigns | `/execution-intelligence`, `/ncp-progress`, `/trend-charts`, `/campaign-breakdown` |
-| More → Reports | Team | `/team` |
-| More → Reports (admin only) | Performance Diagnostics | `/settings/performance-diagnostics` |
-| Administration (admin only) | User Management | `/users` |
-| Administration (admin only) | Lead Upload | `/leads/upload` |
-| Administration (admin only) | Lead Pool | `/leads/all` |
-| Administration (admin only) | System | `/settings/system` |
+| Workspace | My Work / Team Overview | `/` |
+| Workspace | My Leads / Team Leads / All Leads | `/leads` |
+| Workspace | Add Lead | `/leads/new` |
+| Workspace | Lead Intake | `/leads/upload` |
+| Workspace | Lead Pool | `/leads/all` |
+| Workspace | Follow-up Queue / Follow-up Monitor | `/follow-up` |
+| Workspace | Team Members | `/team` |
+| Workspace | My Performance / Team Performance | `/execution-intelligence` |
+| Workspace | Task Calendar | `/task-calendar` |
+| Workspace | Roadshow | `/roadshows` |
+| Workspace | Activities | `/activities` |
+| Workspace (Agent bottom bar + URL) | Daily Workbench | `/workbench` |
+| URL only | NCP Progress | `/ncp-progress` |
+| URL only | Trends & Reports | `/trend-charts` |
+| URL only | Campaigns | `/campaign-breakdown` |
+| Workspace (Admin) | Users & Roles | `/users` |
+| Profile gear | Profile & Settings | `/settings` |
+| Topbar bell | Notifications | `/notifications` |
+| Sidebar footer | Help | `/help` |
+| Sidebar footer | About | `/about` |
+| Configuration (Admin) | Status & Pipeline / Products & Campaigns / System Settings | `/settings/status-pipeline`, `/settings/products-campaigns`, `/settings/system` |
+| Administration (Admin) | Administration | `/administration` |
 
 ---
 
@@ -50,28 +54,27 @@ the feature groups and visible labels match the current navigation structure.
 
 | Visible label | Navigation group | Internal key | Route | Enforcement |
 | --- | --- | --- | --- | --- |
-| Dashboard | Primary navigation | `dashboard` | `/` | `menuAccess['/']` |
-| Daily Workbench | Primary navigation | `workbench` | `/workbench` | `menuAccess['/workbench']` |
-| Lead Workspace | Primary navigation | `lead_tracking` | `/leads` | `menuAccess['/leads']` |
-| Add New Lead | Primary navigation | `lead_generate` | `/leads/new` | `menuAccess['/leads/new']` |
-| Activities | More → Reports | `activities` | `/activities` | `menuAccess['/activities']` |
-| Task Calendar | More → Reports | `task_calendar` | `/task-calendar` | `menuAccess['/task-calendar']` |
-| Follow-up Queue | More → Reports | `follow_up_strategy` | `/follow-up` | `menuAccess['/follow-up']` |
-| Performance | More → Reports | `execution_intelligence` | `/execution-intelligence` | `menuAccess['/execution-intelligence']` |
-| NCP Progress | More → Reports | `ncp_progress` | `/ncp-progress` | `menuAccess['/ncp-progress']` |
-| Trends | More → Reports | `trend_charts` | `/trend-charts` | `menuAccess['/trend-charts']` |
-| Campaigns | More → Reports | `campaign_breakdown` | `/campaign-breakdown` | `menuAccess['/campaign-breakdown']` |
-| Team | More → Reports | `team_progress` | `/team` | `menuAccess['/team']` |
-| Lead Upload | Administration | `lead_upload` | `/leads/upload` | `menuAccess['/leads/upload']` |
-| Lead Pool | Administration | `all_leads` | `/leads/all` | `menuAccess['/leads/all']` |
-| User Management | Administration | `user_management` | `/users` | `menuAccess['/users']` |
-| Profile & settings | More | `settings_control` | `/settings` | `menuAccess['/settings']` |
-| Notifications | More | `notifications` | `/notifications` | `menuAccess['/notifications']` |
-| Help & Support | More | `help_support` | `/help` | `menuAccess['/help']` |
-| About LeadFlow | More | `about_leadflow` | `/about` | `menuAccess['/about']` |
+| My Work / Team Overview | Workspace | `dashboard` | `/` | `menuAccess['/']` |
+| My Leads / Team Leads / All Leads | Workspace | `lead_tracking` | `/leads` | `menuAccess['/leads']` |
+| Add Lead | Workspace | `lead_generate` | `/leads/new` | `menuAccess['/leads/new']` |
+| Lead Intake | Workspace | `lead_upload` | `/leads/upload` | `menuAccess['/leads/upload']` |
+| Lead Pool | Workspace | `all_leads` | `/leads/all` | `menuAccess['/leads/all']` |
+| Follow-up Queue | Workspace | `follow_up_strategy` | `/follow-up` | `menuAccess['/follow-up']` |
+| Team Members | Workspace | `team_progress` | `/team` | `menuAccess['/team']` |
+| My Performance / Team Performance | Workspace | `execution_intelligence` | `/execution-intelligence` | `menuAccess['/execution-intelligence']` |
+| Task Calendar | Workspace | `task_calendar` | `/task-calendar` | `menuAccess['/task-calendar']` |
+| Roadshow | Workspace | `roadshow_follow_up` | `/roadshows` | `menuAccess['/roadshows']` |
+| Activities | Workspace | `activities` | `/activities` | `menuAccess['/activities']` |
+| Daily Workbench | Workspace | `workbench` | `/workbench` | `menuAccess['/workbench']` |
+| NCP Progress | Reports | `ncp_progress` | `/ncp-progress` | `menuAccess['/ncp-progress']` |
+| Trends & Reports | Reports | `trend_charts` | `/trend-charts` | `menuAccess['/trend-charts']` |
+| Campaigns | Reports | `campaign_breakdown` | `/campaign-breakdown` | `menuAccess['/campaign-breakdown']` |
+| Users & Roles | Administration | `user_management` | `/users` | `menuAccess['/users']` |
+| Profile & Settings | Administration | `settings_control` | `/settings` | `menuAccess['/settings']` |
+| Notifications | More pages | `notifications` | `/notifications` | `menuAccess['/notifications']` |
+| Help | More pages | `help_support` | `/help` | `menuAccess['/help']` |
+| About | More pages | `about_leadflow` | `/about` | `menuAccess['/about']` |
 
-`/reports` is an aggregate directory rather than a separate feature toggle:
-it opens when any report/workspace entry enabled for the role is available.
 The Administration directory, System settings, and Performance Diagnostics
 remain guarded by the admin route boundary and are not grants for custom
 non-admin roles.
@@ -107,14 +110,17 @@ full access via the explicit bypass.
 
 | Legacy label | Current label |
 | --- | --- |
-| Lead Generation | Add New Lead |
-| Execution Intelligence | Performance |
-| Trend Charts | Trends |
+| Lead Generation | Add Lead |
+| Execution Intelligence | My Performance / Team Performance |
+| Trend Charts | Trends & Reports |
 | Campaign Breakdown | Campaigns |
 | Follow-up Strategy | Follow-up Queue |
-| Team Progress | Team |
-| User Management | Users |
+| Team Progress | Team Members |
+| User Management | Users & Roles |
 | Lead Pool Tab | Lead Pool |
+
+The labels were renamed again in the 2026-11-20 checklist redesign
+(§6) to match the enterprise workspace names; internal keys never change.
 
 Personal Settings is now self-service profile and password management only.
 System configuration remains in the admin-only Administration → System
@@ -172,15 +178,15 @@ is a valid role configuration.
 
 | Canonical code | Gates (client) | Server enforcement |
 | --- | --- | --- |
-| `leads.view` | Lead Workspace / Lead Pool directory | `hasPermissionCode(caller, 'leads.view')` |
-| `leads.create` | Add New Lead | `hasPermissionCode(caller, 'leads.create')` |
+| `leads.view` | My Leads / Team Leads / All Leads / Lead Pool | `hasPermissionCode(caller, 'leads.view')` |
+| `leads.create` | Add Lead | `hasPermissionCode(caller, 'leads.create')` |
 | `leads.edit` | Lead status update + Daily Workbench Complete/Edit/Cancel/Reschedule | `hasPermissionCode(caller, 'leads.edit')` |
 | `leads.delete` | Lead Pool individual delete | `hasPermissionCode(caller, 'leads.delete')` |
 | `leads.assign` | Normal assign / reassign / unassign | `hasPermissionCode(caller, 'leads.assign')`; server also permits this grant for existing-owner transfers |
 | `leads.transfer` | Existing-owner transfer alternative | `hasPermissionCode(caller, 'leads.transfer')` on mounted update/import transfer paths; server visibility/target checks remain authoritative |
-| `leads.import` | Bulk Upload | `hasPermissionCode(caller, 'leads.import')` |
+| `leads.import` | Lead Intake | `hasPermissionCode(caller, 'leads.import')` |
 | `leads.export` | Export audit logs | client gate (`all_leads.export_raw_xlsx`) — no server export endpoint exists |
-| `dashboard.view` | Dashboard | `hasPermissionCode(caller, 'dashboard.view')` |
+| `dashboard.view` | My Work / Team Overview | `hasPermissionCode(caller, 'dashboard.view')` |
 
 > Campaign purge is not the Lead Pool individual-delete action. The mounted
 > `DELETE /leads/campaign/:campaign` route remains `requireAdmin`, so only
@@ -258,6 +264,10 @@ Exact DB fields:
   actions are independent (revoke Edit ≠ revoke View; grant View ≠ grant Edit),
   unknown/malformed codes fail closed, writes are admin-gated, and ADMIN keeps
   its bypass.
+- `server/tests/role-editor-checklist.test.ts` — the 2026-11-20 checklist
+  redesign: full label table, enterpriseNav cross-check, action coverage
+  per feature, save-payload equivalence, `reports.view` sync, bypass,
+  structure, mobile.
 
 ---
 
@@ -283,3 +293,51 @@ model separates the three layers and is specified in
 - Daily Workbench mutation boundary is unchanged: complete/edit/cancel/
   reschedule still gate on `canAccess('lead_tracking', 'edit')` →
   `leads.edit` server enforcement.
+
+---
+
+## Update — checklist redesign (2026-11-20)
+
+Mahadi found the old editor unfriendly: the feature names did not match
+the app's names, and granting access meant jumping across four sections.
+The editor is now **Role Details** (role name/ID + Data Visibility +
+Save Role) followed by **one Access Checklist**: enabling a feature
+reveals that feature's specific actions inline as checkboxes, right
+there. The old separate "Feature Access" and "Action Permissions"
+panels are gone; the saved permission model is unchanged
+(`handleSaveRole` is untouched — same `menuAccess`, same
+`role_permissions` grants, same `dataVisibility`).
+
+The mapping from each action to its checklist home lives in
+`FEATURE_ACTION_CODES` (presentation only — the save path still builds
+grants from `ACTION_PERMISSION_GROUPS`). Each action appears under
+exactly one feature, except `reports.view`, which is shared by the four
+report pages and appears under each of them; all four checkboxes read
+and write the one underlying grant, so they can never disagree. Turning
+a feature off hides its actions but never drops the grants — the editor
+shows a counted note and the grants still apply at the API.
+
+Old → new labels (internal keys and routes unchanged):
+
+| Internal key | Old label [group] | New label [group] |
+| --- | --- | --- |
+| `dashboard` | Dashboard [Primary navigation] | My Work / Team Overview [Workspace] |
+| `workbench` | Daily Workbench [Primary navigation] | Daily Workbench [Workspace] |
+| `lead_tracking` | Lead Workspace [Primary navigation] | My Leads / Team Leads / All Leads [Workspace] |
+| `lead_generate` | Add New Lead [Primary navigation] | Add Lead [Workspace] |
+| `lead_upload` | Bulk Upload [Administration] | Lead Intake [Workspace] |
+| `all_leads` | Lead Pool [Administration] | Lead Pool [Workspace] |
+| `follow_up_strategy` | Follow-up Queue [More → Reports] | Follow-up Queue [Workspace] |
+| `team_progress` | Team [More → Reports] | Team Members [Workspace] |
+| `execution_intelligence` | Performance [More → Reports] | My Performance / Team Performance [Workspace] |
+| `task_calendar` | Task Calendar [More → Reports] | Task Calendar [Workspace] |
+| `roadshow_follow_up` | Roadshow Follow-up [More] | Roadshow [Workspace] |
+| `activities` | Activities [More → Reports] | Activities [Workspace] |
+| `ncp_progress` | NCP Progress [More → Reports] | NCP Progress [Reports] |
+| `trend_charts` | Trends [More → Reports] | Trends & Reports [Reports] |
+| `campaign_breakdown` | Campaigns [More → Reports] | Campaigns [Reports] |
+| `user_management` | Users [Administration] | Users & Roles [Administration] |
+| `settings_control` | Settings [More] | Profile & Settings [Administration] |
+| `notifications` | Notifications [More] | Notifications [More pages] |
+| `help_support` | Help & Support [More] | Help [More pages] |
+| `about_leadflow` | About LeadFlow [More] | About [More pages] |
