@@ -1869,9 +1869,11 @@
   z-index: 20;
 }
 .ep-brand { display: flex; align-items: center; gap: 10px; padding: 2px 10px 24px; }
+/* The sidebar brand mark is the Shanta Life logo image (Mahadi,
+   2026-11-20) — the old 'L' monogram tile's deep-green background
+   and centred letter are gone; the wide logo sits at tile height. */
 .ep-logo {
-  width: 36px; height: 36px; border-radius: 11px; background: var(--ep-deep);
-  display: grid; place-items: center; color: white; font-weight: 800; font-size: 18px;
+  height: 36px; width: auto; max-width: 120px; object-fit: contain;
   flex-shrink: 0;
 }
 .ep-brand strong { font-size: 18px; display: block; line-height: 1.2; }
