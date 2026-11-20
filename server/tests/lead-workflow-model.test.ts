@@ -48,9 +48,10 @@ describe('Lead workflow model', () => {
     // Enterprise Preview (2026-11-19): the five primary shell tabs are
     // retired — the sidebar nav now lives in enterpriseNav.ts, with the
     // sample's labels. This guard still protects the ROUTES and the
-    // internal feature keys, which are unchanged. The legacy names still
-    // live in the translations and the role-editor feature catalog
-    // asserted below.
+    // internal feature keys, which are unchanged. The legacy name 'Lead
+    // Workspace' still lives in the translations; the role-editor
+    // feature catalog now carries the current app names (checklist
+    // redesign, 2026-11-20) — the combined leads label and 'Lead Pool'.
     const nav = read('src/layouts/enterpriseNav.ts');
     const translations = read('src/modules/shared/utils/translations.ts');
     const roleEditor = read('src/modules/users/pages/UserManagement.tsx');
@@ -86,7 +87,7 @@ describe('Lead workflow model', () => {
     assert.ok(app.includes("path: '/more'"), 'the /more route must survive the shell redesign');
     assert.ok(translations.includes('navLeadTracking: "Lead Workspace"'));
     assert.ok(translations.includes('navAllLeads: "Lead Pool"'));
-    assert.match(roleEditor, /key: 'lead_tracking',[\s\S]*label: 'Lead Workspace'/);
+    assert.match(roleEditor, /key: 'lead_tracking',[\s\S]*label: 'My Leads \/ Team Leads \/ All Leads'/);
     assert.match(roleEditor, /key: 'all_leads',[\s\S]*label: 'Lead Pool'/);
     assert.ok(app.includes("path: '/leads'"));
     assert.ok(app.includes("path: '/leads/all'"));

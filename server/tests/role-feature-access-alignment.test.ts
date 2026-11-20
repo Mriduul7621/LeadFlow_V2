@@ -109,16 +109,43 @@ describe('Role Feature Access — source guards', () => {
     assert.ok(/FAIL-CLOSED|fail.closed|fail closed/i.test(svc), 'adminService must document the fail-closed workbench default');
   });
 
-  it('legacy labels are renamed to current navigation names (internal keys preserved)', () => {
+  it('labels match the current enterprise workspace names (internal keys preserved)', () => {
     const block = appFeaturesBlock();
-    // New current names present. NOTE: 'System Connection' was the label of
-    // the settings_control.view_sync SUB-OPTION and is intentionally gone
-    // with the rest of the action-like child toggles.
-    for (const label of ['Performance', 'Trends', 'Campaigns', 'Follow-up Queue', 'Team', 'Users', 'Add New Lead']) {
+    // Enterprise checklist redesign (2026-11-20, Mahadi): the editor's
+    // visible labels mirror the app's sidebar labels
+    // (src/layouts/enterpriseNav.ts) and page titles (FALLBACK_LABELS).
+    // A page whose sidebar label differs per role carries the combined
+    // label (My Work / Team Overview, My / Team Performance).
+    for (const label of [
+      'My Work / Team Overview',
+      'My Leads / Team Leads / All Leads',
+      'Add Lead',
+      'Lead Intake',
+      'Lead Pool',
+      'Follow-up Queue',
+      'Team Members',
+      'My Performance / Team Performance',
+      'NCP Progress',
+      'Trends & Reports',
+      'Campaigns',
+      'Users & Roles',
+      'Profile & Settings',
+      'Roadshow',
+      'Daily Workbench',
+      'Task Calendar',
+      'Activities',
+      'Notifications',
+      'Help',
+      'About',
+    ]) {
       assert.ok(block.includes(`label: '${label}'`), `must use current label '${label}'`);
     }
-    // Legacy visible labels removed
-    for (const legacy of ["'Execution Intelligence'", "'Trend Charts'", "'Campaign Breakdown'", "'Follow-up Strategy'", "'Team Progress'", "'Lead Generation'", "'Sync Settings'"]) {
+    // Legacy visible labels removed. NOTE: 'Dashboard', 'Users' and
+    // 'Settings' are NOT in this list — those words survive as
+    // ACTION_PERMISSION_GROUPS module names ('Dashboard', 'Users',
+    // 'Settings'), which the block span also covers; only the
+    // FEATURE labels were renamed.
+    for (const legacy of ["'Lead Workspace'", "'Add New Lead'", "'Bulk Upload'", "'Performance'", "'Trends'", "'Team'", "'Roadshow Follow-up'", "'Help & Support'", "'About LeadFlow'", "'Execution Intelligence'", "'Trend Charts'", "'Campaign Breakdown'", "'Follow-up Strategy'", "'Team Progress'", "'Lead Generation'", "'Sync Settings'"]) {
       assert.ok(!block.includes(legacy), `legacy label ${legacy} must be renamed`);
     }
     // Internal keys preserved (not blindly renamed). NOTE: `view_sync` was a
@@ -140,7 +167,7 @@ describe('Role Feature Access — source guards', () => {
     }
   });
 
-  it('feature groups reflect the new primary, More and Administration structure', () => {
+  it('feature groups mirror the enterprise workspace structure', () => {
     const block = appFeaturesBlock();
     // Strip sub-option blocks so only top-level feature keys remain.
     const topLevel = block.replace(/suboptions:\s*\[[\s\S]*?\],/g, '');
@@ -148,34 +175,65 @@ describe('Role Feature Access — source guards', () => {
     const re = /key:\s*'([^']+)'/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(topLevel)) !== null) keys.push(m[1]);
+    // Checklist order (2026-11-20): the sidebar WORKSPACE order first,
+    // then Reports, Administration, More pages.
     const expected = [
       'dashboard',
-      'workbench',
-      'activities',
-      'task_calendar',
-      'follow_up_strategy',
       'lead_tracking',
       'lead_generate',
       'lead_upload',
       'all_leads',
+      'follow_up_strategy',
+      'team_progress',
       'execution_intelligence',
+      'task_calendar',
+      'roadshow_follow_up',
+      'activities',
+      'workbench',
       'ncp_progress',
       'trend_charts',
       'campaign_breakdown',
-      'team_progress',
       'user_management',
       'settings_control',
-      'roadshow_follow_up',
       'notifications',
       'help_support',
       'about_leadflow',
     ];
-    assert.deepEqual(keys, expected, 'feature taxonomy must include every new navigation destination');
-    const primary = block.slice(0, block.indexOf("key: 'activities'"));
-    assert.ok(primary.includes("group: 'Primary navigation'"), 'primary tabs must be grouped together');
-    assert.ok(block.includes("group: 'More → Reports'"), 'legacy report pages must be grouped under More → Reports');
-    assert.ok(block.includes("group: 'Administration'"), 'admin modules must be grouped under Administration');
-    assert.ok(block.includes("group: 'More'"), 'profile and utility pages must be grouped under More');
+    assert.deepEqual(keys, expected, 'feature taxonomy must include every navigation destination in checklist order');
+    // Groups mirror where the page lives in the app — no stale
+    // 'Primary navigation' / 'More → Reports' / 'More' groups (there is
+    // no More menu anymore; the sidebar has WORKSPACE, CONFIGURATION
+    // and ADMINISTRATION groups).
+    for (const group of ['Workspace', 'Reports', 'Administration', 'More pages']) {
+      assert.ok(block.includes(`group: '${group}'`), `group '${group}' must exist`);
+    }
+    for (const stale of ["group: 'Primary navigation'", "group: 'More → Reports'", "group: 'More'"]) {
+      assert.ok(!block.includes(stale), `stale group ${stale} must be gone`);
+    }
+    // Spot-check the key → group mapping (parsed per feature entry).
+    const groupOf = new Map<string, string>();
+    const entryRe = /key: '([^']+)'[\s\S]*?group: '([^']+)'/g;
+    let e: RegExpExecArray | null;
+    while ((e = entryRe.exec(topLevel)) !== null) groupOf.set(e[1], e[2]);
+    const expectedGroups: Record<string, string> = {
+      dashboard: 'Workspace',
+      lead_tracking: 'Workspace',
+      lead_upload: 'Workspace',
+      all_leads: 'Workspace',
+      execution_intelligence: 'Workspace',
+      workbench: 'Workspace',
+      ncp_progress: 'Reports',
+      trend_charts: 'Reports',
+      campaign_breakdown: 'Reports',
+      user_management: 'Administration',
+      settings_control: 'Administration',
+      notifications: 'More pages',
+      help_support: 'More pages',
+      about_leadflow: 'More pages',
+    };
+    for (const [key, group] of Object.entries(expectedGroups)) {
+      assert.equal(groupOf.get(key), group, `feature ${key} must sit in group '${group}'`);
+    }
   });
 
   it('Lead Pool stays a view control and does not claim data-scope authority', () => {

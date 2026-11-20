@@ -49,6 +49,17 @@ import { RolePermission, User } from '../../shared/types';
 /*  Status", the dept/role/user/hier child toggles,                    */
 /*  configure_parameters, …) were duplicates of canonical codes and    */
 /*  are no longer exposed.                                             */
+/*                                                                     */
+/*  Labels + groups mirror the CURRENT app (enterprise workspace,      */
+/*  2026-11-20): sidebar labels from src/layouts/enterpriseNav.ts,     */
+/*  page titles from its FALLBACK_LABELS map. Internal keys and the    */
+/*  menuAccess paths are the storage contract and never change.        */
+/*  Groups mirror where the page lives: Workspace = the sidebar        */
+/*  WORKSPACE group; Reports = report pages with no sidebar item;      */
+/*  Administration = Users & Roles + system configuration; More pages  */
+/*  = topbar bell / sidebar footer pages. A page whose sidebar label   */
+/*  differs per role carries the combined label (e.g. My Work / Team   */
+/*  Overview).                                                         */
 /* ------------------------------------------------------------------ */
 interface FeatureMeta {
   key: string;
@@ -62,96 +73,102 @@ interface FeatureMeta {
 const APP_FEATURES: FeatureMeta[] = [
   {
     key: 'dashboard',
-    label: 'Dashboard',
-    desc: 'View performance summary, pipeline, follow-up discipline and daily execution.',
-    group: 'Primary navigation',
+    label: 'My Work / Team Overview',
+    desc: 'The role’s home page — My Work for Agents, Team Overview for Team Lead, Manager and Admin.',
+    group: 'Workspace',
     path: '/',
   },
   {
-    key: 'workbench',
-    label: 'Daily Workbench',
-    desc: "Manage today's calls, meetings, follow-ups and tasks from one execution workspace.",
-    group: 'Primary navigation',
-    path: '/workbench',
-  },
-  {
-    key: 'activities',
-    label: 'Activities',
-    desc: 'Open the activity history from More → Reports.',
-    group: 'More → Reports',
-    path: '/activities',
-  },
-  {
-    key: 'task_calendar',
-    label: 'Task Calendar',
-    desc: 'View scheduled calls, meetings, follow-ups and tasks from More → Reports.',
-    group: 'More → Reports',
-    path: '/task-calendar',
-  },
-  {
-    key: 'follow_up_strategy',
-    label: 'Follow-up Queue',
-    desc: 'View overdue, today and upcoming follow-ups from More → Reports.',
-    group: 'More → Reports',
-    path: '/follow-up',
-  },
-  {
     key: 'lead_tracking',
-    label: 'Lead Workspace',
-    desc: 'Open the lead workspace; what the role can do inside it follows Action Permissions.',
-    group: 'Primary navigation',
+    label: 'My Leads / Team Leads / All Leads',
+    desc: 'Open the leads list — My Leads for Agents, Team Leads for Team Lead and Manager, All Leads for Admin. What the role can do inside it follows the actions below.',
+    group: 'Workspace',
     path: '/leads',
   },
   {
     key: 'lead_generate',
-    label: 'Add New Lead',
-    desc: 'Open the manual lead creation page; creating leads is governed by the Leads Create action.',
-    group: 'Primary navigation',
+    label: 'Add Lead',
+    desc: 'Open the manual lead creation page; creating leads is governed by the Create action below.',
+    group: 'Workspace',
     path: '/leads/new',
   },
   {
     key: 'lead_upload',
-    label: 'Bulk Upload',
-    desc: 'Open the bulk upload page; importing is governed by the Leads Import action.',
-    group: 'Administration',
+    label: 'Lead Intake',
+    desc: 'Open the lead intake page; importing is governed by the Import action below.',
+    group: 'Workspace',
     path: '/leads/upload',
   },
   {
     key: 'all_leads',
     label: 'Lead Pool',
     desc: 'Open the lead pool; actual data scope still follows server Data Visibility.',
-    group: 'Administration',
+    group: 'Workspace',
     path: '/leads/all',
   },
-  { key: 'execution_intelligence', label: 'Performance', desc: 'View sales execution and performance insights.', group: 'More → Reports', path: '/execution-intelligence' },
-  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.', group: 'More → Reports', path: '/ncp-progress' },
-  { key: 'trend_charts', label: 'Trends', desc: 'View available performance trend analytics.', group: 'More → Reports', path: '/trend-charts' },
-  { key: 'campaign_breakdown', label: 'Campaigns', desc: 'View campaign-level lead performance.', group: 'More → Reports', path: '/campaign-breakdown' },
-  { key: 'team_progress', label: 'Team', desc: 'View reporting hierarchy and team information from More → Reports.', group: 'More → Reports', path: '/team' },
+  {
+    key: 'follow_up_strategy',
+    label: 'Follow-up Queue',
+    desc: 'View overdue, today and upcoming follow-ups. Team Lead, Manager and Admin see this page as Follow-up Monitor in their sidebar.',
+    group: 'Workspace',
+    path: '/follow-up',
+  },
+  {
+    key: 'team_progress',
+    label: 'Team Members',
+    desc: 'View the team roster with workload and drill-down to each member’s leads.',
+    group: 'Workspace',
+    path: '/team',
+  },
+  { key: 'execution_intelligence', label: 'My Performance / Team Performance', desc: 'View sales execution and performance insights — My Performance for Agents, Team Performance for Team Lead, Manager and Admin.', group: 'Workspace', path: '/execution-intelligence' },
+  {
+    key: 'task_calendar',
+    label: 'Task Calendar',
+    desc: 'View scheduled calls, meetings, follow-ups and tasks.',
+    group: 'Workspace',
+    path: '/task-calendar',
+  },
+  {
+    key: 'roadshow_follow_up',
+    label: 'Roadshow',
+    desc: 'Plan and track assigned roadshows, with a separate performance report.',
+    group: 'Workspace',
+    path: '/roadshows',
+  },
+  {
+    key: 'activities',
+    label: 'Activities',
+    desc: 'Open the activity history.',
+    group: 'Workspace',
+    path: '/activities',
+  },
+  {
+    key: 'workbench',
+    label: 'Daily Workbench',
+    desc: "Manage today's calls, meetings, follow-ups and tasks from one execution workspace. Reachable from the Agent bottom bar and by URL.",
+    group: 'Workspace',
+    path: '/workbench',
+  },
+  { key: 'ncp_progress', label: 'NCP Progress', desc: 'View collected and projected NCP progress.', group: 'Reports', path: '/ncp-progress' },
+  { key: 'trend_charts', label: 'Trends & Reports', desc: 'View available performance trend analytics.', group: 'Reports', path: '/trend-charts' },
+  { key: 'campaign_breakdown', label: 'Campaigns', desc: 'View campaign-level lead performance.', group: 'Reports', path: '/campaign-breakdown' },
   {
     key: 'user_management',
-    label: 'Users',
-    desc: 'Open the Users workspace (employees, departments, roles, hierarchy); administration actions follow Action Permissions.',
+    label: 'Users & Roles',
+    desc: 'Open the Users & Roles workspace (employees, departments, roles, hierarchy); administration actions follow the actions below.',
     group: 'Administration',
     path: '/users',
   },
   {
     key: 'settings_control',
-    label: 'Settings',
-    desc: 'Open Personal Settings (name, mobile, email and password); administration and system tools remain admin-only.',
-    group: 'More',
+    label: 'Profile & Settings',
+    desc: 'Open the personal Profile & Settings page (name, mobile, email and password). The actions below govern system metadata and workflow rules.',
+    group: 'Administration',
     path: '/settings',
   },
-  {
-    key: 'roadshow_follow_up',
-    label: 'Roadshow Follow-up',
-    desc: 'Plan and track assigned roadshows, with a separate performance report.',
-    group: 'More',
-    path: '/roadshows',
-  },
-  { key: 'notifications', label: 'Notifications', desc: 'View and manage personal notifications.', group: 'More', path: '/notifications', defaultEnabled: true },
-  { key: 'help_support', label: 'Help & Support', desc: 'Open product help and support information.', group: 'More', path: '/help', defaultEnabled: true },
-  { key: 'about_leadflow', label: 'About LeadFlow', desc: 'View information about LeadFlow.', group: 'More', path: '/about', defaultEnabled: true },
+  { key: 'notifications', label: 'Notifications', desc: 'View and manage personal notifications (topbar bell).', group: 'More pages', path: '/notifications', defaultEnabled: true },
+  { key: 'help_support', label: 'Help', desc: 'Open product help and support information (sidebar footer).', group: 'More pages', path: '/help', defaultEnabled: true },
+  { key: 'about_leadflow', label: 'About', desc: 'View information about LeadFlow (sidebar footer).', group: 'More pages', path: '/about', defaultEnabled: true },
 ];
 const APP_FEATURE_GROUPS = [...new Set(APP_FEATURES.map(feature => feature.group))];
 
@@ -176,7 +193,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
   {
     module: 'Dashboard',
     items: [
-      { code: 'dashboard.view', label: 'View', desc: 'Open the Dashboard (performance summary, pipeline, follow-up discipline, daily execution).' },
+      { code: 'dashboard.view', label: 'View', desc: 'Open the home page (My Work / Team Overview) summary data. The server also accepts leads.view for the same data.' },
     ],
   },
   {
@@ -189,19 +206,19 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
     // how the admin grants or revokes report access per role.
     module: 'Reports',
     items: [
-      { code: 'reports.view', label: 'View', desc: 'Open the report pages (Performance, NCP Progress, Trends & Reports, Campaigns) within this role’s data-visibility scope. The server enforces this grant on the report data endpoints.' },
+      { code: 'reports.view', label: 'View', desc: 'Open the report pages (My / Team Performance, NCP Progress, Trends & Reports, Campaigns) within this role’s data-visibility scope. The server enforces this grant on the report data endpoints.' },
     ],
   },
   {
     module: 'Leads',
     items: [
       { code: 'leads.view', label: 'View', desc: 'View leads within this role’s data-visibility scope.' },
-      { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add New Lead).' },
+      { code: 'leads.create', label: 'Create', desc: 'Create new leads (Add Lead).' },
       { code: 'leads.edit', label: 'Edit', desc: 'Update lead status / record follow-ups. Also gates Daily Workbench and Task Calendar complete, edit, cancel and reschedule.' },
       { code: 'leads.delete', label: 'Delete', desc: 'Delete leads (Lead Pool).' },
       { code: 'leads.assign', label: 'Assign', desc: 'Assign / reassign lead ownership.' },
       { code: 'leads.transfer', label: 'Transfer', desc: 'Transfer lead ownership between users.' },
-      { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Bulk Upload).' },
+      { code: 'leads.import', label: 'Import', desc: 'Bulk-import leads (Lead Intake).' },
       { code: 'leads.export', label: 'Export', desc: 'Export leads (own / team, with full history) as an Excel workbook from the Leads page; also gates the Lead Pool export logs action.' },
     ],
   },
@@ -251,7 +268,7 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
   {
     module: 'Roadshows',
     items: [
-      { code: 'roadshows.view', label: 'View', desc: 'Open Roadshow Follow-up and view roadshow status.' },
+      { code: 'roadshows.view', label: 'View', desc: 'Open Roadshow and view roadshow status.' },
       { code: 'roadshows.create', label: 'Create', desc: 'Schedule roadshows and assign active users.' },
       { code: 'roadshows.edit', label: 'Edit', desc: 'Update pending roadshows, reschedule, or execute them. Executed roadshows are locked for non-admins.' },
       { code: 'roadshows.cancel', label: 'Cancel', desc: 'Cancel a pending or rescheduled roadshow.' },
@@ -260,19 +277,38 @@ const ACTION_PERMISSION_GROUPS: { module: string; items: ActionPermissionMeta[] 
   },
 ];
 
-/* Which Feature Access module toggles keep each action group active.
-   Permissions are always STORED; when every mapped module is hidden the
-   editor marks the group inactive (visually disabled, grants preserved). */
-const ACTION_MODULE_FEATURE_KEYS: Record<string, string[]> = {
-  'Dashboard': ['dashboard'],
-  'Leads': ['lead_tracking', 'lead_generate', 'lead_upload', 'all_leads'],
-  'Users': ['user_management'],
-  'Roles': ['user_management'],
-  'Departments': ['user_management'],
-  'Hierarchy & Teams': ['user_management', 'team_progress'],
-  'Settings': ['settings_control'],
-  'Roadshows': ['roadshow_follow_up'],
+/* Which canonical actions appear under each feature in the checklist
+   (role editor redesign, 2026-11-20, Mahadi): ONE list — enabling a
+   feature reveals that feature's specific actions inline as checkboxes.
+   Each action appears under exactly ONE feature — its primary home —
+   EXCEPT `reports.view`, which is shared by the four report pages and
+   appears under each of them. All four reports.view checkboxes read and
+   write the SAME underlying grant (roleFormActions['reports.view']), so
+   they can never disagree.
+   This map is PRESENTATION ONLY: it changes which toggles the editor
+   SHOWS, never what the server enforces or what handleSaveRole saves.
+   Turning a feature off hides its actions — it never clears the saved
+   grants (they stay in roleFormActions and are saved unchanged). */
+const FEATURE_ACTION_CODES: Record<string, string[]> = {
+  dashboard: ['dashboard.view'],
+  lead_tracking: ['leads.view', 'leads.edit', 'leads.assign', 'leads.transfer', 'leads.export'],
+  lead_generate: ['leads.create'],
+  lead_upload: ['leads.import'],
+  all_leads: ['leads.delete'],
+  execution_intelligence: ['reports.view'],
+  ncp_progress: ['reports.view'],
+  trend_charts: ['reports.view'],
+  campaign_breakdown: ['reports.view'],
+  team_progress: ['teams.manage'],
+  user_management: ['users.create', 'users.edit', 'users.delete', 'users.add_employee', 'roles.manage', 'permissions.manage', 'departments.manage', 'hierarchy.manage'],
+  settings_control: ['settings.manage', 'workflow.manage'],
+  roadshow_follow_up: ['roadshows.view', 'roadshows.create', 'roadshows.edit', 'roadshows.cancel', 'roadshows.report'],
 };
+
+/** Canonical action metadata by code, for the checklist rows. */
+const ACTION_META_BY_CODE: Record<string, ActionPermissionMeta> = Object.fromEntries(
+  ACTION_PERMISSION_GROUPS.flatMap(g => g.items.map(i => [i.code, i])),
+);
 
 /* ================================================================== */
 /*  MAIN COMPONENT                                                     */
@@ -1621,14 +1657,14 @@ export default function UserManagement() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* 1. Role basic info */}
-                <div className="lg:col-span-4 ep-card space-y-4">
-                  <h3 className="text-base font-semibold text-slate-800">
-                    1. Role Details
-                  </h3>
+              {/* 1. Role details — identity + data visibility + save */}
+              <div className="ep-card space-y-4">
+                <h3 className="text-base font-semibold text-slate-800">
+                  1. Role Details
+                </h3>
                   <p className="text-xs text-slate-400 -mt-2">{selectedRole ? 'Edit the role identity and save.' : 'Create a new role.'}</p>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm font-medium text-slate-600 mb-1 block">Role Name</label>
                     <input
@@ -1653,16 +1689,17 @@ export default function UserManagement() {
                       <p className="text-xs text-slate-400 mt-1">Lowercase letters, numbers and underscores only.</p>
                     </div>
                   )}
+                </div>
 
-                  {/* 2. Data visibility */}
+                  {/* Data visibility — role-level, so it lives with Role Details */}
                   <div>
-                    <label className="text-sm font-medium text-slate-600 mb-2 block">2. Data Visibility</label>
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">Data Visibility</label>
                     <p className="text-xs text-slate-400 mb-2 -mt-1">
                       {editingBypassRole
                         ? `${editingRoleCode} bypasses the permission matrix, so this role always sees the entire organization.`
                         : 'Which records the role can access.'}
                     </p>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {(['Own', 'DownTeam', 'FullTeam', 'Organization'] as const).map(scope => {
                         const desc = scope === 'Own' ? 'Only own data'
                           : scope === 'DownTeam' ? 'Own + team below'
@@ -1697,75 +1734,28 @@ export default function UserManagement() {
                   >
                     <Save className="w-4 h-4" /> Save Role
                   </button>
-                </div>
-
-                {/* 3. Feature permissions — module/page visibility only */}
-                <div className="lg:col-span-8 space-y-4">
-                  <div className="ep-card space-y-4">
-                    <h3 className="text-base font-semibold text-slate-800">3. Feature Access</h3>
-                    <p className="text-sm text-slate-500">
-                      Module and page visibility only. What the role can <em>do</em> inside a module
-                      is configured under Action Permissions below.
-                    </p>
-
-                    <div className="space-y-5">
-                      {APP_FEATURE_GROUPS.map(group => (
-                        <section key={group} className="space-y-2">
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{group}</h4>
-                          <div className="space-y-2">
-                            {APP_FEATURES.filter(item => item.group === group).map(item => {
-                              const feat = roleFormFeatures[item.key] || { view: false };
-                              const isOn = !!feat.view;
-                              return (
-                                <div key={item.key} className={cn(
-                                  "border rounded-lg overflow-hidden transition-all",
-                                  isOn ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
-                                )}>
-                                  <div className="p-3 flex items-center justify-between bg-slate-50/50">
-                                    <div>
-                                      <span className="text-sm font-medium text-slate-800">{item.label}</span>
-                                      <p className="text-xs text-slate-400">{item.desc}</p>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setRoleFormFeatures({
-                                          ...roleFormFeatures,
-                                          [item.key]: { ...feat, view: !isOn },
-                                        });
-                                      }}
-                                      className={cn(
-                                        "px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
-                                        isOn
-                                          ? "bg-[#978C21] text-white border-[#978C21]"
-                                          : "bg-white text-slate-400 border-slate-200"
-                                      )}
-                                    >
-                                      {isOn ? '✓ Enabled' : 'Disabled'}
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </section>
-                      ))}
-                    </div>
-                  </div>
-                </div>
               </div>
 
-              {/* 4. Action permissions (canonical, server-enforced) */}
+              {/* 2. Access checklist — ONE list (role editor redesign,
+                  2026-11-20, Mahadi): Feature Access + Action
+                  Permissions merged. Enable a feature to reveal its
+                  actions right underneath — tick exactly what the role
+                  may do. The saved model is unchanged: the same
+                  menuAccess features, the same canonical grants, the
+                  same handleSaveRole payload. */}
               <div className="ep-card space-y-4">
                 <div>
-                  <h3 className="text-base font-semibold text-slate-800">4. Action Permissions</h3>
+                  <h3 className="text-base font-semibold text-slate-800">2. Access Checklist</h3>
                   <p className="text-sm text-slate-500">
-                    Granular actions this role can perform. These are enforced by the server
-                    and persist to the database — separate from page visibility and data access.
+                    Enable a feature to reveal its actions right underneath it.
+                    Tick exactly what the role may do — everything lives in this one list.
                   </p>
                   <p className="text-xs text-slate-400 mt-1">
                     Feature Access controls whether the module is available. Action Permissions
                     control what the role can do inside it.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Turning a feature off hides its actions — the role can't reach these actions in the UI. Grants stay saved and still apply at the API.
                   </p>
                   {editingBypassRole && (
                     <p className="text-xs text-[#978C21] bg-[#978C21]/10 border border-[#978C21]/20 rounded-lg px-3 py-2 mt-2">
@@ -1775,49 +1765,92 @@ export default function UserManagement() {
                     </p>
                   )}
                 </div>
-                {ACTION_PERMISSION_GROUPS.map(group => {
-                  const featureKeys = ACTION_MODULE_FEATURE_KEYS[group.module] || [];
-                  const groupActive = featureKeys.length === 0 || featureKeys.some(k => !!roleFormFeatures?.[k]?.view);
-                  return (
-                    <div key={group.module} className={cn(
-                      "border rounded-lg overflow-hidden transition-all",
-                      groupActive ? "border-slate-200" : "border-slate-200 opacity-60"
-                    )}>
-                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{group.module}</span>
-                        {!groupActive && (
-                          <span className="text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                            Module hidden in Feature Access — the role can't reach these actions in the UI. Grants stay saved and still apply at the API.
-                          </span>
-                        )}
-                      </div>
-                      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {group.items.map(item => {
-                          const isOn = editingBypassRole ? true : !!roleFormActions[item.code];
+
+                <div className="space-y-5">
+                  {APP_FEATURE_GROUPS.map(group => (
+                    <section key={group} className="space-y-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{group}</h4>
+                      <div className="space-y-2">
+                        {APP_FEATURES.filter(feature => feature.group === group).map(feature => {
+                          const feat = roleFormFeatures[feature.key] || { view: false };
+                          const enabled = !!feat.view;
+                          const actionCodes = FEATURE_ACTION_CODES[feature.key] || [];
+                          const savedActionCount = actionCodes.filter(code => !!roleFormActions[code]).length;
                           return (
-                            <label key={item.code} className={cn(
-                              "flex items-start gap-2 p-2 rounded-md",
-                              groupActive ? "cursor-pointer hover:bg-slate-50" : "cursor-not-allowed"
+                            <div key={feature.key} className={cn(
+                              "border rounded-lg overflow-hidden transition-all",
+                              enabled ? "border-[#978C21]/30 bg-[#978C21]/[0.02]" : "border-slate-200"
                             )}>
-                              <input
-                                type="checkbox"
-                                checked={isOn}
-                                disabled={!groupActive || editingBypassRole}
-                                onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
-                                className="mt-0.5 w-4 h-4 accent-[#978C21] disabled:opacity-60"
-                              />
-                              <div>
-                                <span className="text-xs font-medium text-slate-700">{item.label}</span>
-                                <p className="text-[10px] text-slate-400">{item.desc}</p>
-                                <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                              <div className="p-3 flex items-center justify-between gap-3 bg-slate-50/50">
+                                <div className="min-w-0">
+                                  <span className="text-sm font-medium text-slate-800">{feature.label}</span>
+                                  <p className="text-xs text-slate-400">{feature.desc}</p>
+                                  <p className="text-[10px] font-mono text-slate-300 mt-0.5">{feature.path}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRoleFormFeatures({
+                                      ...roleFormFeatures,
+                                      [feature.key]: { ...feat, view: !enabled },
+                                    });
+                                  }}
+                                  className={cn(
+                                    "shrink-0 px-3 py-1.5 text-xs font-medium rounded-md border transition-all",
+                                    enabled
+                                      ? "bg-[#978C21] text-white border-[#978C21]"
+                                      : "bg-white text-slate-400 border-slate-200"
+                                  )}
+                                >
+                                  {enabled ? '✓ Enabled' : 'Disabled'}
+                                </button>
                               </div>
-                            </label>
+                              {enabled && actionCodes.length > 0 && (
+                                <div className="p-3 pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  {actionCodes.map(code => {
+                                    const item = ACTION_META_BY_CODE[code];
+                                    if (!item) return null;
+                                    const isOn = editingBypassRole ? true : !!roleFormActions[item.code];
+                                    return (
+                                      <label key={item.code} className={cn(
+                                        "flex items-start gap-2 p-2 rounded-md",
+                                        editingBypassRole ? "cursor-not-allowed" : "cursor-pointer hover:bg-slate-50"
+                                      )}>
+                                        <input
+                                          type="checkbox"
+                                          checked={isOn}
+                                          disabled={editingBypassRole}
+                                          onChange={() => setRoleFormActions({ ...roleFormActions, [item.code]: !isOn })}
+                                          className="mt-0.5 w-4 h-4 shrink-0 accent-[#978C21] disabled:opacity-60"
+                                        />
+                                        <div className="min-w-0">
+                                          <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                                          <p className="text-[10px] text-slate-400">{item.desc}</p>
+                                          <p className="text-[10px] font-mono text-slate-300">{item.code}</p>
+                                          {item.code === 'reports.view' && (
+                                            <p className="text-[10px] text-[#978C21]">Shared — one grant covering every report page.</p>
+                                          )}
+                                        </div>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {enabled && actionCodes.length === 0 && (
+                                <p className="px-3 pb-3 text-[11px] text-slate-400">View only — this page has no separate actions.</p>
+                              )}
+                              {!enabled && savedActionCount > 0 && (
+                                <p className="px-3 pb-3 text-[11px] text-amber-600">
+                                  {savedActionCount} saved action{savedActionCount === 1 ? '' : 's'} stay{savedActionCount === 1 ? 's' : ''} saved — enable this feature to view {savedActionCount === 1 ? 'it' : 'them'}.
+                                </p>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
-                    </div>
-                  );
-                })}
+                    </section>
+                  ))}
+                </div>
               </div>
             </div>
           )}

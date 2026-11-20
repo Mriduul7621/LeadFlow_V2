@@ -43,22 +43,32 @@ Permissions).
 
 | Section | Module (editor label) | Internal key | Route |
 | --- | --- | --- | --- |
-| Overview | Dashboard | `dashboard` | `/` |
-| My Work | Daily Workbench | `workbench` | `/workbench` |
-| My Work | Activities | `activities` | `/activities` |
-| My Work | Task Calendar | `task_calendar` | `/task-calendar` |
-| My Work | Follow-up Queue | `follow_up_strategy` | `/follow-up` |
-| Leads | Lead Tracking | `lead_tracking` | `/leads` |
-| Leads | Add New Lead | `lead_generate` | `/leads/new` |
-| Leads | Bulk Upload | `lead_upload` | `/leads/upload` |
-| Leads | All Leads | `all_leads` | `/leads/all` |
-| Insights | Performance | `execution_intelligence` | `/execution-intelligence` |
-| Insights | NCP Progress | `ncp_progress` | `/ncp-progress` |
-| Insights | Trends | `trend_charts` | `/trend-charts` |
-| Insights | Campaigns | `campaign_breakdown` | `/campaign-breakdown` |
-| Management | Team | `team_progress` | `/team` |
-| Management | Users | `user_management` | `/users` |
-| System | Settings | `settings_control` | `/settings` |
+| Workspace | My Work / Team Overview | `dashboard` | `/` |
+| Workspace | My Leads / Team Leads / All Leads | `lead_tracking` | `/leads` |
+| Workspace | Add Lead | `lead_generate` | `/leads/new` |
+| Workspace | Lead Intake | `lead_upload` | `/leads/upload` |
+| Workspace | Lead Pool | `all_leads` | `/leads/all` |
+| Workspace | Follow-up Queue | `follow_up_strategy` | `/follow-up` |
+| Workspace | Team Members | `team_progress` | `/team` |
+| Workspace | My Performance / Team Performance | `execution_intelligence` | `/execution-intelligence` |
+| Workspace | Task Calendar | `task_calendar` | `/task-calendar` |
+| Workspace | Roadshow | `roadshow_follow_up` | `/roadshows` |
+| Workspace | Activities | `activities` | `/activities` |
+| Workspace | Daily Workbench | `workbench` | `/workbench` |
+| Reports | NCP Progress | `ncp_progress` | `/ncp-progress` |
+| Reports | Trends & Reports | `trend_charts` | `/trend-charts` |
+| Reports | Campaigns | `campaign_breakdown` | `/campaign-breakdown` |
+| Administration | Users & Roles | `user_management` | `/users` |
+| Administration | Profile & Settings | `settings_control` | `/settings` |
+| More pages | Notifications | `notifications` | `/notifications` |
+| More pages | Help | `help_support` | `/help` |
+| More pages | About | `about_leadflow` | `/about` |
+
+Editor labels mirror the current app names (enterprise workspace sidebar
+labels from `src/layouts/enterpriseNav.ts`); internal keys and routes are
+the storage contract and never change. A page whose sidebar label differs
+per role carries the combined label (My Work / Team Overview, My / Team
+Performance).
 
 Defaults: `workbench` and `all_leads` fail closed for roles without a legacy
 signal (an admin grants them explicitly); every other module follows the
@@ -180,25 +190,37 @@ Other preserved behavior:
 
 ## 7. Role editor UX
 
-The role editor presents four numbered sections:
+The role editor (checklist redesign, 2026-11-20, Mahadi) presents two
+sections:
 
-1. **Role Details** — name and role ID.
-2. **Data Visibility** — Own / DownTeam / FullTeam / Organization.
-3. **Feature Access** — one enable/disable toggle per module (page
-   visibility only).
-4. **Action Permissions** — the canonical matrix grouped by module.
+1. **Role Details** — name, role ID, and **Data Visibility** (Own /
+   DownTeam / FullTeam / Organization), plus Save Role.
+2. **Access Checklist** — ONE feature-wise list. Enabling a feature
+   reveals that feature's specific actions inline as checkboxes, right
+   underneath it. Features with no separate actions show "View only".
+
+The three layers are unchanged — only the presentation merged. Feature
+Access is still module/page visibility only (one `view` flag per
+feature, stored in `menuAccess`); Action Permissions are still the
+canonical server-enforced grants; Data Visibility is still role-level.
 
 Helper text in the editor: *"Feature Access controls whether the module is
 available. Action Permissions control what the role can do inside it."*
 
-Dependency rule: when every module mapped to an action group is hidden in
-Feature Access, the group is dimmed, its checkboxes are disabled
-**visually**, and a note states the exact semantics: the role cannot reach
-these actions in the UI, the grants stay saved, and they **still apply at
-the API** (Feature Access is presentation-level; it never weakens or
-removes server-side enforcement). Saved grants are never deleted, and
-toggling one action never mutates its siblings. `Edit` never auto-grants
-`View`.
+Dependency rule: turning a feature off hides its actions outright. The
+grants stay saved — the editor shows a counted note ("N saved actions
+stay saved — enable this feature to view them") so hidden is never
+mistaken for lost — and they **still apply at the API** (Feature Access
+is presentation-level; it never weakens or removes server-side
+enforcement). Saved grants are never deleted, and toggling one action
+never mutates its siblings. `Edit` never auto-grants `View`.
+
+Each action appears under exactly one feature — its primary home —
+except `reports.view`, which is shared by the four report pages (My /
+Team Performance, NCP Progress, Trends & Reports, Campaigns) and appears
+under each of them. All four checkboxes read and write the SAME
+underlying grant, so they can never disagree; the shared-grant note in
+the editor says so.
 
 ## 8. Example roles
 
