@@ -26,6 +26,7 @@ import path from 'node:path';
 import { _setTestPoolForTest, _resetPoolsForTest, closePool } from '../database/connection.js';
 import { getPGliteInstanceAsync, createPGlitePoolAsync } from '../database/pglitePool.js';
 import { up as defaultRoleAccess, down as revertDefaultRoleAccess } from '../database/migrations/045_default_role_access.js';
+import { up as narrowRmRoleGrants } from '../database/migrations/061_rm_role_grant_scope.js';
 import { applyDefaultRoleAccess } from '../database/roleAccessDefaults.js';
 
 const ROOT = process.cwd();
@@ -51,6 +52,7 @@ const ROLE_ROWS: Array<[string, number]> = [
   ['ADMIN', 1],
   ['CEO', 1],
   ['MANAGER', 2],
+  ['RM', 2],
   ['SM', 2],
   ['TEAM_LEAD', 3],
   ['BDM', 3],
@@ -190,6 +192,50 @@ describe('migration 045 — default role access', () => {
     assert.deepEqual(await grantedCodes('MKTH'), [], 'a custom role receives no default grants');
   });
 
+  it('A2. RM receives the Team Lead default, not Manager-only grants', async () => {
+    const rm = await grantedCodes('RM');
+    const teamLead = await grantedCodes('TEAM_LEAD');
+    assert.deepEqual(rm, teamLead, 'RM defaults must match TEAM_LEAD');
+    for (const forbidden of ['leads.transfer', 'leads.export', 'users.view', 'departments.view', 'roadshows.report', 'audit.view']) {
+      assert.ok(!rm.includes(forbidden), `RM must not receive ${forbidden} by default`);
+    }
+  });
+
+  it('A3. migration 061 narrows only an untouched legacy RM Manager matrix', async () => {
+    // Recreate the exact pre-061 state that migration 045 shipped for RM.
+    await pool.query(`DELETE FROM role_permissions rp USING roles r
+      WHERE rp.role_id = r.id AND UPPER(r.role_code) = 'RM'`);
+    await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed)
+      SELECT r.id, p.id, TRUE FROM roles r CROSS JOIN permissions p
+      WHERE UPPER(r.role_code) = 'RM' AND p.permission_code = ANY($1)`, [
+        // Previous RM default was the Manager set (19 codes — the same
+        // union on main, where reports.view moved into FIELD_EXEC).
+        [
+          'dashboard.view','leads.view','leads.create','leads.edit','campaigns.view','products.view',
+          'roadshows.view','notifications.view','leads.assign','roadshows.create','roadshows.edit',
+          'teams.view','reports.view','leads.transfer','leads.export','users.view','departments.view',
+          'roadshows.report','audit.view'
+        ]
+      ]);
+    await narrowRmRoleGrants();
+    assert.deepEqual(await grantedCodes('RM'), await grantedCodes('TEAM_LEAD'));
+
+    // A manually curated matrix is not rewritten.
+    await pool.query(`DELETE FROM role_permissions rp USING roles r
+      WHERE rp.role_id = r.id AND UPPER(r.role_code) = 'RM'`);
+    await pool.query(`INSERT INTO role_permissions (role_id, permission_id, is_allowed)
+      SELECT r.id, p.id, TRUE FROM roles r CROSS JOIN permissions p
+      WHERE UPPER(r.role_code) = 'RM' AND p.permission_code = 'leads.view'`);
+    await narrowRmRoleGrants();
+    assert.deepEqual(await grantedCodes('RM'), ['leads.view']);
+
+    // Restore the default matrix so later tests see the post-045 state.
+    await pool.query(`DELETE FROM role_permissions rp USING roles r
+      WHERE rp.role_id = r.id AND UPPER(r.role_code) = 'RM'`);
+    await defaultRoleAccess();
+    assert.deepEqual(await grantedCodes('RM'), await grantedCodes('TEAM_LEAD'));
+  });
+
   it('B. an already-curated matrix is never overwritten', async () => {
     assert.deepEqual(await grantedCodes('SBE'), ['leads.view'], 'a hand-narrowed role stays exactly as configured');
     const adminCodes = await grantedCodes('ADMIN');
@@ -302,5 +348,37 @@ describe('migration 045 — default role access', () => {
     assert.ok(src.includes("COALESCE(data_visibility, 'Own') = 'Own'"), 'visibility must only move off the default');
     // Codes are parameterised, never interpolated into SQL text.
     assert.ok(src.includes('p.permission_code = ANY($2)'), 'codes must be passed as a parameter');
+  });
+
+  it('G. source guards: migration 061 is registered and excluded from legacy adoption', async () => {
+    const runner = read('server/database/runMigrations.ts');
+    assert.match(
+      runner,
+      /import \{ up as rmRoleGrantScope \} from "\.\/migrations\/061_rm_role_grant_scope\.js"/,
+      'the migration must be imported'
+    );
+    assert.match(
+      runner,
+      /\{ id: "061_rm_role_grant_scope", name: "Narrow RM Default Action Permissions", run: rmRoleGrantScope \}/,
+      'and registered in the ledger so it runs once'
+    );
+    // 061 is data-only with no schema sentinel: legacy adoption must leave
+    // it pending so it runs once after the baseline is adopted.
+    assert.ok(
+      runner.includes('MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope")'),
+      'legacy adoption must exclude 061 so it still runs on adopted databases'
+    );
+    // 061 sits in chronological order (between 060 and 063); 063 stays the tail.
+    const { MIGRATION_IDS } = await import('../database/runMigrations.js');
+    assert.ok(MIGRATION_IDS.includes('061_rm_role_grant_scope'), '061 must be a known migration id');
+    assert.ok(
+      MIGRATION_IDS.indexOf('061_rm_role_grant_scope') > MIGRATION_IDS.indexOf('060_stage_rules_terminal'),
+      '061 must run after 060'
+    );
+    assert.ok(
+      MIGRATION_IDS.indexOf('061_rm_role_grant_scope') < MIGRATION_IDS.indexOf('063_users_add_employee'),
+      '061 must run before 063'
+    );
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee', '063 stays the migration tail');
   });
 });

@@ -82,7 +82,11 @@ export const DEFAULT_GRANTS: Record<string, string[]> = {
   BH: EXECUTIVE,
   MANAGER: MANAGER,
   SM: MANAGER,
-  RM: MANAGER,
+  // RM is a first-line supervisor (DownTeam), not a department manager.
+  // Keep its actions aligned with TEAM_LEAD; do not grant transfer/export/audit.
+  // (Migration 061 narrows existing RM matrices that still hold the old
+  // Manager defaults; manually curated matrices are left untouched.)
+  RM: TEAM_LEAD,
   TEAM_LEAD: TEAM_LEAD,
   BDM: TEAM_LEAD,
   ASM: TEAM_LEAD,
