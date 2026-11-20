@@ -89,8 +89,30 @@ jobs:
       # visibility/workspace/pool, bulk imports, scheduled activities,
       # dashboards, source guards, chunk recovery, hierarchy, Lead Quality,
       # production security, fallback safety).
-      - name: Full test suite
-        run: npm test -- --run
+      #
+      # Split in two (2026-11-20, red main #232): the heavy
+      # perf-final-latency-fix.test.ts (PGlite + full migration replay
+      # + live HTTP server + gzip, in a node:test child process)
+      # crashed CI run #232 with the known node:test IPC framing
+      # flake — "Unable to deserialize cloned data due to invalid or
+      # unsupported version" (processRawBuffer) — while the same file
+      # passed CI #233 on another branch and passes every local gate.
+      # It now runs alone, in-process (--experimental-test-isolation=none), so
+      # there is no IPC hop to corrupt. NOTE: CI pins Node 22, where the flag
+      # exists ONLY under its experimental name (added v22.8.0); the stable
+      # --test-isolation name arrived in Node 24 — PR #174 run #239 proved the
+      # stable name fails on Node 22 with "bad option". Nothing else changes: the
+      # rest of the suite keeps the default isolation, and the two
+      # steps together still run every test file exactly once.
+      - name: Full test suite (excluding perf-final-latency-fix)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(ls server/tests/*.test.ts | grep -v 'perf-final-latency-fix.test.ts')
+          echo "Running ${#files[@]} test files (perf-final-latency-fix runs in the next step)"
+          npx tsx --test "${files[@]}" --run
+
+      - name: Perf latency test (no test isolation)
+        run: npx tsx --test --experimental-test-isolation=none server/tests/perf-final-latency-fix.test.ts --run
 
       # Gate 3 — TypeScript, no emit.
       - name: Typecheck
