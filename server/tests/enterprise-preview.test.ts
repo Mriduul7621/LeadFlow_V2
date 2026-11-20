@@ -160,8 +160,11 @@ describe('role preview — the shell wiring (source guards)', () => {
     const home = stripComments(read('src/modules/workspace/pages/EnterpriseHome.tsx'));
     assert.ok(home.includes('useEnterpriseDisplayRole()'));
     const hook = stripComments(read('src/modules/workspace/hooks/useEnterpriseHomeData.ts'));
+    // Team Lead / Manager / Admin workspace (2026-11-20): the
+    // `withUsers` option is gone with the Active users KPI — the
+    // hook takes NO parameters at all now.
     assert.ok(
-      hook.includes('export function useEnterpriseHomeData(options?: { withUsers?: boolean })'),
+      hook.includes('export function useEnterpriseHomeData()'),
       'the data hook has no role parameter — data stays scoped to the real user',
     );
     assert.ok(!hook.includes('displayRole') && !hook.includes('previewRole'), 'the hook never sees the preview');

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { Calendar, Clock, AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../../../lib/utils';
@@ -9,7 +9,18 @@ import { EnterprisePageHeader, KpiCard } from '../../workspace/components/Enterp
 import BackButton from '../../shared/components/BackButton';
 import { formatDhakaShort, formatDhakaTime, resolveTerminalNames } from '../../workspace/utils/enterpriseData';
 import { completedToday, onTimeRate } from '../../workspace/utils/agentWorkspaceData';
+import { useAuthStore } from '../../auth/store/authStore';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { getSelfPerson } from '../../team/services/teamOverviewService';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import {
+  isAdminPerson,
+  scopeLeadsByAssignee,
+  scopePeople,
+  tlAncestorOf,
+} from '../../workspace/utils/teamWorkspaceData';
 import type { DropdownOption, Lead } from '../../shared/types';
+import type { TeamOverviewPerson } from '../../team/services/teamOverviewService';
 
 type Bucket = 'overdue' | 'today' | 'upcoming';
 
@@ -57,14 +68,91 @@ const BUCKET_HEADINGS: Record<Bucket, string> = {
  *
  * The Overdue / Today / Upcoming tabs and the ?bucket= deep-link
  * contract stay exactly as they were — the dashboards link here.
+ *
+ * Follow-up Monitor (2026-11-20, Mahadi): the TL/Manager/Admin
+ * sidebar label is "Follow-up Monitor" (the page H1 stays
+ * "Follow-up Queue" per the demo). The KPI cards stay team-wide
+ * for every role. The LIST differs by role:
+ *   Agent   — own follow-ups (server scope), unchanged.
+ *   TL      — full-team data, with a Team / Self toggle on the
+ *             LIST only (Self loads a second queue result with
+ *             assignedTo=self; the KPI cards never change).
+ *   Manager — TL-grouped: each Team Lead's group expands to
+ *             member sub-groups, then items (Manager → TL →
+ *             member → lead).
+ *   Admin   — flat org-wide, with admin-assigned items filtered
+ *             out client-side (an admin never appears in report
+ *             data). Caveat: the server-computed KPI counts
+ *             cannot be filtered client-side, so an
+ *             admin-assigned lead's follow-up still counts in
+ *             the server totals — only the ITEMS list is
+ *             filtered. Reported to Mahadi.
  */
-export default function FollowUpStrategy() {
+interface ChecklistRowProps {
+  item: FollowUpQueueItem;
+  done: boolean;
+  onComplete: (item: FollowUpQueueItem) => void;
+}
+
+const ChecklistRow: FC<ChecklistRowProps> = ({ item, done, onComplete }) => {
   const navigate = useNavigate();
+  const name = item.prospectName || item.customerName || 'Unnamed lead';
+  const assignee = item.assignedEmployeeName || item.assignedTo || 'Unassigned';
+  const overdueLabel = item.dueState === 'overdue'
+    ? `Overdue${item.overdueDays ? ` ${item.overdueDays}d` : ''} · `
+    : '';
+  return (
+    <div className={cn('ep-checklist-row', done && 'ep-checklist-done')}>
+      <input
+        type="checkbox"
+        className="ep-checklist-box"
+        checked={done}
+        disabled={done}
+        onChange={() => onComplete(item)}
+        aria-label={`Complete follow-up for ${name}`}
+      />
+      <button
+        type="button"
+        className="ep-checklist-copy"
+        onClick={() => navigate(`/leads/${encodeURIComponent(item.id)}`)}
+        aria-label={`Open ${name}`}
+      >
+        <strong>{name}</strong>
+        <small>{overdueLabel}{item.currentStatus} · {assignee}</small>
+      </button>
+      <span className="ep-checklist-time">
+        {item.dueState === 'overdue'
+          ? formatDhakaShort(item.nextFollowUpAt)
+          : formatDhakaTime(item.nextFollowUpAt)}
+      </span>
+      <Link
+        className="ep-checklist-update"
+        to={`/leads/${encodeURIComponent(item.id)}/update`}
+      >
+        Update
+      </Link>
+    </div>
+  );
+};
+
+export default function FollowUpStrategy() {
+  const user = useAuthStore(state => state.user);
+  const { role: displayRole } = useEnterpriseDisplayRole();
+  const callerTeam = useCallerTeam();
   const [searchParams, setSearchParams] = useSearchParams();
   const bucketFromUrl = searchParams.get('bucket');
   const [active, setActive] = useState<Bucket>(isValidBucket(bucketFromUrl) ? bucketFromUrl : 'overdue');
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<FollowUpQueueResult | null>(null);
+
+  // TL Team / Self toggle (2026-11-20): the LIST only — the KPI
+  // cards stay team-wide. Self loads a second queue result with
+  // assignedTo=self; the server narrows within visibility.
+  const [listScope, setListScope] = useState<'team' | 'self'>('team');
+  const [selfData, setSelfData] = useState<FollowUpQueueResult | null>(null);
+  const [selfLoading, setSelfLoading] = useState(false);
+  // Manager TL groups: which TL groups are expanded.
+  const [expandedTls, setExpandedTls] = useState<Set<string>>(new Set());
 
   // The caller's visible leads (for the Completed / On-time cards
   // and the Add-follow-up lead picker). Loaded once, separately
@@ -123,6 +211,19 @@ export default function FollowUpStrategy() {
     }
   }, []);
 
+  const loadSelf = useCallback(async (bucket: Bucket) => {
+    if (!user?.employeeId) return;
+    setSelfLoading(true);
+    try {
+      const result = await leadService.getFollowUpQueue({ bucket, limit: 100, assignedTo: user.employeeId });
+      setSelfData(result);
+    } catch {
+      setSelfData(null);
+    } finally {
+      setSelfLoading(false);
+    }
+  }, [user?.employeeId]);
+
   const loadLeads = useCallback(async () => {
     setLeadsLoading(true);
     setLeadsError(false);
@@ -141,6 +242,10 @@ export default function FollowUpStrategy() {
   }, [active, load]);
 
   useEffect(() => {
+    if (displayRole === 'teamLead' && listScope === 'self') void loadSelf(active);
+  }, [active, displayRole, listScope, loadSelf]);
+
+  useEffect(() => {
     void loadLeads();
     void (async () => {
       try {
@@ -153,8 +258,27 @@ export default function FollowUpStrategy() {
   }, [loadLeads]);
 
   const counts = data?.counts || { overdue: 0, today: 0, upcoming: 0, all: 0 };
-  const completedCount = useMemo(() => completedToday(leads).length, [leads]);
-  const onTime = useMemo(() => onTimeRate(leads), [leads]);
+  const self = useMemo(
+    () => (callerTeam.overview ? getSelfPerson(callerTeam.overview.people) : undefined),
+    [callerTeam.overview],
+  );
+  const people = useMemo(() => callerTeam.overview?.people ?? [], [callerTeam.overview]);
+  const scopeIds = useMemo(
+    () => (self ? new Set(scopePeople(people, self, displayRole).map(p => String(p.employeeId).toUpperCase())) : null),
+    [people, self, displayRole],
+  );
+  const adminIds = useMemo(
+    () => new Set(people.filter(isAdminPerson).map(p => String(p.employeeId).toUpperCase())),
+    [people],
+  );
+  // Completed / On-time / Add-follow-up use the scope's own leads
+  // (assignee-scoped; the Agent's list is unchanged).
+  const scopedLeads = useMemo(() => {
+    if (displayRole === 'agent' || !scopeIds) return leads;
+    return scopeLeadsByAssignee(leads, scopeIds);
+  }, [leads, scopeIds, displayRole]);
+  const completedCount = useMemo(() => completedToday(scopedLeads).length, [scopedLeads]);
+  const onTime = useMemo(() => onTimeRate(scopedLeads), [scopedLeads]);
   const terminalNames = useMemo(
     () => resolveTerminalNames(statusOptions),
     [statusOptions],
@@ -166,11 +290,56 @@ export default function FollowUpStrategy() {
     [statusOptions],
   );
   const addLeadOptions = useMemo(
-    () => leads
+    () => scopedLeads
       .filter(lead => !terminalNames.has(lead.currentStatus))
       .sort((a, b) => String(a.prospectName || '').localeCompare(String(b.prospectName || ''))),
-    [leads, terminalNames],
+    [scopedLeads, terminalNames],
   );
+
+  // The displayed items: the Self result for a TL on Self, else
+  // the team result — filtered to the scope (Manager subtree;
+  // Admin minus admin-assigned). Unassigned items stay
+  // (distribution work); the Agent's list is unchanged.
+  const rawItems = (displayRole === 'teamLead' && listScope === 'self' ? selfData?.items : data?.items) || [];
+  const items = useMemo(() => {
+    if (displayRole === 'agent' || !scopeIds) return rawItems;
+    return rawItems.filter(item => {
+      const assignee = String(item.assignedTo || '').toUpperCase();
+      if (!assignee) return true;
+      if (adminIds.has(assignee)) return false;
+      if (displayRole === 'manager' && !scopeIds.has(assignee)) return false;
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawItems, displayRole, scopeIds, adminIds]);
+
+  // Manager TL groups: items under their assignee's nearest TL
+  // ancestor (unassigned items group under the Manager themself).
+  const managerGroups = useMemo(() => {
+    if (displayRole !== 'manager' || !self) return [];
+    const groups = new Map<string, { tl: TeamOverviewPerson; total: number; members: Map<string, { name: string; items: FollowUpQueueItem[] }> }>();
+    for (const item of items) {
+      const assignee = String(item.assignedTo || '').trim();
+      const tl = assignee ? tlAncestorOf(people, assignee, self.employeeId) : null;
+      const groupPerson = tl ?? self;
+      const key = String(groupPerson.employeeId).toUpperCase();
+      let group = groups.get(key);
+      if (!group) {
+        group = { tl: groupPerson, total: 0, members: new Map() };
+        groups.set(key, group);
+      }
+      group.total += 1;
+      const memberKey = assignee ? assignee.toUpperCase() : 'UNASSIGNED';
+      const memberName = assignee ? (item.assignedEmployeeName || assignee) : 'Unassigned';
+      let member = group.members.get(memberKey);
+      if (!member) {
+        member = { name: memberName, items: [] };
+        group.members.set(memberKey, member);
+      }
+      member.items.push(item);
+    }
+    return [...groups.values()].sort((a, b) => a.tl.name.localeCompare(b.tl.name));
+  }, [items, people, self, displayRole]);
 
   const tabs: Array<{ id: Bucket; label: string; icon: typeof Clock; count: number }> = [
     { id: 'overdue', label: 'Overdue', icon: AlertTriangle, count: counts.overdue },
@@ -215,6 +384,7 @@ export default function FollowUpStrategy() {
       toast.success('Outcome logged — the follow-up is done.');
       closeOutcome();
       void load(active);
+      if (displayRole === 'teamLead' && listScope === 'self') void loadSelf(active);
       void loadLeads();
     } catch (err: any) {
       // The server's own message (e.g. a stage-rule refusal), plus
@@ -246,6 +416,7 @@ export default function FollowUpStrategy() {
       setAddWhen('');
       setAddNote('');
       void load(active);
+      if (displayRole === 'teamLead' && listScope === 'self') void loadSelf(active);
       void loadLeads();
     } catch (err: any) {
       toast.error(err?.message || 'Could not schedule the follow-up.');
@@ -254,7 +425,17 @@ export default function FollowUpStrategy() {
     }
   };
 
-  const items = data?.items || [];
+  const listLoading = displayRole === 'teamLead' && listScope === 'self' ? selfLoading : loading;
+
+  const toggleTlGroup = (employeeId: string) => {
+    setExpandedTls(prev => {
+      const next = new Set(prev);
+      const key = employeeId.toUpperCase();
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div className="ep-page">
@@ -266,7 +447,7 @@ export default function FollowUpStrategy() {
             <span className="ep-pill">Asia/Dhaka · {data?.todayDate || '—'}</span>
             <button
               type="button"
-              onClick={() => { void load(active); void loadLeads(); }}
+              onClick={() => { void load(active); if (displayRole === 'teamLead' && listScope === 'self') void loadSelf(active); void loadLeads(); }}
               className="ep-btn"
             >
               <RefreshCw className="w-3.5 h-3.5" /> Refresh
@@ -331,9 +512,88 @@ export default function FollowUpStrategy() {
         ))}
       </div>
 
-      {loading ? (
+      {displayRole === 'teamLead' && (
+        <div className="ep-scope-toggle" role="group" aria-label="Whose follow-ups to show">
+          <button
+            type="button"
+            className={listScope === 'team' ? 'active' : ''}
+            aria-pressed={listScope === 'team'}
+            onClick={() => setListScope('team')}
+          >
+            Team
+          </button>
+          <button
+            type="button"
+            className={listScope === 'self' ? 'active' : ''}
+            aria-pressed={listScope === 'self'}
+            onClick={() => setListScope('self')}
+          >
+            Self
+          </button>
+          <span className="ep-scope-toggle-note">
+            {listScope === 'team' ? 'Your whole team\u2019s follow-ups' : 'Only your own follow-ups'}
+          </span>
+        </div>
+      )}
+
+      {listLoading ? (
         <div className="flex justify-center py-16">
           <div className="w-10 h-10 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin" />
+        </div>
+      ) : displayRole === 'manager' ? (
+        <div className="ep-card">
+          <div className="ep-cardhead">
+            <h3>{BUCKET_HEADINGS[active]}</h3>
+            <span className="ep-muted">{items.length} follow-up{items.length === 1 ? '' : 's'} · grouped by team lead</span>
+          </div>
+          {managerGroups.length === 0 ? (
+            <p className="ep-empty">No {active} follow-ups in your visibility</p>
+          ) : (
+            <div className="ep-tlgroup-list">
+              {managerGroups.map(group => {
+                const expanded = expandedTls.has(String(group.tl.employeeId).toUpperCase());
+                const members = [...group.members.values()];
+                return (
+                  <div key={group.tl.employeeId} className="ep-tlgroup">
+                    <button
+                      type="button"
+                      className="ep-tlgroup-head"
+                      onClick={() => toggleTlGroup(group.tl.employeeId)}
+                      aria-expanded={expanded}
+                    >
+                      <span className="ep-tlgroup-name">
+                        {group.tl.name}
+                        <small>{group.tl.designation || group.tl.roleName || 'Team Lead'}</small>
+                      </span>
+                      <span className="ep-tlgroup-count">{group.total} follow-up{group.total === 1 ? '' : 's'}</span>
+                      <span className="ep-tlgroup-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+                    </button>
+                    {expanded && (
+                      <div className="ep-tlgroup-body">
+                        {members.map(member => (
+                          <div key={member.name} className="ep-tlgroup-member">
+                            <p className="ep-tlgroup-member-name">
+                              {member.name} · {member.items.length} follow-up{member.items.length === 1 ? '' : 's'}
+                            </p>
+                            <div className="ep-checklist">
+                              {member.items.map(item => (
+                                <ChecklistRow
+                                  key={item.id}
+                                  item={item}
+                                  done={justCompleted.has(item.id)}
+                                  onComplete={openOutcome}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ) : (
         <div className="ep-card">
@@ -345,46 +605,14 @@ export default function FollowUpStrategy() {
             <p className="ep-empty">No {active} follow-ups in your visibility</p>
           ) : (
             <div className="ep-checklist">
-              {items.map(item => {
-                const done = justCompleted.has(item.id);
-                const name = item.prospectName || item.customerName || 'Unnamed lead';
-                const assignee = item.assignedEmployeeName || item.assignedTo || 'Unassigned';
-                const overdueLabel = item.dueState === 'overdue'
-                  ? `Overdue${item.overdueDays ? ` ${item.overdueDays}d` : ''} · `
-                  : '';
-                return (
-                  <div key={item.id} className={cn('ep-checklist-row', done && 'ep-checklist-done')}>
-                    <input
-                      type="checkbox"
-                      className="ep-checklist-box"
-                      checked={done}
-                      disabled={done}
-                      onChange={() => openOutcome(item)}
-                      aria-label={`Complete follow-up for ${name}`}
-                    />
-                    <button
-                      type="button"
-                      className="ep-checklist-copy"
-                      onClick={() => navigate(`/leads/${encodeURIComponent(item.id)}`)}
-                      aria-label={`Open ${name}`}
-                    >
-                      <strong>{name}</strong>
-                      <small>{overdueLabel}{item.currentStatus} · {assignee}</small>
-                    </button>
-                    <span className="ep-checklist-time">
-                      {item.dueState === 'overdue'
-                        ? formatDhakaShort(item.nextFollowUpAt)
-                        : formatDhakaTime(item.nextFollowUpAt)}
-                    </span>
-                    <Link
-                      className="ep-checklist-update"
-                      to={`/leads/${encodeURIComponent(item.id)}/update`}
-                    >
-                      Update
-                    </Link>
-                  </div>
-                );
-              })}
+              {items.map(item => (
+                <ChecklistRow
+                  key={item.id}
+                  item={item}
+                  done={justCompleted.has(item.id)}
+                  onComplete={openOutcome}
+                />
+              ))}
             </div>
           )}
         </div>

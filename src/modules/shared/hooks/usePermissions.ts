@@ -190,6 +190,10 @@ export function usePermissions() {
         export_raw_xlsx: 'export',
         reassign_global_leads: 'assign',
         reassign_own_leads: 'assign',
+        // Team Lead / Manager user add (2026-11-20): the
+        // `users.add_employee` grant — without this mapping the
+        // action key would fall through to `users.view`.
+        add_employee: 'add_employee',
         perform_status_transitions: 'edit',
         status_update: 'edit',
         record_followup_logs: 'edit',

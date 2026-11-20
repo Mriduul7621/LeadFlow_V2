@@ -173,22 +173,26 @@ describe('Performance Phase 2 — the Task Calendar is a route of its own', () =
     // with Dashboard.tsx — those markers are dropped, not weakened. The
     // homes' own primary sections (heading + KPI cards + chart) must
     // remain on every role home.
-    for (const name of ['AdminHome', 'ManagerHome', 'TeamLeadHome', 'AgentHome']) {
+    //
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers over ONE shared component —
+    // the sections live in TeamOverviewHome, not the wrappers.
+    for (const name of ['AdminHome', 'ManagerHome', 'TeamLeadHome']) {
+      const src = read(`src/modules/workspace/pages/${name}.tsx`);
+      assert.ok(src.includes('<TeamOverviewHome scope='), `${name} must delegate to the shared Team Overview home`);
+    }
+    for (const name of ['TeamOverviewHome', 'AgentHome']) {
       const src = read(`src/modules/workspace/pages/${name}.tsx`);
       assert.ok(src.includes('<OverviewHeading'), `${name} must keep its overview heading`);
       assert.ok(src.includes('<KpiCard'), `${name} must keep its KPI cards`);
-      // AgentHome is the exception (Agent workspace rebuild,
-      // 2026-11-20): its chart is the Weekly activity card — the
-      // shared ChartCard hardcodes a "7 days" pill and has no slot
-      // for the timeframe dropdown, so the home renders the same
-      // .ep-chart bars directly.
-      if (name === 'AgentHome') {
-        assert.ok(src.includes('Weekly activity'), 'AgentHome must keep its chart card');
-        assert.ok(src.includes('ep-chart'), 'AgentHome must render chart bars');
-      } else {
-        assert.ok(src.includes('<ChartCard'), `${name} must keep its chart card`);
-      }
+      // Both homes render their chart as .ep-chart bars directly —
+      // the shared ChartCard hardcoded a "7 days" pill and had no
+      // slot for the timeframe dropdown, so it was removed
+      // (2026-11-20) with the rest of the 7-day chart pipeline.
+      assert.ok(src.includes('ep-chart'), `${name} must render chart bars`);
     }
+    assert.ok(read('src/modules/workspace/pages/TeamOverviewHome.tsx').includes('Team activity'), 'TeamOverviewHome must keep its chart card');
+    assert.ok(read('src/modules/workspace/pages/AgentHome.tsx').includes('Weekly activity'), 'AgentHome must keep its chart card');
   });
 
   it('G. dashboard KPI authority is untouched (no new client-side sources)', () => {

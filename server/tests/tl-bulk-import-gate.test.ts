@@ -3,8 +3,10 @@
  * ------------------------------------------------------------------
  * The bulk-import gate is aligned with the /leads/upload route gate:
  * an explicit `leads.import` grant passes on its own; otherwise the
- * caller needs `leads.create` PLUS at least one person in their
- * reporting subtree (admin or team lead only).
+ * caller needs `leads.create` PLUS team scope — at least one person
+ * in their reporting subtree (team lead) OR Manager scope (FullTeam
+ * / Organization). A plain agent has neither; a no-reports
+ * TEAM_LEAD has DownTeam, which is not Manager scope.
  *
  * This MUST run against PGlite, not demo mode: without a database,
  * hasPermissionCode grants every known lead code, so the `import`
@@ -40,6 +42,7 @@ describe('POST /api/leads/bulk — admin or team lead only (PGlite, real grants)
   let e1: any;
   let e2: any;
   let loneMgr: any;
+  let loneTl: any;
   let agent: any;
 
   const adminToken = () => sign({ id: adminId, employeeId: 'ADMIN1', role: 'ADMIN', email: 'admin@test.com' });
@@ -118,6 +121,7 @@ describe('POST /api/leads/bulk — admin or team lead only (PGlite, real grants)
     e1 = await addUser('EMP001', 'EMPLOYEE', tl.id);
     e2 = await addUser('EMP002', 'EMPLOYEE', tl.id);
     loneMgr = await addUser('MGR9', 'MANAGER');
+    loneTl = await addUser('TL999', 'TEAM_LEAD');
     agent = await addUser('AGENT1', 'EMPLOYEE');
   });
 
@@ -135,12 +139,31 @@ describe('POST /api/leads/bulk — admin or team lead only (PGlite, real grants)
     assert.match(res.body.message, /team lead/i);
   });
 
-  it('a no-reports MANAGER is refused — holding leads.create is not having a team', async () => {
+  it('a no-reports MANAGER passes — Manager scope (FullTeam) counts as team scope now', async () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi):
+    // Lead Intake belongs to Team Lead AND Manager. The 2026-11-19
+    // rule asked only "does the caller have a subtree?" and refused
+    // a no-reports Manager; the new rule counts Manager scope
+    // (FullTeam / Organization — the MANAGER role's data_visibility
+    // after applyDefaultRoleAccess) as team scope.
     const res = await request(app)
       .post('/api/leads/bulk')
       .set('Authorization', `Bearer ${tokenFor(loneMgr, 'MANAGER')}`)
       .send({ leads: rows, dryRun: true });
-    assert.equal(res.status, 403, `no-reports manager bulk should be 403, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(res.status, 200, `no-reports manager dry-run should pass, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.data.dryRun, true);
+  });
+
+  it('a no-reports TEAM_LEAD is still refused — DownTeam is not Manager scope', async () => {
+    // The managerScope arm reads roles.data_visibility: TEAM_LEAD
+    // is DownTeam after applyDefaultRoleAccess, so a no-reports TL
+    // has neither arm (no subtree, no Manager scope).
+    const res = await request(app)
+      .post('/api/leads/bulk')
+      .set('Authorization', `Bearer ${tokenFor(loneTl, 'TEAM_LEAD')}`)
+      .send({ leads: rows, dryRun: true });
+    assert.equal(res.status, 403, `no-reports team lead bulk should be 403, got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.match(res.body.message, /team lead/i);
   });
 
   it('a team lead passes — dry-run validates, commit imports, blank stays unassigned', async () => {

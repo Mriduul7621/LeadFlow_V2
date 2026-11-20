@@ -1193,14 +1193,16 @@ describe('KPI drill-down — source guards', () => {
     // The homes render KpiCard with `to={kpiDrilldownUrl(key)}` —
     // never a hand-built /team/kpi/... string, so the drill-down
     // URL shape stays in one place.
+    // Team Lead / Manager / Admin workspace (2026-11-20): the three
+    // non-agent homes are thin wrappers over ONE shared component —
+    // the Agent KPI set at team scope (Assigned leads / Due today /
+    // Contacted / Converted). No Overdue card — the overdue count is
+    // the Due-today subline. The Contacted card has no drill-down
+    // either (there is no 'contacted' key), so it must NOT appear
+    // here. The wrappers import no drill-down helper.
     const homes: Record<string, string[]> = {
-      'src/modules/workspace/pages/AdminHome.tsx': ['totalLeads', 'open', 'converted', 'noAction'],
-      'src/modules/workspace/pages/ManagerHome.tsx': ['totalLeads', 'overdue', 'noAction'],
-      'src/modules/workspace/pages/TeamLeadHome.tsx': ['totalLeads', 'dueToday', 'overdue', 'noAction'],
-      // Agent workspace rebuild (2026-11-20): no Overdue card — the
-      // overdue count is the Due-today subline. The Contacted card
-      // has no drill-down either (there is no 'contacted' key), so
-      // it must NOT appear here.
+      'src/modules/workspace/pages/TeamOverviewHome.tsx': ['totalLeads', 'dueToday', 'converted'],
+      // Agent workspace rebuild (2026-11-20): same KPI set, own scope.
       'src/modules/workspace/pages/AgentHome.tsx': ['totalLeads', 'dueToday', 'converted'],
     };
     for (const [file, keys] of Object.entries(homes)) {
@@ -1250,10 +1252,11 @@ describe('KPI drill-down — source guards', () => {
       'the export endpoint is gated on the existing leads.export code');
     assert.ok(users.includes("actionCode: 'leads.export'"), 'exports are audit-logged as leads.export');
     assert.ok(!users.includes('LeadExportService'), 'FIX-2\'s service is never imported here — the KPI export keeps its own builder');
-    // The tree branch is merged now (2026-11-14): this file
-    // legitimately imports its builder for GET /team/tree — the old
-    // "sibling branch" guard no longer applies to it.
-    assert.ok(users.includes("router.get('/team/tree'"), 'the tree endpoint lives in the same file');
+    // The tree endpoint is GONE (2026-11-20): GET /api/team/tree
+    // + its builder were removed with the Team Members rebuild —
+    // the roster was their only caller. Nothing here may reference it.
+    assert.ok(!users.includes("router.get('/team/tree'"), 'the tree endpoint was removed with the /team rebuild');
+    assert.ok(!users.includes('buildTeamTree'), 'the tree builder is gone too');
     const service = read('server/services/TeamKpiExportService.ts');
     assert.ok(service.includes("from 'exceljs'"), 'the workbook builder uses exceljs (server-side, outside the src-only guard)');
   });

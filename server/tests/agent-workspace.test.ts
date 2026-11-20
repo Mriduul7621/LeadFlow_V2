@@ -387,9 +387,13 @@ describe('Agent workspace — sidebar', () => {
     assert.equal(heading.sub, 'Track progress, activity and conversion trends.');
   });
 
-  it('the sidebar-bottom profile block is agent-only (AppLayout source guard)', () => {
+  it('the sidebar-bottom profile block renders for every role (AppLayout source guard)', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): the profile
+    // block + settings gear are no longer agent-only — every role
+    // reaches Profile & Settings from the sidebar bottom (no ACCOUNT
+    // group in any nav). The CSS class names stay (no churn).
     const appLayout = stripComments(readSrc('layouts/AppLayout.tsx'));
-    assert.ok(appLayout.includes("displayRole === 'agent'"));
+    assert.ok(!appLayout.includes("displayRole === 'agent'"), 'no agent-only condition on the profile block');
     assert.ok(appLayout.includes('ep-agent-profile'));
     assert.ok(appLayout.includes('ep-agent-profile-gear'));
     // The gear links to /settings — it is the settings entry, not a page.
@@ -473,13 +477,17 @@ describe('Agent workspace — source guards (no demo data, real vocabulary)', ()
     assert.ok(!queue.includes('Next 7 days'));
   });
 
-  it('ExecutionIntelligence branches on the display role; AgentPerformance carries Mahadi\'s KPIs', () => {
+  it('ExecutionIntelligence renders the performance layout for every role; AgentPerformance carries Mahadi\'s KPIs', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): the ~600-line
+    // Analytics layout was REMOVED — all roles render AgentPerformance
+    // with scope-driven leads (the Agent layout, team/org scope for
+    // the other roles). The role branch survives only for the title.
     const page = stripComments(readSrc('modules/dashboard/pages/ExecutionIntelligence.tsx'));
-    assert.ok(page.includes("role === 'agent'"));
+    assert.ok(page.includes("role === 'agent'"), 'the title still branches on the display role');
     assert.ok(page.includes('<AgentPerformance'));
-    // The Analytics layout survives for the other roles.
-    assert.ok(page.includes('stageBreakdown'));
-    assert.ok(page.includes('trendPoints'));
+    assert.ok(!page.includes('stageBreakdown'), 'the Analytics layout is gone');
+    assert.ok(!page.includes('trendPoints'), 'the Analytics layout is gone');
+    assert.ok(!page.includes('ncpByArea'), 'the Analytics layout is gone');
     const perf = stripComments(readSrc('modules/dashboard/components/AgentPerformance.tsx'));
     assert.ok(perf.includes('label="Total Response"'));
     assert.ok(perf.includes('label="Pipeline Premium"'));

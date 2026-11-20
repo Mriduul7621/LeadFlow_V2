@@ -131,7 +131,7 @@ import {
   employeeIdsFor,
   findLeadByIdRaw,
   getCallerDbInfo,
-  getDownlineIdsForCaller,
+  callerHasTeamScope,
   getFollowUpStatusValues,
   hasPermissionCode,
   isAssignedToAllowed,
@@ -187,6 +187,13 @@ function mapLeadRow(row: any) {
     assignedTo: assignedToEmp || spread.assignedTo || '',
     assignedBy: assignedByEmp || spread.assignedBy || '',
     assignedDate: row.assigned_at || spread.assignedDate || '',
+    // Creator, exposed for the Team Leads / My Leads scope split
+    // (2026-11-20): the client matches `createdByEmployeeId` against
+    // the overview roster, falling back to the `createdBy` users.id
+    // UUID when the creator row is gone. Never an ownership source
+    // for access — isLeadAccessible stays the only predicate.
+    createdBy: row.created_by || null,
+    createdByEmployeeId: row.created_by_employee_id || '',
     projectedNCP: row.expected_premium != null ? Number(row.expected_premium) : (spread.projectedNCP ?? 0),
     sumAssured: row.expected_value != null ? Number(row.expected_value) : (spread.sumAssured ?? 0),
     lastFollowUpDate: row.last_contacted_at || spread.lastFollowUpDate || '',
@@ -1425,28 +1432,32 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to assign, reassign, or transfer this lead.' });
       }
-      // Team Lead reassign rule (2026-11-19, Mahadi): reassigning an
-      // EXISTING lead's owner is a team-lead power, on top of the
+      // Team Lead / Manager reassign rule (2026-11-19, extended
+      // 2026-11-20, Mahadi: reassign belongs to Team Lead and
+      // Manager, never to a plain Agent). Reassigning an EXISTING
+      // lead's owner is a team-scope power, on top of the
       // leads.assign/transfer layer above. A non-admin caller must
-      // have at least one person in their reporting subtree, and the
-      // new owner must sit inside that same subtree (the full
-      // downline — A → B and grand-reports included). Without this,
-      // a no-reports FullTeam manager (holds leads.assign, sees the
-      // whole department) could reassign anyone's lead to anyone in
-      // the department. Creates are NOT tree-checked: assigning at
-      // creation stays governed by leads.assign + the scope check
-      // above, exactly as before. Reassigning to self (a lead
-      // taken back) always passes — the caller is in their own
-      // downline — and an explicit unassignment needs only the
-      // has-subordinate arm (there is no target to place).
+      // have team scope — at least one person in their reporting
+      // subtree (the Team Lead arm) OR FullTeam/Organization data
+      // visibility (the Manager arm, which is why a no-reports
+      // Manager may now reassign). A Team Lead's new owner must sit
+      // inside their subtree (the full downline — A → B and
+      // grand-reports included); a Manager-scope caller's target is
+      // already bounded by the visibility check above
+      // (isAssignedToAllowed). Creates are NOT tree-checked:
+      // assigning at creation stays governed by leads.assign + the
+      // scope check above, exactly as before. Reassigning to self
+      // (a lead taken back) always passes — the caller is in their
+      // own downline — and an explicit unassignment needs only the
+      // team-scope arm (there is no target to place).
       if (assignmentChanged && !['ADMIN', 'SUPERADMIN'].includes(normalizeRole(caller.role_code))) {
-        const downline = await getDownlineIdsForCaller(caller.id);
-        if (downline.length <= 1) {
+        const scope = await callerHasTeamScope(caller);
+        if (!scope.hasTeam) {
           perf.span('authz.permissions');
           perf.finish(res);
-          return sendJson(res, 403, { success: false, message: 'Only team leads and admins can reassign leads.' });
+          return sendJson(res, 403, { success: false, message: 'Only team leads, managers and admins can reassign leads.' });
         }
-        if (targetAssigned && !downline.includes(targetAssigned.userId)) {
+        if (targetAssigned && !scope.managerScope && !scope.downline.includes(targetAssigned.userId)) {
           perf.span('authz.permissions');
           perf.finish(res);
           return sendJson(res, 403, { success: false, message: 'You can only reassign leads to members of your own team.' });
@@ -1979,21 +1990,23 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       hasPermissionCode(caller, 'leads.assign'),
       hasPermissionCode(caller, 'leads.transfer'),
     ]);
-    // Aligned with the /leads/upload route gate (2026-11-19, Mahadi):
-    // bulk import is an admin or team-lead power. An explicit
-    // `leads.import` grant passes on its own; otherwise the caller
-    // needs `leads.create` PLUS at least one person in their
-    // reporting subtree. The old `canImport || canCreate` rule let
-    // any plain agent call this endpoint directly even though the
-    // page was admin-only — the route gate and the server now agree.
-    // The downline lookup runs only when it decides the answer.
+    // Aligned with the /leads/upload route gate (2026-11-19, extended
+    // 2026-11-20, Mahadi): bulk import is an admin, manager or
+    // team-lead power. An explicit `leads.import` grant passes on
+    // its own; otherwise the caller needs `leads.create` PLUS team
+    // scope — at least one person in their reporting subtree (Team
+    // Lead) or FullTeam/Organization visibility (Manager). The old
+    // `canImport || canCreate` rule let any plain agent call this
+    // endpoint directly even though the page was admin-only — the
+    // route gate and the server now agree. The scope lookup runs
+    // only when it decides the answer.
     if (!canImport) {
       if (!canCreate) {
         return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
       }
-      const downline = await getDownlineIdsForCaller(caller.id);
-      if (downline.length <= 1) {
-        return sendJson(res, 403, { success: false, message: 'Bulk import is available to admins and team leads.' });
+      const scope = await callerHasTeamScope(caller);
+      if (!scope.hasTeam) {
+        return sendJson(res, 403, { success: false, message: 'Bulk import is available to admins, managers and team leads.' });
       }
     }
 

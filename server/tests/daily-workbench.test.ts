@@ -59,15 +59,19 @@ describe('Daily Workbench — source guards', () => {
     assert.ok(src.includes('DailyWorkbench'), 'App must import DailyWorkbench');
   });
 
-  it('enterprise sidebar includes Daily Workbench', () => {
-    // The primary tabs are retired with the old shell: the Workbench is
-    // reached as "Daily Workbench" in the role-based enterprise sidebar
-    // (single source of truth: src/layouts/enterpriseNav.ts), and the
-    // agent home keeps the "My Work" title. "Follow-up Queue" is the
-    // /follow-up page (2026-11-19 label fix), never /workbench.
+  it('Daily Workbench leaves the sidebar; Follow-up Monitor / Queue stays', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20): NO role's
+    // sidebar carries /workbench anymore — the Agent home (My Work)
+    // is the day's workspace, and /workbench stays live by URL (see
+    // the route test above) + on the Agent bottom bar as "Workbench".
+    // The /follow-up page is "Follow-up Monitor" for TL/Manager/Admin
+    // (the demo's sidebar label) and "Follow-up Queue" for Agent; the
+    // page H1 stays "Follow-up Queue" for every role.
     const nav = enterpriseNav();
-    assert.ok(nav.includes("label: 'Daily Workbench', path: '/workbench'"), 'the sidebar must offer Daily Workbench → /workbench');
-    assert.ok(nav.includes("label: 'Follow-up Queue', path: '/follow-up'"), 'the sidebar must offer Follow-up Queue → /follow-up');
+    assert.ok(!nav.includes("label: 'Daily Workbench', path: '/workbench'"), 'no sidebar item may offer Daily Workbench → /workbench anymore');
+    assert.ok(nav.includes("label: 'Workbench', path: '/workbench'"), 'the Agent bottom bar still reaches /workbench');
+    assert.ok(nav.includes("label: 'Follow-up Monitor', path: '/follow-up'"), 'TL/Manager/Admin see Follow-up Monitor → /follow-up');
+    assert.ok(nav.includes("label: 'Follow-up Queue', path: '/follow-up'"), 'Agent sees Follow-up Queue → /follow-up');
     // Agent workspace rebuild (2026-11-20): "My Work" survives as
     // the Agent sidebar label — the home's H1 is the time-based
     // greeting now.

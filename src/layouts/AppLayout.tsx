@@ -78,7 +78,7 @@ const NOTIFICATION_REFRESH_MS = 60_000;
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuthStore();
-  const { canAccess } = usePermissions();
+  const { canAccess, serverPermissionsSettled } = usePermissions();
   // Super-admin role preview (fix round, 2026-11-19): the role
   // chosen in the sidebar rolebox, or null for the caller's own
   // view. Component state only — never persisted — and the
@@ -450,12 +450,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const sidebarGroups = roleLoading
     ? []
     : buildEnterpriseNavGroups({
-        // The teamLeadAllowed predicate (Lead Intake for team leads)
-        // needs the tree fact; roleLoading already waits for the
-        // overview, so hasSubordinates is settled whenever the nav
-        // renders at all.
-        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates }),
+        // The teamLeadAllowed / managerAllowed predicates (Lead
+        // Intake, User Management) need the tree fact and the
+        // derived enterprise role; roleLoading already waits for
+        // the overview, so both are settled whenever the nav
+        // renders at all. Route access always uses the REAL role,
+        // never the preview.
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates, isManager: enterpriseRole === 'manager' }),
         canAccess,
+        grantsSettled: serverPermissionsSettled,
         role: displayRole,
       });
   const activePath = enterpriseActivePath(sidebarGroups, location.pathname);
@@ -468,8 +471,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const bottomNavTabs = roleLoading
     ? []
     : buildEnterpriseBottomNavTabs({
-        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates }),
+        canOpen: (route: string) => resolveFeatureRouteAccess(route, userRoleName, matchedPermission, { hasSubordinates, isManager: enterpriseRole === 'manager' }),
         canAccess,
+        grantsSettled: serverPermissionsSettled,
         role: displayRole,
       });
   const bottomNavActivePath = enterpriseBottomNavActivePath(bottomNavTabs, location.pathname);
@@ -559,14 +563,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Info className="h-3.5 w-3.5" aria-hidden="true" /> About
           </Link>
         </div>
-        {/* Agent workspace (2026-11-20, Mahadi): the agent sidebar
-            has no ACCOUNT group, so the profile lives at the
-            sidebar bottom instead — avatar + name + employee ID,
-            with a settings gear beside it. Both lead to /settings,
-            exactly like the topbar profile chip; the gear is the
-            explicit settings entry, not a sidebar page. Other
-            roles keep their ACCOUNT items and see no block here. */}
-        {displayRole === 'agent' && (
+        {/* Sidebar profile (Agent workspace 2026-11-20, extended
+            to ALL roles by the Team Lead / Manager / Admin
+            workspace: no role has an ACCOUNT group anymore, so
+            the profile lives at the sidebar bottom for everyone —
+            avatar + name + employee ID, with a settings gear
+            beside it. Both lead to /settings, exactly like the
+            topbar profile chip; the gear is the explicit settings
+            entry, not a sidebar page. The ep-agent-profile class
+            names are kept to avoid CSS churn. */}
           <div className="ep-agent-profile">
             <Link
               to="/settings"
@@ -595,7 +600,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <Settings className="h-[17px] w-[17px]" />
             </Link>
           </div>
-        )}
       </aside>
       {isSidebarOpen && (
         <div

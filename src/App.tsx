@@ -48,6 +48,8 @@ const TeamHierarchy = lazy(() => import('./modules/hierarchy/pages/TeamHierarchy
 const TeamOverview = lazy(() => import('./modules/team/pages/TeamOverview'));
 const TeamKpiDrilldown = lazy(() => import('./modules/team/pages/TeamKpiDrilldown'));
 const ExecutionIntelligence = lazy(() => import('./modules/dashboard/pages/ExecutionIntelligence'));
+const SelfPerformance = lazy(() => import('./modules/dashboard/pages/SelfPerformance'));
+const TeamUserManagement = lazy(() => import('./modules/users/pages/TeamUserManagement'));
 const NcpProgress = lazy(() => import('./modules/dashboard/pages/NcpProgress'));
 const TrendCharts = lazy(() => import('./modules/dashboard/pages/TrendCharts'));
 const CampaignBreakdown = lazy(() => import('./modules/dashboard/pages/CampaignBreakdown'));
@@ -151,6 +153,12 @@ const router = createBrowserRouter([
     path: '/leads',
     element: <ProtectedRoute><FeatureGate route="/leads"><LazyPage page={<LeadList />} /></FeatureGate></ProtectedRoute>,  },
   {
+    // Team Lead My Leads (2026-11-20): own-only list, declared
+    // before /leads/:id (react-router ranks static segments
+    // above dynamic ones anyway, so /my can never match :id).
+    path: '/leads/my',
+    element: <ProtectedRoute><FeatureGate route="/leads/my"><LazyPage page={<LeadList scope="my" />} /></FeatureGate></ProtectedRoute>,  },
+  {
     path: '/leads/upload',
     element: <ProtectedRoute><FeatureGate route="/leads/upload"><LazyPage page={<LeadUpload />} /></FeatureGate></ProtectedRoute>,  },
   {
@@ -181,6 +189,11 @@ const router = createBrowserRouter([
     path: '/users',
     element: <ProtectedRoute><FeatureGate route="/users"><LazyPage page={<UserManagement />} /></FeatureGate></ProtectedRoute>,  },
   {
+    // Team Lead / Manager User Management (2026-11-20): team list
+    // + Employee add, admin-granted via users.add_employee.
+    path: '/users/team',
+    element: <ProtectedRoute><FeatureGate route="/users/team"><LazyPage page={<TeamUserManagement />} /></FeatureGate></ProtectedRoute>,  },
+  {
     path: '/team',
     element: <ProtectedRoute><FeatureGate route="/team"><LazyPage page={<TeamOverview />} /></FeatureGate></ProtectedRoute>,  },
   {
@@ -192,6 +205,11 @@ const router = createBrowserRouter([
   {
     path: '/execution-intelligence',
     element: <ProtectedRoute><FeatureGate route="/execution-intelligence"><LazyPage page={<ExecutionIntelligence />} /></FeatureGate></ProtectedRoute>,  },
+  {
+    // Self Performance / My Performance (2026-11-20): the TL's
+    // own performance page (Manager's My Performance too).
+    path: '/performance/self',
+    element: <ProtectedRoute><FeatureGate route="/performance/self"><LazyPage page={<SelfPerformance />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/ncp-progress',
     element: <ProtectedRoute><FeatureGate route="/ncp-progress"><LazyPage page={<NcpProgress />} /></FeatureGate></ProtectedRoute>,  },

@@ -69,7 +69,12 @@ describe('settings split — exactly one active nav item per page', () => {
   it('the plain /settings profile page does not hijack a settings sub-route', () => {
     // /settings is a prefix of /settings/system — longest match wins.
     assert.equal(enterpriseActivePath(adminGroups(), '/settings/system'), '/settings/system');
-    assert.equal(enterpriseActivePath(adminGroups(), '/settings'), '/settings');
+    // Since the TL/Manager/Admin workspace (2026-11-20) /settings is
+    // NO LONGER a sidebar item for any role — the profile block gear
+    // links there directly (no ACCOUNT group) — so no nav item is
+    // active on the profile page. The route itself stays live (see
+    // the registration test below).
+    assert.equal(enterpriseActivePath(adminGroups(), '/settings'), null);
   });
 });
 
@@ -137,6 +142,16 @@ describe('settings split — routes registered behind the admin gate', () => {
       const line = app.split('\n').find(l => l.includes(`route="${route}"`)) ?? '';
       assert.ok(line.includes('AdminRoute'), `${route} is behind AdminRoute`);
     }
+  });
+
+  it('/settings stays registered + live by URL even though no sidebar item points to it', () => {
+    // The profile-block gear links to /settings directly; the route
+    // must stay registered (App.tsx) and open to everyone (Layer B).
+    const app = read('src/App.tsx');
+    assert.ok(app.includes("path: '/settings'"), 'App.tsx still registers /settings');
+    const entry = FEATURE_ROUTES['/settings'];
+    assert.ok(entry, '/settings has a Layer B entry');
+    assert.deepEqual([...entry.roles], ['*'], 'EVERYONE — the ANY_ROLE sentinel, open to every role');
   });
 
   it('featureRouteAccess gates both new routes to the admin roles', () => {

@@ -43,19 +43,23 @@ const labels = (role: EnterpriseRole) => tabsFor(role).map(t => t.label);
 const paths = (role: EnterpriseRole) => tabsFor(role).map(t => t.path);
 
 describe('bottom nav — the tabs per role (Mahadi’s lists, verbatim)', () => {
-  it('Admin: Overview, Users & Roles, Lead Pool, Analytics', () => {
-    assert.deepEqual(labels('admin'), ['Overview', 'Users & Roles', 'Lead Pool', 'Analytics']);
-    assert.deepEqual(paths('admin'), ['/', '/users', '/leads/all', '/execution-intelligence']);
+  // Team Lead / Manager / Admin bottom tabs (2026-11-20): Mahadi
+  // did not specify these — they follow the new sidebar's first
+  // four working pages per role (reported to him for veto). The
+  // agent's tabs are unchanged (his list, verbatim).
+  it('Admin: Team Overview, All Leads, Users & Roles, Team Performance', () => {
+    assert.deepEqual(labels('admin'), ['Team Overview', 'All Leads', 'Users & Roles', 'Team Performance']);
+    assert.deepEqual(paths('admin'), ['/', '/leads', '/users', '/execution-intelligence']);
   });
 
-  it('Manager: Overview, Teams, Analytics, Lead Pool', () => {
-    assert.deepEqual(labels('manager'), ['Overview', 'Teams', 'Analytics', 'Lead Pool']);
-    assert.deepEqual(paths('manager'), ['/', '/team', '/execution-intelligence', '/leads/all']);
+  it('Manager: Team Overview, Team Leads, Team Members, Team Performance', () => {
+    assert.deepEqual(labels('manager'), ['Team Overview', 'Team Leads', 'Team Members', 'Team Performance']);
+    assert.deepEqual(paths('manager'), ['/', '/leads', '/team', '/execution-intelligence']);
   });
 
-  it('Team Lead: Overview, Team Members, Lead Pool, Workbench', () => {
-    assert.deepEqual(labels('teamLead'), ['Overview', 'Team Members', 'Lead Pool', 'Workbench']);
-    assert.deepEqual(paths('teamLead'), ['/', '/team', '/leads/all', '/workbench']);
+  it('Team Lead: Team Overview, Team Leads, Follow-up Monitor, Team Members', () => {
+    assert.deepEqual(labels('teamLead'), ['Team Overview', 'Team Leads', 'Follow-up Monitor', 'Team Members']);
+    assert.deepEqual(paths('teamLead'), ['/', '/leads', '/follow-up', '/team']);
   });
 
   it('Agent: My Work, My Leads, Workbench, Add Lead', () => {
@@ -82,14 +86,14 @@ describe('bottom nav — the tabs per role (Mahadi’s lists, verbatim)', () => 
 });
 
 describe('bottom nav — access filtering (same predicates as the sidebar)', () => {
-  it('a role without the insight grant loses the Analytics tab', () => {
+  it('a role without the insight grant loses the Team Performance tab', () => {
     const tabs = tabsFor('manager', { canAccess: () => false });
-    assert.deepEqual(tabs.map(t => t.label), ['Overview', 'Teams', 'Lead Pool']);
+    assert.deepEqual(tabs.map(t => t.label), ['Team Overview', 'Team Leads', 'Team Members']);
   });
 
   it('a route the user cannot open drops its tab', () => {
-    const tabs = tabsFor('admin', { canOpen: (route: string) => route !== '/leads/all' });
-    assert.deepEqual(tabs.map(t => t.label), ['Overview', 'Users & Roles', 'Analytics']);
+    const tabs = tabsFor('admin', { canOpen: (route: string) => route !== '/users' });
+    assert.deepEqual(tabs.map(t => t.label), ['Team Overview', 'All Leads', 'Team Performance']);
   });
 
   it('the overview tab is never filtered (every role opens /)', () => {
@@ -106,7 +110,7 @@ describe('bottom nav — the active state follows the route', () => {
   it('exact matches activate', () => {
     assert.equal(enterpriseBottomNavActivePath(adminTabs, '/'), '/');
     assert.equal(enterpriseBottomNavActivePath(adminTabs, '/users'), '/users');
-    assert.equal(enterpriseBottomNavActivePath(adminTabs, '/leads/all'), '/leads/all');
+    assert.equal(enterpriseBottomNavActivePath(adminTabs, '/leads'), '/leads');
   });
 
   it('deep links activate their tab by longest prefix', () => {

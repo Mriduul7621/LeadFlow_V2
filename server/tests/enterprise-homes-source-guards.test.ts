@@ -2,7 +2,8 @@
  * enterprise-homes-source-guards.test.ts
  * ------------------------------------------------------------------
  * Source guards on the four enterprise role homes (Enterprise
- * Preview redesign, 2026-11-19) + the shared hook + primitives:
+ * Preview redesign, 2026-11-19; Team Lead / Manager / Admin
+ * workspace rebuild, 2026-11-20) + the shared hook + primitives:
  *
  *   - the sample prototype's demo metrics must NOT appear as
  *     rendered content — the real KPI substitutions are pinned
@@ -20,6 +21,10 @@
  *   - every link target is a real route registered in App.tsx;
  *   - no home reads leads through getLeads (the hook owns the
  *     bounded queue reads).
+ *
+ * The three non-agent homes are thin wrappers around the shared
+ * TeamOverviewHome (2026-11-20), so the guards run on the shared
+ * component too — that is where the rendered content lives now.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,6 +49,11 @@ const HOME_FILES = [
   'src/modules/workspace/pages/AgentHome.tsx',
 ] as const;
 
+/** The shared Team Overview home (2026-11-20) — the non-agent homes' rendered content lives here. */
+const SHARED_HOME_FILE = 'src/modules/workspace/pages/TeamOverviewHome.tsx';
+
+const GUARDED_FILES = [...HOME_FILES, SHARED_HOME_FILE];
+
 /** The sample's demo metrics / demo chrome — banned from rendered code. */
 const BANNED_STRINGS = [
   'Import success',
@@ -51,7 +61,13 @@ const BANNED_STRINGS = [
   'Target progress',
   'Monthly target',
   'Open records',
-  'Follow-up completion',
+  // 'Follow-up completion' is DELIBERATELY not banned anymore:
+  // since the 2026-11-20 rebuild it is a REAL metric (completed
+  // today / (completed + due today + overdue), computed from the
+  // team's follow-up activity — see teamWorkspaceData.
+  // memberCompletions), honestly labelled on Team Overview and
+  // Team Members. The ban protected the sample's FAKE metric;
+  // the real one is the substitution.
   'NCP achievement',
   'Performance trend',
   'Filters are illustrative',
@@ -62,7 +78,7 @@ const BANNED_STRINGS = [
 const DEMO_STAGE_NAMES = ['Qualified', 'Proposal', 'Won', 'Lost', 'Stalled'];
 
 describe('enterprise homes — no demo metrics, no demo stages, no dollars', () => {
-  for (const file of HOME_FILES) {
+  for (const file of GUARDED_FILES) {
     it(`${file}: no sample demo metric or demo chrome in rendered code`, () => {
       const code = stripComments(read(file));
       for (const banned of BANNED_STRINGS) {
@@ -101,39 +117,47 @@ describe('enterprise homes — no demo metrics, no demo stages, no dollars', () 
   it('the demo strings survive ONLY in the substitution comments (the guards strip them deliberately)', () => {
     // If a future edit moves a demo string out of a comment into
     // rendered JSX, the tests above catch it; this test pins the
-    // reason the strip exists at all.
-    const admin = read('src/modules/workspace/pages/AdminHome.tsx');
-    assert.ok(admin.includes('"Import success 98.4%"'), 'AdminHome documents its Import-success substitution');
-    assert.ok(admin.includes('"System health"'), 'AdminHome documents its System-health substitution');
-    const manager = read('src/modules/workspace/pages/ManagerHome.tsx');
-    assert.ok(manager.includes('"Target progress 62%"'), 'ManagerHome documents its Target-progress substitution');
+    // reason the strip exists at all. The substitution docs moved
+    // to the shared component with the 2026-11-20 rebuild (the
+    // role homes are thin wrappers now).
+    const shared = read(SHARED_HOME_FILE);
+    assert.ok(shared.includes('"Import success 98.4%"'), 'TeamOverviewHome documents its Import-success substitution');
+    assert.ok(shared.includes('"System health"'), 'TeamOverviewHome documents its System-health substitution');
+    assert.ok(shared.includes('"Target progress 62%"'), 'TeamOverviewHome documents its Target-progress substitution');
+    assert.ok(shared.includes('"NCP achievement ৳28.4L"'), 'TeamOverviewHome documents its NCP-achievement substitution');
+    assert.ok(shared.includes('"Monthly target"'), 'TeamOverviewHome documents its Monthly-target substitution');
+    assert.ok(shared.includes('"Open records"'), 'TeamOverviewHome documents its Open-records substitution');
   });
 });
 
 describe('enterprise homes — the KPI substitutions are pinned', () => {
-  it('AdminHome: Total leads + Active users + Open leads + Converted', () => {
-    const code = stripComments(read('src/modules/workspace/pages/AdminHome.tsx'));
-    for (const label of ['label="Active users"', 'label="Total leads"', 'label="Open leads"', 'label="Converted"']) {
-      assert.ok(code.includes(label), `AdminHome renders ${label}`);
+  it('the three non-agent homes are thin wrappers around the shared Team Overview', () => {
+    for (const [file, scope] of [
+      ['src/modules/workspace/pages/AdminHome.tsx', 'admin'],
+      ['src/modules/workspace/pages/ManagerHome.tsx', 'manager'],
+      ['src/modules/workspace/pages/TeamLeadHome.tsx', 'teamLead'],
+    ] as const) {
+      const code = stripComments(read(file));
+      assert.ok(code.includes(`<TeamOverviewHome scope="${scope}" />`), `${file} renders the shared home with scope ${scope}`);
+      assert.ok(!code.includes('<KpiCard'), `${file} renders no KPI card of its own`);
     }
-    assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'AdminHome renders exactly four KPI cards');
   });
 
-  it('ManagerHome: Conversion + Collected NCP (৳) + Managed leads + At-risk leads', () => {
-    const code = stripComments(read('src/modules/workspace/pages/ManagerHome.tsx'));
-    for (const label of ['label="Managed leads"', 'label="Conversion"', 'label="Collected NCP"', 'label="At-risk leads"']) {
-      assert.ok(code.includes(label), `ManagerHome renders ${label}`);
+  it('TeamOverviewHome: the Agent KPI set at team scope — Assigned leads + Due today + Contacted + Converted', () => {
+    // Mahadi's words (2026-11-20): "KPI gulo agent er motoi tobe
+    // tar nijer and tar nicher subordinate der sob miliye" — the
+    // Agent's set, scoped to own + all subordinates (org-wide for
+    // the Admin, minus admin-role users).
+    const code = stripComments(read(SHARED_HOME_FILE));
+    for (const label of ['label="Assigned leads"', 'label="Due today"', 'label="Contacted"', 'label="Converted"']) {
+      assert.ok(code.includes(label), `TeamOverviewHome renders ${label}`);
     }
-    assert.ok(code.includes('money(metrics.collected)'), 'Collected NCP renders through the ৳ money helper');
-    assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'ManagerHome renders exactly four KPI cards');
-  });
-
-  it('TeamLeadHome: No Action Alert stands in for follow-up completion', () => {
-    const code = stripComments(read('src/modules/workspace/pages/TeamLeadHome.tsx'));
-    for (const label of ['label="Team leads"', 'label="Due today"', 'label="Overdue"', 'label="No Action Alert"']) {
-      assert.ok(code.includes(label), `TeamLeadHome renders ${label}`);
-    }
-    assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'TeamLeadHome renders exactly four KPI cards');
+    assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'TeamOverviewHome renders exactly four KPI cards');
+    // The old Admin "Active users" KPI is GONE with the rebuild
+    // (it was a user-admin metric, not a sales KPI — documented
+    // in the shared component's substitution comment).
+    assert.ok(!code.includes('label="Active users"'), 'no Active users card anymore');
+    assert.ok(!code.includes('label="Overdue"'), 'no Overdue card (the count is the Due-today subline, as on AgentHome)');
   });
 
   it('AgentHome: greeting H1 + Assigned leads + Contacted + Converted (Agent workspace rebuild, 2026-11-20)', () => {
@@ -153,19 +177,30 @@ describe('enterprise homes — the KPI substitutions are pinned', () => {
     assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'AgentHome renders exactly four KPI cards');
   });
 
-  it('the non-agent homes show the real 7-day follow-up chart, not the sample\'s 7-month trend', () => {
-    // AgentHome is the exception (Agent workspace rebuild,
-    // 2026-11-20): its chart is the Weekly activity card — 7 daily
-    // buckets by default, timeframe-switchable — fed by the lead
-    // history, not by the queue buckets.
-    for (const file of HOME_FILES.filter(f => !f.endsWith('AgentHome.tsx'))) {
-      const code = stripComments(read(file));
-      assert.ok(code.includes('title="Follow-ups due · next 7 days"'), `${file} carries the 7-day chart`);
-      assert.ok(code.includes('days={data.chartDays}'), `${file} feeds the chart from the queue buckets`);
-    }
+  it('TeamOverviewHome shows the Team activity chart (real logged outcomes), not the sample\'s 7-month trend', () => {
+    // The non-agent homes used to show the 7-day follow-up chart
+    // from the queue buckets; the 2026-11-20 rebuild replaced it
+    // with the Team activity chart — the whole team's logged
+    // activity, timeframe-switchable (This week / Last week /
+    // This month), exactly like AgentHome's Weekly activity.
+    const code = stripComments(read(SHARED_HOME_FILE));
+    assert.ok(code.includes('Team activity'), 'TeamOverviewHome carries the Team activity chart');
+    assert.ok(code.includes('activityBuckets('), 'TeamOverviewHome buckets real logged outcomes per day');
+    assert.ok(!code.includes('title="Follow-ups due · next 7 days"'), 'the 7-day queue chart is gone');
     const agent = stripComments(read('src/modules/workspace/pages/AgentHome.tsx'));
     assert.ok(agent.includes('Weekly activity'), 'AgentHome carries the Weekly activity chart');
     assert.ok(agent.includes('activityBuckets'), 'AgentHome buckets real logged outcomes per day');
+  });
+
+  it('TeamOverviewHome carries Member performance + Follow-up health + At-risk leads (the demo sections)', () => {
+    const code = stripComments(read(SHARED_HOME_FILE));
+    assert.ok(code.includes('Member performance'), 'the member performance section renders');
+    assert.ok(code.includes('Follow-up health'), 'the follow-up health section renders');
+    assert.ok(code.includes('At-risk leads'), 'the at-risk leads section renders');
+    assert.ok(code.includes('Follow-up completion'), 'the member % is honestly labelled Follow-up completion');
+    assert.ok(code.includes('ep-member-list'), 'member performance renders as a list');
+    assert.ok(code.includes('ep-health-list'), 'follow-up health renders as bars');
+    assert.ok(code.includes('ep-atrisk-list'), 'at-risk leads render as a list');
   });
 });
 
@@ -212,17 +247,24 @@ describe('enterprise homes — every link target is a real App.tsx route', () =>
   // matching a link shape, the count drops and this fails loudly
   // instead of silently checking fewer links.
   const EXPECTED_SITES: Record<string, number> = {
-    'src/modules/workspace/pages/AdminHome.tsx': 10,
-    'src/modules/workspace/pages/ManagerHome.tsx': 9,
-    'src/modules/workspace/pages/TeamLeadHome.tsx': 10,
+    // The three role homes are thin wrappers now — no links of
+    // their own; the shared component carries them all.
+    'src/modules/workspace/pages/AdminHome.tsx': 0,
+    'src/modules/workspace/pages/ManagerHome.tsx': 0,
+    'src/modules/workspace/pages/TeamLeadHome.tsx': 0,
     // Agent workspace rebuild (2026-11-20): 11 — View tasks, Add
     // Lead, 3 KPI drill-downs, the priority-row update link, the
     // pipeline / activity / recent "View all" links, the recent
     // lead row, and the dialog's queue link.
     'src/modules/workspace/pages/AgentHome.tsx': 11,
+    // Team Overview (2026-11-20): 11 — Add Lead, Add user, 3 KPI
+    // drill-downs, the member row (template, /team?member=…), the
+    // at-risk row (template, /leads/:id), the member / health /
+    // activity "View all" links, and the dialog's queue link.
+    [SHARED_HOME_FILE]: 11,
   };
 
-  for (const file of HOME_FILES) {
+  for (const file of GUARDED_FILES) {
     it(`${file}: every link target resolves to a registered route`, () => {
       const sites = linkSites(stripComments(read(file)));
       assert.equal(sites.length, EXPECTED_SITES[file], `${file} link-site count (extraction drift?)`);
@@ -231,8 +273,11 @@ describe('enterprise homes — every link target is a real App.tsx route', () =>
           assert.ok(site.value.startsWith('/'), `${file}: link target ${site.value} starts with /`);
           assert.ok(isRealRoute(site.value), `${file}: ${site.value} is not a registered App.tsx route`);
         } else if (site.kind === 'template') {
-          // `/leads/${item.id}` -> /leads/:param, matched segment-wise.
-          const normalized = site.value.replace(/\$\{[^}]+\}/g, ':param');
+          // `/leads/${item.id}` -> /leads/:param, matched
+          // segment-wise. A query string (e.g. /team?member=…)
+          // resolves to its base route.
+          const base = site.value.split('?')[0];
+          const normalized = base.replace(/\$\{[^}]+\}/g, ':param');
           assert.ok(isRealRoute(normalized), `${file}: ${site.value} does not resolve to a registered route`);
         } else {
           assert.ok((KPI_KEYS as readonly string[]).includes(site.value), `${file}: ${site.value} is not a KPI key`);
@@ -252,7 +297,12 @@ describe('enterprise homes — the shared hook and primitives', () => {
       assert.ok(hook.includes(bucket), `the queue reads the ${bucket} bucket`);
     }
     assert.ok(!hook.includes("bucket: 'all'"), 'no unbounded bucket=all read');
-    assert.ok(hook.includes('buildNext7Days('), 'the 7-day chart is built from the buckets');
+    // Team Lead / Manager / Admin workspace (2026-11-20): the 7-day
+    // chart pipeline (chartDays / buildNext7Days) was removed — the
+    // homes chart team activity from the loaded leads list via
+    // activityBuckets, and the hook carries no chart state anymore.
+    assert.ok(!hook.includes('buildNext7Days('), 'the 7-day chart builder is gone');
+    assert.ok(!hook.includes('chartDays'), 'the hook carries no 7-day chart state anymore');
     assert.ok(!hook.includes('getLeads'), 'the hook never calls getLeads');
   });
 

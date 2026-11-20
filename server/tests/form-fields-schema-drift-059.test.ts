@@ -364,9 +364,9 @@ describe('059 — form_fields schema drift repair', () => {
     assert.equal((list.body as any[]).filter(f => f.fieldKey === 'drift_probe').length, 1);
   });
 
-  it('059 is registered (060 is now the migration tail)', () => {
+  it('059 is registered (063 is now the migration tail)', () => {
     assert.ok(MIGRATION_IDS.includes('059_form_fields_timestamps'));
     assert.ok(MIGRATION_IDS.includes('058_user_designation_backfill'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '060_stage_rules_terminal');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee');
   });
 });

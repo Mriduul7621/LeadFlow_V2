@@ -1,8 +1,6 @@
 import {
   Activity,
-  Banknote,
   BarChart3,
-  Bell,
   CalendarDays,
   ClipboardList,
   Clock,
@@ -10,7 +8,6 @@ import {
   Globe,
   LayoutDashboard,
   MapPinned,
-  Network,
   Plus,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -92,6 +89,45 @@ import type { EnterpriseRole } from './enterpriseRole';
  * roles keep their entries. The mobile bottom bar is unchanged
  * for the agent (My Work / My Leads / Workbench / Add Lead).
  *
+ * Team Lead / Manager / Admin workspace (2026-11-20, Mahadi's
+ * four demo screenshots + words — "ebar now complete koro"):
+ * all three roles get ONE WORKSPACE group in his exact order,
+ * and NO ACCOUNT group (the profile block + settings gear now
+ * render for every role, and Notifications live behind the
+ * topbar bell for every role). Team Lead: Team Overview, Team
+ * Leads, My Leads, Lead Intake, Follow-up Monitor, Team
+ * Members, Team Performance, Self Performance, Task Calendar,
+ * Roadshow, Activities, User Management (grant-gated, see
+ * below). Manager: the same minus My Leads and Add Lead, with
+ * My Performance instead of Self Performance. Admin: Team
+ * Overview, All Leads, Lead Intake, Lead Pool, Follow-up
+ * Monitor, Team Members, Team Performance, Task Calendar,
+ * Roadshow, Activities, Users & Roles — plus the unchanged
+ * CONFIGURATION and ADMINISTRATION groups; no My Leads / My
+ * Performance / Add Lead (an admin is not a seller).
+ *
+ * Items that left the TL/Manager/Admin sidebars with this
+ * rebuild (routes stay live by URL, reported to Mahadi):
+ * Daily Workbench, Sales Pipeline, Campaigns, Trends &
+ * Reports, NCP Progress, and the ACCOUNT group. Lead Pool
+ * stays in the ADMIN sidebar only (the admin distributes) —
+ * TL/Manager distribute through Reassign instead, and the TL's
+ * own-created unassigned leads surface in Team Leads.
+ *
+ * Grant-gated nav items: an item may carry `grant` (a
+ * featureId + actionKey pair). It renders ONLY when the server
+ * permission sheet has settled AND the grant resolves — so the
+ * User Management item never flashes for an ungranted TL on a
+ * slow connection (the role-matrix fallback maps unknown action
+ * keys to `view`, which would wrongly show it).
+ *
+ * Follow-up Monitor: the sidebar label is "Follow-up Monitor"
+ * for TL/Manager/Admin, but the demo page's own H1 is
+ * "Follow-up Queue" — Mahadi asked to follow the demo exactly,
+ * so enterpriseHeadingForPath special-cases /follow-up to the
+ * demo H1 for every role (the agent nav label is already
+ * "Follow-up Queue").
+ *
  * The sidebar is a UX surface, never a security boundary: every entry
  * is filtered by the SAME resolvers the router uses
  * (`resolveFeatureRouteAccess` for the route module + `canAccess` for
@@ -121,6 +157,12 @@ export interface EnterpriseNavAccess {
   canAccess: (featureId: string, actionKey: string) => boolean;
   /** The caller's derived enterprise role (never a switcher). */
   role: EnterpriseRole;
+  /**
+   * True once the server permission sheet has loaded. Grant-gated
+   * items (see `NavItemDef.grant`) stay hidden until this is true,
+   * so a role-matrix fallback can never flash them in.
+   */
+  grantsSettled?: boolean;
 }
 
 /** Page subtitles, verbatim from the sample's `descriptions`. */
@@ -151,6 +193,15 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   'My Leads': 'Manage your assigned leads and next actions.',
   'My Performance': 'Track progress, activity and conversion trends.',
   'Add Lead': 'Capture a prospect with the required details.',
+  // Team Lead / Manager / Admin workspace (2026-11-20): sample-voice
+  // descriptions for the new labels, so their headings never render
+  // an empty subtitle.
+  'Team Overview': 'Your team at a glance — leads, follow-ups and activity.',
+  'Team Leads': 'Review your team members\u2019 leads and next actions.',
+  'All Leads': 'Search and inspect every lead in the organisation.',
+  'Follow-up Monitor': 'Prioritize overdue and upcoming follow-ups.',
+  'Self Performance': 'Track your own progress, activity and conversion trends.',
+  'User Management': 'Review your team and add new employees.',
   'Profile & Settings': 'Manage personal profile and preferences.',
   Notifications: 'Review important updates.',
   // Additions (not in the sample — the pages exist only in LeadFlow):
@@ -165,12 +216,17 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   Team: 'Compare managed teams and workload.',
 };
 
-type NavItemDef = EnterpriseNavItem & { permission?: string };
-
-const ACCOUNT_ITEMS: NavItemDef[] = [
-  { label: 'Profile & Settings', path: '/settings', icon: SettingsIcon },
-  { label: 'Notifications', path: '/notifications', icon: Bell },
-];
+type NavItemDef = EnterpriseNavItem & {
+  permission?: string;
+  /**
+   * Grant gate (2026-11-20): the item renders only when the server
+   * permission sheet has settled AND `canAccess(featureId,
+   * actionKey)` passes. Used for User Management
+   * (`users.add_employee`) — a TL/Manager without the grant never
+   * sees the item.
+   */
+  grant?: { featureId: string; actionKey: string };
+};
 
 /** Admin-only addition (not in the sample — see the header note). */
 const ADMIN_ITEMS: NavItemDef[] = [
@@ -179,22 +235,31 @@ const ADMIN_ITEMS: NavItemDef[] = [
 
 function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavItemDef[] }> {
   if (role === 'admin') {
+    // Admin workspace (2026-11-20, Mahadi): ONE WORKSPACE group in
+    // his order — Team Overview (org-wide), All Leads, Lead Intake,
+    // Lead Pool (the admin distributes; the only role that keeps
+    // it), Follow-up Monitor, Team Members, Team Performance, Task
+    // Calendar, Roadshow, Activities, Users & Roles — then the
+    // unchanged CONFIGURATION and ADMINISTRATION groups. NO My
+    // Leads / My Performance / Add Lead: an admin is not a seller
+    // and never appears in report data. NO ACCOUNT group: the
+    // profile block + settings gear render for every role now, and
+    // Notifications live behind the topbar bell.
     return [
       {
         title: 'WORKSPACE',
         items: [
-          { label: 'Overview', path: '/', icon: LayoutDashboard },
-          { label: 'Users & Roles', path: '/users', icon: UserCog },
-          { label: 'Teams & Hierarchy', path: '/team', icon: Network },
+          { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+          { label: 'All Leads', path: '/leads', icon: ClipboardList },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
           { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
-          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
-        ],
-      },
-      {
-        title: 'INSIGHTS',
-        items: [
-          { label: 'Analytics', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+          { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
+          { label: 'Team Members', path: '/team', icon: Users },
+          { label: 'Team Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+          { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
+          { label: 'Roadshow', path: '/roadshows', icon: MapPinned },
+          { label: 'Activities', path: '/activities', icon: Activity },
+          { label: 'Users & Roles', path: '/users', icon: UserCog },
         ],
       },
       {
@@ -205,70 +270,66 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
           { label: 'System Settings', path: '/settings/system', icon: SettingsIcon },
         ],
       },
-      { title: 'ACCOUNT', items: ACCOUNT_ITEMS },
       { title: 'ADMINISTRATION', items: ADMIN_ITEMS },
     ];
   }
   if (role === 'manager') {
+    // Manager workspace (2026-11-20, Mahadi): the Team Lead
+    // workspace minus My Leads and Add Lead, with My Performance
+    // (own data) instead of Self Performance. Lead Intake stays
+    // (upload), and User Management appears only with the
+    // admin-granted `users.add_employee` grant. Daily Workbench,
+    // Sales Pipeline, Campaigns, Trends & Reports and NCP Progress
+    // left the manager sidebar with this rebuild — their routes
+    // stay live by URL.
     return [
       {
         title: 'WORKSPACE',
         items: [
-          { label: 'Overview', path: '/', icon: LayoutDashboard },
-          { label: 'Teams', path: '/team', icon: Users },
-          { label: 'Leads', path: '/leads', icon: ClipboardList },
-          { label: 'Daily Workbench', path: '/workbench', icon: Clock },
-          { label: 'Sales Pipeline', path: '/sales-pipeline', icon: FileText },
-        ],
-      },
-      {
-        title: 'INSIGHTS',
-        items: [
-          { label: 'Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
-          { label: 'Campaigns', path: '/campaign-breakdown', icon: Globe, permission: 'campaign_breakdown' },
-          { label: 'Trends & Reports', path: '/trend-charts', icon: TrendingUp, permission: 'trend_charts' },
-          { label: 'NCP Progress', path: '/ncp-progress', icon: Banknote, permission: 'ncp_progress' },
-        ],
-      },
-      {
-        title: 'FIELD EXECUTION',
-        items: [
-          { label: 'Roadshow Follow-up', path: '/roadshows', icon: MapPinned },
-          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
+          { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+          { label: 'Team Leads', path: '/leads', icon: ClipboardList },
+          { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
+          { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
+          { label: 'Team Members', path: '/team', icon: Users },
+          { label: 'Team Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+          { label: 'My Performance', path: '/performance/self', icon: TrendingUp },
           { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
+          { label: 'Roadshow', path: '/roadshows', icon: MapPinned },
+          { label: 'Activities', path: '/activities', icon: Activity },
+          { label: 'User Management', path: '/users/team', icon: UserCog, grant: { featureId: 'user_management', actionKey: 'add_employee' } },
         ],
       },
-      { title: 'ACCOUNT', items: ACCOUNT_ITEMS },
     ];
   }
   if (role === 'teamLead') {
+    // Team Lead workspace (2026-11-20, Mahadi's demo screenshots +
+    // words): ONE WORKSPACE group in his exact order — Team
+    // Overview, Team Leads (members-only), My Leads (own-only,
+    // directly below), Lead Intake, Follow-up Monitor, Team
+    // Members, Team Performance, Self Performance, Task Calendar,
+    // Roadshow, Activities, User Management (grant-gated). NO
+    // Daily Workbench sidebar item (the route stays live by URL)
+    // and NO Add Lead sidebar item — Add Lead is a button on Team
+    // Overview, like the agent's. The demo's "Manage team" and
+    // "Assign leads" buttons were dropped on his word.
     return [
       {
         title: 'WORKSPACE',
         items: [
-          { label: 'Overview', path: '/', icon: LayoutDashboard },
-          { label: 'Team Members', path: '/team', icon: Users },
-          // Team Lead lead creation (2026-11-19, Mahadi): a team lead
-          // uploads sheets (Lead Intake, gated by the teamLeadAllowed
-          // route predicate) and adds single leads (Add Lead, already
-          // open to everyone) — new leads default to the creator, and
-          // the lead list shows the TL's own + assigned leads first.
+          { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+          { label: 'Team Leads', path: '/leads', icon: ClipboardList },
+          { label: 'My Leads', path: '/leads/my', icon: ClipboardList },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
-          { label: 'Add Lead', path: '/leads/new', icon: Plus },
-          { label: 'Daily Workbench', path: '/workbench', icon: Clock },
-          { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
-          { label: 'Activities', path: '/activities', icon: Activity },
-          { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
-        ],
-      },
-      {
-        title: 'PERFORMANCE',
-        items: [
+          { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
+          { label: 'Team Members', path: '/team', icon: Users },
           { label: 'Team Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
-          { label: 'Roadshow Follow-up', path: '/roadshows', icon: MapPinned },
+          { label: 'Self Performance', path: '/performance/self', icon: TrendingUp },
+          { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },
+          { label: 'Roadshow', path: '/roadshows', icon: MapPinned },
+          { label: 'Activities', path: '/activities', icon: Activity },
+          { label: 'User Management', path: '/users/team', icon: UserCog, grant: { featureId: 'user_management', actionKey: 'add_employee' } },
         ],
       },
-      { title: 'ACCOUNT', items: ACCOUNT_ITEMS },
     ];
   }
   // Agent workspace (2026-11-20, Mahadi's demo screenshots): ONE
@@ -302,22 +363,30 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
 export function buildEnterpriseNavGroups(access: EnterpriseNavAccess): EnterpriseNavGroup[] {
   const passes = (item: NavItemDef): boolean => {
     if (item.permission && !access.canAccess(item.permission, 'view')) return false;
+    // Grant-gated items (User Management): hidden until the server
+    // permission sheet has settled AND the grant resolves — the
+    // role-matrix fallback maps unknown action keys to `view`,
+    // which would wrongly show the item on a slow connection.
+    if (item.grant) {
+      if (access.grantsSettled !== true) return false;
+      if (!access.canAccess(item.grant.featureId, item.grant.actionKey)) return false;
+    }
     return access.canOpen(item.path);
   };
 
   // No dedupe by path: several sample items legitimately share a
-  // real destination (Teams / Team Members / Teams & Hierarchy all
-  // land on /team; Analytics / Performance / Team Performance all
-  // land on /execution-intelligence) — but never within ONE role's
-  // nav, so the active state is always unambiguous. (The Admin
-  // CONFIGURATION group used to share /settings/system across
-  // three items; the 2026-11-19 fix round split it into three
-  // distinct routes for exactly that reason.)
+  // real destination (Team Leads / My Leads / All Leads all land
+  // on /leads or /leads/my across roles; Team Performance lands on
+  // /execution-intelligence for three roles) — but never within
+  // ONE role's nav, so the active state is always unambiguous.
+  // (The Admin CONFIGURATION group used to share /settings/system
+  // across three items; the 2026-11-19 fix round split it into
+  // three distinct routes for exactly that reason.)
   const groups: EnterpriseNavGroup[] = [];
   for (const group of navItemsFor(access.role)) {
     const items: EnterpriseNavItem[] = group.items
       .filter(passes)
-      .map(({ permission: _permission, ...entry }) => entry);
+      .map(({ permission: _permission, grant: _grant, ...entry }) => entry);
     if (items.length > 0) groups.push({ title: group.title, items });
   }
   return groups;
@@ -348,23 +417,27 @@ interface BottomNavTabDef extends EnterpriseBottomNavTab {
 }
 
 const BOTTOM_NAV_TABS: Record<EnterpriseRole, BottomNavTabDef[]> = {
+  // Team Lead / Manager / Admin bottom tabs (2026-11-20): Mahadi
+  // did not specify these — they follow the new sidebar's first
+  // four working pages per role (reported to him for veto). The
+  // agent's tabs are unchanged.
   admin: [
-    { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+    { label: 'All Leads', path: '/leads', icon: ClipboardList },
     { label: 'Users & Roles', path: '/users', icon: UserCog },
-    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
-    { label: 'Analytics', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
+    { label: 'Team Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
   ],
   manager: [
-    { label: 'Overview', path: '/', icon: LayoutDashboard },
-    { label: 'Teams', path: '/team', icon: Users },
-    { label: 'Analytics', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
-    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
+    { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Team Leads', path: '/leads', icon: ClipboardList },
+    { label: 'Team Members', path: '/team', icon: Users },
+    { label: 'Team Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
   ],
   teamLead: [
-    { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Team Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Team Leads', path: '/leads', icon: ClipboardList },
+    { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
     { label: 'Team Members', path: '/team', icon: Users },
-    { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
-    { label: 'Workbench', path: '/workbench', icon: Clock },
   ],
   agent: [
     { label: 'My Work', path: '/', icon: LayoutDashboard },
@@ -411,6 +484,9 @@ const FALLBACK_LABELS: Record<string, string> = {
   '/leads/new': 'Add Lead',
   '/leads/upload': 'Lead Intake',
   '/leads/all': 'Lead Pool',
+  '/leads/my': 'My Leads',
+  '/performance/self': 'Self Performance',
+  '/users/team': 'User Management',
   '/leads': 'Leads',
   '/administration': 'Administration',
   '/more': 'More',
@@ -422,7 +498,7 @@ const FALLBACK_LABELS: Record<string, string> = {
   '/settings/products-campaigns': 'Products & Campaigns',
   '/settings/performance-diagnostics': 'Performance Diagnostics',
   '/team/kpi': 'KPI detail',
-  '/team/organogram': 'Teams & Hierarchy',
+  '/team/organogram': 'Team Members',
   '/team': 'Team',
   '/users': 'Users & Roles',
   '/workbench': 'Daily Workbench',
@@ -521,6 +597,15 @@ export interface EnterprisePageHeading {
  * sample's words. Deep links fall back to the breadcrumb label.
  */
 export function enterpriseHeadingForPath(role: EnterpriseRole, pathname: string): EnterprisePageHeading {
+  // Follow-up Monitor (2026-11-20 demo): the sidebar label is
+  // "Follow-up Monitor" for TL/Manager/Admin, but the demo page's
+  // own H1 is "Follow-up Queue" — Mahadi asked to follow the demo
+  // exactly, so the heading stays "Follow-up Queue" for every role
+  // (the agent nav label is already "Follow-up Queue"). Flagged in
+  // the PR report: sidebar and H1 deliberately differ here.
+  if (pathname === '/follow-up') {
+    return { title: 'Follow-up Queue', sub: ENTERPRISE_PAGE_DESCRIPTIONS['Follow-up Queue'] ?? '' };
+  }
   const groups = buildEnterpriseNavGroups({
     role,
     canOpen: () => true,

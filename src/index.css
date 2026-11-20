@@ -2050,6 +2050,9 @@
 }
 .ep-pill.orange { background: #fff0e5; color: #c65d20; }
 .ep-pill.red { background: #fae9e7; color: var(--ep-red); }
+/* Status pill variants (Team Members roster, 2026-11-20). */
+.ep-pill.warn { background: #fae9e7; color: var(--ep-red); }
+.ep-pill.ok { background: #e7f6ec; color: #2f7a4a; }
 /* Selected state for pill toggle buttons (Analytics period filter). */
 button.ep-pill { cursor: pointer; font: inherit; border: none; }
 .ep-pill.active { background: var(--ep-deep); color: #fff; }
@@ -2449,4 +2452,176 @@ button.ep-checklist-copy:hover strong { color: var(--ep-deep); }
   .ep-dialog { max-height: 92vh; }
   .ep-funnel-row { grid-template-columns: 88px 1fr 62px; }
   .ep-checklist-time { display: none; }
+}
+
+/* --- Team Lead / Manager / Admin workspace (2026-11-20) --- */
+
+/* Member performance rows (Team Overview home): avatar, name +
+   subline, follow-up completion % on the right. The whole row is
+   the link to the member's detail on Team Members. */
+.ep-member-list { display: flex; flex-direction: column; }
+.ep-member-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 0; border-bottom: 1px solid #f0f0eb;
+  text-decoration: none; color: inherit;
+}
+.ep-member-row:last-child { border-bottom: 0; }
+a.ep-member-row:hover strong, button.ep-member-row:hover strong { color: var(--ep-deep); }
+button.ep-member-row {
+  font: inherit; background: none; border: none; border-bottom: 1px solid #f0f0eb;
+  padding: 11px 0; cursor: pointer; text-align: left; width: 100%;
+}
+.ep-member-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ep-member-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-member-copy small { font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+.ep-member-pct { font-size: 12px; font-weight: 800; color: var(--ep-ink); white-space: nowrap; }
+
+/* Follow-up health bars (Team Overview home): label, bar, %.
+   The overdue bar is red; the other two are olive. */
+.ep-health-list { display: flex; flex-direction: column; gap: 11px; margin-top: 4px; }
+.ep-health-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 10px; }
+.ep-health-label { font-size: 12px; font-weight: 600; }
+.ep-health-bar { height: 10px; background: #f0f0eb; border-radius: 5px; overflow: hidden; }
+.ep-health-bar span { display: block; height: 100%; background: var(--ep-olive); border-radius: 5px; min-width: 2px; }
+.ep-health-bar--red span { background: var(--ep-red); }
+.ep-health-pct { font-size: 11px; font-weight: 700; color: var(--ep-muted); text-align: right; white-space: nowrap; }
+
+/* Overdue alert bar (Team Overview home): red-tinted, with a
+   Review link to the Follow-up Monitor. */
+.ep-alert-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #fef2f2; border: 1px solid #fecaca; border-radius: 11px;
+  padding: 11px 14px; font-size: 12px; font-weight: 600; color: #991b1b; margin-top: 14px;
+}
+
+/* At-risk lead rows (Team Overview home): name + reason, due
+   info on the right. The whole row is the link to Lead360. */
+.ep-atrisk-list { display: flex; flex-direction: column; }
+.ep-atrisk-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 0; border-bottom: 1px solid #f0f0eb;
+  text-decoration: none; color: inherit;
+}
+.ep-atrisk-row:last-child { border-bottom: 0; }
+a.ep-atrisk-row:hover strong { color: var(--ep-deep); }
+.ep-atrisk-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ep-atrisk-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-atrisk-copy small { font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+
+/* Team / Self toggle (Follow-up Monitor, Team Lead only):
+   a segmented pill pair above the list. */
+.ep-scope-toggle {
+  display: inline-flex; gap: 2px; background: #f0f0eb;
+  border-radius: 9px; padding: 3px; margin-bottom: 4px;
+}
+.ep-scope-toggle .ep-pill { border: 0; background: transparent; }
+.ep-scope-toggle .ep-pill.active { background: white; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+.ep-scope-toggle-note { font-size: 11px; color: var(--ep-muted); margin: 0 0 12px; }
+
+/* TL group cards (Manager drill-down on Team Leads, Follow-up
+   Monitor, Team Members): an expandable card per Team Lead with
+   member rows inside. */
+.ep-tlgroup-list { display: flex; flex-direction: column; gap: 12px; }
+.ep-tlgroup { background: white; border: 1px solid var(--ep-line); border-radius: 14px; overflow: hidden; }
+.ep-tlgroup-head {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  font: inherit; background: none; border: none; padding: 14px 16px;
+  cursor: pointer; text-align: left; color: inherit;
+}
+.ep-tlgroup-head:hover .ep-tlgroup-name { color: var(--ep-deep); }
+.ep-tlgroup-name { font-size: 13px; font-weight: 700; flex: 1; min-width: 0; }
+.ep-tlgroup-name small { display: block; font-size: 10px; color: var(--ep-muted); font-weight: 400; margin-top: 2px; }
+.ep-tlgroup-count { font-size: 11px; font-weight: 700; color: var(--ep-muted); white-space: nowrap; }
+.ep-tlgroup-chevron { font-size: 12px; color: var(--ep-muted); flex-shrink: 0; }
+.ep-tlgroup-body { border-top: 1px solid #f0f0eb; padding: 4px 16px 12px; }
+.ep-tlgroup-member { padding: 10px 0; border-bottom: 1px solid #f0f0eb; }
+.ep-tlgroup-member:last-child { border-bottom: 0; }
+.ep-tlgroup-member-name { font-size: 12px; font-weight: 700; margin: 0 0 2px; }
+
+/* Team roster rows (Team Members rebuild): member + role on the
+   left, the numbers on the right. A row, not a table, so it
+   stacks cleanly at 390px. */
+.ep-roster-head {
+  display: grid; grid-template-columns: minmax(150px, 1fr) 130px 90px 120px 100px 110px; gap: 10px;
+  padding: 0 4px 8px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--ep-muted); font-weight: 700;
+  border-bottom: 1px solid var(--ep-line);
+}
+.ep-roster-head span:nth-child(n+3) { text-align: right; }
+.ep-roster-head span:last-child { text-align: right; }
+.ep-roster-list { display: flex; flex-direction: column; }
+.ep-roster-row {
+  display: grid; grid-template-columns: minmax(150px, 1fr) 130px 90px 120px 100px 110px; gap: 10px;
+  align-items: center; padding: 12px 4px; border-bottom: 1px solid #f0f0eb;
+  font: inherit; background: none; border-top: none; border-left: none; border-right: none;
+  cursor: pointer; text-align: left; color: inherit; width: 100%;
+  text-decoration: none;
+}
+.ep-roster-row:last-child { border-bottom: 0; }
+.ep-roster-row:hover .ep-roster-member strong { color: var(--ep-deep); }
+.ep-roster-member { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ep-roster-copy { display: flex; flex-direction: column; min-width: 0; }
+.ep-roster-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-roster-copy small { font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+.ep-roster-role {
+  font-size: 12px; font-weight: 600; color: var(--ep-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-roster-num { font-size: 12px; font-weight: 700; text-align: right; white-space: nowrap; }
+.ep-roster-row .ep-pill { justify-self: end; }
+.ep-roster-you {
+  display: inline-block; margin-left: 6px; padding: 1px 6px;
+  background: var(--ep-soft); color: var(--ep-deep); border-radius: 6px;
+  font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
+  vertical-align: 1px;
+}
+
+/* Two-column form grid (Team User Management add form). */
+.ep-form-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px;
+}
+
+/* Dual bookings legend (Task Calendar): your bookings solid,
+   team bookings dashed with a T marker. */
+.ep-cal-legend {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-size: 11px; font-weight: 600; color: var(--ep-muted); margin-bottom: 2px;
+}
+.ep-cal-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.ep-cal-legend-swatch {
+  width: 22px; height: 14px; border-radius: 4px; flex-shrink: 0;
+  display: inline-grid; place-items: center; font-size: 9px; font-weight: 800;
+}
+.ep-cal-legend-swatch--own { background: #E7F6EC; border-left: 3px solid #10B981; }
+.ep-cal-legend-swatch--team { background: #E7F6EC; border: 1px dashed #596b35; color: #596b35; }
+
+/* Team bookings in the calendar grids: dashed outline + T marker,
+   keeping the category colour (lf-cal-pill--team is the team
+   MEETING category colour — the team-booking marker is is-team). */
+.lf-cal-pill.is-team { outline: 1px dashed #596b35; outline-offset: -1px; }
+.lf-cal-pill-team {
+  display: inline-grid; place-items: center; width: 13px; height: 13px;
+  border-radius: 4px; background: #596b35; color: white;
+  font-size: 8px; font-weight: 800; flex-shrink: 0; margin-left: 2px;
+}
+.lf-tg-event.is-team { outline: 1px dashed #596b35; outline-offset: -1px; }
+
+@media (max-width: 720px) {
+  /* Roster rows stack at 390px: member on top, role + numbers in
+     a 2-col grid below, status pill last — no horizontal overflow. */
+  .ep-roster-head { display: none; }
+  .ep-roster-row { grid-template-columns: 1fr 1fr; row-gap: 4px; }
+  .ep-roster-member { grid-column: 1 / -1; }
+  .ep-roster-role { font-size: 11px; }
+  .ep-roster-num { text-align: left; font-size: 11px; }
+  .ep-roster-row .ep-pill { justify-self: start; }
+  .ep-form-grid { grid-template-columns: 1fr; }
+  .ep-health-row { grid-template-columns: 64px 1fr 38px; }
+  .ep-tlgroup-count { display: none; }
 }

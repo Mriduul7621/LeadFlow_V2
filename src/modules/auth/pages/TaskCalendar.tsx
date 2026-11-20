@@ -53,6 +53,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import BackButton from '../../shared/components/BackButton';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 
 /**
  * TaskCalendar.tsx — Microsoft-style rebuild (calendar upgrade PR D)
@@ -69,6 +70,17 @@ import BackButton from '../../shared/components/BackButton';
  *     set) are READ-ONLY here: the lead follow-up owns their time,
  *     so the detail view links to the lead instead of editing.
  *   - Embedded mode (Dashboard) renders a compact month + agenda.
+ *
+ *   - Dual bookings (Team Lead / Manager / Admin workspace,
+ *     2026-11-20): the server already returns team-visible
+ *     activities (lead rows via the lead-visibility predicate,
+ *     lead-less rows via created_by/assigned_to/attendee), so
+ *     no server change was needed — the client marks each event
+ *     own vs team (isOwn/ownerName) and renders team bookings
+ *     visually distinguished (dashed pill, "Team" tag, owner
+ *     name, legend). Edit/complete behaviour is unchanged: a
+ *     team booking stays editable only through the caller's
+ *     existing edit path (canEditScheduled).
  */
 
 const MONTHS = [
@@ -116,9 +128,21 @@ interface CalendarEvent {
   leadMobile?: string | null;
   leadStatus?: string | null;
   managed: boolean;
+  /** Own vs team booking (dual bookings, 2026-11-20). */
+  isOwn: boolean;
+  /** Team member who owns a team booking (null when unknown). */
+  ownerName?: string | null;
   raw?: ScheduledActivity;
   roadshow?: Roadshow;
 }
+
+/** Owner resolution for the dual-booking markers. */
+interface CalendarOwnerContext {
+  currentUserId: string;
+  ownerNameByUserId: Map<string, string>;
+}
+
+const DEFAULT_OWNER_CONTEXT: CalendarOwnerContext = { currentUserId: '', ownerNameByUserId: new Map() };
 
 interface EventFormState {
   mode: 'create' | 'edit';
@@ -142,7 +166,7 @@ const fmtDateLong = (d: Date) => `${DAYS_OF_WEEK[d.getDay()]}, ${d.getDate()} ${
 const isSameDay = (a: Date, b: Date) =>
   a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
 
-function mapScheduled(sa: ScheduledActivity): CalendarEvent {
+function mapScheduled(sa: ScheduledActivity, ctx: CalendarOwnerContext = DEFAULT_OWNER_CONTEXT): CalendarEvent {
   const iso = (sa.scheduledAt || (sa as any).scheduled_at) as string;
   const type = String(sa.activityType || (sa as any).activity_type || 'follow_up');
   const leadId = (sa.leadId ?? (sa as any).lead_id ?? null) as string | null;
@@ -155,6 +179,11 @@ function mapScheduled(sa: ScheduledActivity): CalendarEvent {
       : type === 'task'
         ? 'Task'
         : 'Scheduled activity';
+  // Owner = the assignee, else the creator (both users.id UUIDs).
+  // A row with no owner fields at all is the caller's own (the
+  // server only serves a team row with its creator attached).
+  const ownerId = String(sa.assignedTo ?? (sa as any).assigned_to ?? sa.createdBy ?? (sa as any).created_by ?? '');
+  const isOwn = !ownerId || !ctx.currentUserId || ownerId === ctx.currentUserId;
   return {
     id: sa.id,
     kind: 'scheduled',
@@ -171,11 +200,17 @@ function mapScheduled(sa: ScheduledActivity): CalendarEvent {
     leadMobile: ((sa as any).leadMobile ?? null) as string | null,
     leadStatus: ((sa as any).leadStatus ?? null) as string | null,
     managed: isManagedEntry(sa),
+    isOwn,
+    ownerName: isOwn ? null : (ctx.ownerNameByUserId.get(ownerId) ?? null),
     raw: sa,
   };
 }
 
-function mapRoadshow(r: Roadshow): CalendarEvent {
+function mapRoadshow(r: Roadshow, ctx: CalendarOwnerContext = DEFAULT_OWNER_CONTEXT): CalendarEvent {
+  const assignedIds = (r.assignedUsers || []).map(a => a.id);
+  const isOwn = !ctx.currentUserId
+    || assignedIds.includes(ctx.currentUserId)
+    || (r.createdBy !== null && r.createdBy === ctx.currentUserId);
   return {
     id: `roadshow:${r.id}`,
     kind: 'roadshow',
@@ -186,6 +221,8 @@ function mapRoadshow(r: Roadshow): CalendarEvent {
     status: String(r.status || 'pending'),
     location: r.location || null,
     managed: false,
+    isOwn,
+    ownerName: isOwn ? null : (r.assignedUsers?.[0]?.name ?? null),
     roadshow: r,
   };
 }
@@ -195,6 +232,19 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
   const navigate = useNavigate();
   const { canAccess } = usePermissions();
   const canEditScheduled = canAccess('lead_tracking', 'edit');
+  const callerTeam = useCallerTeam();
+
+  // Owner names for team bookings come from the team overview
+  // roster (users.id -> name). The overview loads once and is
+  // cached per session; a missing roster just means team pills
+  // show without a name until it arrives.
+  const ownerCtx = useMemo<CalendarOwnerContext>(() => {
+    const ownerNameByUserId = new Map<string, string>();
+    for (const person of callerTeam.overview?.people ?? []) {
+      ownerNameByUserId.set(person.userId, person.name);
+    }
+    return { currentUserId: user?.id || '', ownerNameByUserId };
+  }, [user?.id, callerTeam.overview]);
 
   const [loading, setLoading] = useState(true);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -290,8 +340,8 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       .then(([activities, roadshows]) => {
         if (cancelled) return;
         const mapped = [
-          ...(activities || []).map(mapScheduled),
-          ...(roadshows || []).filter(r => String(r.status) !== 'cancel').map(mapRoadshow),
+          ...(activities || []).map(sa => mapScheduled(sa, ownerCtx)),
+          ...(roadshows || []).filter(r => String(r.status) !== 'cancel').map(r => mapRoadshow(r, ownerCtx)),
         ];
         mapped.sort((a, b) => a.date.getTime() - b.date.getTime());
         setEvents(mapped);
@@ -302,7 +352,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [user, fetchRange, refreshKey]);
+  }, [user, fetchRange, refreshKey, ownerCtx]);
 
   const filteredEvents = useMemo(() => {
     let result = events.filter(e => String(e.status).toLowerCase() !== 'cancelled');
@@ -402,7 +452,7 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
     // Refresh the detail (attendees / RSVP state) from the server.
     try {
       const fresh = await scheduledActivityService.getById(ev.id);
-      if (fresh && fresh.id) setSelectedEvent(prev => (prev && prev.id === ev.id ? mapScheduled(fresh) : prev));
+      if (fresh && fresh.id) setSelectedEvent(prev => (prev && prev.id === ev.id ? mapScheduled(fresh, ownerCtx) : prev));
     } catch { /* list data is already shown */ }
   };
 
@@ -666,11 +716,12 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                       key={event.id}
                       type="button"
                       onClick={e => { e.stopPropagation(); void openEvent(event); }}
-                      className={cn('lf-cal-pill', PILL_CLASS[event.category], String(event.status).toLowerCase() === 'completed' && 'opacity-60')}
-                      title={`${event.title} · ${fmtTime(event.date)}`}
+                      className={cn('lf-cal-pill', PILL_CLASS[event.category], !event.isOwn && 'is-team', String(event.status).toLowerCase() === 'completed' && 'opacity-60')}
+                      title={`${event.title} · ${fmtTime(event.date)}${event.isOwn ? '' : ` · Team${event.ownerName ? ` · ${event.ownerName}` : ''}`}`}
                     >
                       <span className="lf-cal-pill-time">{fmtTime(event.date)}</span>
                       <span className="lf-cal-pill-title">{event.title}</span>
+                      {!event.isOwn && <span className="lf-cal-pill-team" aria-label="Team booking">T</span>}
                     </button>
                   ))}
                   {dayEvents.length > rendered.length && (
@@ -765,17 +816,17 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
                           key={event.id}
                           type="button"
                           onClick={e => { e.stopPropagation(); void openEvent(event); }}
-                          className={cn('lf-tg-event', `lf-tg-event--${event.category}`, String(event.status).toLowerCase() === 'completed' && 'is-completed')}
+                          className={cn('lf-tg-event', `lf-tg-event--${event.category}`, !event.isOwn && 'is-team', String(event.status).toLowerCase() === 'completed' && 'is-completed')}
                           style={{
                             top: `${top}px`,
                             height: `${height}px`,
                             left: `calc(${(pos.column / pos.columns) * 100}% + 2px)`,
                             width: `calc(${100 / pos.columns}% - 4px)`,
                           }}
-                          title={`${event.title} · ${fmtTime(event.date)}`}
+                          title={`${event.title} · ${fmtTime(event.date)}${event.isOwn ? '' : ` · Team${event.ownerName ? ` · ${event.ownerName}` : ''}`}`}
                         >
                           <span className="lf-tg-event-time">{fmtTime(event.date)}</span>
-                          <span className="lf-tg-event-title">{event.title}</span>
+                          <span className="lf-tg-event-title">{event.title}{!event.isOwn && event.ownerName ? ` · ${event.ownerName}` : ''}</span>
                         </button>
                       );
                     })}
@@ -809,6 +860,9 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
             <span className="flex-1 min-w-0">
               <span className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-black text-slate-900 truncate">{event.title}</span>
+                {!event.isOwn && (
+                  <span className="text-[8px] font-black uppercase tracking-widest text-[#596b35] bg-[#eff0e4] border border-[#d9d9c2] px-1.5 py-0.5">Team{event.ownerName ? ` · ${event.ownerName}` : ''}</span>
+                )}
                 {String(event.status).toLowerCase() === 'completed' && (
                   <span className="text-[8px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5">Completed</span>
                 )}
@@ -930,6 +984,18 @@ export default function TaskCalendar({ embedded = false }: { embedded?: boolean 
           </button>
         )}
       />
+
+      {/* Dual bookings legend — your bookings solid, team bookings dashed with a T marker. */}
+      <div className="ep-cal-legend" aria-label="Calendar legend">
+        <span className="ep-cal-legend-item">
+          <span className="ep-cal-legend-swatch ep-cal-legend-swatch--own" aria-hidden="true" />
+          Your bookings
+        </span>
+        <span className="ep-cal-legend-item">
+          <span className="ep-cal-legend-swatch ep-cal-legend-swatch--team" aria-hidden="true">T</span>
+          Team bookings
+        </span>
+      </div>
 
       <div className="flex gap-4 items-start">
         <aside className="hidden lg:block w-[248px] shrink-0 sticky top-4">{renderRailContent()}</aside>
@@ -1123,6 +1189,11 @@ function EventDetailModal({ ev, currentUser, canEdit, onClose, onComplete, onCan
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
+          <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5 text-[#978C21]" />
+            {ev.isOwn ? 'Your booking' : `Team booking${ev.ownerName ? ` · ${ev.ownerName}` : ''}`}
+          </div>
+
           {ev.managed && (
             <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-semibold text-amber-800 leading-relaxed">
               From lead follow-up — this entry is kept in sync with the lead's next step, so its time is managed from the lead, not here. Open the lead to change it.

@@ -4,25 +4,29 @@ import { useCallerTeam, type CallerTeamState } from '../../team/hooks/useCallerT
 import { dashboardService, type DashboardMetrics } from '../../dashboard/services/dashboardService';
 import { leadService, type FollowUpQueueItem } from '../../leads/services/leadService';
 import { metadataService } from '../../metadata/services/metadataService';
-import { userService } from '../../users/services/userService';
-import type { DropdownOption, User } from '../../shared/types';
+import type { DropdownOption } from '../../shared/types';
 import {
   markCriticalStartupSettled,
   waitForCriticalStartup,
 } from '../../shared/api/startupPriority';
 import { isForbiddenError } from '../../shared/api/forbidden';
-import { buildNext7Days, type DayBucket } from '../utils/enterpriseData';
 
 /**
- * useEnterpriseHomeData — the shared data load for the four
- * enterprise role homes (Enterprise Preview redesign, 2026-11-19).
+ * useEnterpriseHomeData — the shared data load for the enterprise
+ * role homes (Enterprise Preview redesign, 2026-11-19).
  * ------------------------------------------------------------------
- * One hook, one loading pattern, four homes: the scoped team
+ * One hook, one loading pattern, all homes: the scoped team
  * overview (KPIs), the dashboard metrics (conversion, NCP, team
  * stats, status counts), the follow-up queue buckets (attention
- * lists + the 7-day chart), and the FollowUpStatus dictionary
- * (terminal flags for the pipeline bottleneck). Admin homes pass
- * `withUsers` for the roster read behind the Active users KPI.
+ * lists), and the FollowUpStatus dictionary (terminal flags for
+ * the pipeline bottleneck).
+ *
+ * Removed 2026-11-20 (Team Lead / Manager / Admin workspace):
+ * the 7-day chart pipeline (chartDays / chartTruncated, built
+ * from the queue buckets) and the `withUsers` roster read — the
+ * shared Team Overview home charts team activity from the loaded
+ * leads list instead, and the Active users KPI is gone with the
+ * old Admin home. Nothing reads them anymore.
  *
  * Startup sequencing mirrors the old Dashboard: GET /api/dashboard
  * is the session's critical request — it releases the startup gate
@@ -48,15 +52,11 @@ export interface EnterpriseHomeData {
   upcomingItems: FollowUpQueueItem[];
   overdueTotal: number;
   todayTotal: number;
-  chartDays: DayBucket[];
-  chartTruncated: boolean;
   statusOptions: DropdownOption[];
-  users: User[] | null;
-  usersLoading: boolean;
   refresh: () => void;
 }
 
-export function useEnterpriseHomeData(options?: { withUsers?: boolean }): EnterpriseHomeData {
+export function useEnterpriseHomeData(): EnterpriseHomeData {
   const user = useAuthStore(state => state.user);
   const callerTeam = useCallerTeam();
 
@@ -71,12 +71,7 @@ export function useEnterpriseHomeData(options?: { withUsers?: boolean }): Enterp
   const [upcomingItems, setUpcomingItems] = useState<FollowUpQueueItem[]>([]);
   const [overdueTotal, setOverdueTotal] = useState(0);
   const [todayTotal, setTodayTotal] = useState(0);
-  const [chartDays, setChartDays] = useState<DayBucket[]>(() => buildNext7Days([]));
-  const [chartTruncated, setChartTruncated] = useState(false);
   const [statusOptions, setStatusOptions] = useState<DropdownOption[]>([]);
-
-  const [users, setUsers] = useState<User[] | null>(null);
-  const [usersLoading, setUsersLoading] = useState(Boolean(options?.withUsers));
 
   const [reloadTick, setReloadTick] = useState(0);
   const refresh = useCallback(() => {
@@ -134,10 +129,6 @@ export function useEnterpriseHomeData(options?: { withUsers?: boolean }): Enterp
       setUpcomingItems(upcoming);
       setOverdueTotal(overdueRes.counts?.overdue ?? overdue.length);
       setTodayTotal(todayRes.counts?.today ?? today.length);
-      setChartDays(buildNext7Days([...today, ...upcoming]));
-      const fetched = today.length + upcoming.length;
-      const available = (todayRes.pagination?.total ?? 0) + (upcomingRes.pagination?.total ?? 0);
-      setChartTruncated(available > fetched);
       setStatusOptions(options ?? []);
     } catch {
       setOverdueItems([]);
@@ -145,30 +136,11 @@ export function useEnterpriseHomeData(options?: { withUsers?: boolean }): Enterp
       setUpcomingItems([]);
       setOverdueTotal(0);
       setTodayTotal(0);
-      setChartDays(buildNext7Days([]));
-      setChartTruncated(false);
       setStatusOptions([]);
     } finally {
       setQueueLoading(false);
     }
   }, [user]);
-
-  const loadUsers = useCallback(async () => {
-    if (!user || !options?.withUsers) {
-      setUsersLoading(false);
-      return;
-    }
-    setUsersLoading(true);
-    try {
-      await waitForCriticalStartup();
-      const roster = await userService.getAllUsers();
-      setUsers(roster ?? []);
-    } catch {
-      setUsers([]);
-    } finally {
-      setUsersLoading(false);
-    }
-  }, [user, options?.withUsers]);
 
   useEffect(() => {
     void loadDashboardData();
@@ -177,10 +149,6 @@ export function useEnterpriseHomeData(options?: { withUsers?: boolean }): Enterp
   useEffect(() => {
     void loadQueue();
   }, [loadQueue, reloadTick]);
-
-  useEffect(() => {
-    void loadUsers();
-  }, [loadUsers, reloadTick]);
 
   return {
     callerTeam,
@@ -194,11 +162,7 @@ export function useEnterpriseHomeData(options?: { withUsers?: boolean }): Enterp
     upcomingItems,
     overdueTotal,
     todayTotal,
-    chartDays,
-    chartTruncated,
     statusOptions,
-    users,
-    usersLoading,
     refresh,
   };
 }

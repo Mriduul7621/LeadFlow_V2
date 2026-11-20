@@ -38,13 +38,14 @@ const PAGES = [
 
 // Enterprise Preview (2026-11-19): Dashboard.tsx is deleted and the
 // "no access" wiring split in two — the shared home hook carries the
-// classifier + the forbidden flag, and the four role homes render the
+// classifier + the forbidden flag, and the role homes render the
 // empty state from the hook's flag.
+// Team Lead / Manager / Admin workspace (2026-11-20): the three
+// non-agent homes are thin wrappers over ONE shared component — the
+// empty state lives in the shared component, not the wrappers.
 const HOME_HOOK = 'src/modules/workspace/hooks/useEnterpriseHomeData.ts';
 const ROLE_HOMES = [
-  'src/modules/workspace/pages/AdminHome.tsx',
-  'src/modules/workspace/pages/ManagerHome.tsx',
-  'src/modules/workspace/pages/TeamLeadHome.tsx',
+  'src/modules/workspace/pages/TeamOverviewHome.tsx',
   'src/modules/workspace/pages/AgentHome.tsx',
 ];
 

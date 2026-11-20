@@ -87,6 +87,32 @@ export const userService = {
     return saved;
   },
 
+  /**
+   * POST /api/users/employee — Team Lead / Manager Employee add
+   * (2026-11-20, admin-granted via `users.add_employee`). The
+   * server forces role=EMPLOYEE, manager=the caller and
+   * department=the caller's department — the payload carries
+   * only the new person's details.
+   */
+  async addEmployee(payload: {
+    fullName: string;
+    employeeId: string;
+    email?: string;
+    phone?: string;
+    designation?: string;
+    password: string;
+    mustChangePassword: boolean;
+  }): Promise<User> {
+    const saved = await apiRequest<User>('/api/users/employee', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    cacheUser(saved);
+    invalidateUsersReferenceCache();
+    return saved;
+  },
+
   async updateOwnProfile(profile: { name: string; email: string; phone: string }): Promise<User> {
     const saved = await apiRequest<User>('/api/auth/profile', {
       method: 'PUT',

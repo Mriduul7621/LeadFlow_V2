@@ -1,20 +1,23 @@
 /**
  * enterprise-analytics.test.ts
  * ------------------------------------------------------------------
- * Fix round 1 (2026-11-19): Mahadi's ask — "Analytics page E
- * analytic type E data thakte Hobe." /execution-intelligence
- * imported recharts but rendered NO chart — KPI buttons and a
- * list only. It now leads with analytic content built from the
- * real data the page already loads: a leads-over-time area chart,
- * a stage-distribution pie, an NCP-by-area bar comparison, and
- * rate breakdowns — with honest empty states when a period has
- * no data. Real data only: the server trendData is [] and nothing
- * is invented to fill a chart.
+ * Team Lead / Manager / Admin workspace (2026-11-20): the
+ * Analytics layout on /execution-intelligence (fix round 1,
+ * 2026-11-19 — leads-over-time area chart, stage pie,
+ * NCP-by-area bars, rates card, area table) was REMOVED and
+ * every role now renders the performance layout
+ * (AgentPerformance, Mahadi's KPI set) on scope-driven leads:
+ * the Agent's own leads, the TL's team leads, the Manager's
+ * downline, the Admin's org-wide leads minus admin-assigned
+ * ones. The Manager additionally gets a TL-grouped breakdown
+ * table below the layout. The Analytics code is restorable from
+ * git if Mahadi ever asks for it back; keeping ~600 lines of
+ * unreachable code would rot. Reported in the PR.
  *
- * The same round fixed a real-data bug in NCP Progress: its chart
- * interpolated the period totals at 25/55/80/100% — invented
- * numbers. The buckets now sum the leads that actually fall in
- * each quarter of the selected period, cumulatively.
+ * The NCP Progress quartile fix (fix round 1) is unchanged: its
+ * chart interpolated the period totals at 25/55/80/100% —
+ * invented numbers. The buckets now sum the leads that actually
+ * fall in each quarter of the selected period, cumulatively.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,59 +37,68 @@ const stripComments = (src: string): string =>
 
 const analytics = stripComments(read('src/modules/dashboard/pages/ExecutionIntelligence.tsx'));
 
-describe('Analytics — charts are the primary content, from real data', () => {
-  it('renders three real charts: leads over time, stage mix, NCP by area', () => {
-    assert.ok(analytics.includes('<AreaChart data={trendPoints}'), 'leads-over-time area chart');
-    assert.ok(analytics.includes('data={stageBreakdown}'), 'stage-distribution pie data');
-    assert.ok(analytics.includes('<PieChart>'), 'stage-distribution pie chart');
-    assert.ok(analytics.includes('<BarChart data={ncpByArea}'), 'NCP-by-area bar comparison');
+describe('Team Performance — every role renders the performance layout on scope-driven leads', () => {
+  it('renders AgentPerformance with a role title + scope note, never the Analytics layout', () => {
+    assert.ok(analytics.includes('<AgentPerformance'), 'the page renders the shared performance layout');
+    assert.ok(analytics.includes('title={title}'), 'the export title follows the role');
+    assert.ok(analytics.includes('scopeNote={scopeNote}'), 'the scope line follows the role');
+    // The Analytics layout is GONE — no chart/popup/table code survives.
+    for (const gone of ['<AreaChart', '<PieChart', '<BarChart', 'ncpByArea', 'stageBreakdown', 'trendPoints', 'setActivePopup', 'handleExportTeamStats']) {
+      assert.ok(!analytics.includes(gone), `${gone} is gone with the Analytics layout`);
+    }
   });
 
-  it('every chart is fed by a memo over the real loaded leads', () => {
-    for (const memo of ['stageBreakdown', 'trendPoints', 'ncpByArea', 'filteredLeads', 'rates']) {
-      assert.ok(analytics.includes(`const ${memo} = useMemo`), `${memo} is computed from the page data`);
-    }
-    assert.ok(analytics.includes('leads.filter'), 'the memos filter the real lead list');
+  it('scopes the leads by display role through the Team Leads split (never widens)', () => {
+    assert.ok(analytics.includes('teamLeadsForRole(leads, people, self, role)'), 'the scope split drives the list');
+    assert.ok(analytics.includes('useEnterpriseDisplayRole()'), 'the scope follows the display role');
+    assert.ok(analytics.includes('useCallerTeam()'), 'the scope comes from the shared team overview');
+  });
+
+  it('the Agent keeps the My Performance title and its own-leads scope note', () => {
+    assert.ok(analytics.includes("role === 'agent' ? 'My Performance' : 'Team Performance'"), 'Agent = My Performance, everyone else = Team Performance');
+    assert.ok(analytics.includes("'all figures are your own scoped leads'"), 'the Agent scope note is unchanged');
+  });
+
+  it('the Admin scope note names the admin exclusion', () => {
+    assert.ok(analytics.includes('admins excluded'), 'the Admin scope note says admins are excluded');
   });
 
   it('never fabricates trend data — the server trendData is [] and unused', () => {
     assert.ok(!analytics.includes('trendData'), 'no trendData anywhere on the page');
-    // The trend buckets come from the leads' own timestamps.
-    assert.ok(analytics.includes('new Date(l.timestamp)'), 'trend buckets use real lead timestamps');
   });
 
-  it('empty periods show an honest empty state instead of a chart', () => {
-    for (const memo of ['trendPoints', 'stageBreakdown', 'ncpByArea']) {
-      assert.ok(analytics.includes(`{${memo}.length === 0 ? (`), `the ${memo} chart guards its empty period`);
-    }
-    assert.ok(analytics.includes('No leads in this period'), 'the empty copy says so plainly');
-  });
-
-  it('the rates card shows real counts, never a bare percent', () => {
-    assert.ok(analytics.includes('Contact rate'), 'contact rate is shown');
-    assert.ok(analytics.includes('Conversion rate'), 'conversion rate is shown');
-    assert.ok(analytics.includes('Collection rate'), 'collection rate is shown');
-    assert.ok(
-      analytics.includes('Rates are computed from the {rates.total} lead'),
-      'the denominator is named in the card foot',
-    );
-  });
-
-  it('keeps the sample heading and the drill-down (the list is secondary now)', () => {
+  it('keeps the sample heading and the Back button', () => {
     assert.ok(analytics.includes('path="/execution-intelligence"'), 'the sample heading via EnterprisePageHeader');
-    assert.ok(analytics.includes('setActivePopup(stat.id)'), 'KPI drill-down still works');
+    assert.ok(analytics.includes('<BackButton fallback="/" />'), 'the Back button stays');
   });
 });
 
-describe('Analytics — the role-aware titles read as analytics', () => {
-  it('admin sees "Analytics", manager "Performance", team lead "Team Performance"', () => {
-    assert.equal(enterpriseHeadingForPath('admin', '/execution-intelligence').title, 'Analytics');
-    assert.equal(enterpriseHeadingForPath('manager', '/execution-intelligence').title, 'Performance');
+describe('Team Performance — the Manager TL-grouped breakdown table', () => {
+  it('renders below the layout for Managers only, all-time, with honest labelling', () => {
+    assert.ok(analytics.includes("role === 'manager' && ("), 'the table is Manager-only');
+    assert.ok(analytics.includes('Performance by team lead'), 'the table heading names the grouping');
+    assert.ok(analytics.includes('All time · all scoped leads'), 'the table says it is all-time (the period dropdown lives inside AgentPerformance)');
+    assert.ok(analytics.includes('groupLeadsByTl(scopedLeads, people, self)'), 'the groups come from the shared TL-grouping helper');
+    assert.ok(analytics.includes('agentPerformanceKpis(group.leads)'), 'each row reuses the real KPI computation');
+    assert.ok(analytics.includes('Response'), 'response % per TL');
+    assert.ok(analytics.includes('Collected Premium'), 'collected premium per TL');
+  });
+
+  it('each TL row links to that TL\'s member-wise roster', () => {
+    assert.ok(analytics.includes('to={`/team?tl=${encodeURIComponent(group.tl.employeeId)}`}'), 'the TL name links to /team?tl=…');
+  });
+});
+
+describe('Team Performance — the role-aware titles', () => {
+  it('admin, manager and team lead see "Team Performance"; the agent sees "My Performance"', () => {
+    assert.equal(enterpriseHeadingForPath('admin', '/execution-intelligence').title, 'Team Performance');
+    assert.equal(enterpriseHeadingForPath('manager', '/execution-intelligence').title, 'Team Performance');
     assert.equal(enterpriseHeadingForPath('teamLead', '/execution-intelligence').title, 'Team Performance');
+    assert.equal(enterpriseHeadingForPath('agent', '/execution-intelligence').title, 'My Performance');
     assert.equal(
       enterpriseHeadingForPath('admin', '/execution-intelligence').sub,
-      'Explore performance indicators and authorized records.',
-      "the sample's description, verbatim",
+      'Review team performance and progress.',
+      "the Team Performance description",
     );
   });
 });

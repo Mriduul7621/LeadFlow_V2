@@ -274,3 +274,43 @@ describe('access matrix — the Roles & Access editor catalogs the Reports modul
     );
   });
 });
+
+describe('access matrix — the Roles & Access editor catalogs the reassign + add-employee grants', () => {
+  it('ACTION_PERMISSION_GROUPS toggles leads.assign under Leads (the reassign grant)', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi):
+    // reassign belongs to Team Lead and Manager, never to a plain
+    // Agent — and the admin must be able to grant/remove it per
+    // role. The Leads module already toggles it; this pins it.
+    const users = read('src/modules/users/pages/UserManagement.tsx');
+    const groupsAt = users.indexOf('const ACTION_PERMISSION_GROUPS');
+    assert.ok(groupsAt >= 0, 'the editor catalog exists');
+    const leadsAt = users.indexOf("module: 'Leads'", groupsAt);
+    assert.ok(leadsAt > groupsAt, 'the catalog has a Leads module');
+    const leadsBlock = users.slice(leadsAt, leadsAt + 1200);
+    assert.ok(
+      leadsBlock.includes("{ code: 'leads.assign', label: 'Assign'"),
+      'the Leads module toggles the canonical leads.assign grant'
+    );
+  });
+
+  it('ACTION_PERMISSION_GROUPS toggles users.add_employee under Users (the TL/Manager add-user grant)', () => {
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi):
+    // a Team Lead or Manager may add Employee-role users ONLY when
+    // the admin grants this access. The code is seeded by
+    // migration 063 (definition only, no default grants).
+    const users = read('src/modules/users/pages/UserManagement.tsx');
+    const groupsAt = users.indexOf('const ACTION_PERMISSION_GROUPS');
+    assert.ok(groupsAt >= 0, 'the editor catalog exists');
+    const usersAt = users.indexOf("module: 'Users'", groupsAt);
+    assert.ok(usersAt > groupsAt, 'the catalog has a Users module');
+    const usersBlock = users.slice(usersAt, usersAt + 1600);
+    assert.ok(
+      usersBlock.includes("{ code: 'users.add_employee', label: 'Add Employee'"),
+      'the Users module toggles the canonical users.add_employee grant'
+    );
+    assert.ok(
+      users.includes('migration 063'),
+      'the catalog comment records that users.add_employee comes from migration 063, not 025'
+    );
+  });
+});

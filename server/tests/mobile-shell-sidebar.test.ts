@@ -103,6 +103,11 @@ describe('Mobile shell — left sidebar drawer', () => {
       'src/modules/hierarchy/pages/TeamHierarchy.tsx',
       'src/modules/roadshows/pages/RoadshowPage.tsx',
       'src/modules/auth/pages/TaskCalendar.tsx',
+      // Team Lead / Manager / Admin workspace (2026-11-20): the
+      // rebuilt Team Members page and the two new pages.
+      'src/modules/team/pages/TeamOverview.tsx',
+      'src/modules/dashboard/pages/SelfPerformance.tsx',
+      'src/modules/users/pages/TeamUserManagement.tsx',
     ]) {
       assert.ok(read(page).includes('BackButton'), `${page} must render the shared back control`);
     }
@@ -114,14 +119,22 @@ describe('Mobile shell — navigation ownership', () => {
   const more = () => read('src/modules/navigation/pages/MorePages.tsx');
   const app = () => read('src/App.tsx');
 
-  it('the sidebar owns analytics, workspace, roadshows and the pipeline', () => {
+  it('the sidebar owns analytics, workspace and roadshows', () => {
     const s = sidebar();
     for (const route of [
-      '/execution-intelligence', '/ncp-progress', '/trend-charts', '/campaign-breakdown',
+      '/execution-intelligence',
       '/activities', '/task-calendar', '/follow-up', '/team',
-      '/roadshows', '/sales-pipeline',
+      '/roadshows',
     ]) {
       assert.ok(s.includes(`path: '${route}'`), `sidebar must offer ${route}`);
+    }
+    // Team Lead / Manager / Admin workspace (2026-11-20, Mahadi's
+    // sidebar lists): NCP Progress, Trends & Reports, Campaigns
+    // and Sales Pipeline left the sidebars — they are NOT sidebar
+    // entries anymore, but their routes stay registered and live
+    // by URL (see feature-route-access.test.ts).
+    for (const route of ['/ncp-progress', '/trend-charts', '/campaign-breakdown', '/sales-pipeline']) {
+      assert.ok(!s.includes(`path: '${route}'`), `sidebar must NOT offer ${route} anymore`);
     }
     // Analytics entries keep their functional permission gate.
     assert.ok(s.includes("permission: 'execution_intelligence'"), 'analytics entries must keep their view permission');
@@ -171,55 +184,61 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     // The dropped sections stay dropped on every home — and the old
     // home's own snapshot panels (ExecutiveSnapshot, TodayTomorrowPanel)
     // went with them.
+    const DROPPED = ['SalesPipeline', 'FollowUpDiscipline', 'NeedsAttentionSection', 'TaskCalendar', 'ExecutiveSnapshot', 'TodayTomorrowPanel'];
     for (const file of HOMES) {
       const src = read(file);
-      for (const gone of ['SalesPipeline', 'FollowUpDiscipline', 'NeedsAttentionSection', 'TaskCalendar', 'ExecutiveSnapshot', 'TodayTomorrowPanel']) {
+      for (const gone of DROPPED) {
         assert.ok(!src.includes(gone), `${gone} must not render on ${file} any more`);
       }
-      // Every home still shows the caller's own work: a KPI grid and a
-      // follow-up / workload table.
-      assert.ok(src.includes('<KpiCard'), `${file} must render its KPI cards`);
       // AgentHome is the exception (Agent workspace rebuild,
       // 2026-11-20): its work table is the Priority follow-ups list
       // and the Recent leads list, not the shared DataTableCard.
       if (file.endsWith('AgentHome.tsx')) {
+        assert.ok(src.includes('<KpiCard'), 'AgentHome must render its KPI cards');
         assert.ok(src.includes('Priority follow-ups'), 'AgentHome must render its priority list');
         assert.ok(src.includes('Recent leads'), 'AgentHome must render its recent leads');
       } else {
-        assert.ok(src.includes('<DataTableCard'), `${file} must render its work table`);
+        // Team Lead / Manager / Admin workspace (2026-11-20): the
+        // three non-agent homes are thin wrappers around the shared
+        // Team Overview — the KPI grid and the work sections live
+        // there, not in the wrappers.
+        assert.ok(src.includes('<TeamOverviewHome scope='), `${file} must render the shared Team Overview`);
       }
     }
+    // The shared Team Overview shows the caller's work: a KPI grid
+    // plus the member performance, follow-up health, at-risk leads
+    // and team activity sections (no DataTableCard — the member
+    // performance is a list, per Mahadi's demo).
+    const shared = read('src/modules/workspace/pages/TeamOverviewHome.tsx');
+    for (const gone of DROPPED) {
+      assert.ok(!shared.includes(gone), `${gone} must not render on TeamOverviewHome any more`);
+    }
+    assert.ok(shared.includes('<KpiCard'), 'TeamOverviewHome must render its KPI cards');
+    assert.ok(shared.includes('Member performance'), 'TeamOverviewHome must render member performance');
+    assert.ok(shared.includes('Follow-up health'), 'TeamOverviewHome must render follow-up health');
+    assert.ok(shared.includes('At-risk leads'), 'TeamOverviewHome must render at-risk leads');
+    assert.ok(shared.includes('Team activity'), 'TeamOverviewHome must render team activity');
+    assert.ok(!shared.includes('<DataTableCard'), 'TeamOverviewHome renders lists, not a DataTableCard');
   });
 
-  it('Overdue stays prominent on every home: a KPI card and the first attention row', () => {
-    // The old Home put "Overdue Follow-ups" beside "Active Leads" in
-    // the KPI grid. The role homes keep overdue first-class in both
-    // shapes they use: Team Lead carries an Overdue KPI right after
-    // Due today; Manager and Admin lead their attention list with
-    // "Overdue follow-ups"; the Agent (workspace rebuild, 2026-11-20)
-    // names the overdue count in the Due-today KPI subline instead
-    // of a separate card.
-    for (const file of ['src/modules/workspace/pages/TeamLeadHome.tsx']) {
-      const src = read(file);
-      const grid = src.slice(src.indexOf('<div className="ep-grid">'));
-      const dueIdx = grid.indexOf('label="Due today"');
-      const overdueIdx = grid.indexOf('label="Overdue"');
-      assert.ok(dueIdx !== -1 && overdueIdx > dueIdx, `${file}: the Overdue KPI must follow Due today inside the KPI grid`);
+  it('Overdue stays prominent on every home: the Due-today subline names it', () => {
+    // The old Home put "Overdue Follow-ups" beside "Active Leads"
+    // in the KPI grid. Since the Agent workspace rebuild
+    // (2026-11-20) every home follows the Agent pattern instead:
+    // no separate Overdue card — the overdue count is the
+    // Due-today KPI subline ("N overdue needs attention"), with an
+    // orange tone while anything is overdue. The shared Team
+    // Overview additionally carries the overdue alert bar in the
+    // Follow-up health section.
+    for (const file of [...HOMES, 'src/modules/workspace/pages/TeamOverviewHome.tsx']) {
+      if (file.endsWith('AgentHome.tsx') || file.endsWith('TeamOverviewHome.tsx')) {
+        const src = read(file);
+        assert.ok(src.includes('overdue needs attention'), `${file} must name the overdue count in the Due-today subline`);
+        assert.ok(!src.includes('label="Overdue"'), `${file} must not render a separate Overdue card`);
+      }
     }
-    {
-      const src = read('src/modules/workspace/pages/AgentHome.tsx');
-      assert.ok(src.includes('overdue needs attention'), 'AgentHome must name the overdue count in the Due-today subline');
-    }
-    for (const file of ['src/modules/workspace/pages/ManagerHome.tsx', 'src/modules/workspace/pages/AdminHome.tsx']) {
-      const src = read(file);
-      const attention = src.slice(src.indexOf('const attentionRows'));
-      assert.ok(
-        attention.indexOf("title: 'Overdue follow-ups'") !== -1 &&
-        attention.indexOf("title: 'Overdue follow-ups'") < attention.indexOf("title: 'No Action Alert'"),
-        `${file}: Overdue follow-ups must lead the attention list`
-      );
-      assert.ok(!src.includes('Overdue Follow-ups shown as a compact callout'), 'the old red callout must be gone');
-    }
+    const shared = read('src/modules/workspace/pages/TeamOverviewHome.tsx');
+    assert.ok(shared.includes('ep-alert-bar'), 'TeamOverviewHome must render the overdue alert bar');
   });
 
   it('the workbench queue is minimal and every row can start an update', () => {

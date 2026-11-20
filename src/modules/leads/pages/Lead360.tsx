@@ -17,8 +17,7 @@ import WhatsAppAction from '../components/WhatsAppAction';
 import LeadQualityPanel from '../components/LeadQualityPanel';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import { usePermissions } from '../../shared/hooks/usePermissions';
-import { useCallerTeam } from '../../team/hooks/useCallerTeam';
-import { callerHasTeam } from '../../team/services/teamOverviewService';
+import { useCanReassign } from '../hooks/useCanReassign';
 
 type TimelineEventType = 'status' | 'assignment' | 'document' | 'notification';
 
@@ -45,15 +44,13 @@ export default function Lead360() {
   const { canAccess } = usePermissions();
   const [lead, setLead] = useState<Lead | null>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
-  // Reassign (2026-11-19, Mahadi): a team lead — admin, or anyone
-  // with ≥1 subordinate — holding the leads.assign grant may move
-  // this lead to anyone in their full downline. The gate mirrors the
-  // server rule, so the button never shows where the server would
-  // 403; a plain agent never sees it.
-  const callerTeam = useCallerTeam();
-  const userRoleUpper = String(user?.role || '').toUpperCase();
-  const canReassign = (userRoleUpper === 'ADMIN' || userRoleUpper === 'SUPERADMIN' || callerHasTeam(callerTeam.overview?.people))
-    && canAccess('lead_tracking', 'reassign_global_leads');
+  // Reassign (2026-11-19, extended 2026-11-20, Mahadi): Team
+  // Lead / Manager / Admin holding the leads.assign grant may move
+  // this lead — a plain Agent never sees the button, and a super
+  // admin previewing as Agent hides it too (display role). The
+  // hook mirrors the server rule, so the button never shows where
+  // the server would 403.
+  const canReassign = useCanReassign();
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<TimelineEventType | 'all'>('all');

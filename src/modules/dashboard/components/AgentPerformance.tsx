@@ -16,15 +16,15 @@ import {
 } from '../../workspace/utils/agentWorkspaceData';
 
 /**
- * AgentPerformance — the Agent's "My Performance" layout on
+ * AgentPerformance — the performance layout on
  * /execution-intelligence (Agent workspace rebuild, 2026-11-20,
- * Mahadi's demo screenshot 6).
+ * Mahadi's demo screenshot 6; shared by ALL roles since the Team
+ * Lead / Manager / Admin workspace rebuild, 2026-11-20 — the
+ * Analytics layout it replaced is gone, restorable from git).
  * ------------------------------------------------------------------
- * Role-conditional: only the Agent role sees this layout; Admin /
- * Manager / Team Lead keep the Analytics layout in
- * ExecutionIntelligence.tsx. The KPIs are MAHADI's set, computed
- * from the period's leads (the caller's own scope — the parent
- * loads the scoped list):
+ * The KPIs are MAHADI's set, computed from the period's leads
+ * (the parent loads the scope-driven list — own leads for the
+ * Agent, team/downline/org leads for the other roles):
  *
  *   Total Response         -> contacted / assigned (% + count)
  *   Pipeline Premium       -> Σ projected NCP of open leads (৳)
@@ -108,7 +108,17 @@ function periodRange(period: AgentPeriod, customStart: string, customEnd: string
   return { startMs, endMs, label: 'This month' };
 }
 
-export function AgentPerformance({ leads, loading }: { leads: Lead[]; loading: boolean }) {
+export function AgentPerformance(props: {
+  leads: Lead[];
+  loading: boolean;
+  /** CSV/export title — 'My Performance' by default (the Agent). */
+  title?: string;
+  /** Scope line under the period card — the Agent's own-leads wording by default. */
+  scopeNote?: string;
+}) {
+  const { leads, loading } = props;
+  const title = props.title ?? 'My Performance';
+  const scopeNote = props.scopeNote ?? 'all figures are your own scoped leads';
   const [period, setPeriod] = useState<AgentPeriod>('THIS MONTH');
   const [customStart, setCustomStart] = useState(() => {
     const { y, m } = dhakaYearMonth(new Date());
@@ -147,7 +157,7 @@ export function AgentPerformance({ leads, loading }: { leads: Lead[]; loading: b
 
   const exportCsv = () => {
     const rows: string[][] = [
-      ['My Performance', range.label, `Exported ${dhakaDateString(new Date())}`],
+      [title, range.label, `Exported ${dhakaDateString(new Date())}`],
       [],
       ['KPI', 'Value', 'Detail'],
       ['Total Response', `${kpis.contactedRate}%`, `${kpis.contacted} of ${kpis.assigned} contacted`],
@@ -168,7 +178,7 @@ export function AgentPerformance({ leads, loading }: { leads: Lead[]; loading: b
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `My_Performance_${period.replace(' ', '_')}_${dhakaDateString(new Date())}.csv`;
+    link.download = `${title.replace(/\s+/g, '_')}_${period.replace(' ', '_')}_${dhakaDateString(new Date())}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -218,7 +228,7 @@ export function AgentPerformance({ leads, loading }: { leads: Lead[]; loading: b
           </div>
         </div>
         <div className="ep-muted">
-          {kpis.assigned} lead{kpis.assigned === 1 ? '' : 's'} in this period · all figures are your own scoped leads
+          {kpis.assigned} lead{kpis.assigned === 1 ? '' : 's'} in this period · {scopeNote}
         </div>
       </div>
 

@@ -17,7 +17,8 @@ import { isWeakJwtSecret } from '../../config/env.js';
 import { resolveTokenLifetimeDays } from '../../utils/jwt.js';
 import { getPool, isDatabaseConfigured } from '../../database/connection.js';
 import { fallbackStore } from '../../fallbackStore.js';
-import { getDownlineIds, resolveVisibility } from '../../authz.js';
+import { getDownlineIds, resolveDataVisibility, resolveVisibility } from '../../authz.js';
+import { DEFAULT_VISIBILITY } from '../../../src/modules/shared/access/roleGrantDefaults.js';
 import { applyDefaultRoleAccess } from '../../database/roleAccessDefaults.js';
 import { getUserDepartmentIds } from '../../utils/departmentMirror.js';
 import { storedTimestampIso } from '../../utils/businessTime.js';
@@ -792,6 +793,49 @@ export async function getDownlineIdsForCaller(userId: string): Promise<string[]>
 }
 
 /**
+ * Team scope for the reassign / bulk-import gates (2026-11-20, Mahadi:
+ * reassign belongs to Team Lead and Manager, never to a plain Agent).
+ * ------------------------------------------------------------------
+ * The 2026-11-19 rule asked only "does the caller have a subtree?" —
+ * which refused a Manager with no direct reports even though the
+ * enterprise model counts Manager scope (FullTeam / Organization)
+ * as team scope. The new rule has two arms:
+ *
+ *   - `managerScope`: the caller's effective data visibility is
+ *     FullTeam or Organization. DB mode reads `roles.data_visibility`
+ *     (resolveDataVisibility); demo mode reads the DEFAULT_VISIBILITY
+ *     table — deliberately NOT the `isManagerLike` role list, so a
+ *     no-reports TEAM_LEAD / BDM (DownTeam) still counts as an agent
+ *     here and cannot reassign.
+ *   - the subtree arm from getDownlineIdsForCaller (length > 1).
+ *
+ * `hasTeam` is either arm. Callers bypass ADMIN/SUPERADMIN before
+ * calling this; a failure anywhere degrades to "no team" (fail
+ * closed). The downline is returned alongside so the reassign rule
+ * can place TL targets inside the subtree without a second lookup —
+ * Manager-scope callers are already bounded by the visibility check
+ * (isAssignedToAllowed) that runs before the tree check.
+ */
+export async function callerHasTeamScope(
+  caller: CallerDbInfo
+): Promise<{ hasTeam: boolean; managerScope: boolean; downline: string[] }> {
+  let managerScope = false;
+  if (useDb()) {
+    try {
+      const vis = await resolveDataVisibility(caller.role_code);
+      managerScope = vis === 'FullTeam' || vis === 'Organization';
+    } catch {
+      managerScope = false;
+    }
+  } else {
+    const vis = DEFAULT_VISIBILITY[normalizeRole(caller.role_code)];
+    managerScope = vis === 'FullTeam' || vis === 'Organization';
+  }
+  const downline = await getDownlineIdsForCaller(caller.id);
+  return { hasTeam: managerScope || downline.length > 1, managerScope, downline };
+}
+
+/**
  * THE lead-access predicate (row-level twin of buildDashboardVisibilitySql).
  * ------------------------------------------------------------------
  * Organogram Fix 2: one rule everywhere. A lead is accessible to a
@@ -888,10 +932,12 @@ export async function resolveUserId(ref: any): Promise<string | null> {
 export const LEAD_SELECT = `
   SELECT l.*,
          au.employee_id AS assigned_to_employee_id,
-         ab.employee_id AS assigned_by_employee_id
+         ab.employee_id AS assigned_by_employee_id,
+         cu.employee_id AS created_by_employee_id
   FROM leads l
   LEFT JOIN users au ON au.id = l.assigned_to
   LEFT JOIN users ab ON ab.id = l.assigned_by
+  LEFT JOIN users cu ON cu.id = l.created_by
 `;
 
 export async function findLeadByIdRaw(leadIdParam: string, forUpdate = false): Promise<any | null> {
