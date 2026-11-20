@@ -201,11 +201,14 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/dashboard/pages/NcpProgress.tsx': 0,
     'src/modules/roadshows/pages/RoadshowPage.tsx': 0,
     'src/modules/leads/pages/LeadUpload.tsx': 0,
-    // Team Members rebuild (2026-11-20): 7 — the Organogram link,
-    // the Invite member link, the All-teams back link, the member
-    // detail's lead rows, the member detail's follow-up rows, the
-    // TL-group link, and the roster row (template, /team?member=…).
-    'src/modules/team/pages/TeamOverview.tsx': 7,
+    // Head-first drill-down (2026-11-20): 6 — the Organogram link,
+    // the Invite member link, the breadcrumb top link (/team), the
+    // breadcrumb ancestor link (template, /team?node=…), the member
+    // detail's lead rows, and the member detail's follow-up rows.
+    // The roster-row link is built in a variable (rowTo), so the
+    // extractor cannot see it — its two shapes are pinned in
+    // team-members-head-drilldown.test.ts instead.
+    'src/modules/team/pages/TeamOverview.tsx': 6,
     'src/modules/hierarchy/pages/TeamHierarchy.tsx': 0,
     // Agent workspace rebuild (2026-11-20): 6 — the ?leadId= deep
     // link, the mobile row open, the mobile update, the mobile
@@ -225,7 +228,7 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/leads/pages/LeadGenerate.tsx': 3,
     'src/modules/settings/pages/PerformanceDiagnostics.tsx': 1,
     // Team Lead / Manager / Admin workspace (2026-11-20): 1 — the
-    // Manager breakdown table's TL link (/team?tl=…).
+    // Manager breakdown table's TL link (/team?node=…).
     'src/modules/dashboard/pages/ExecutionIntelligence.tsx': 1,
     // New pages (2026-11-20): 1 each — the page-gate redirect
     // (SelfPerformance -> /execution-intelligence,
