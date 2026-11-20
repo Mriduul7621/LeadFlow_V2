@@ -127,7 +127,7 @@ export default function ExecutionIntelligence() {
           <div className="ep-tablehead">
             <div>
               <h3>Performance by team lead</h3>
-              <div className="ep-muted">All time · all scoped leads · click a team lead to see their members</div>
+              <div className="ep-muted">All time · all scoped leads · click a team lead to drill into their team</div>
             </div>
           </div>
           <div className="ep-tablewrap">
@@ -150,7 +150,7 @@ export default function ExecutionIntelligence() {
                   tlGroups.map(group => (
                     <tr key={group.tl.employeeId}>
                       <td>
-                        <Link to={`/team?tl=${encodeURIComponent(group.tl.employeeId)}`} className="ep-viewall" style={{ fontSize: 13 }}>
+                        <Link to={`/team?node=${encodeURIComponent(group.tl.employeeId)}`} className="ep-viewall" style={{ fontSize: 13 }}>
                           <strong>{group.tl.name}</strong>
                         </Link>
                         <div className="ep-cellsub">{group.tl.employeeId}</div>

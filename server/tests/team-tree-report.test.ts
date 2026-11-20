@@ -47,7 +47,11 @@ describe('org-tree report — removed with the 2026-11-20 Team Members rebuild',
     assert.ok(page.includes('RosterRow'), 'the roster table renders');
     assert.ok(page.includes('ep-roster-row'), 'roster rows are links to the member detail');
     assert.ok(page.includes("searchParams.get('member')"), 'click a member → their detail (?member=)');
-    assert.ok(page.includes("searchParams.get('tl')"), 'Manager: click a TL → their member-wise roster (?tl=)');
+    // Head-first drill-down (2026-11-20): click a group row → that
+    // person's direct reports (?node=); ?tl= survives only as the
+    // legacy alias for ?node=.
+    assert.ok(page.includes("searchParams.get('node')"), 'click a group row → the next tier (?node=)');
+    assert.ok(page.includes("searchParams.get('tl')"), '?tl= is the legacy alias for ?node=');
     // The tree function survives at /team/organogram, linked from the header.
     assert.ok(page.includes("to=\"/team/organogram\""), 'the Organogram link is kept');
   });

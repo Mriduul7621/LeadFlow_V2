@@ -84,8 +84,8 @@ describe('Team Performance — the Manager TL-grouped breakdown table', () => {
     assert.ok(analytics.includes('Collected Premium'), 'collected premium per TL');
   });
 
-  it('each TL row links to that TL\'s member-wise roster', () => {
-    assert.ok(analytics.includes('to={`/team?tl=${encodeURIComponent(group.tl.employeeId)}`}'), 'the TL name links to /team?tl=…');
+  it('each TL row links to that TL\'s drill-down on /team', () => {
+    assert.ok(analytics.includes('to={`/team?node=${encodeURIComponent(group.tl.employeeId)}`}'), 'the TL name links to /team?node=…');
   });
 });
 
