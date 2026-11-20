@@ -1,0 +1,269 @@
+# LeadFlow — Android release APK
+#
+# Manual dispatch ONLY: no APK is ever produced by accident. Each run
+# builds the signed release APK from the checked-in version source
+# (android/version.properties), verifies it, publishes it to the
+# rolling `latest` GitHub release under a friendly filename (the web
+# app's download popup and login link point at LeadFlow's own
+# /api/download-apk route, which redirects to the newest .apk asset),
+# and uploads it as a workflow artifact (90-day backup).
+#
+# UPLOAD ROUTE — read before pushing: the Muse GitHub App CANNOT push
+# files under .github/workflows/ (deterministic 403, workflows:write
+# missing). This file reaches the repo when Mahadi uploads it via the
+# github.com web UI, or after he grants the App the Workflows
+# permission. Do not attempt a connector push of this file. The old
+# debug workflow (.github/workflows/android-debug-apk.yml) is retired
+# the same way — Mahadi deletes it via the web UI after this lands.
+#
+# What this pipeline deliberately does NOT do:
+# - No web build (`npm run build`): the shell remote-loads the live
+#   production LeadFlow, so the APK contains no copy of the web app.
+# - No VITE_* variables: the Android build holds no JWT material
+#   (the production JWT secret stays in Vercel). The signing secrets
+#   are the four LEADFLOW_KEYSTORE_* secrets; push adds one OPTIONAL
+#   secret, LEADFLOW_GOOGLE_SERVICES_JSON_B64 (the build succeeds
+#   without it — see the Restore google-services.json step).
+# - No Gradle wrapper: gradle-wrapper.jar is a binary and is not
+#   committed, so Gradle is installed by gradle/actions/setup-gradle
+#   and invoked as `gradle` (not ./gradlew).
+#
+# Required repository secrets (names only — values live in GitHub
+# Secrets, never in this file): LEADFLOW_KEYSTORE_B64,
+# LEADFLOW_KEYSTORE_PASSWORD, LEADFLOW_KEY_ALIAS, LEADFLOW_KEY_PASSWORD.
+# Optional (FCM push): LEADFLOW_GOOGLE_SERVICES_JSON_B64 — base64 of
+# the google-services.json for com.shantalife.leadflow from the
+# "Shanta Life Apps" Firebase project. Without it the APK builds
+# without push. See docs/ANDROID_RELEASE.md for how Mahadi creates them.
+#
+# Download: the file users download carries the app name + version
+# (Mahadi 2026-11-21): "LeadFlow-V-1.0.0.1.apk" —
+# LeadFlow-V-<versionName>.<versionCode>.apk, set by the Publish step
+# below. Because the asset name changes with every version, the web
+# app does NOT link to GitHub directly: from one constant
+# (ANDROID_APK_DOWNLOAD_URL in src/native/androidPromo.ts) it links
+# to LeadFlow's own download route, which redirects to the newest
+# .apk asset in `latest` (see server/routes/downloadApk.ts). The
+# release is public — no GitHub login needed to download:
+# https://lead-flow-jet.vercel.app/api/download-apk
+
+name: Android release APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    # Publishing releases needs write; scoped to this job only (the
+    # workflow default stays read).
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle 8.14.3
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.14.3
+
+      - name: Install Android SDK 36
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read release version
+        id: version
+        run: |
+          CODE=$(grep '^versionCode=' android/version.properties | cut -d= -f2)
+          NAME=$(grep '^versionName=' android/version.properties | cut -d= -f2)
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Release version: $NAME ($CODE)"
+
+      - name: Generate launcher icons
+        run: npm run android:assets
+
+      - name: Sync Capacitor shell
+        run: npx cap sync android
+
+      - name: Restore release keystore from secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.LEADFLOW_KEYSTORE_B64 }}
+          LEADFLOW_KEYSTORE_PASSWORD: ${{ secrets.LEADFLOW_KEYSTORE_PASSWORD }}
+          LEADFLOW_KEY_ALIAS: ${{ secrets.LEADFLOW_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::LEADFLOW_KEYSTORE_B64 secret is not set — see docs/ANDROID_RELEASE.md"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/leadflow-release.keystore"
+          # Fail fast if the keystore is corrupt or the alias/password is wrong.
+          keytool -list -keystore "$RUNNER_TEMP/leadflow-release.keystore" \
+            -storepass "$LEADFLOW_KEYSTORE_PASSWORD" \
+            -alias "$LEADFLOW_KEY_ALIAS" > /dev/null
+
+      # ---- FCM: google-services.json (ONE step — keep delimited) ----
+      # Restores the Firebase config from the CI secret so the
+      # google-services plugin wires FCM into the release build.
+      # LENIENT ON PURPOSE: the Firebase project may not exist yet
+      # when the first release is built, and a missing config must
+      # never block the APK — the app runs fine without push (the
+      # in-app bell still works) and the run summary records
+      # push-enabled vs push-disabled. Flip to fail-fast only once
+      # the project + secret exist and push is a release blocker.
+      - name: Restore google-services.json from secrets
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.LEADFLOW_GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "::warning::LEADFLOW_GOOGLE_SERVICES_JSON_B64 secret is not set — building WITHOUT push notifications (see docs/ANDROID_RELEASE.md §8)"
+            echo "### Push notifications" >> "$GITHUB_STEP_SUMMARY"
+            echo "Disabled — LEADFLOW_GOOGLE_SERVICES_JSON_B64 secret is not set." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+          # The config must belong to THIS app — a config for another
+          # package would silently register the wrong app in Firebase.
+          python3 - <<'EOF'
+          import json, sys
+          with open('android/app/google-services.json') as f:
+              cfg = json.load(f)
+          names = {c.get('client_info', {}).get('android_client_info', {}).get('package_name')
+                   for c in cfg.get('client', [])}
+          if 'com.shantalife.leadflow' not in names:
+              print('::error::google-services.json has no client for com.shantalife.leadflow — wrong Firebase app config')
+              sys.exit(1)
+          EOF
+          echo "### Push notifications" >> "$GITHUB_STEP_SUMMARY"
+          echo "Enabled — google-services.json restored for com.shantalife.leadflow." >> "$GITHUB_STEP_SUMMARY"
+      # ---- end FCM: google-services.json ----
+
+      - name: Build signed release APK
+        env:
+          LEADFLOW_KEYSTORE_PATH: ${{ runner.temp }}/leadflow-release.keystore
+          LEADFLOW_KEYSTORE_PASSWORD: ${{ secrets.LEADFLOW_KEYSTORE_PASSWORD }}
+          LEADFLOW_KEY_ALIAS: ${{ secrets.LEADFLOW_KEY_ALIAS }}
+          LEADFLOW_KEY_PASSWORD: ${{ secrets.LEADFLOW_KEY_PASSWORD }}
+        run: gradle -p android :app:assembleRelease --no-daemon
+
+      - name: Verify signature, signer and version
+        env:
+          LEADFLOW_KEYSTORE_PASSWORD: ${{ secrets.LEADFLOW_KEYSTORE_PASSWORD }}
+          LEADFLOW_KEY_ALIAS: ${{ secrets.LEADFLOW_KEY_ALIAS }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          test -f "$APK" || { echo "::error::APK not found at $APK"; exit 1; }
+          # 1. The APK signature must verify.
+          "$BUILD_TOOLS/apksigner" verify "$APK"
+          # 2. The signer must be the release keystore — never a debug key.
+          #    (Compares the APK cert fingerprint with the keystore cert.)
+          #    FORMAT TRAP (Agent Hub run #1, 2026-11-21): apksigner prints
+          #    the digest lowercase WITHOUT colons, keytool prints it
+          #    uppercase WITH colons — the same fingerprint failed a plain
+          #    string compare. Normalise both sides first.
+          APK_FP=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | grep -m1 'SHA-256' | awk '{print $NF}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          KS_FP=$(keytool -list -v -keystore "$RUNNER_TEMP/leadflow-release.keystore" \
+            -storepass "$LEADFLOW_KEYSTORE_PASSWORD" -alias "$LEADFLOW_KEY_ALIAS" \
+            | grep -m1 'SHA256:' | awk '{print $NF}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          if [ "$APK_FP" != "$KS_FP" ]; then
+            echo "::error::APK signer does not match the release keystore (APK=$APK_FP keystore=$KS_FP)"
+            exit 1
+          fi
+          echo "Signer fingerprint (SHA-256): $APK_FP"
+          # 3. The version must match the checked-in version source.
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK" | head -1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "versionCode='${{ steps.version.outputs.code }}'" || { echo "::error::versionCode mismatch"; exit 1; }
+          echo "$BADGING" | grep -q "versionName='${{ steps.version.outputs.name }}'" || { echo "::error::versionName mismatch"; exit 1; }
+
+      - name: SHA-256 checksum
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          sha256sum "$APK" | awk '{print $1}' > "$APK.sha256"
+          echo "SHA-256: $(cat "$APK.sha256")"
+          {
+            echo "## LeadFlow Android release"
+            echo ""
+            echo "- Version: ${{ steps.version.outputs.name }} (versionCode ${{ steps.version.outputs.code }})"
+            echo "- APK: app-release.apk"
+            echo "- SHA-256: \`$(cat "$APK.sha256")\`"
+            echo "- Signer: release keystore (verified — fingerprint matches LEADFLOW_KEYSTORE_B64)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to GitHub Releases (latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          VERSION="${{ steps.version.outputs.name }}"
+          CODE="${{ steps.version.outputs.code }}"
+          SHA256=$(cat "$APK.sha256")
+          # The file users download carries the app name + version
+          # (Mahadi 2026-11-21): "LeadFlow-V-1.0.0.1.apk" —
+          # versionName.versionCode. DASHES, not spaces: GitHub turns
+          # spaces into dots in release asset names (verified live on
+          # the Agent Hub), so a spaced name would be served as
+          # "LeadFlow.V-1.0.0.1.apk". The web app's download route
+          # (/api/download-apk) redirects to the newest .apk asset in
+          # the rolling `latest` release, so the LeadFlow link never
+          # changes when the version does.
+          APK_NAME="LeadFlow-V-$VERSION.$CODE.apk"
+          cp "$APK" "$RUNNER_TEMP/$APK_NAME"
+          cp "$APK.sha256" "$RUNNER_TEMP/$APK_NAME.sha256"
+          # Idempotent: a missing release is created first; an existing
+          # one has its notes refreshed, so a re-run replaces the files
+          # instead of failing. The `latest` tag keeps pointing at the
+          # commit that first created it — only the assets move.
+          NOTES="Latest LeadFlow Android release — version $VERSION (versionCode $CODE). APK SHA-256: $SHA256. Installs over your current release build — same signer, higher versionCode updates in place. (First-time installers: uninstall the old debug LeadFlow app first — see docs/ANDROID_RELEASE.md.)"
+          if ! gh release view latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create latest --repo "$GITHUB_REPOSITORY" \
+              --title "LeadFlow Android (latest)" \
+              --notes "$NOTES"
+          else
+            gh release edit latest --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+          fi
+          # `latest` must hold exactly one APK: the asset name changes
+          # with every version, so delete the previous version's
+          # assets first — otherwise stale names pile up and the
+          # download route could pick the wrong one.
+          gh release view latest --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | select(.name | endswith(".apk") or endswith(".apk.sha256")) | .name' \
+            | while IFS= read -r OLD; do
+                [ -n "$OLD" ] && gh release delete-asset latest --repo "$GITHUB_REPOSITORY" --yes "$OLD"
+              done
+          gh release upload latest --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/$APK_NAME" "$RUNNER_TEMP/$APK_NAME.sha256"
+          {
+            echo ""
+            echo "- Latest APK: https://lead-flow-jet.vercel.app/api/download-apk ($APK_NAME)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Published: latest ($APK_NAME)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: leadflow-android-${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/release/app-release.apk.sha256
+          retention-days: 90
