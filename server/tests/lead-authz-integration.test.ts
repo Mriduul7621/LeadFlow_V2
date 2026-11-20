@@ -251,7 +251,14 @@ describe('Lead API Authorization - Route Level', () => {
     assert.equal(leadsForB.length, 0, 'Unauthorized bulk should not create leads outside scope');
   });
 
-  it('8. Authorized bulk import inside caller scope -> succeeds, persisted', async () => {
+  it('8. Bulk import inside caller scope -> succeeds in demo mode (grants are fake-permissive here)', async () => {
+    // Demo-mode caveat: hasPermissionCode grants EVERY known lead
+    // code when no database is configured, so the bulk gate's
+    // `leads.import` arm always passes here and the has-subordinate
+    // rule cannot be observed. The real refusal (plain agent → 403,
+    // no-reports manager → 403, team lead → 200) is proven against
+    // PGlite with real grants in tl-bulk-import-gate.test.ts. This
+    // test pins the demo flow itself: two in-scope rows import.
     const userA = makeUser({ employeeId: 'EMPA', role: 'EMPLOYEE' });
     fallbackStore.users.push(userA);
     const tokenA = signToken({ id: userA.id, employeeId: userA.employeeId, role: userA.role, email: userA.email, name: userA.fullName });
@@ -263,6 +270,34 @@ describe('Lead API Authorization - Route Level', () => {
         leads: [
           { customerName: 'Bulk Auth 1', mobile: '01700000017' },
           { customerName: 'Bulk Auth 2', mobile: '01700000018', assignedTo: 'EMPA' },
+        ],
+      });
+
+    assert.equal(bulkRes.status, 200, `Authorized bulk should succeed, got ${bulkRes.status} ${JSON.stringify(bulkRes.body)}`);
+    assert.equal(bulkRes.body.data.failed, 0);
+    assert.equal(bulkRes.body.data.inserted, 2);
+
+    const stored1 = fallbackStore.leads.find((l: any) => l.mobile === '01700000017');
+    const stored2 = fallbackStore.leads.find((l: any) => l.mobile === '01700000018');
+    assert.ok(stored1, 'Bulk lead 1 should be persisted');
+    assert.ok(stored2, 'Bulk lead 2 should be persisted');
+  });
+
+  it('8b. Team lead bulk import inside caller scope -> succeeds, persisted', async () => {
+    // The same two rows a plain agent may not import: a team lead
+    // (≥1 subordinate) with leads.create passes the aligned gate.
+    const tl = makeUser({ employeeId: 'TL001', role: 'TEAM_LEAD' });
+    const sub = makeUser({ employeeId: 'EMP001', role: 'EMPLOYEE', managerId: tl.employeeId });
+    fallbackStore.users.push(tl, sub);
+    const tokenTl = signToken({ id: tl.id, employeeId: tl.employeeId, role: tl.role, email: tl.email, name: tl.fullName });
+
+    const bulkRes = await request(app)
+      .post('/api/leads/bulk')
+      .set('Authorization', `Bearer ${tokenTl}`)
+      .send({
+        leads: [
+          { customerName: 'Bulk Auth 1', mobile: '01700000017' },
+          { customerName: 'Bulk Auth 2', mobile: '01700000018', assignedTo: 'TL001' },
         ],
       });
 

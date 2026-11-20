@@ -15,7 +15,10 @@ import { getLeadStatusColorClasses } from '../../workflow/utils/leadStatusMeta';
 import LeadQualityBadge from '../components/LeadQualityBadge';
 import WhatsAppAction from '../components/WhatsAppAction';
 import LeadQualityPanel from '../components/LeadQualityPanel';
+import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { callerHasTeam } from '../../team/services/teamOverviewService';
 
 type TimelineEventType = 'status' | 'assignment' | 'document' | 'notification';
 
@@ -41,6 +44,16 @@ export default function Lead360() {
   const { user } = useAuthStore();
   const { canAccess } = usePermissions();
   const [lead, setLead] = useState<Lead | null>(null);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  // Reassign (2026-11-19, Mahadi): a team lead — admin, or anyone
+  // with ≥1 subordinate — holding the leads.assign grant may move
+  // this lead to anyone in their full downline. The gate mirrors the
+  // server rule, so the button never shows where the server would
+  // 403; a plain agent never sees it.
+  const callerTeam = useCallerTeam();
+  const userRoleUpper = String(user?.role || '').toUpperCase();
+  const canReassign = (userRoleUpper === 'ADMIN' || userRoleUpper === 'SUPERADMIN' || callerHasTeam(callerTeam.overview?.people))
+    && canAccess('lead_tracking', 'reassign_global_leads');
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<TimelineEventType | 'all'>('all');
@@ -409,6 +422,17 @@ export default function Lead360() {
                 </button>
               </>
             )}
+            {canReassign && (
+              <button
+                type="button"
+                onClick={() => setReassignOpen(true)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                aria-label="Reassign lead"
+                title="Reassign"
+              >
+                <UserCog className="h-[18px] w-[18px]" />
+              </button>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-50">
@@ -479,6 +503,17 @@ export default function Lead360() {
                     <Edit2 className="h-[18px] w-[18px]" />
                   </button>
                 </>
+              )}
+              {canReassign && (
+                <button
+                  type="button"
+                  onClick={() => setReassignOpen(true)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
+                  aria-label="Reassign lead"
+                  title="Reassign"
+                >
+                  <UserCog className="h-[18px] w-[18px]" />
+                </button>
               )}
             </div>
           </div>
@@ -692,6 +727,13 @@ export default function Lead360() {
           )}
         </div>
       </div>
+      {lead && (
+        <ReassignLeadDialog
+          lead={reassignOpen ? { id: lead.id, prospectName: lead.prospectName, assignedTo: lead.assignedTo } : null}
+          onClose={() => setReassignOpen(false)}
+          onReassigned={() => void load()}
+        />
+      )}
     </div>
   );
 }

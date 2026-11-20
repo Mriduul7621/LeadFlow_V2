@@ -131,6 +131,7 @@ import {
   employeeIdsFor,
   findLeadByIdRaw,
   getCallerDbInfo,
+  getDownlineIdsForCaller,
   getFollowUpStatusValues,
   hasPermissionCode,
   isAssignedToAllowed,
@@ -1424,6 +1425,33 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         perf.finish(res);
         return sendJson(res, 403, { success: false, message: 'You do not have permission to assign, reassign, or transfer this lead.' });
       }
+      // Team Lead reassign rule (2026-11-19, Mahadi): reassigning an
+      // EXISTING lead's owner is a team-lead power, on top of the
+      // leads.assign/transfer layer above. A non-admin caller must
+      // have at least one person in their reporting subtree, and the
+      // new owner must sit inside that same subtree (the full
+      // downline — A → B and grand-reports included). Without this,
+      // a no-reports FullTeam manager (holds leads.assign, sees the
+      // whole department) could reassign anyone's lead to anyone in
+      // the department. Creates are NOT tree-checked: assigning at
+      // creation stays governed by leads.assign + the scope check
+      // above, exactly as before. Reassigning to self (a lead
+      // taken back) always passes — the caller is in their own
+      // downline — and an explicit unassignment needs only the
+      // has-subordinate arm (there is no target to place).
+      if (assignmentChanged && !['ADMIN', 'SUPERADMIN'].includes(normalizeRole(caller.role_code))) {
+        const downline = await getDownlineIdsForCaller(caller.id);
+        if (downline.length <= 1) {
+          perf.span('authz.permissions');
+          perf.finish(res);
+          return sendJson(res, 403, { success: false, message: 'Only team leads and admins can reassign leads.' });
+        }
+        if (targetAssigned && !downline.includes(targetAssigned.userId)) {
+          perf.span('authz.permissions');
+          perf.finish(res);
+          return sendJson(res, 403, { success: false, message: 'You can only reassign leads to members of your own team.' });
+        }
+      }
     }
     perf.span('authz.permissions');
 
@@ -1951,8 +1979,22 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       hasPermissionCode(caller, 'leads.assign'),
       hasPermissionCode(caller, 'leads.transfer'),
     ]);
-    if (!canImport && !canCreate) {
-      return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
+    // Aligned with the /leads/upload route gate (2026-11-19, Mahadi):
+    // bulk import is an admin or team-lead power. An explicit
+    // `leads.import` grant passes on its own; otherwise the caller
+    // needs `leads.create` PLUS at least one person in their
+    // reporting subtree. The old `canImport || canCreate` rule let
+    // any plain agent call this endpoint directly even though the
+    // page was admin-only — the route gate and the server now agree.
+    // The downline lookup runs only when it decides the answer.
+    if (!canImport) {
+      if (!canCreate) {
+        return sendJson(res, 403, { success: false, message: 'You do not have permission to bulk import leads.' });
+      }
+      const downline = await getDownlineIdsForCaller(caller.id);
+      if (downline.length <= 1) {
+        return sendJson(res, 403, { success: false, message: 'Bulk import is available to admins and team leads.' });
+      }
     }
 
     /* ---- 1. Map rows (real spreadsheet headers + legacy API shape) ---- */

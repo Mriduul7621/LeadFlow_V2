@@ -19,6 +19,13 @@ export function usePermissions() {
   const { user } = useAuthStore();
   const [roles, setRoles] = useState<RolePermission[]>([]);
   const [serverPermissions, setServerPermissions] = useState<Record<string, boolean> | null>(null);
+  // Whether the server permission sheet attempt finished (success,
+  // failure, or cache hit). Pages whose gate depends on the sheet
+  // (LeadUpload's team-lead arm) wait on this instead of deciding
+  // on the first paint, when the sheet is still null and canAccess
+  // would fall back to the role matrix — a flash of "Access Denied"
+  // for a caller the sheet would allow.
+  const [serverPermissionsSettled, setServerPermissionsSettled] = useState(false);
 
   useEffect(() => {
     const loadRoles = () => {
@@ -57,8 +64,10 @@ export function usePermissions() {
     let cancelled = false;
 
     async function loadServerPermissions() {
+      setServerPermissionsSettled(false);
       if (!user?.id) {
         setServerPermissions(null);
+        setServerPermissionsSettled(true);
         return;
       }
 
@@ -72,6 +81,7 @@ export function usePermissions() {
       const cached = readSessionCache<Record<string, boolean>>(cacheKey);
       if (cached && Date.now() - cached.fetchedAt <= USER_PERMISSIONS_TTL_MS) {
         setServerPermissions(cached.value);
+        setServerPermissionsSettled(true);
         return;
       }
 
@@ -92,6 +102,7 @@ export function usePermissions() {
         const response = await coalesceGet(permPath, () => fetch(permPath));
         if (!response.ok) {
           setServerPermissions(null);
+          setServerPermissionsSettled(true);
           return;
         }
 
@@ -104,9 +115,13 @@ export function usePermissions() {
         if (!cancelled) {
           writeSessionCache(cacheKey, permissions);
           setServerPermissions(permissions);
+          setServerPermissionsSettled(true);
         }
       } catch {
-        if (!cancelled) setServerPermissions(null);
+        if (!cancelled) {
+          setServerPermissions(null);
+          setServerPermissionsSettled(true);
+        }
       }
     }
 
@@ -317,5 +332,6 @@ export function usePermissions() {
     userRole: user?.role,
     userRoleNormalized,
     user,
+    serverPermissionsSettled,
   };
 }

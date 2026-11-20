@@ -58,7 +58,8 @@ describe('Lead workflow model', () => {
 
     for (const [label, route] of [
       ['Overview', '/'],
-      ['Follow-up Queue', '/workbench'],
+      ['Daily Workbench', '/workbench'],
+      ['Follow-up Queue', '/follow-up'],
       ['Add Lead', '/leads/new'],
       ['My Leads', '/leads'],
       ['Leads', '/leads'],

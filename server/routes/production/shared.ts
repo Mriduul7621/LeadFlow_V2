@@ -17,7 +17,7 @@ import { isWeakJwtSecret } from '../../config/env.js';
 import { resolveTokenLifetimeDays } from '../../utils/jwt.js';
 import { getPool, isDatabaseConfigured } from '../../database/connection.js';
 import { fallbackStore } from '../../fallbackStore.js';
-import { resolveVisibility } from '../../authz.js';
+import { getDownlineIds, resolveVisibility } from '../../authz.js';
 import { applyDefaultRoleAccess } from '../../database/roleAccessDefaults.js';
 import { getUserDepartmentIds } from '../../utils/departmentMirror.js';
 import { storedTimestampIso } from '../../utils/businessTime.js';
@@ -732,6 +732,62 @@ async function resolveCallerVisibilityOnce(caller: CallerDbInfo) {
     return vis;
   } catch {
     return { all: false, userIds: [caller.id], employeeIds: [caller.employee_id] };
+  }
+}
+
+/**
+ * The caller's full reporting subtree (users.id values, caller
+ * included) — the TREE fact, not the visibility set.
+ * ------------------------------------------------------------------
+ * The Team Lead reassign rule (2026-11-19, Mahadi) needs exactly
+ * this: reassigning a lead is a team-lead power — the caller must
+ * have at least one person in their subtree, and the new owner must
+ * sit inside that same subtree (the full downline, not just direct
+ * reports). `resolveCallerVisibility` cannot answer it: its
+ * FullTeam arm is the whole department, so a no-reports manager
+ * holding `leads.assign` would pass a visibility check while having
+ * no team at all.
+ *
+ * DB path: the same recursive CTE `authz.getDownlineIds` runs for
+ * the DownTeam arm (depth-guarded, caller included). Demo path: the
+ * same BFS over fallbackStore users that
+ * `resolveCallerVisibilityOnce` runs above. Both return the caller
+ * plus every descendant; length ≤ 1 means "no reports". Any failure
+ * degrades to the caller alone (fail closed: no subtree, no
+ * reassign).
+ */
+export async function getDownlineIdsForCaller(userId: string): Promise<string[]> {
+  if (!useDb()) {
+    try {
+      const allUsers = fallbackStore.users;
+      const callerUser = allUsers.find(u => u.id === userId);
+      if (!callerUser) return [userId];
+      const visited = new Set<string>([callerUser.employeeId]);
+      const queue: string[] = [callerUser.employeeId];
+      const userIds: string[] = [callerUser.id];
+      while (queue.length > 0) {
+        const currentEmp = queue.shift()!;
+        const directReports = allUsers.filter(
+          u => String(u.managerId || '').toUpperCase() === String(currentEmp).toUpperCase()
+        );
+        for (const dr of directReports) {
+          if (!visited.has(dr.employeeId)) {
+            visited.add(dr.employeeId);
+            queue.push(dr.employeeId);
+            userIds.push(dr.id);
+          }
+        }
+      }
+      return userIds;
+    } catch {
+      return [userId];
+    }
+  }
+  try {
+    const ids = await getDownlineIds(userId);
+    return ids.includes(userId) ? ids : [userId, ...ids];
+  } catch {
+    return [userId];
   }
 }
 

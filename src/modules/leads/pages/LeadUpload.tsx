@@ -24,6 +24,8 @@ import {
 } from '../../shared/utils/excel';
 import { leadService, type BulkImportResult } from '../services/leadService';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { callerHasTeam } from '../../team/services/teamOverviewService';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 import { REAL_SHEET_HEADERS, mapRowForPreview, formatSheetCellForDisplay, isDateColumn, type PreviewRow } from '../utils/leadUploadMapping';
 
@@ -41,7 +43,19 @@ function displayCell(cell: any, header: unknown = ''): string {
 }
 
 export default function LeadUpload() {
-  const { canAccess, userRole } = usePermissions();
+  const { canAccess, userRole, serverPermissionsSettled } = usePermissions();
+  // Team Lead lead upload (2026-11-19): the route gate already
+  // admits admins and team leads; this page gate mirrors the
+  // server's bulk-import rule exactly — an explicit leads.import
+  // grant, or leads.create plus ≥1 subordinate. The
+  // has-subordinate arm is what opens the page for a team lead: no
+  // default grant set carries leads.import, so the import check
+  // alone would deny every TL (and adding it to the TEAM_LEAD
+  // defaults would not change production's stored rows anyway).
+  const callerTeam = useCallerTeam();
+  const hasSubordinates = callerHasTeam(callerTeam.overview?.people);
+  const canUpload = canAccess('lead_upl_gen', 'upload_raw_csv_xlsx')
+    || (hasSubordinates && canAccess('lead_generate', 'capture_new_leads'));
 
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -57,7 +71,23 @@ export default function LeadUpload() {
    *  number as an Excel serial; an amount must stay 50000, not 2036-11-21). */
   const headerRow: any[] = Array.isArray(previewData[0]) ? previewData[0] : [];
 
-  if (!canAccess('lead_upl_gen', 'upload_raw_csv_xlsx')) {
+  // Wait for the permission sheet before deciding: it loads in an
+  // effect after the first paint, and a first-paint "Access Denied"
+  // for a team lead would be wrong. FeatureGate already waited for
+  // the team overview on a cold load, so the team arm is settled by
+  // the time this page mounts — this wait is only the sheet's.
+  if (!serverPermissionsSettled) {
+    return (
+      <div className="ep-page" style={{ maxWidth: 640 }}>
+        <div className="ep-card" style={{ marginTop: 48 }} role="status" aria-label="Checking access">
+          <div className="h-9 w-60 bg-stone-100 rounded-[10px] animate-pulse" />
+          <div className="h-44 bg-stone-100 rounded-[12px] animate-pulse" style={{ marginTop: 16 }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!canUpload) {
     return (
       <div className="ep-page" style={{ maxWidth: 640 }}>
         <div className="ep-card" style={{ textAlign: 'center', marginTop: 48 }}>
@@ -72,7 +102,7 @@ export default function LeadUpload() {
             </p>
           </div>
           <div className="pt-2 border-t border-slate-100 w-full text-[9px] font-mono text-slate-400 uppercase tracking-widest leading-none" style={{ marginTop: 16 }}>
-            Strict Security Level: Feature lead_upl_gen.upload_raw_csv_xlsx Required
+            Strict Security Level: Lead import required (admin, or team lead with lead creation)
           </div>
         </div>
       </div>

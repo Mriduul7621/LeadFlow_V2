@@ -63,6 +63,7 @@ describe('buildEnterpriseNavGroups — Admin', () => {
     assert.equal(byLabel.get('Lead Pool'), '/leads/all');
     assert.equal(byLabel.get('Overview'), '/');
     assert.equal(byLabel.get('Teams & Hierarchy'), '/team');
+    assert.equal(byLabel.get('Follow-up Queue'), '/follow-up');
   });
 
   it('CONFIGURATION carries the three settings pages on three DISTINCT routes', () => {
@@ -116,7 +117,7 @@ describe('buildEnterpriseNavGroups — Manager', () => {
     assert.equal(byLabel.get('Teams'), '/team');
     assert.equal(byLabel.get('Sales Pipeline'), '/sales-pipeline');
     assert.equal(byLabel.get('Leads'), '/leads');
-    assert.equal(byLabel.get('Follow-up Queue'), '/workbench');
+    assert.equal(byLabel.get('Daily Workbench'), '/workbench');
   });
 
   it('INSIGHTS carries all four report pages', () => {
@@ -146,7 +147,8 @@ describe('buildEnterpriseNavGroups — Team Lead', () => {
     const workspace = groups.find(g => g.title === 'WORKSPACE')!;
     const byLabel = new Map(workspace.items.map(i => [i.label, i.path]));
     assert.equal(byLabel.get('Team Members'), '/team');
-    assert.equal(byLabel.get('Follow-up Queue'), '/workbench');
+    assert.equal(byLabel.get('Daily Workbench'), '/workbench');
+    assert.equal(byLabel.get('Follow-up Queue'), '/follow-up');
     assert.equal(byLabel.get('Activities'), '/activities');
     const performance = groups.find(g => g.title === 'PERFORMANCE')!;
     const perfByLabel = new Map(performance.items.map(i => [i.label, i.path]));
@@ -154,10 +156,16 @@ describe('buildEnterpriseNavGroups — Team Lead', () => {
     assert.equal(perfByLabel.get('Roadshow Follow-up'), '/roadshows');
   });
 
+  it('WORKSPACE carries Lead Intake and Add Lead (team-lead lead creation, 2026-11-19)', () => {
+    const workspace = groupsFor('teamLead').find(g => g.title === 'WORKSPACE')!;
+    const byLabel = new Map(workspace.items.map(i => [i.label, i.path]));
+    assert.equal(byLabel.get('Lead Intake'), '/leads/upload');
+    assert.equal(byLabel.get('Add Lead'), '/leads/new');
+  });
+
   it('has no admin or manager-only entries', () => {
     const all = labels(groupsFor('teamLead'));
     assert.ok(!all.includes('Users & Roles'));
-    assert.ok(!all.includes('Lead Intake'));
     assert.ok(!all.includes('System Settings'));
     assert.ok(!all.includes('Teams'));
     assert.ok(!all.includes('Sales Pipeline'));
@@ -174,7 +182,8 @@ describe('buildEnterpriseNavGroups — Agent', () => {
     const byLabel = new Map(work.items.map(i => [i.label, i.path]));
     assert.equal(byLabel.get('Add Lead'), '/leads/new');
     assert.equal(byLabel.get('My Leads'), '/leads');
-    assert.equal(byLabel.get('Follow-up Queue'), '/workbench');
+    assert.equal(byLabel.get('Daily Workbench'), '/workbench');
+    assert.equal(byLabel.get('Follow-up Queue'), '/follow-up');
     assert.equal(byLabel.get('Activities'), '/activities');
   });
 
@@ -241,6 +250,7 @@ describe('buildEnterpriseNavGroups — permission filtering', () => {
     const groups = groupsFor('agent', { canAccess: () => false });
     assert.ok(labels(groups).includes('My Leads'));
     assert.ok(labels(groups).includes('Add Lead'));
+    assert.ok(labels(groups).includes('Daily Workbench'));
     assert.ok(labels(groups).includes('Follow-up Queue'));
   });
 });

@@ -112,7 +112,7 @@ const router = createBrowserRouter([
     // derived role overview (Admin / Manager / Team Lead / Agent).
     // No landing redirect and no Workbench-first bounce any more —
     // the overview IS the landing page, and the Daily Workbench
-    // stays one tap away in the sidebar ("Follow-up Queue").
+    // stays one tap away in the sidebar ("Daily Workbench").
     element: <ProtectedRoute><FeatureGate route="/"><LazyPage page={<EnterpriseHome />} /></FeatureGate></ProtectedRoute>,
   },
   {

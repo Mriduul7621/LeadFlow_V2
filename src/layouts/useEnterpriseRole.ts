@@ -20,8 +20,14 @@ import { deriveEnterpriseRole, type EnterpriseRole } from './enterpriseRole';
  * pre-matrix role as final for anything but a loading skeleton.
  * Admins never flash: the admin arm needs only the role code, which
  * the auth store holds from the first paint.
+ *
+ * `hasSubordinates` is the same tree fact the teamLead derivation
+ * runs on (≥1 direct report), exposed for the route gate: the
+ * `teamLeadAllowed` predicate in featureRouteAccess needs it, and
+ * every caller that already derives a role should not re-derive it
+ * from a second overview read.
  */
-export function useEnterpriseRole(): { role: EnterpriseRole; loading: boolean } {
+export function useEnterpriseRole(): { role: EnterpriseRole; loading: boolean; hasSubordinates: boolean } {
   const user = useAuthStore(state => state.user);
   const userId = user?.id;
   const userRole = user?.role;
@@ -53,5 +59,6 @@ export function useEnterpriseRole(): { role: EnterpriseRole; loading: boolean } 
       dataVisibility,
     }),
     loading: callerTeam.loading,
+    hasSubordinates: callerHasTeam(callerTeam.overview?.people),
   };
 }

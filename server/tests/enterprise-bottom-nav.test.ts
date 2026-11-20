@@ -53,13 +53,13 @@ describe('bottom nav — the tabs per role (Mahadi’s lists, verbatim)', () => 
     assert.deepEqual(paths('manager'), ['/', '/team', '/execution-intelligence', '/leads/all']);
   });
 
-  it('Team Lead: Overview, Team Members, Lead Pool, Follow-up Queue', () => {
-    assert.deepEqual(labels('teamLead'), ['Overview', 'Team Members', 'Lead Pool', 'Follow-up Queue']);
+  it('Team Lead: Overview, Team Members, Lead Pool, Workbench', () => {
+    assert.deepEqual(labels('teamLead'), ['Overview', 'Team Members', 'Lead Pool', 'Workbench']);
     assert.deepEqual(paths('teamLead'), ['/', '/team', '/leads/all', '/workbench']);
   });
 
-  it('Agent: My Work, My Leads, Follow-up Queue, Add Lead', () => {
-    assert.deepEqual(labels('agent'), ['My Work', 'My Leads', 'Follow-up Queue', 'Add Lead']);
+  it('Agent: My Work, My Leads, Workbench, Add Lead', () => {
+    assert.deepEqual(labels('agent'), ['My Work', 'My Leads', 'Workbench', 'Add Lead']);
     assert.deepEqual(paths('agent'), ['/', '/leads', '/workbench', '/leads/new']);
   });
 
