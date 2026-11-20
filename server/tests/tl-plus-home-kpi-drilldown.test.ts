@@ -1197,7 +1197,11 @@ describe('KPI drill-down — source guards', () => {
       'src/modules/workspace/pages/AdminHome.tsx': ['totalLeads', 'open', 'converted', 'noAction'],
       'src/modules/workspace/pages/ManagerHome.tsx': ['totalLeads', 'overdue', 'noAction'],
       'src/modules/workspace/pages/TeamLeadHome.tsx': ['totalLeads', 'dueToday', 'overdue', 'noAction'],
-      'src/modules/workspace/pages/AgentHome.tsx': ['totalLeads', 'dueToday', 'overdue', 'converted'],
+      // Agent workspace rebuild (2026-11-20): no Overdue card — the
+      // overdue count is the Due-today subline. The Contacted card
+      // has no drill-down either (there is no 'contacted' key), so
+      // it must NOT appear here.
+      'src/modules/workspace/pages/AgentHome.tsx': ['totalLeads', 'dueToday', 'converted'],
     };
     for (const [file, keys] of Object.entries(homes)) {
       const src = read(file);
@@ -1209,10 +1213,14 @@ describe('KPI drill-down — source guards', () => {
     }
     // The agent's KPIs always land on the caller's OWN leads.
     const agent = read('src/modules/workspace/pages/AgentHome.tsx');
-    for (const key of ['totalLeads', 'dueToday', 'overdue', 'converted']) {
+    for (const key of ['totalLeads', 'dueToday', 'converted']) {
       assert.ok(agent.includes(`kpiDrilldownUrl('${key}', 'self')`),
         `AgentHome ${key} drills to person=self`);
     }
+    assert.ok(!agent.includes(`kpiDrilldownUrl('overdue'`),
+      'AgentHome must not drill an Overdue card that no longer exists');
+    assert.ok(!agent.includes(`kpiDrilldownUrl('contacted'`),
+      'AgentHome must not link the Contacted card (no contacted drill-down key exists)');
   });
 
   it('the drill-down route exists, gated, under the Team module', () => {

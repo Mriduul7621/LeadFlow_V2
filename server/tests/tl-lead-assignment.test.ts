@@ -135,8 +135,11 @@ describe('Follow-up labels match their pages (2026-11-19)', () => {
       const followUp = items.find(i => i.path === '/follow-up');
       // Admin has no /workbench entry (no Daily Workbench in the
       // admin nav) — the label rule applies wherever the item exists.
-      if (role === 'admin') {
-        assert.equal(workbench, undefined, 'admin has no workbench entry');
+      // Agent workspace rebuild (2026-11-20): the agent nav dropped
+      // /workbench too (not in Mahadi's demo) — the route stays live
+      // and the heading still resolves through the fallback map.
+      if (role === 'admin' || role === 'agent') {
+        assert.equal(workbench, undefined, `${role} has no workbench entry`);
       } else {
         assert.ok(workbench, `${role} nav must include /workbench`);
         assert.equal(workbench!.label, 'Daily Workbench', `${role} must label /workbench Daily Workbench`);
@@ -181,7 +184,11 @@ describe('Follow-up labels match their pages (2026-11-19)', () => {
       const paths = groups.flatMap(g => g.items.map(i => i.path));
       assert.equal(new Set(paths).size, paths.length, `${role} nav must not duplicate a path`);
       assert.equal(enterpriseActivePath(groups, '/follow-up'), '/follow-up');
-      if (role !== 'admin') {
+      // Admin and Agent have no /workbench nav item, so nothing is
+      // active there (null) — the page itself stays reachable by URL.
+      if (role === 'admin' || role === 'agent') {
+        assert.equal(enterpriseActivePath(groups, '/workbench'), null);
+      } else {
         assert.equal(enterpriseActivePath(groups, '/workbench'), '/workbench');
       }
     }

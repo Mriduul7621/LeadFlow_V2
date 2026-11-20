@@ -3,7 +3,6 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   User as UserIcon,
-  Briefcase,
   ShieldCheck,
   Check,
   AlertCircle
@@ -20,6 +19,8 @@ import { formBuilderService } from '../../forms/services/formBuilderService';
 import { FormField } from '../../shared/types';
 import { useAuthStore } from '../../auth/store/authStore';
 import { usePermissions } from '../../shared/hooks/usePermissions';
+import { useCallerTeam } from '../../team/hooks/useCallerTeam';
+import { downlineOf } from '../../team/services/teamOverviewService';
 import { BANGLADESH_GEOGRAPHY } from '../../shared/utils/bangladeshGeography';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
 
@@ -27,6 +28,17 @@ import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimi
 // these stay in the form regardless of admin visibility settings, so
 // the Form Builder can't be used to accidentally break lead creation.
 const ALWAYS_VISIBLE_FIELDS = new Set(['prospectName', 'mobile']);
+
+// Fields that live behind the "More details" toggle (Agent workspace
+// rebuild, 2026-11-20). A failed submit re-opens the section when an
+// error sits inside one of these, so a hidden mandatory field can
+// never silently block the save.
+const MORE_DETAILS_FIELDS = [
+  'profession', 'occupation', 'maritalStatus', 'noOfChildren',
+  'familyMember', 'division', 'district', 'thana',
+  'residenceAddress', 'officeAddress', 'productName', 'campaignName',
+  'customFields',
+];
 
 // The validation schema lives in ../utils/leadFormSchema.ts: the Form
 // Builder "Required" flag is the ONLY source of required-ness there —
@@ -57,6 +69,17 @@ export default function LeadGenerate() {
 
   const [options, setOptions] = useState<any>({});
   const [fieldConfigs, setFieldConfigs] = useState<FormField[]>([]);
+  // Agent workspace rebuild (2026-11-20): the "More details"
+  // toggle (collapsed by default) and the Assign-to options — the
+  // caller's full downline, resolved from the team overview. Both
+  // hooks sit here, BEFORE the capability gate below, so the hook
+  // order never changes (React #310).
+  const [showMoreDetails, setShowMoreDetails] = useState(false);
+  const callerTeam = useCallerTeam();
+  const assignOptions = useMemo(() => {
+    if (!user || !callerTeam.overview) return [];
+    return downlineOf(callerTeam.overview.people, user.employeeId);
+  }, [callerTeam.overview, user]);
   const fieldConfigMap = useMemo(() => {
     const map: Record<string, FormField> = {};
     fieldConfigs.forEach(f => { map[f.fieldKey] = f; });
@@ -77,6 +100,8 @@ export default function LeadGenerate() {
     defaultValues: {
       prospectName: '',
       mobile: '',
+      email: '',
+      assignedTo: '',
       profession: '',
       occupation: '',
       priority: '',
@@ -195,10 +220,10 @@ export default function LeadGenerate() {
 
   const onSubmit = async (data: any) => {
     if (!user) return;
-    
+
     const combinedArea = `${data.thana}, ${data.district}, ${data.division}`;
     const childPresence = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
-    
+
     try {
       // F12: the server upserts a lead when the MOBILE NUMBER already exists
       // (documented behaviour). Without this the operator saw "Lead created
@@ -211,7 +236,11 @@ export default function LeadGenerate() {
           area: combinedArea,
           hasChild: childPresence && Number(data.noOfChildren) > 0,
           noOfChildren: childPresence ? data.noOfChildren : '0',
-          assignedTo: user.employeeId,
+          // Agent workspace rebuild (2026-11-20): the Assign-to
+          // dropdown may name a downline member; blank still means
+          // "myself". The server re-validates the target against the
+          // caller's scope and rejects anything outside it.
+          assignedTo: data.assignedTo || user.employeeId,
           assignedBy: user.employeeId,
           currentStatus: 'New',
           projectedNCP: 0,
@@ -230,9 +259,16 @@ export default function LeadGenerate() {
         toast.success(t('leadCreatedSuccess'));
       }
       reset();
+      setShowMoreDetails(false);
     } catch (err) {
       toast.error(t('leadCreatedError'));
     }
+  };
+
+  // A failed submit re-opens More details when any error sits inside
+  // it, so a hidden mandatory field is never the silent blocker.
+  const onInvalid = (formErrors: Record<string, unknown>) => {
+    if (MORE_DETAILS_FIELDS.some(key => formErrors[key])) setShowMoreDetails(true);
   };
 
   return (
@@ -240,13 +276,19 @@ export default function LeadGenerate() {
       {/* Enterprise Preview restyle (2026-11-19): the sample's Add Lead
           page — eyebrow + H1 + the sample's own description, the form
           in sample cards, the sample's input style (via .ep-leadform
-          CSS) and a "Save lead" submit. Classes only: every field,
-          the validation schema, translations and the submit flow are
-          unchanged. */}
+          CSS) and a "Save lead" submit. Agent workspace rebuild
+          (2026-11-20): the simple first screen from Mahadi's demo,
+          with the extras behind "More details" — no field removed,
+          required-ness still the Form Builder's alone. */}
       <EnterprisePageHeader path="/leads/new" />
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {/* Section 1: Identity */}
+      <form onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-4">
+        {/* Agent workspace rebuild (2026-11-20): the demo's simple
+            "Add new lead" form — name, phone, email, source,
+            priority, assign-to, notes — with every existing extra
+            field behind a "More details" button. NO field is
+            removed; the extras are only collapsed, and a failed
+            submit re-opens them when an error sits inside. */}
         <motion.section 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -254,7 +296,7 @@ export default function LeadGenerate() {
         >
           <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
             <UserIcon className="w-6 h-6 text-[#978C21]" />
-            <h2 className="font-semibold text-base text-slate-800">{t("customerInfo")}</h2>
+            <h2 className="font-semibold text-base text-slate-800">New lead</h2>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -287,6 +329,97 @@ export default function LeadGenerate() {
               {errors.mobile && <p className="text-xs text-red-500">{errors.mobile.message}</p>}
             </div>
 
+            {isFieldVisible('email') && (
+              <div className="space-y-3">
+                <label className="text-sm font-medium text-slate-700">Email</label>
+                <input
+                  type="email"
+                  inputMode="email"
+                  {...register('email')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
+                  placeholder="name@example.com"
+                />
+                {errors.email && <p className="text-xs text-red-500">{errors.email.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('source') && (
+              <div className="space-y-3">
+                <label className="text-sm font-medium text-slate-700">{t("source")}{fieldConfigMap.source?.isMandatory !== false && ' *'}</label>
+                <Controller
+                  control={control}
+                  name="source"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Source || []}
+                      placeholder={t("selectSource")}
+                      onCreateOption={raw => handleAddOption('Source', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
+                {errors.source && <p className="text-xs text-red-500">{errors.source.message as string}</p>}
+              </div>
+            )}
+
+            {isFieldVisible('priority') && (
+              <div className="space-y-3">
+                <label className="text-sm font-medium text-slate-700">Priority{fieldConfigMap.priority?.isMandatory && ' *'}</label>
+                <Controller
+                  control={control}
+                  name="priority"
+                  render={({ field }) => (
+                    <CreatableSelect
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={options.Priority || []}
+                      placeholder="Select Priority"
+                      onCreateOption={raw => handleAddOption('Priority', raw)}
+                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                    />
+                  )}
+                />
+                {errors.priority && <p className="text-xs text-red-500">{errors.priority.message as string}</p>}
+              </div>
+            )}
+
+            {/* Assign to: the caller's downline (plus "Myself"). A
+                caller with no subordinates sees no dropdown at all —
+                the lead goes to them, and a one-option dropdown
+                would be a dead control. */}
+            {assignOptions.length > 0 && (
+              <div className="space-y-3">
+                <label className="text-sm font-medium text-slate-700">Assign to</label>
+                <select
+                  {...register('assignedTo')}
+                  className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                >
+                  <option value="">Myself</option>
+                  {assignOptions.map(person => (
+                    <option key={person.employeeId} value={person.employeeId}>
+                      {person.name} ({person.employeeId})
+                    </option>
+                  ))}
+                </select>
+                {errors.assignedTo && <p className="text-xs text-red-500">{errors.assignedTo.message as string}</p>}
+              </div>
+            )}
+
+            <div className="md:col-span-2">
+              <button
+                type="button"
+                className="ep-btn"
+                onClick={() => setShowMoreDetails(v => !v)}
+                aria-expanded={showMoreDetails}
+              >
+                {showMoreDetails ? 'Hide details' : 'More details'}
+              </button>
+            </div>
+
+            {showMoreDetails && (
+              <>
             {isFieldVisible('profession') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("profession")}{fieldConfigMap.profession?.isMandatory !== false && ' *'}</label>
@@ -326,27 +459,6 @@ export default function LeadGenerate() {
                   )}
                 />
                 {errors.occupation && <p className="text-xs text-red-500">{errors.occupation.message as string}</p>}
-              </div>
-            )}
-
-            {isFieldVisible('priority') && (
-              <div className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">Priority{fieldConfigMap.priority?.isMandatory && ' *'}</label>
-                <Controller
-                  control={control}
-                  name="priority"
-                  render={({ field }) => (
-                    <CreatableSelect
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      options={options.Priority || []}
-                      placeholder="Select Priority"
-                      onCreateOption={raw => handleAddOption('Priority', raw)}
-                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                    />
-                  )}
-                />
-                {errors.priority && <p className="text-xs text-red-500">{errors.priority.message as string}</p>}
               </div>
             )}
 
@@ -396,22 +508,6 @@ export default function LeadGenerate() {
                 {errors.familyMember && <p className="text-xs text-red-500">{errors.familyMember.message as string}</p>}
               </div>
             )}
-          </div>
-        </motion.section>
-
-        {/* Section 2: Strategy */}
-        <motion.section 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="ep-card"
-        >
-          <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
-            <Briefcase className="w-6 h-6 text-[#978C21]" />
-            <h2 className="font-semibold text-base text-slate-800">{t("residenceAddress")} & {t("campaign")}</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {isFieldVisible('division') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("division")}{fieldConfigMap.division?.isMandatory !== false && ' *'}</label>
@@ -501,27 +597,6 @@ export default function LeadGenerate() {
               </div>
             )}
 
-            {isFieldVisible('source') && (
-              <div className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">{t("source")}{fieldConfigMap.source?.isMandatory !== false && ' *'}</label>
-                <Controller
-                  control={control}
-                  name="source"
-                  render={({ field }) => (
-                    <CreatableSelect
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      options={options.Source || []}
-                      placeholder={t("selectSource")}
-                      onCreateOption={raw => handleAddOption('Source', raw)}
-                      selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                    />
-                  )}
-                />
-                {errors.source && <p className="text-xs text-red-500">{errors.source.message as string}</p>}
-              </div>
-            )}
-
             {isFieldVisible('campaignName') && (
               <div className="space-y-3">
                 <label className="text-sm font-medium text-slate-700">{t("campaign")}{fieldConfigMap.campaignName?.isMandatory !== false && ' *'}</label>
@@ -543,6 +618,57 @@ export default function LeadGenerate() {
               </div>
             )}
 
+            {/* Admin-added custom fields (Form Builder) — extra
+                details too, so they live behind the toggle. */}
+            {customFieldDefs.map(field => (
+              <div key={field.id} className={cn("space-y-3", field.fieldType === 'textarea' && "md:col-span-2")}>
+                <label className="text-sm font-medium text-slate-700">
+                  {field.label}{field.isMandatory && ' *'}
+                </label>
+                {field.fieldType === 'dropdown' ? (
+                  <Controller
+                    control={control}
+                    name={`customFields.${field.fieldKey}` as any}
+                    render={({ field: rhfField }) => (
+                      <CreatableSelect
+                        value={rhfField.value || ''}
+                        onChange={rhfField.onChange}
+                        options={options[field.metadataTypeKey || ''] || []}
+                        placeholder="Select"
+                        onCreateOption={raw => handleAddOption(field.metadataTypeKey || '', raw)}
+                        selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                      />
+                    )}
+                  />
+                ) : field.fieldType === 'textarea' ? (
+                  <textarea
+                    {...register(`customFields.${field.fieldKey}` as any)}
+                    rows={3}
+                    placeholder={field.placeholder}
+                    className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-bold focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
+                  />
+                ) : field.fieldType === 'checkbox' ? (
+                  <select
+                    {...register(`customFields.${field.fieldKey}` as any)}
+                    className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
+                  >
+                    <option value="">-</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </select>
+                ) : (
+                  <input
+                    type={field.fieldType === 'number' ? 'number' : field.fieldType === 'date' ? 'date' : 'text'}
+                    {...register(`customFields.${field.fieldKey}` as any)}
+                    placeholder={field.placeholder}
+                    className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
+                  />
+                )}
+              </div>
+            ))}
+              </>
+            )}
+
             {isFieldVisible('otherInfo') && (
               <div className="space-y-3 md:col-span-2">
                 <label className="text-sm font-medium text-slate-700">{t("otherInfo")}{fieldConfigMap.otherInfo?.isMandatory && ' *'}</label>
@@ -557,70 +683,6 @@ export default function LeadGenerate() {
             )}
           </div>
         </motion.section>
-
-        {/* Section 3: Additional (admin-added custom fields via Form Builder) */}
-        {customFieldDefs.length > 0 && (
-          <motion.section 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="ep-card"
-          >
-            <div className="flex items-center gap-3 mb-6 border-b border-slate-50 pb-4">
-              <Briefcase className="w-6 h-6 text-[#978C21]" />
-              <h2 className="font-semibold text-base text-slate-800">{t("otherInfo")}</h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {customFieldDefs.map(field => (
-                <div key={field.id} className={cn("space-y-3", field.fieldType === 'textarea' && "md:col-span-2")}>
-                  <label className="text-sm font-medium text-slate-700">
-                    {field.label}{field.isMandatory && ' *'}
-                  </label>
-                  {field.fieldType === 'dropdown' ? (
-                    <Controller
-                      control={control}
-                      name={`customFields.${field.fieldKey}` as any}
-                      render={({ field: rhfField }) => (
-                        <CreatableSelect
-                          value={rhfField.value || ''}
-                          onChange={rhfField.onChange}
-                          options={options[field.metadataTypeKey || ''] || []}
-                          placeholder="Select"
-                          onCreateOption={raw => handleAddOption(field.metadataTypeKey || '', raw)}
-                          selectClassName="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                        />
-                      )}
-                    />
-                  ) : field.fieldType === 'textarea' ? (
-                    <textarea
-                      {...register(`customFields.${field.fieldKey}` as any)}
-                      rows={3}
-                      placeholder={field.placeholder}
-                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-bold focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
-                    />
-                  ) : field.fieldType === 'checkbox' ? (
-                    <select
-                      {...register(`customFields.${field.fieldKey}` as any)}
-                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-xs font-black uppercase tracking-widest italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none cursor-pointer"
-                    >
-                      <option value="">-</option>
-                      <option value="true">Yes</option>
-                      <option value="false">No</option>
-                    </select>
-                  ) : (
-                    <input
-                      type={field.fieldType === 'number' ? 'number' : field.fieldType === 'date' ? 'date' : 'text'}
-                      {...register(`customFields.${field.fieldKey}` as any)}
-                      placeholder={field.placeholder}
-                      className="w-full px-5 py-4 bg-[#FBFAF8] border border-slate-100 rounded-sm text-sm font-black uppercase tracking-tight italic focus:ring-2 focus:ring-primary/5 focus:border-[#978C21] transition-all outline-none"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          </motion.section>
-        )}
 
         <div className="flex items-center justify-end gap-6 mt-6">
           <div className="flex items-center gap-2 mr-auto opacity-60">

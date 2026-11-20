@@ -169,7 +169,10 @@ describe('inner pages — every link target is a real App.tsx route', () => {
   const EXPECTED_SITES: Record<string, number> = {
     'src/modules/leads/pages/Activities.tsx': 1,
     'src/modules/dashboard/pages/SalesPipelinePage.tsx': 3,
-    'src/modules/leads/pages/FollowUpStrategy.tsx': 1,
+    // Agent workspace rebuild (2026-11-20): 3 — the row's Lead360
+    // navigation, the row's Update link, and the outcome dialog's
+    // "Open the full update page" link.
+    'src/modules/leads/pages/FollowUpStrategy.tsx': 3,
     'src/modules/settings/pages/ProfileSettings.tsx': 0,
     'src/modules/dashboard/pages/CampaignBreakdown.tsx': 0,
     'src/modules/dashboard/pages/TrendCharts.tsx': 0,
@@ -179,7 +182,12 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     'src/modules/leads/pages/LeadUpload.tsx': 0,
     'src/modules/team/pages/TeamOverview.tsx': 1,
     'src/modules/hierarchy/pages/TeamHierarchy.tsx': 0,
-    'src/modules/leads/pages/LeadList.tsx': 8,
+    // Agent workspace rebuild (2026-11-20): 6 — the ?leadId= deep
+    // link, the mobile row open, the mobile update, the mobile
+    // chevron, the desktop row open, the desktop update. (The
+    // Timeline and Edit buttons are gone; the quick view lives in
+    // LeadQuickViewModal.tsx.)
+    'src/modules/leads/pages/LeadList.tsx': 6,
     'src/modules/leads/pages/AllLeads.tsx': 1,
     'src/modules/workbench/pages/DailyWorkbench.tsx': 16,
     'src/modules/auth/pages/TaskCalendar.tsx': 5,

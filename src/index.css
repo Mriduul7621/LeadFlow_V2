@@ -2255,3 +2255,198 @@ a.ep-person:hover strong { color: var(--ep-deep); }
   .ep-grid { grid-template-columns: 1fr 1fr; }
   .ep-metric { font-size: 21px; }
 }
+
+/* --- Agent workspace (2026-11-20, Mahadi's demo screenshots) --- */
+/* The "View all →" affordance the homes already use: the sample's
+   small olive link. (It was unstyled until this rebuild, so every
+   home's link rendered in the browser default.) Works for <a> and
+   <button> alike. */
+.ep-viewall {
+  font-size: 11px; color: var(--ep-deep); font-weight: 700;
+  text-decoration: none; background: none; border: none;
+  cursor: pointer; padding: 0; white-space: nowrap; font-family: inherit;
+}
+.ep-viewall:hover { text-decoration: underline; }
+
+/* The agent sidebar-bottom profile block (AppLayout): avatar +
+   name + employee ID, with a settings gear beside it. Sits below
+   the Help/About footer, pinned to the sidebar bottom by the
+   sidefoot's margin-top: auto. */
+.ep-agent-profile {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 20px 16px; border-top: 1px solid var(--ep-line);
+}
+.ep-agent-profile-who {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  text-decoration: none; color: inherit; flex: 1;
+}
+.ep-agent-profile-copy { display: flex; flex-direction: column; min-width: 0; }
+.ep-agent-profile-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-agent-profile-copy small { font-size: 10px; color: var(--ep-muted); }
+.ep-agent-profile-gear {
+  color: var(--ep-muted); flex-shrink: 0; display: grid; place-items: center;
+  width: 30px; height: 30px; border-radius: 9px;
+}
+.ep-agent-profile-gear:hover { background: var(--ep-soft); color: var(--ep-deep); }
+
+/* Priority follow-up rows (My Work): serial circle, name + status
+   subline, time on the RIGHT (per the screenshot). The whole row is
+   the link to the lead's update flow. */
+.ep-priority-list { display: flex; flex-direction: column; }
+.ep-priority-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 0; border-bottom: 1px solid #f0f0eb;
+  text-decoration: none; color: inherit;
+}
+.ep-priority-row:last-child { border-bottom: 0; }
+.ep-priority-row:hover strong { color: var(--ep-deep); }
+.ep-priority-num {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ep-soft); color: var(--ep-deep);
+  display: grid; place-items: center; font-size: 11px; font-weight: 800;
+}
+.ep-priority-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ep-priority-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-priority-copy small { font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+.ep-priority-time { font-size: 11px; font-weight: 700; color: var(--ep-ink); white-space: nowrap; }
+
+/* My pipeline: one segmented bar + a legend naming every stage. */
+.ep-pipeline-total { font-size: 12px; color: var(--ep-muted); margin: 0 0 10px; }
+.ep-pipeline-total strong { color: var(--ep-ink); font-size: 15px; }
+.ep-pipeline-bar {
+  display: flex; height: 12px; border-radius: 6px; overflow: hidden;
+  background: #f0f0eb; margin-bottom: 12px;
+}
+.ep-pipeline-seg { height: 100%; min-width: 2px; }
+.ep-pipeline-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11px; color: var(--ep-muted);
+}
+.ep-pipeline-legend-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ep-pipeline-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* Dialog (My Work "View all", queue outcome / add-follow-up):
+   centred panel over the whole shell, drawer included. */
+.ep-dialog-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(38, 50, 56, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.ep-dialog {
+  background: white; border-radius: 14px; width: 100%; max-width: 560px;
+  max-height: 86vh; display: flex; flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18); overflow: hidden;
+}
+.ep-dialog-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 17px 18px 12px; border-bottom: 1px solid var(--ep-line);
+}
+.ep-dialog-head h3 { font-size: 15px; margin: 0 0 2px; }
+.ep-dialog-body { padding: 8px 18px 14px; overflow-y: auto; }
+.ep-dialog-foot {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 13px 18px; border-top: 1px solid var(--ep-line);
+}
+.ep-dialog-section {
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--ep-muted); margin: 14px 0 2px;
+}
+.ep-dialog-body .ep-priority-row { padding: 10px 0; }
+
+/* Lead quick-view modal (My Leads): 2-col field boxes, 1-col on
+   phones. */
+.ep-quickview-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px;
+}
+.ep-quickview-field {
+  background: #fafaf7; border: 1px solid var(--ep-line);
+  border-radius: 9px; padding: 10px 12px; min-width: 0;
+}
+.ep-quickview-field span {
+  display: block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--ep-muted); font-weight: 700; margin-bottom: 3px;
+}
+.ep-quickview-field strong {
+  font-size: 12px; word-break: break-word; font-weight: 600; color: var(--ep-ink);
+}
+.ep-quickview-notes { grid-column: 1 / -1; }
+.ep-quickview-notes strong { font-weight: 400; }
+
+/* Follow-up checklist rows (queue page): checkbox, name + subline,
+   time right, Update link. A row completed this session renders
+   struck through — the log itself is append-only. */
+.ep-checklist { display: flex; flex-direction: column; }
+.ep-checklist-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 0; border-bottom: 1px solid #f0f0eb;
+}
+.ep-checklist-row:last-child { border-bottom: 0; }
+.ep-checklist-box {
+  width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--ep-olive);
+  cursor: pointer;
+}
+.ep-checklist-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+button.ep-checklist-copy {
+  font: inherit; background: none; border: none; padding: 0;
+  cursor: pointer; text-align: left; color: inherit;
+}
+button.ep-checklist-copy:hover strong { color: var(--ep-deep); }
+.ep-checklist-copy strong {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-checklist-copy small { font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+.ep-checklist-done .ep-checklist-copy strong { text-decoration: line-through; color: var(--ep-muted); }
+.ep-checklist-time { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.ep-checklist-update { font-size: 11px; font-weight: 700; color: var(--ep-deep); white-space: nowrap; }
+
+/* Tip bar (queue page, the demo's wording). */
+.ep-tipbar {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: #f7f5ec; border: 1px solid #ece5cd; border-radius: 11px;
+  padding: 13px 15px; font-size: 12px; color: #6b6544; margin-top: 16px;
+}
+.ep-tipbar strong { color: #4f4a2e; }
+
+/* Conversion funnel (My Performance): cumulative bars, one per
+   stage, with the count and the share of assigned leads. */
+.ep-funnel { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
+.ep-funnel-row { display: grid; grid-template-columns: 110px 1fr 74px; align-items: center; gap: 10px; }
+.ep-funnel-label { font-size: 12px; font-weight: 600; }
+.ep-funnel-track { height: 12px; background: #f0f0eb; border-radius: 6px; overflow: hidden; }
+.ep-funnel-fill { height: 100%; background: var(--ep-olive); border-radius: 6px; min-width: 2px; }
+.ep-funnel-value { font-size: 11px; color: var(--ep-muted); text-align: right; white-space: nowrap; }
+.ep-funnel-value strong { color: var(--ep-ink); }
+
+/* Performance insights (My Performance): a coloured dot, a title,
+   a factual subline. */
+.ep-insight-list { display: flex; flex-direction: column; }
+.ep-insight-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 11px 0; border-bottom: 1px solid #f0f0eb;
+}
+.ep-insight-row:last-child { border-bottom: 0; }
+.ep-insight-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.ep-insight-dot.good { background: var(--ep-green); }
+.ep-insight-dot.info { background: var(--ep-olive); }
+.ep-insight-dot.warn { background: var(--ep-red); }
+.ep-insight-copy strong { font-size: 12px; }
+.ep-insight-copy small { display: block; font-size: 10px; color: var(--ep-muted); margin-top: 2px; }
+
+/* The Add Lead form's new email field (type=email) gets the same
+   sample input style as the other fields. */
+.ep-leadform input[type="email"] {
+  background: #fff; border: 1px solid #e7e7df; border-radius: 9px;
+  padding: 9px 12px; font-size: 13px; font-weight: 400;
+  color: #263238; width: 100%;
+}
+
+@media (max-width: 720px) {
+  .ep-quickview-grid { grid-template-columns: 1fr; }
+  .ep-dialog { max-height: 92vh; }
+  .ep-funnel-row { grid-template-columns: 88px 1fr 62px; }
+  .ep-checklist-time { display: none; }
+}

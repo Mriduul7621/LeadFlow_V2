@@ -1,20 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Search,
   Filter,
   Download,
-  MoreHorizontal,
-  Phone,
-  MessageSquare,
-  Clock,
-  ChevronLeft,
   ChevronRight,
-  Eye,
   XCircle,
-  Calendar,
   RefreshCw,
-  Edit2,
   Target,
   UserCog,
 } from 'lucide-react';
@@ -31,10 +23,20 @@ import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { callerHasTeam } from '../../team/services/teamOverviewService';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
+import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
-import LeadQualityBadge from '../components/LeadQualityBadge';
+import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
 
 const getStatusColor = (status: string) => getLeadStatusColorClasses(status);
+
+/** Priority pill tone (Priority is a configurable metadata list,
+    so anything outside High/Medium falls back to the default). */
+const getPriorityTone = (priority: string): string => {
+  const p = String(priority || '').toLowerCase();
+  if (p === 'high') return 'red';
+  if (p === 'medium') return 'orange';
+  return '';
+};
 
 export default function LeadList() {
   const { user } = useAuthStore();
@@ -59,6 +61,14 @@ export default function LeadList() {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [activeStatus, setActiveStatus] = useState('All');
+  // Priority filter (Agent workspace rebuild, 2026-11-20): the
+  // demo's "All priorities" dropdown. The stage filter stays the
+  // status tabs above — one control per filter, no duplicate
+  // "All stages" dropdown.
+  const [priorityFilter, setPriorityFilter] = useState<string>('All');
+  // The quick-view modal (demo screenshot 3): read-only, with a
+  // path to the full Lead360 workspace and the update flow.
+  const [quickViewLead, setQuickViewLead] = useState<Lead | null>(null);
   const mobileSearchRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [statusOptions, setStatusOptions] = useState<string[]>([]);
@@ -74,9 +84,10 @@ export default function LeadList() {
 
   // FIX-1c — deep links (?leadId=, used by notifications and the Task
   // Calendar) land on the Lead 360 workspace, the same full-page format
-  // every other lead entry point opens. The old in-list detail modal is
-  // gone: opening or editing a lead from this page navigates to
-  // /leads/:id, and status updates run through Lead 360's Update page.
+  // every other lead entry point opens. The quick-view modal on this
+  // page is read-only (a glance + links to Lead 360 and the update
+  // flow); opening or editing a lead from this page still navigates
+  // to /leads/:id, and status updates run through the Update page.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const leadId = params.get('leadId');
@@ -144,6 +155,39 @@ export default function LeadList() {
     }
   };
 
+  // Owner names for the table (Agent workspace rebuild): the roster
+  // map resolves an assignee's employee ID to their name; the ID
+  // itself is the fallback, and 'Unassigned' covers blank assignees.
+  const ownerNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const person of callerTeam.overview?.people ?? []) {
+      if (person.employeeId) map.set(String(person.employeeId).toUpperCase(), person.name);
+    }
+    if (user?.employeeId) map.set(String(user.employeeId).toUpperCase(), user.name);
+    return map;
+  }, [callerTeam.overview, user]);
+  const ownerName = (lead: Lead): string => {
+    if (!lead.assignedTo) return 'Unassigned';
+    return ownerNameById.get(String(lead.assignedTo).toUpperCase()) || lead.assignedTo;
+  };
+
+  // Priority options come from the visible leads themselves (the
+  // Priority list is configurable metadata, so no hardcoded set).
+  const priorityOptions = useMemo(() => {
+    const values = new Set<string>();
+    for (const lead of leads) if (lead.priority) values.add(lead.priority);
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [leads]);
+
+  const createdLabel = (lead: Lead): string => {
+    if (!lead.creationDate) return '—';
+    const created = new Date(lead.creationDate);
+    if (Number.isNaN(created.getTime())) return '—';
+    return dhakaDayKey(created) === dhakaDayKey(new Date())
+      ? 'Today'
+      : formatDhakaShort(lead.creationDate);
+  };
+
   const filteredLeads = (() => {
     // Authoritative source of rules-filtered leads from dynamic query builder
     const baseList = advancedFilteredLeads.length > 0 || leads.length === 0 ? advancedFilteredLeads : leads;
@@ -156,12 +200,17 @@ export default function LeadList() {
       qualityBand === 'All'
         ? statusScoped
         : statusScoped.filter(lead => (lead.leadQuality as LeadQuality | undefined)?.band === qualityBand);
+    const priorityScoped =
+      priorityFilter === 'All'
+        ? qualityScoped
+        : qualityScoped.filter(lead => lead.priority === priorityFilter);
 
     // Filter using fast text search across demographics
-    let result = qualityScoped.filter(lead => {
+    let result = priorityScoped.filter(lead => {
       const prospectName = String(lead.prospectName || '').toLowerCase();
       const mobile = String(lead.mobile || '');
       const mobileNum = String(lead.mobileNumber || '').toLowerCase();
+      const leadId = String(lead.id || '').toLowerCase();
       const campaignName = String(lead.campaignName || '').toLowerCase();
       const areaVal = String(lead.area || '').toLowerCase();
       const sourceVal = String(lead.source || '').toLowerCase();
@@ -174,6 +223,7 @@ export default function LeadList() {
       return prospectName.includes(searchTerm) || 
              mobile.includes(search) ||
              mobileNum.includes(search) ||
+             leadId.includes(searchTerm) ||
              campaignName.includes(searchTerm) ||
              areaVal.includes(searchTerm) ||
              sourceVal.includes(searchTerm) ||
@@ -259,12 +309,6 @@ export default function LeadList() {
     } finally {
       setExportBusy(false);
     }
-  };
-
-  const handleCall = (name: string) => {
-    toast(`Initiating secure call to ${name}...`, {
-      icon: <Phone className="w-4 h-4 text-brand-blue" />
-    });
   };
 
   if (!canAccess('lead_tracking', 'view')) {
@@ -353,10 +397,10 @@ export default function LeadList() {
           <input
             ref={mobileSearchRef}
             type="search"
-            placeholder="Search name, phone, area..."
+            placeholder="Search name, phone or lead ID…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search leads by name, phone, or area"
+            aria-label="Search leads by name, phone, or lead ID"
           />
         </div>
       )}
@@ -373,6 +417,15 @@ export default function LeadList() {
               <option value="Cold">Cold</option>
               <option value="Converted">Converted</option>
               <option value="Not Interested">Not interested</option>
+            </select>
+          </label>
+          <label>
+            <span>Priority</span>
+            <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+              <option value="All">All priorities</option>
+              {priorityOptions.map(priority => (
+                <option key={priority} value={priority}>{priority}</option>
+              ))}
             </select>
           </label>
           <label>
@@ -437,7 +490,7 @@ export default function LeadList() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
               type="text" 
-              placeholder="Search name, phone, area..."
+              placeholder="Search name, phone or lead ID…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="ep-search"
@@ -446,6 +499,18 @@ export default function LeadList() {
           </div>
           <div className="flex items-center gap-4">
              <div className="h-10 w-px bg-slate-200 hidden md:block" />
+            <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Priority</label>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              title="Filter by priority"
+              className="ep-select"
+            >
+              <option value="All">All priorities</option>
+              {priorityOptions.map(priority => (
+                <option key={priority} value={priority}>{priority}</option>
+              ))}
+            </select>
             <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Quality</label>
             <select
               value={qualityBand}
@@ -535,13 +600,13 @@ export default function LeadList() {
   <table className="w-full text-left">
             <thead>
               <tr>
-                <th>Prospect</th>
-                <th>Owner / Next Action</th>
-                <th>Campaign / Source</th>
-                <th>Current Status</th>
-                <th>Quality</th>
-                <th>Last Activity</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
+                <th>Lead</th>
+                <th>Source</th>
+                <th>Owner</th>
+                <th>Priority</th>
+                <th>Stage</th>
+                <th>Created</th>
+                <th style={{ textAlign: 'right' }}>Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -554,93 +619,64 @@ export default function LeadList() {
                   className="group hover:bg-[#FBFAF8] transition-colors cursor-pointer relative"
                   onClick={() => navigate(`/leads/${lead.id}`)}
                 >
-                  <td className="px-8 py-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-[#F7F5E9] flex items-center justify-center text-[#817719] font-bold text-xs shrink-0 border border-[#EAE7D6] transition-colors group-hover:bg-[#978C21] group-hover:text-white">
-                        {String(lead.prospectName || 'U').split(' ').map(n => n[0] || '').join('')}
+                  {/* Desktop columns follow the demo (Agent workspace
+                      rebuild, 2026-11-20): Lead / Source / Owner /
+                      Priority / Stage / Created / Action. The Quality,
+                      Campaign and Last Activity columns are gone from
+                      this table (the quality filter stays above, and
+                      quality + history stay on Lead 360). Row click
+                      still opens Lead 360; "View ↗" opens the
+                      read-only quick view instead. */}
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-[#F7F5E9] flex items-center justify-center text-[#817719] font-bold text-xs shrink-0 border border-[#EAE7D6]">
+                        {String(lead.prospectName || 'U').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase()}
                       </div>
                       <div>
-                        <div className="font-bold text-brand-text text-[13px] group-hover:text-[#817719] transition-colors tracking-tight flex items-center gap-2">
+                        <div className="font-bold text-brand-text text-[13px] tracking-tight">
                            {lead.prospectName || 'Unknown Prospect'}
-                           {(lead.collectedNCP || 0) > 100000 && <span className="w-2 h-2 rounded-full bg-[#978C21]" />}
-                           <button
-                              onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
-                              title="View full timeline"
-                              className="text-[8px] font-black text-[#978C21] bg-[#978C21]/10 px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#978C21]/20 transition-all shrink-0 normal-case not-italic"
-                           >
-                              Timeline
-                           </button>
-                           {canEditLead && (
-                             <button
-                               onClick={(e) => { e.stopPropagation(); navigate(`/leads/${encodeURIComponent(lead.id)}/update`); }}
-                               title="Update status"
-                               aria-label={'Update status for ' + (lead.prospectName || 'lead')}
-                               className="text-[8px] font-black text-white bg-[#978C21] px-1.5 py-0.5 rounded-sm uppercase tracking-wider hover:bg-[#8a7f1e] transition-all shrink-0 normal-case not-italic"
-                             >
-                                Update
-                             </button>
-                           )}
                         </div>
-                        <p className="text-[10px] text-slate-400 font-bold flex items-center gap-1 uppercase tracking-tight mt-1 opacity-60">
-                          <Phone className="w-3 h-3 text-brand-blue" /> {lead.mobile || 'No Mobile'} • {lead.area || 'No Area'}
+                        <p className="ep-cellsub">
+                          {lead.id} · {lead.mobile || 'No mobile'}
                         </p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-6 border-l border-slate-50/50">
-                    <p className="text-[11px] font-black text-[#978C21] uppercase tracking-tight italic">{lead.assignedTo || 'Unassigned'}</p>
-                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest mt-1">
-                      {lead.nextFollowUpDate ? `Next: ${new Date(lead.nextFollowUpDate).toLocaleDateString('en-GB')}` : 'No next action set'}
-                    </p>
-                    {(lead.projectedNCP || lead.collectedNCP) ? (
-                      <p className="text-[9px] text-emerald-600 font-bold mt-1">NCP signal: ৳ {(lead.collectedNCP || lead.projectedNCP || 0).toLocaleString()}</p>
-                    ) : null}
+                  <td>{lead.source || '—'}</td>
+                  <td>{ownerName(lead)}</td>
+                  <td>
+                    {lead.priority ? (
+                      <span className={cn('ep-pill', getPriorityTone(lead.priority))}>
+                        {lead.priority}
+                      </span>
+                    ) : '—'}
                   </td>
-                  <td className="px-6 py-6 border-l border-slate-50/50">
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tight italic">{lead.campaignName || 'N/A'}</p>
-                    <p className="text-[9px] text-slate-300 font-black uppercase tracking-widest mt-1">{lead.source || 'N/A'}</p>
-                  </td>
-                  <td className="px-6 py-6 border-l border-slate-50/50">
-                    <span className={cn(
-                      "px-3 py-1.5 rounded-sm text-[9px] font-black uppercase tracking-widest border transition-all",
-                      getStatusColor(lead.currentStatus)
-                    )}>
+                  <td>
+                    <span className={cn('ep-pill', getStatusColor(lead.currentStatus))}>
                       {lead.currentStatus}
                     </span>
                   </td>
-                  <td className="px-6 py-6 border-l border-slate-50/50">
-                    <LeadQualityBadge quality={lead.leadQuality} />
-                  </td>
-                  <td className="px-6 py-6 border-l border-slate-50/50 max-w-[200px]">
-                    {(() => {
-                      const latestHistory = lead.statusHistory && lead.statusHistory.length > 0 
-                        ? lead.statusHistory[lead.statusHistory.length - 1] 
-                        : null;
-                      const latestRemark = latestHistory ? latestHistory.remarks : "No remarks logged";
-                      return (
-                        <p className="text-[11px] font-medium text-slate-500 italic truncate" title={latestRemark}>
-                          {latestRemark}
-                        </p>
-                      );
-                    })()}
-                  </td>
+                  <td>{createdLabel(lead)}</td>
                   <td className="px-6 py-6 text-right">
                     <div className="flex items-center justify-end gap-1.5 opacity-100 transition-opacity">
-                       <button 
-                         onClick={(e) => { e.stopPropagation(); navigate(`/leads/${lead.id}`); }}
-                         className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Edit — open lead workspace"
-                         aria-label={'Edit lead in workspace for ' + (lead.prospectName || 'lead')}
+                       <button
+                         onClick={(e) => { e.stopPropagation(); setQuickViewLead(lead); }}
+                         className="ep-btn"
+                         title="View lead details"
+                         aria-label={'View details for ' + (lead.prospectName || 'lead')}
                        >
-                        <Edit2 className="w-3.5 h-3.5" />
+                        View ↗
                        </button>
-                       <button 
-                         onClick={(e) => { e.stopPropagation(); handleCall(lead.prospectName || 'Prospect'); }}
-                         className="p-2 border border-slate-100 hover:border-blue-300 text-blue-700 hover:text-blue-700 hover:bg-blue-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                         title="Call Prospect"
-                       >
-                        <Phone className="w-3.5 h-3.5" />
-                       </button>
+                       {canEditLead && (
+                         <button
+                           onClick={(e) => { e.stopPropagation(); navigate(`/leads/${encodeURIComponent(lead.id)}/update`); }}
+                           className="p-2 border border-slate-100 hover:border-[#978C21] text-slate-400 hover:text-[#978C21] hover:bg-slate-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
+                           title="Update status"
+                           aria-label={'Update status for ' + (lead.prospectName || 'lead')}
+                         >
+                          <Target className="w-3.5 h-3.5" />
+                         </button>
+                       )}
                        {canReassign && (
                          <button
                            onClick={(e) => { e.stopPropagation(); setReassignLead(lead); }}
@@ -671,29 +707,11 @@ export default function LeadList() {
         </div>
       </div>
 
-      <div className="px-4 py-8 flex flex-col md:flex-row items-center justify-between gap-6 opacity-30 mt-4 mx-1 italic">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none underline decoration-slate-200 underline-offset-4">Showing {filteredLeads.length} Matrix Entities</p>
-        <div className="flex items-center gap-2">
-          <button className="p-3 hover:bg-slate-50 rounded-sm disabled:opacity-20 transition-all border border-transparent hover:border-slate-100">
-            <ChevronLeft className="w-4 h-4 text-slate-400" />
-          </button>
-          <div className="flex items-center gap-1.5 px-6">
-            {[1, 2, 3].map(p => (
-              <button 
-                key={p} 
-                className={cn(
-                  "w-10 h-10 rounded-sm text-[11px] font-black transition-all border shadow-sm",
-                  p === 1 ? "bg-[#3C3C3C] text-white border-[#3C3C3C]" : "text-slate-300 border-transparent hover:border-slate-100 hover:text-slate-600"
-                )}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-          <button className="p-3 hover:bg-slate-50 rounded-sm transition-all border border-transparent hover:border-slate-100">
-            <ChevronRight className="w-4 h-4 text-slate-400" />
-          </button>
-        </div>
+      {/* The old 1/2/3 pager buttons did nothing (the list is not
+          paginated) — removed (Agent workspace rebuild). The real
+          count line stays. */}
+      <div className="px-4 py-6 flex items-center justify-between gap-6 mt-2 mx-1">
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Showing {filteredLeads.length} of {leads.length} leads</p>
       </div>
 
       {/* FIX-2 Export Dialog */}
@@ -839,6 +857,14 @@ export default function LeadList() {
         onClose={() => setReassignLead(null)}
         onReassigned={() => { setReassignLead(null); void loadLeads(); }}
       />
+
+      {quickViewLead && (
+        <LeadQuickViewModal
+          lead={quickViewLead}
+          ownerName={ownerName(quickViewLead)}
+          onClose={() => setQuickViewLead(null)}
+        />
+      )}
 
     </div>
   );

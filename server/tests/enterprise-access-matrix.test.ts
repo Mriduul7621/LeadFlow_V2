@@ -164,25 +164,35 @@ describe('access matrix — Agent (RO + EMPLOYEE): the new reports.view grant', 
     const allPaths = groups.flatMap(g => g.items.map(i => i.path));
     assert.ok(!allPaths.includes('/trend-charts'), 'the agent nav never links Trends & Reports');
     assert.ok(!allPaths.includes('/campaign-breakdown'), 'the agent nav never links Campaigns');
-    assert.ok(allPaths.includes('/execution-intelligence'), 'Performance stays in the agent nav');
-    assert.ok(allPaths.includes('/ncp-progress'), 'NCP Progress stays in the agent nav');
+    assert.ok(allPaths.includes('/execution-intelligence'), 'My Performance stays in the agent nav');
+    // Agent workspace rebuild (2026-11-20): NCP Progress left the
+    // agent nav (not in Mahadi's demo) — the route stays live and
+    // the other roles keep it.
+    assert.ok(!allPaths.includes('/ncp-progress'), 'NCP Progress is no longer in the agent nav');
   });
 
   it('the feature-permission layer hides a denied agent insight item (canAccess stub)', () => {
-    const denyNcp = buildEnterpriseNavGroups({
+    // Agent workspace rebuild (2026-11-20): the agent's only
+    // insight item is My Performance (execution_intelligence) —
+    // NCP Progress is not in the agent nav at all.
+    const denyPerf = buildEnterpriseNavGroups({
       role: 'agent',
       canOpen: (route: string) => resolveFeatureRouteAccess(route, 'RO', undefined),
-      canAccess: (featureId: string) => featureId !== 'ncp_progress',
+      canAccess: (featureId: string) => featureId !== 'execution_intelligence',
     });
-    const labels = denyNcp.flatMap(g => g.items.map(i => i.label));
-    assert.ok(!labels.includes('NCP Progress'), 'denying ncp_progress hides the nav item');
-    assert.ok(labels.includes('Performance'), 'the other insight item stays');
+    const labels = denyPerf.flatMap(g => g.items.map(i => i.label));
+    assert.ok(!labels.includes('My Performance'), 'denying execution_intelligence hides the nav item');
+    assert.ok(labels.includes('My Leads'), 'the other items stay');
+    assert.ok(labels.includes('Follow-up Queue'), 'the other items stay');
     const denyBoth = buildEnterpriseNavGroups({
       role: 'agent',
       canOpen: (route: string) => resolveFeatureRouteAccess(route, 'RO', undefined),
       canAccess: (featureId: string) => !['ncp_progress', 'execution_intelligence'].includes(featureId),
     });
-    assert.ok(!denyBoth.map(g => g.title).includes('MY PERFORMANCE'), 'the emptied group disappears');
+    // The WORKSPACE group survives (it holds non-insight items) —
+    // only the insight item itself disappears.
+    assert.ok(denyBoth.map(g => g.title).includes('WORKSPACE'), 'the workspace group stays');
+    assert.ok(!denyBoth.flatMap(g => g.items.map(i => i.label)).includes('My Performance'), 'the denied item is gone');
   });
 
   it('opens the agent workspace routes and NOT the admin-only routes', () => {

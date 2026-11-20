@@ -136,21 +136,36 @@ describe('enterprise homes — the KPI substitutions are pinned', () => {
     assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'TeamLeadHome renders exactly four KPI cards');
   });
 
-  it('AgentHome: "My Work" (the sample\'s one H1 exception) + My leads + Converted', () => {
+  it('AgentHome: greeting H1 + Assigned leads + Contacted + Converted (Agent workspace rebuild, 2026-11-20)', () => {
+    // The H1 is now the time-based greeting ("Good morning,
+    // {firstName}"); "My Work" survives as the sidebar label and
+    // breadcrumb, not as the page title. The KPI set is the demo's
+    // with Mahadi's substitution: Converted replaces Target
+    // progress, and the Overdue card became the Due-today subline.
     const code = stripComments(read('src/modules/workspace/pages/AgentHome.tsx'));
-    assert.ok(code.includes('title="My Work"'), 'AgentHome is headed My Work, not Overview');
-    for (const label of ['label="My leads"', 'label="Due today"', 'label="Overdue"', 'label="Converted"']) {
+    assert.ok(code.includes('greetingForDhakaHour'), 'AgentHome greets by Dhaka hour');
+    assert.ok(code.includes('eyebrow="Personal workspace"'), 'AgentHome keeps the Personal workspace eyebrow');
+    for (const label of ['label="Assigned leads"', 'label="Due today"', 'label="Contacted"', 'label="Converted"']) {
       assert.ok(code.includes(label), `AgentHome renders ${label}`);
     }
+    assert.ok(!code.includes('label="Overdue"'), 'AgentHome has no Overdue card (the count is the Due-today subline)');
+    assert.ok(code.includes('overdue needs attention'), 'AgentHome names the overdue count in the Due-today subline');
     assert.equal((code.match(/<KpiCard/g) || []).length, 4, 'AgentHome renders exactly four KPI cards');
   });
 
-  it('all four homes show the real 7-day follow-up chart, not the sample\'s 7-month trend', () => {
-    for (const file of HOME_FILES) {
+  it('the non-agent homes show the real 7-day follow-up chart, not the sample\'s 7-month trend', () => {
+    // AgentHome is the exception (Agent workspace rebuild,
+    // 2026-11-20): its chart is the Weekly activity card — 7 daily
+    // buckets by default, timeframe-switchable — fed by the lead
+    // history, not by the queue buckets.
+    for (const file of HOME_FILES.filter(f => !f.endsWith('AgentHome.tsx'))) {
       const code = stripComments(read(file));
       assert.ok(code.includes('title="Follow-ups due · next 7 days"'), `${file} carries the 7-day chart`);
       assert.ok(code.includes('days={data.chartDays}'), `${file} feeds the chart from the queue buckets`);
     }
+    const agent = stripComments(read('src/modules/workspace/pages/AgentHome.tsx'));
+    assert.ok(agent.includes('Weekly activity'), 'AgentHome carries the Weekly activity chart');
+    assert.ok(agent.includes('activityBuckets'), 'AgentHome buckets real logged outcomes per day');
   });
 });
 
@@ -200,7 +215,11 @@ describe('enterprise homes — every link target is a real App.tsx route', () =>
     'src/modules/workspace/pages/AdminHome.tsx': 10,
     'src/modules/workspace/pages/ManagerHome.tsx': 9,
     'src/modules/workspace/pages/TeamLeadHome.tsx': 10,
-    'src/modules/workspace/pages/AgentHome.tsx': 8,
+    // Agent workspace rebuild (2026-11-20): 11 — View tasks, Add
+    // Lead, 3 KPI drill-downs, the priority-row update link, the
+    // pipeline / activity / recent "View all" links, the recent
+    // lead row, and the dialog's queue link.
+    'src/modules/workspace/pages/AgentHome.tsx': 11,
   };
 
   for (const file of HOME_FILES) {

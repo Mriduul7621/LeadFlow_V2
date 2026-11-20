@@ -173,26 +173,41 @@ describe('buildEnterpriseNavGroups — Team Lead', () => {
 });
 
 describe('buildEnterpriseNavGroups — Agent', () => {
-  it('has MY WORK, MY PERFORMANCE and ACCOUNT', () => {
-    assert.deepEqual(titles(groupsFor('agent')), ['MY WORK', 'MY PERFORMANCE', 'ACCOUNT']);
+  // Agent workspace rebuild (2026-11-20, Mahadi's demo): the agent
+  // nav is ONE WORKSPACE group in his exact order — My Work,
+  // Activities right after it, My Leads, Follow-up Queue, My
+  // Performance, Task Calendar, Roadshow. NO ACCOUNT group: the
+  // profile block at the sidebar bottom carries the settings gear.
+  // Daily Workbench, Sales Pipeline, Add Lead and NCP Progress left
+  // the agent sidebar with the rebuild (their routes stay live).
+  it('has ONE WORKSPACE group', () => {
+    assert.deepEqual(titles(groupsFor('agent')), ['WORKSPACE']);
   });
 
-  it('MY WORK carries Add Lead and My Leads', () => {
-    const work = groupsFor('agent').find(g => g.title === 'MY WORK')!;
-    const byLabel = new Map(work.items.map(i => [i.label, i.path]));
-    assert.equal(byLabel.get('Add Lead'), '/leads/new');
-    assert.equal(byLabel.get('My Leads'), '/leads');
-    assert.equal(byLabel.get('Daily Workbench'), '/workbench');
-    assert.equal(byLabel.get('Follow-up Queue'), '/follow-up');
-    assert.equal(byLabel.get('Activities'), '/activities');
+  it('WORKSPACE carries the seven items in Mahadi\'s exact order', () => {
+    const work = groupsFor('agent').find(g => g.title === 'WORKSPACE')!;
+    assert.deepEqual(
+      work.items.map(i => [i.label, i.path]),
+      [
+        ['My Work', '/'],
+        ['Activities', '/activities'],
+        ['My Leads', '/leads'],
+        ['Follow-up Queue', '/follow-up'],
+        ['My Performance', '/execution-intelligence'],
+        ['Task Calendar', '/task-calendar'],
+        ['Roadshow', '/roadshows'],
+      ],
+    );
   });
 
-  it('MY PERFORMANCE carries Performance and NCP Progress — and no other report pages', () => {
-    const perf = groupsFor('agent').find(g => g.title === 'MY PERFORMANCE')!;
-    const byLabel = new Map(perf.items.map(i => [i.label, i.path]));
-    assert.equal(byLabel.get('Performance'), '/execution-intelligence');
-    assert.equal(byLabel.get('NCP Progress'), '/ncp-progress');
-    assert.deepEqual([...byLabel.keys()].sort(), ['NCP Progress', 'Performance']);
+  it('carries NONE of the removed items (Daily Workbench, Sales Pipeline, Add Lead, NCP Progress, Account)', () => {
+    const all = labels(groupsFor('agent'));
+    assert.ok(!all.includes('Daily Workbench'));
+    assert.ok(!all.includes('Sales Pipeline'));
+    assert.ok(!all.includes('Add Lead'));
+    assert.ok(!all.includes('NCP Progress'));
+    assert.ok(!all.includes('Profile & Settings'));
+    assert.ok(!all.includes('Notifications'));
   });
 
   it('has NO admin entries and NO Trends/Campaigns entries', () => {
@@ -223,18 +238,22 @@ describe('buildEnterpriseNavGroups — permission filtering', () => {
     };
     assert.ok(!labels(groupsFor('admin', denyInsights)).includes('Analytics'));
     assert.ok(!labels(groupsFor('manager', denyInsights)).includes('Performance'));
-    assert.ok(!labels(groupsFor('agent', denyInsights)).includes('Performance'));
+    assert.ok(!labels(groupsFor('agent', denyInsights)).includes('My Performance'));
     // The rest of the nav is untouched by one denied feature.
-    assert.ok(labels(groupsFor('agent', denyInsights)).includes('NCP Progress'));
+    assert.ok(labels(groupsFor('agent', denyInsights)).includes('My Leads'));
   });
 
-  it('denying NCP Progress hides it for Manager and Agent alike', () => {
+  it('denying NCP Progress hides it for the Manager; the Agent has no NCP item to hide', () => {
     const denyNcp = {
       canAccess: (featureId: string, _actionKey: string) => featureId !== 'ncp_progress',
     };
     assert.ok(!labels(groupsFor('manager', denyNcp)).includes('NCP Progress'));
+    // Agent workspace rebuild (2026-11-20): NCP Progress is not in
+    // the agent nav at all, so denying it changes nothing there —
+    // and the agent's own insight item is unaffected (different
+    // feature).
     assert.ok(!labels(groupsFor('agent', denyNcp)).includes('NCP Progress'));
-    assert.ok(labels(groupsFor('agent', denyNcp)).includes('Performance'));
+    assert.ok(labels(groupsFor('agent', denyNcp)).includes('My Performance'));
   });
 
   it('a group left with no items disappears entirely (no empty group headers)', () => {
@@ -248,9 +267,9 @@ describe('buildEnterpriseNavGroups — permission filtering', () => {
   it('non-insight items never consult canAccess', () => {
     // canAccess false for everything still leaves the plain items.
     const groups = groupsFor('agent', { canAccess: () => false });
+    assert.ok(labels(groups).includes('My Work'));
     assert.ok(labels(groups).includes('My Leads'));
-    assert.ok(labels(groups).includes('Add Lead'));
-    assert.ok(labels(groups).includes('Daily Workbench'));
+    assert.ok(labels(groups).includes('Activities'));
     assert.ok(labels(groups).includes('Follow-up Queue'));
   });
 });

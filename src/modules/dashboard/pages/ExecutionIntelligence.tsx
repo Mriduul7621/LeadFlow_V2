@@ -14,6 +14,8 @@ import { userService } from '../../users/services/userService';
 import { toast } from 'sonner';
 import { downloadWorkbook } from '../../shared/utils/excel';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
+import { useEnterpriseDisplayRole } from '../../../layouts/enterpriseDisplayRole';
+import { AgentPerformance } from '../components/AgentPerformance';
 import BackButton from '../../shared/components/BackButton';
 
 /** Stage-pie colours: the sample palette first, then muted tones. */
@@ -294,6 +296,13 @@ export default function ExecutionIntelligence() {
     };
   }, [filteredLeads, stats]);
 
+  // Agent workspace rebuild (2026-11-20): the DISPLAY role decides
+  // which layout this page renders — the Agent's "My Performance"
+  // layout, or the Analytics layout every other role keeps. (A super
+  // admin previewing the agent role sees the agent layout, as with
+  // the nav and the home.)
+  const { role } = useEnterpriseDisplayRole();
+
   return (
     <div className="ep-page">
       <BackButton fallback="/" />
@@ -312,6 +321,15 @@ export default function ExecutionIntelligence() {
         )}
       />
 
+      {/* Agent workspace rebuild (2026-11-20): the Agent role sees
+          the "My Performance" layout (Mahadi's KPI set) instead of
+          the Analytics layout below. The Analytics memos above stay
+          in this file — the other roles still use them, and the
+          agent branch receives the same scoped leads. */}
+      {role === 'agent' ? (
+        <AgentPerformance leads={leads} loading={loading} />
+      ) : (
+        <>
       {/* Period filter */}
       <div className="ep-card" style={{ marginBottom: 18 }}>
         <div className="ep-cardhead">
@@ -654,6 +672,8 @@ export default function ExecutionIntelligence() {
            </div>
         )}
       </AnimatePresence>
+        </>
+      )}
     </div>
   );
 }

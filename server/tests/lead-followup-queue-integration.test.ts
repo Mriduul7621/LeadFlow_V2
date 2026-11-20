@@ -475,8 +475,17 @@ describe('Follow-up Queue — GET /api/leads/follow-ups (Step 4B)', () => {
     assert.ok(!body.includes('localStorage'));
     const page = fs.readFileSync(path.join(process.cwd(), 'src/modules/leads/pages/FollowUpStrategy.tsx'), 'utf-8');
     assert.ok(page.includes('getFollowUpQueue'));
-    assert.ok(!page.includes('getLeads('));
     assert.ok(!page.includes('localStorage'));
+    // Agent workspace rebuild (2026-11-20): the queue itself still
+    // loads ONLY from getFollowUpQueue — but the Completed /
+    // On-time KPI cards and the Add-follow-up lead picker need
+    // lead-level history the queue endpoint does not return, so the
+    // page loads the visible leads ONCE, in loadLeads, for those
+    // two purposes only. It is never a fallback for the queue:
+    // load() is unchanged, and getLeads appears exactly once.
+    const getLeadsUses = (page.match(/getLeads\(/g) || []).length;
+    assert.equal(getLeadsUses, 1, 'getLeads is called exactly once, in loadLeads');
+    assert.ok(page.includes('const loadLeads'), 'the single getLeads call lives in loadLeads');
     const svc = fs.readFileSync(path.join(process.cwd(), 'src/modules/leads/services/leadService.ts'), 'utf-8');
     const qStart = svc.indexOf('async getFollowUpQueue');
     const qBody = svc.slice(qStart, qStart + 1200);
