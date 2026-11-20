@@ -7,12 +7,20 @@ import { installGlobalChunkRecovery } from './utils/chunkRecovery';
 import { registerPushServiceWorker } from './modules/notifications/services/pushService';
 import { installFollowUpOutboxSync } from './modules/leads/services/followUpSync';
 import { initAndroidBackButton } from './native/backButton';
+import { initPushNotifications } from './native/pushNotifications';
 
 installAuthenticatedFetch();
 
 // Android back button (Capacitor shell only — inert in the browser):
 // walks router history, exits only at the app root.
 initAndroidBackButton();
+
+// FCM push notifications (Capacitor shell only — inert in the
+// browser): subscribes the device to the user's topic on sign-in,
+// unsubscribes on sign-out, routes taps in-app. The Web Push
+// opt-in cannot work inside a WebView (no PushManager) — FCM is
+// the installed app's only push surface.
+initPushNotifications();
 
 // Web Push reminders (public/sw.js): registration only — permission is
 // requested solely from the explicit opt-in toggle in Profile settings,

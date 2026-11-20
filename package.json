@@ -14,7 +14,7 @@
     "lint": "tsc --noEmit",
     "test": "tsx --test server/tests/*.test.ts",
     "verify:serverless": "node scripts/verify-serverless-build.mjs",
- "android:assets": "node scripts/android-assets.mjs",
+    "android:assets": "node scripts/android-assets.mjs",
     "verify:db-schema": "node scripts/verify-db-schema.mjs",
     "smoke:production": "tsx scripts/smoke-production.ts"
   },
@@ -22,6 +22,7 @@
     "@capacitor/android": "^8.6.2",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.2",
+    "@capacitor/push-notifications": "^8.1.3",
     "@hookform/resolvers": "^5.2.2",
     "@tailwindcss/vite": "^4.1.14",
     "@tanstack/react-table": "^8.21.3",

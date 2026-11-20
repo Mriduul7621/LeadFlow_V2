@@ -52,6 +52,7 @@ import {
   type SlaBreachRunSummary,
 } from './LeadSlaService.js';
 import { getNotificationSettings } from './NotificationSettingsService.js';
+import { publishToUserTopic } from './FcmService.js';
 
 /* ====================================================================
    Configuration (VAPID + cron secret)
@@ -608,6 +609,14 @@ export interface DailyPushRunSummary {
   failed: number;
   skippedNoDue: number;
   /**
+   * FCM topic publishes from this run (the installed app's copy of
+   * the same morning summary, one publish per targeted user).
+   * fcmFailed counts configured-but-failed publishes only —
+   * unconfigured FCM counts neither.
+   */
+  fcmSent: number;
+  fcmFailed: number;
+  /**
    * First-contact SLA breach detection that rides this same morning
    * run (Phase 3 PR #3): in-app alerts are created even when Web Push
    * itself is not configured, and per-assignee breach counts feed the
@@ -631,6 +640,7 @@ export interface DailyPushRunSummary {
 export async function runDailyPushReminders(now: Date = new Date()): Promise<DailyPushRunSummary> {
   const summary: DailyPushRunSummary = {
     enabled: false, usersTargeted: 0, sent: 0, pruned: 0, failed: 0, skippedNoDue: 0,
+    fcmSent: 0, fcmFailed: 0,
     sla: { enabled: false, breached: 0, alerted: 0, escalated: 0, deduped: 0 },
   };
 
@@ -688,9 +698,22 @@ export async function runDailyPushReminders(now: Date = new Date()): Promise<Dai
       continue;
     }
     summary.usersTargeted++;
-    const payloadJson = JSON.stringify(
-      buildDailyReminderPayload({ ...counts, slaBreaches, meetingsToday })
-    );
+    const payload = buildDailyReminderPayload({ ...counts, slaBreaches, meetingsToday });
+    const payloadJson = JSON.stringify(payload);
+    // FCM fan-out (ONE publish per user — topics are per-user, not
+    // per-device): the installed app gets the same morning summary
+    // the web push carries. Best-effort and counted; a failure here
+    // never affects the web-push fan-out below. The daily summary
+    // has NO in-app notification row, so this is its only FCM path
+    // (it cannot ride the insertNotificationWithIdempotency hook).
+    const fcm = await publishToUserTopic({
+      employeeId: caller.employee_id,
+      title: payload.title,
+      body: payload.body,
+      route: PUSH_REMINDER_URL,
+    });
+    if (fcm.sent) summary.fcmSent++;
+    else if (fcm.configured) summary.fcmFailed++;
     for (const sub of userSubs) {
       try {
         await send({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth }, payloadJson);
@@ -712,7 +735,8 @@ export async function runDailyPushReminders(now: Date = new Date()): Promise<Dai
 
   console.log(
     `[push-reminders] daily run complete: targeted=${summary.usersTargeted} sent=${summary.sent} ` +
-    `pruned=${summary.pruned} failed=${summary.failed} skippedNoDue=${summary.skippedNoDue}`,
+    `pruned=${summary.pruned} failed=${summary.failed} skippedNoDue=${summary.skippedNoDue} ` +
+    `fcmSent=${summary.fcmSent} fcmFailed=${summary.fcmFailed}`,
   );
   return summary;
 }

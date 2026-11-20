@@ -227,5 +227,142 @@ Run on a pilot phone, against the release APK:
    Retry recovers when connectivity returns.
 8. Push opt-in shows as unavailable in-app (expected — `PushManager`
    does not exist in a WebView), with no error and no broken toggle.
+   (That is the WEB Push opt-in. The installed app's push is FCM —
+   see §8.)
 9. Install the same build over itself (same `versionCode` refuses —
    expected, not an update path).
+
+## 8. Firebase + push notifications (FCM)
+
+FCM is the installed app's push surface. LeadFlow is BOTH a
+publisher and a receiver: its server publishes every user
+notification to the user's FCM topic, and the app subscribes to
+that topic on sign-in. The in-app bell stays the durable record —
+FCM is an additional surface, never a dependency: if push is
+unconfigured or a send fails, the notification still lands in the
+bell and the request/cron still succeeds.
+
+### One Firebase project for all three apps
+
+**"Shanta Life Apps"** — one project, all three Android apps
+registered in it (LeadFlow, Agent Hub, Learning Hub), each with its
+own `google-services.json`. Mahadi creates the project in the
+Firebase console. No paid service is involved: FCM is free with no
+message limit, and no billing is needed for it.
+
+### What Mahadi sets up (once)
+
+1. **Firebase console → Project settings → Your apps → Add app →
+   Android**, package name `com.shantalife.leadflow`, download
+   `google-services.json`. In Git Bash,
+   `base64 -w0 google-services.json | clip`, then repo → Settings →
+   Secrets and variables → Actions → New repository secret:
+   - `LEADFLOW_GOOGLE_SERVICES_JSON_B64` — the base64 just copied
+   The workflow restores it into `android/app/google-services.json`
+   before every build and verifies it is for
+   `com.shantalife.leadflow`. The file is gitignored — never commit
+   it. (A build dispatched BEFORE the secret is set still succeeds —
+   it just ships WITHOUT push. The run summary says which kind of
+   build it was. That leniency is deliberate while the project does
+   not exist yet; it can be flipped to fail-fast later.)
+2. **Firebase console → Project settings → Service accounts →
+   Generate new private key** — download the service-account JSON.
+   In Git Bash, `base64 -w0 <file>.json | clip`, then Vercel →
+   lead-flow → Settings → Environment Variables → New (Production
+   target):
+   - `FIREBASE_SERVICE_ACCOUNT_B64` — the base64 just copied
+   Same env var + same value as the Agent Hub and Learning Hub. The
+   LeadFlow server uses it to mint a Google OAuth token and publish
+   to topics + subscribe device tokens. The JSON contains a private
+   key: same handling as the release keystore — never committed,
+   never pasted into chat.
+3. Re-upload `.github/workflows/android.yml` (it carries the
+   google-services restore step) and dispatch. The APK from that run
+   is the first push-enabled build.
+
+### How it works
+
+- **Topics, no token storage.** On native sign-in (or session
+  restore) the app subscribes the device to the topic
+  `user-{employeeId}` — e.g. `user-2025019` (one place derives the
+  name: `userPushTopic` in `src/native/pushRouting.ts`). The
+  LeadFlow server publishes each user notification to that topic
+  with data `{source: 'leadflow', title, body, route, module:
+  'leadflow'}`. Every subscribed app receives it — so a LeadFlow
+  notification also lands in the Agent Hub (and vice versa). No FCM
+  token is stored anywhere: the client sends its token to
+  `POST /api/notifications/push/fcm-subscribe` with its LeadFlow
+  JWT, the route derives the topic from the verified session's
+  employee id (never from the request body — a client must never
+  choose whose topic it joins) and subscribes the token through
+  FCM's IID API, then forgets it.
+- **Why a server route subscribes:** @capacitor/push-notifications
+  has NO topic subscribe/unsubscribe API (verified against the 8.1.3
+  sources — only permission, register/unregister, delivered
+  notification and channel calls). The route is the subscription
+  mechanism. Unsubscribe needs no route: sign-out / session expiry
+  calls `PushNotifications.unregister()`, which deletes the FCM
+  token, and FCM drops a dead token from every topic — this also
+  covers expiry, where the JWT is already dead.
+- **What gets published.** Everything the user would see in the
+  bell — lead assignment / reassignment, SLA breach + escalation,
+  lead-delete-requests, every meeting event — publishes from the
+  shared creation point (`insertNotificationWithIdempotency`), plus
+  the generic `POST /api/notifications` endpoint, plus the daily
+  follow-up summary cron (which has no in-app row, so the runner
+  publishes alongside the Web Push fan-out) and the meeting-reminder
+  cron (via the meeting events). Web Push is unchanged: web users
+  keep exactly the push they have today; FCM is added alongside.
+  Sending is direct FCM HTTP v1 with a service-account JWT
+  (`server/services/FcmService.ts`) — no firebase-admin dependency.
+- **Permission:** requested once after native sign-in, only while
+  undecided. Denied stays silent forever — no nagging; the bell
+  still works. Android 12 and below need no runtime permission (the
+  plugin reports granted).
+- **Tap routing** (`resolvePushTarget` in
+  `src/native/pushRouting.ts` — router navigation, no page reload):
+
+  | data | opens |
+  | --- | --- |
+  | `source: 'leadflow'` + a safe relative `route` | that route in-app (e.g. `/workbench`, `/leads?leadId=…`, `/task-calendar`) |
+  | `source: 'leadflow'` + missing/unsafe `route` | LeadFlow Home |
+  | anything else (Hub / Learning Hub notification, foreign `source`) | LeadFlow Home — its route is meaningless here |
+
+  A `route` that is an absolute URL, protocol-relative (`//…`), or
+  carries a fragment is ignored — push data must never drive an
+  open redirect.
+
+### Verified limits (read from the 8.1.3 plugin sources)
+
+- **Cold-start taps do not deep-link.** The plugin fires the tap
+  event only from `onNewIntent` and never inspects the launch
+  intent — tapping a notification while the app is killed opens
+  LeadFlow Home. Taps while the app is open or backgrounded DO
+  deep-link.
+- **Foreground receipt shows no banner.** The FCM SDK auto-displays
+  in the tray only when the app is backgrounded. In the foreground
+  the notification is already in the bell — the user sees it when
+  they open the bell (no in-app toast is shown).
+- **No Firebase project yet = no push, not a broken app.** Without
+  the secret, registration fails silently and subscribe is never
+  attempted; without the service account, the server's FCM entry
+  points degrade to no-ops and `/api/notifications/push/fcm-subscribe`
+  answers 503 `push_not_configured`, which the client treats as
+  silent.
+
+### Testing (after the project + secrets + dispatch)
+
+1. Install the push-enabled APK, sign in (accept the permission
+   prompt when it appears).
+2. Firebase console → Cloud Messaging → Send test message → Topic
+   `user-{employeeId}`, notification title/body + data
+   `source=leadflow`, `route=/workbench` → Send. The device shows
+   the notification; tapping it opens the Daily Workbench.
+3. Assign a lead to the signed-in user from another device / the
+   web app — a real notification must arrive AND appear in the
+   bell. Tapping it opens the lead list on that lead.
+4. Sign out on the device, send another test message to the same
+   topic — nothing must arrive (the token was deleted on sign-out).
+5. Send a test message with `source=agenthub`, `route=/modules/x`
+   — it must display, and tapping it must open LeadFlow Home (never
+   a bogus route).

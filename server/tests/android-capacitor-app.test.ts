@@ -102,7 +102,9 @@ describe('Android app — Capacitor release shell (remote-load)', () => {
     assert.equal(/VITE_API_BASE_URL/.test(workflow), false, 'no API-origin bake-in — remote-load is same-origin');
     assert.equal(workflow.includes('npm run build:web'), false, 'no web build in the APK pipeline');
     assert.equal(workflow.includes('npm run build '), false, 'no web build in the APK pipeline');
-    // Every secrets reference must be a LEADFLOW_KEYSTORE_* signing secret.
+    // Every secrets reference must be a LEADFLOW_* secret: the four
+    // LEADFLOW_KEYSTORE_* signing secrets plus the optional FCM
+    // LEADFLOW_GOOGLE_SERVICES_JSON_B64 (no other app's secrets).
     const secretRefs = [...workflow.matchAll(/\$\{\{\s*secrets\.([A-Z_]+)\s*\}\}/g)].map((m) => m[1]);
     assert.ok(secretRefs.length > 0, 'the workflow reads signing secrets');
     for (const ref of secretRefs) {
