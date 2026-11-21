@@ -32,6 +32,7 @@ import {
 } from '../../utils/leadStatusRules.js';
 import {
   getEffectiveStageRules,
+  getTerminalStatusInfo,
   getTerminalStatusNames,
   getTerminalStatusNamesFallback,
   validateLeadStatusFieldsAsync,
@@ -78,6 +79,11 @@ import {
   insertNotificationWithIdempotency,
 } from '../../services/NotificationService.js';
 import { getLeadBulkImportMaxRows } from '../../services/OperationsSettingsService.js';
+import {
+  lookupPolicy,
+  isTermPolicy,
+  PolicyLookupError,
+} from '../../services/PolicyLookupService.js';
 import {
   AUTO_ASSIGN_AUDIT_ACTION,
   AUTO_ASSIGN_RULE,
@@ -3742,10 +3748,92 @@ router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
 });
 
 /* ------------------------------------------------------------------
+   POST /leads/policy-lookup — conversion auto-fill (PR sync).
+   Body: { key } — a Proposal No ("Pro-N") or a Policy No.
+   Returns the ONE matched policy's conversion fields (product, sum
+   assured, collected premium, term, pay mode, FA code, comm. date)
+   from the retail sales sheet, or 404 POLICY_NOT_FOUND when neither
+   sheet has it yet (the form stays manually editable — conversion is
+   never blocked). 503 when Sheets is unconfigured/unreachable.
+   Gated by leads.edit, the same permission that gates follow-up
+   writes; no lead id is needed because the lookup precedes the save.
+------------------------------------------------------------------- */
+router.post('/leads/policy-lookup', requireAuth, requirePermissionCode('leads.edit'), async (req: any, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim();
+    if (!key) {
+      return sendJson(res, 400, { success: false, message: 'Enter a Proposal No or Policy No.' });
+    }
+    if (key.length > 64) {
+      return sendJson(res, 400, { success: false, message: 'That Proposal No or Policy No is too long.' });
+    }
+    const matched = await lookupPolicy(key);
+    if (!matched) {
+      return sendJson(res, 404, {
+        success: false,
+        error: 'POLICY_NOT_FOUND',
+        message: 'This policy is not in the sales sheet yet (MIS enters the first receipt after the sale). Fill in the conversion details manually — you can look it up again later.',
+      });
+    }
+    return sendJson(res, 200, { success: true, data: matched });
+  } catch (error: any) {
+    if (error instanceof PolicyLookupError) {
+      return sendJson(res, error.status, { success: false, error: error.code, message: error.message });
+    }
+    console.error('[policy-lookup] unexpected failure:', error?.message || error);
+    return sendJson(res, 500, { success: false, message: 'Policy lookup failed. Fill in the conversion details manually.' });
+  }
+});
+
+/**
+ * T-series exemption (PR sync) for the F6 required-field check.
+ * ------------------------------------------------------------------
+ * Shanta Assurance has NO sum assured in any sheet, so a Converted
+ * save carrying a matched Term-policy reference (Policy No starting
+ * with 'T', or a Shanta Assurance plan) is exempt from the sumAssured
+ * > 0 requirement ONLY. productName and collectedNCP still apply, and
+ * a manual Converted save without a matched policy reference still
+ * enforces sumAssured.
+ *
+ * The reference is client-asserted: re-verifying against Sheets on
+ * every save would make conversion depend on Sheets availability, and
+ * the rule is a data-quality guard (an agent who wanted to bypass it
+ * could already type sumAssured=1) — not a security boundary.
+ *
+ * Rename-proof (DZ-6): the status is recognised as the won terminal
+ * via the dictionary flags, not by the name "Converted". The
+ * dictionary read runs only on this rare path (a policy reference was
+ * supplied); when the dictionary is unreadable the code-default fast
+ * path ('Converted') applies.
+ */
+async function applyTermPolicyExemption(
+  status: string,
+  policy: { policyNo?: string; productName?: string },
+  violations: Array<{ field: string; label: string; message: string }>,
+): Promise<Array<{ field: string; label: string; message: string }>> {
+  if (policy.policyNo === undefined || !isTermPolicy(policy.policyNo, policy.productName ?? '')) {
+    return violations;
+  }
+  const statusKey = normalizeStatusKey(status);
+  let exempt = statusKey === 'converted';
+  try {
+    const terminalInfo = await getTerminalStatusInfo();
+    exempt = terminalInfo.wonNames
+      .map((name: string) => normalizeStatusKey(name))
+      .includes(statusKey);
+  } catch {
+    // Dictionary unreadable: keep the code-default fast path.
+  }
+  return exempt ? violations.filter(v => v.field !== 'sumAssured') : violations;
+}
+
+/* ------------------------------------------------------------------
    POST /leads/:id/follow-up — server-authoritative follow-up
    Body whitelist: status/currentStatus, remarks, nextFollowUpDate,
    nextCallDate, meetingDate, meetingType, collectedNCP, projectedNCP,
-   sumAssured, productName, lossReason
+   sumAssured, productName, lossReason, policyTerm, payMode,
+   policyNo, proposalNo (PR sync: the matched policy reference +
+   term/pay mode, stored in custom_fields with the conversion)
    Spoofable fields ignored: changedBy, updatedBy, createdBy, actor,
    date, timestamp, statusHistory, assignmentHistory
 ------------------------------------------------------------------- */
@@ -3782,6 +3870,13 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     const rawSumAssured = body.sumAssured ?? body.sum_assured ?? body.sumAssured;
     const rawProductName = body.productName ?? body.product_name ?? body.product;
     const rawLossReason = body.lossReason ?? body.loss_reason ?? body.lossReason;
+    // PR sync: the matched policy reference + term/pay mode the lookup
+    // auto-filled. Stored in custom_fields with the conversion; the
+    // policyNo is also what the T-series sum-assured exemption keys on.
+    const rawPolicyTerm = body.policyTerm ?? body.term;
+    const rawPayMode = body.payMode ?? body.paymentMode ?? body.payment_mode;
+    const rawPolicyNo = body.policyNo ?? body.policy_no;
+    const rawProposalNo = body.proposalNo ?? body.proposal_no;
     // 'nextAction' is the form's shortcut out of 'Interested' (Need Follow-Up /
     // Meeting Fixed / Proposal Sent / Not Interested). It is resolved to the
     // canonical status here, so the API keeps the UI's semantics.
@@ -3809,6 +3904,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     const sumAssuredInput = rawSumAssured !== undefined && rawSumAssured !== null && String(rawSumAssured).trim() !== '' ? parseNumeric(rawSumAssured) : undefined;
     const productNameInput = rawProductName !== undefined && rawProductName !== null && String(rawProductName).trim() !== '' ? String(rawProductName).trim().slice(0, 255) : undefined;
     const lossReasonInput = rawLossReason !== undefined && rawLossReason !== null && String(rawLossReason).trim() !== '' ? String(rawLossReason).trim() : undefined;
+    const policyTermInput = rawPolicyTerm !== undefined && rawPolicyTerm !== null && String(rawPolicyTerm).trim() !== '' ? String(rawPolicyTerm).trim().slice(0, 255) : undefined;
+    const payModeInput = rawPayMode !== undefined && rawPayMode !== null && String(rawPayMode).trim() !== '' ? String(rawPayMode).trim().slice(0, 255) : undefined;
+    const policyNoInput = rawPolicyNo !== undefined && rawPolicyNo !== null && String(rawPolicyNo).trim() !== '' ? String(rawPolicyNo).trim().slice(0, 255) : undefined;
+    const proposalNoInput = rawProposalNo !== undefined && rawProposalNo !== null && String(rawProposalNo).trim() !== '' ? String(rawProposalNo).trim().slice(0, 255) : undefined;
 
     // Validate dates when supplied but unparseable
     if (rawNextFollowUpDate !== undefined && rawNextFollowUpDate !== null && String(rawNextFollowUpDate).trim() !== '' && nextFollowUpDateInput === null) {
@@ -3853,7 +3952,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     }
 
     // At least one business field should be present; otherwise it's a no-op
-    const hasAnyField = validatedStatus !== undefined || remarksInput !== undefined || nextFollowUpDateInput !== undefined || nextCallDateInput !== undefined || meetingDateInput !== undefined || meetingTypeInput !== undefined || collectedNCPInput !== undefined || projectedNCPInput !== undefined || sumAssuredInput !== undefined || productNameInput !== undefined || lossReasonInput !== undefined;
+    const hasAnyField = validatedStatus !== undefined || remarksInput !== undefined || nextFollowUpDateInput !== undefined || nextCallDateInput !== undefined || meetingDateInput !== undefined || meetingTypeInput !== undefined || collectedNCPInput !== undefined || projectedNCPInput !== undefined || sumAssuredInput !== undefined || productNameInput !== undefined || lossReasonInput !== undefined || policyTermInput !== undefined || payModeInput !== undefined || policyNoInput !== undefined || proposalNoInput !== undefined;
     if (!hasAnyField) {
       return sendJson(res, 400, { success: false, message: 'No valid follow-up fields supplied.' });
     }
@@ -3870,7 +3969,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
        A partial update (remarks only, no status) keeps working: the rule is
        keyed on the status being written.                                          */
     if (validatedStatus !== undefined) {
-      const violations = await validateLeadStatusFieldsAsync(validatedStatus, {
+      let violations = await validateLeadStatusFieldsAsync(validatedStatus, {
         nextFollowUpDate: nextFollowUpDateInput,
         meetingDate: meetingDateInput,
         productName: productNameInput,
@@ -3879,6 +3978,12 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         collectedNCP: collectedNCPInput,
         lossReason: lossReasonInput,
       });
+      /* T-series exemption (PR sync) — see applyTermPolicyExemption. */
+      violations = await applyTermPolicyExemption(
+        validatedStatus,
+        { policyNo: policyNoInput, productName: productNameInput },
+        violations,
+      );
       if (violations.length > 0) {
         perf.finish(res);
         return sendJson(res, 400, {
@@ -3932,6 +4037,11 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         updatedBy: caller.employee_id,
         changedBy: caller.employee_id,
         actor: caller.employee_id,
+        // PR sync: the matched policy reference + term/pay mode.
+        policyNo: policyNoInput !== undefined ? policyNoInput! : (lead as any).customFields?.policyNo,
+        proposalNo: proposalNoInput !== undefined ? proposalNoInput! : (lead as any).customFields?.proposalNo,
+        policyTerm: policyTermInput !== undefined ? policyTermInput! : (lead as any).customFields?.policyTerm,
+        payMode: payModeInput !== undefined ? payModeInput! : (lead as any).customFields?.payMode,
       };
 
       // Update lead current state (partial-update semantics, preserve unrelated data)
@@ -3959,6 +4069,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (collectedNCPInput !== undefined) cf.collectedNCP = collectedNCPInput;
       if (projectedNCPInput !== undefined) cf.projectedNCP = projectedNCPInput;
       if (sumAssuredInput !== undefined) cf.sumAssured = sumAssuredInput;
+      if (policyTermInput !== undefined) cf.policyTerm = policyTermInput;
+      if (payModeInput !== undefined) cf.payMode = payModeInput;
+      if (policyNoInput !== undefined) cf.policyNo = policyNoInput;
+      if (proposalNoInput !== undefined) cf.proposalNo = proposalNoInput;
       (lead as any).customFields = cf;
 
       // Append to statusHistory (authoritative)
@@ -4134,6 +4248,11 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
         projectedNCP: projectedNCPInput !== undefined ? projectedNCPInput! : undefined,
         updatedBy: caller.employee_id,
         changedBy: caller.employee_id,
+        // PR sync: the matched policy reference + term/pay mode.
+        policyNo: policyNoInput !== undefined ? policyNoInput! : undefined,
+        proposalNo: proposalNoInput !== undefined ? proposalNoInput! : undefined,
+        policyTerm: policyTermInput !== undefined ? policyTermInput! : undefined,
+        payMode: payModeInput !== undefined ? payModeInput! : undefined,
         // Preserve additional fields for backward compat if existing history had them
       };
       // Fill missing history fields from existing custom_fields when not supplied
@@ -4146,6 +4265,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (historyEntry.collectedNCP === undefined && cfExisting.collectedNCP != null) historyEntry.collectedNCP = cfExisting.collectedNCP;
       if (historyEntry.projectedNCP === undefined && cfExisting.projectedNCP != null) historyEntry.projectedNCP = cfExisting.projectedNCP;
       if (historyEntry.sumAssured === undefined && cfExisting.sumAssured != null) historyEntry.sumAssured = cfExisting.sumAssured;
+      if (historyEntry.policyNo === undefined && cfExisting.policyNo) historyEntry.policyNo = cfExisting.policyNo;
+      if (historyEntry.proposalNo === undefined && cfExisting.proposalNo) historyEntry.proposalNo = cfExisting.proposalNo;
+      if (historyEntry.policyTerm === undefined && cfExisting.policyTerm) historyEntry.policyTerm = cfExisting.policyTerm;
+      if (historyEntry.payMode === undefined && cfExisting.payMode) historyEntry.payMode = cfExisting.payMode;
 
       const newHistory = [...existingHistory, historyEntry];
 
@@ -4160,6 +4283,10 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (collectedNCPInput !== undefined) newCustomFields.collectedNCP = collectedNCPInput;
       if (projectedNCPInput !== undefined) newCustomFields.projectedNCP = projectedNCPInput;
       if (sumAssuredInput !== undefined) newCustomFields.sumAssured = sumAssuredInput;
+      if (policyTermInput !== undefined) newCustomFields.policyTerm = policyTermInput;
+      if (payModeInput !== undefined) newCustomFields.payMode = payModeInput;
+      if (policyNoInput !== undefined) newCustomFields.policyNo = policyNoInput;
+      if (proposalNoInput !== undefined) newCustomFields.proposalNo = proposalNoInput;
 
       // Build dynamic SET for leads update. Use parameterized query to avoid undefined wipes.
       const setClauses: string[] = [];

@@ -8,6 +8,17 @@ import { coalesceGet } from '../../shared/api/coalesce';
 import { shouldFallBackToCache } from '../../shared/api/offlinePolicy';
 import { newMutationId } from '../utils/followUpOutboxCore';
 import { enqueueFollowUp, FollowUpQueuedOfflineError } from './followUpOutbox';
+import type { MatchedPolicy } from '../utils/policyLookupFill';
+
+export type { MatchedPolicy } from '../utils/policyLookupFill';
+
+/** The matched policy reference a Converted save carries (PR sync). */
+export interface PolicyReference {
+  policyNo?: string;
+  proposalNo?: string;
+  term?: string;
+  payMode?: string;
+}
 
 export { FollowUpQueuedOfflineError } from './followUpOutbox';
 
@@ -342,6 +353,7 @@ export const leadService = {
     projectedNCP?: number,
     lossReason?: string,
     meetingType?: string,
+    policyRef?: PolicyReference,
   ): Promise<Lead | null> {
     // updatedBy is intentionally ignored: server derives actor from auth
     void updatedBy;
@@ -357,6 +369,12 @@ export const leadService = {
       sumAssured,
       productName,
       lossReason,
+      // PR sync: the matched policy reference + term/pay mode ride with
+      // the conversion and are stored in custom_fields server-side.
+      policyNo: policyRef?.policyNo,
+      proposalNo: policyRef?.proposalNo,
+      policyTerm: policyRef?.term,
+      payMode: policyRef?.payMode,
     };
     // Remove undefined values — preserves partial-update semantics
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
@@ -386,6 +404,21 @@ export const leadService = {
       }
       throw err;
     }
+  },
+
+  /**
+   * PR sync — look a policy up by Proposal No or Policy No.
+   * Returns the ONE matched policy's conversion fields. The ApiError
+   * propagates with the server's message (404 = not in the sheet yet,
+   * 503 = lookup not configured) so the form can show it inline and
+   * leave manual entry working.
+   */
+  async lookupPolicy(key: string): Promise<MatchedPolicy> {
+    return apiRequest<MatchedPolicy>('/api/leads/policy-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
   },
 
   async getLead(leadId: string): Promise<Lead | null> {
