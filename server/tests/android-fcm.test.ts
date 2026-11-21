@@ -880,12 +880,55 @@ describe('FCM wiring — source guards', () => {
   it('the push module subscribes via the server route and unregisters on sign-out', () => {
     const push = read('src/native/pushNotifications.ts');
     assert.ok(push.includes('/api/notifications/push/fcm-subscribe'), 'subscribe route');
+    assert.ok(push.includes('export async function unregisterPush'), 'explicit sign-out unregister lives in its own function');
     assert.ok(push.includes('PushNotifications.unregister()'), 'unregister on sign-out');
     assert.ok(push.includes('pushNotificationActionPerformed'), 'tap listener');
     assert.ok(push.includes('checkPermissions'), 'permission gate');
     assert.ok(push.includes('requestPermissions'), 'permission request');
     assert.ok(push.includes("Capacitor.isNativePlatform()"), 'native-only guard');
     assert.ok(!push.includes('userPushTopic(') || push.includes('derive'), 'topic derived server-side');
+  });
+
+  it('session expiry keeps the subscription — it belongs to the device, not the session', () => {
+    const push = read('src/native/pushNotifications.ts');
+    // The session-null branch of syncPushSubscription: forget the
+    // session only. (2026-11-21: it used to unregister here, so an
+    // agent stopped receiving notifications 30 minutes after their
+    // last tap / 1 hour after sign-in, with no way to know.)
+    const nullStart = push.indexOf('if (!user || !jwt) {');
+    assert.ok(nullStart >= 0, 'null branch exists');
+    const nullBranch = push.slice(nullStart, nullStart + 500);
+    assert.ok(nullBranch.includes('session = null'), 'session forgotten');
+    assert.ok(!nullBranch.includes('unregister()'), 'no unregister call on session loss');
+    assert.ok(!nullBranch.includes('PushNotifications.unregister'), 'no direct unregister call either');
+    assert.ok(!nullBranch.includes('subscribed = null'), 'subscription record kept');
+    assert.ok(!nullBranch.includes('lastToken = null'), 'token kept');
+    // ...while the explicit sign-out function DOES clear everything.
+    const unregStart = push.indexOf('export async function unregisterPush');
+    assert.ok(unregStart >= 0, 'unregisterPush exists');
+    const unreg = push.slice(unregStart, unregStart + 600);
+    assert.ok(unreg.includes('PushNotifications.unregister()'), 'unregister deletes the token');
+    assert.ok(unreg.includes('subscribed = null'), 'subscription record cleared');
+    assert.ok(unreg.includes('lastToken = null'), 'token cleared');
+  });
+
+  it('only the explicit Log out handlers unregister push', () => {
+    // The four explicit sign-out sites (AppLayout x2, MorePages,
+    // Settings) call unregisterPush before logout().
+    const appLayout = read('src/layouts/AppLayout.tsx');
+    const morePages = read('src/modules/navigation/pages/MorePages.tsx');
+    const settings = read('src/modules/settings/pages/Settings.tsx');
+    assert.ok((appLayout.match(/void unregisterPush\(\);/g) || []).length >= 2, 'AppLayout: both Log out paths unregister');
+    assert.ok(morePages.includes('void unregisterPush(); logout();'), 'MorePages Log out unregisters');
+    assert.ok(settings.includes('void unregisterPush();'), 'Settings Log out unregisters');
+    // ...and no expiry path does: the 30-min inactivity timeout, the
+    // startup session validation, and the 401 interceptor must all
+    // leave the device subscription alone.
+    const timeoutStart = appLayout.indexOf('Session expired due to 30 minutes');
+    assert.ok(timeoutStart >= 0, 'inactivity timeout exists');
+    assert.ok(!appLayout.slice(timeoutStart, timeoutStart + 400).includes('unregisterPush'), 'inactivity timeout keeps the subscription');
+    assert.ok(!read('src/modules/auth/services/authFlow.ts').includes('unregisterPush'), 'startup validation keeps the subscription');
+    assert.ok(!read('src/modules/shared/api/http.ts').includes('unregisterPush'), '401 rejection keeps the subscription');
   });
 
   it('the appNavigation module falls back to a full load when no navigator is registered', () => {

@@ -24,18 +24,30 @@
  * client must never choose whose topic it joins. The token is used
  * in the request and forgotten; nothing stores it. Unsubscribe
  * needs no route at all: `unregister()` deletes the FCM token, and
- * FCM drops a dead token from every topic — which also covers
- * session expiry, where the JWT is already dead.
+ * FCM drops a dead token from every topic.
+ *
+ * Lifetime (Mahadi 2026-11-21 — the subscription belongs to the
+ * DEVICE, not the session, like WhatsApp/Gmail): session EXPIRY
+ * (30-min inactivity timeout, 1h JWT expiry, 401 rejection) only
+ * forgets the session in memory — the FCM token and the topic
+ * subscription STAY, so the agent keeps receiving notifications
+ * and tapping one brings them to sign-in, then inside. Only an
+ * EXPLICIT sign-out (the user taps Log out) unregisters, via
+ * unregisterPush() from the sign-out handlers — never from the
+ * session-null sync, which cannot tell expiry from sign-out.
  *
  * Lifecycle (wired in main.tsx via initPushNotifications):
  * - Sign-in / session restore → the auth-store subscription calls
  *   syncPushSubscription(user, token): permission (requested once,
  *   only while undecided) → register() → POST the token to the
  *   subscribe route. Denied permission stays silent forever — no
- *   nagging; the in-app bell still works.
- * - Sign-out / session expiry → syncPushSubscription(null, null):
- *   unregister() + forget the subscription. Best-effort, never
- *   throws.
+ *   nagging; the in-app bell still works. Re-sign-in after an
+ *   expiry is idempotent: the subscription is still live, so the
+ *   already-subscribed check skips the redundant call.
+ * - Session expiry → syncPushSubscription(null, null): forgets the
+ *   session only. The token + topic subscription survive.
+ * - Explicit sign-out → unregisterPush() from the Log out handler:
+ *   unregister() + forget everything. Best-effort, never throws.
  * - Token refresh → the `registration` listener re-subscribes the
  *   new token for the current session.
  *
@@ -233,18 +245,13 @@ export async function syncPushSubscription(
 
   try {
     if (!user || !jwt) {
+      // Session gone (expiry OR sign-out — this sync cannot tell
+      // them apart): forget the session ONLY. The FCM token and the
+      // topic subscription belong to the device and stay alive, so
+      // the agent keeps receiving notifications after an expiry.
+      // Unregistering lives in unregisterPush(), called only from
+      // the explicit Log out handlers.
       session = null;
-      subscribed = null;
-      lastToken = null;
-      // Unregister deletes the FCM token — FCM drops the dead token
-      // from every topic, so this IS the unsubscribe (and it needs no
-      // JWT, so it also works when the session expired).
-      try {
-        const { PushNotifications } = await import('@capacitor/push-notifications');
-        await PushNotifications.unregister();
-      } catch {
-        // Already unregistered, or no plugin — nothing to do.
-      }
       return;
     }
 
@@ -278,5 +285,31 @@ export async function syncPushSubscription(
   } catch {
     // Push is best-effort: a failure here (no Firebase project yet,
     // no network, plugin missing) must never surface in auth.
+  }
+}
+
+/**
+ * Explicit sign-out only: delete the FCM token and forget the
+ * subscription. Unregister deletes the token, and FCM drops a dead
+ * token from every topic — so this IS the unsubscribe, and it needs
+ * no JWT. Called ONLY from the Log out handlers (AppLayout,
+ * MorePages, Settings) — never from the session-null sync and never
+ * from any expiry path (inactivity timeout, 401 rejection, startup
+ * validation), where the subscription must survive.
+ *
+ * Native-only; a no-op on web. Never throws.
+ */
+export async function unregisterPush(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  // Supersede any in-flight subscribe — the user is leaving.
+  syncSeq++;
+  session = null;
+  subscribed = null;
+  lastToken = null;
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    await PushNotifications.unregister();
+  } catch {
+    // Already unregistered, or no plugin — nothing to do.
   }
 }
