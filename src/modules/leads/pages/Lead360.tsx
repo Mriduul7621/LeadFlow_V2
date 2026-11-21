@@ -386,8 +386,12 @@ export default function Lead360() {
     );
   }
 
+  // Mobile: no horizontal padding of our own — the shell's 14px inset is the
+  // only margin, same as the lead list (2026-11-21: p-6 here stacked on the
+  // shell padding and squeezed the 360 card into a narrow centred column).
+  // Desktop keeps its roomy p-10.
   return (
-    <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
+    <div className="px-0 py-6 md:p-10 max-w-5xl mx-auto space-y-8">
       <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-[#978C21] transition-colors">
         <ArrowLeft className="w-3.5 h-3.5" /> Back
       </button>
@@ -501,7 +505,10 @@ export default function Lead360() {
               {lead.currentStatus}
             </span>
           </div>
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-stone-100 pt-4">
+          {/* Contact line above, actions below (2026-11-21): five 40px
+              icons beside the phone number squeezed it until the icons
+              overlapped the digits. Stacked, both get full width. */}
+          <div className="mt-4 flex flex-col gap-3 border-t border-stone-100 pt-4">
             <div className="min-w-0 space-y-1">
               <a href={`tel:${lead.mobile}`} className="flex items-center gap-2 text-sm font-semibold text-stone-800">
                 <Phone className="h-3.5 w-3.5 text-stone-500" /> {lead.mobile || 'No mobile'}
@@ -512,9 +519,7 @@ export default function Lead360() {
                 </a>
               ) : null}
             </div>
-            {/* Icon-only actions: the phone number / email line next to them can
-                be arbitrarily long, so labels used to collide with it. The icons
-                keep their accessible names. */}
+            {/* Icon-only actions. The icons keep their accessible names. */}
             <div className="flex shrink-0 items-center gap-2">
               <WhatsAppAction variant="icon" mobile={lead.mobile} name={lead.prospectName} />
               {canAccess('lead_tracking', 'edit') && (

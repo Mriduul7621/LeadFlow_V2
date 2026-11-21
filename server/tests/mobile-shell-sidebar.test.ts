@@ -297,4 +297,17 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     assert.ok(/h-10 w-10/.test(deleteBtn), 'the mobile Request-deletion action must be a square icon button');
     assert.ok(mobile.includes('aria-label="Update lead status"'), 'the mobile header keeps Update too');
   });
+
+  it('Lead 360 uses the full screen width on mobile', () => {
+    const l = lead360();
+    assert.ok(l.includes('px-0 py-6 md:p-10 max-w-5xl mx-auto space-y-8'), 'no horizontal padding of its own on mobile (only the shell inset), roomy p-10 on desktop');
+    assert.ok(!l.includes('p-6 md:p-10 max-w-5xl'), 'the old p-6 must not come back — it squeezed the card into a narrow centred column');
+  });
+
+  it('Lead 360 stacks the contact line above the action icons on mobile', () => {
+    const l = lead360();
+    const mobile = l.slice(l.indexOf('<section className="space-y-4 md:hidden">'));
+    assert.ok(mobile.includes('flex flex-col gap-3 border-t border-stone-100 pt-4'), 'contact line above, icons below — five 40px icons beside the number overlapped the digits');
+    assert.ok(!mobile.includes('flex items-center justify-between gap-3 border-t'), 'the side-by-side contact row must not come back');
+  });
 });
