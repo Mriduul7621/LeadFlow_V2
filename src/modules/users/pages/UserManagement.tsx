@@ -337,6 +337,8 @@ export default function UserManagement() {
   const [userForm, setUserForm] = useState({
     name: '',
     employeeId: '',
+    // 064: optional IDRA FA Code (unique when present).
+    idraFaCode: '',
     contact: '',
     email: '',
     designation: '',
@@ -454,7 +456,7 @@ export default function UserManagement() {
   const openCreateUser = () => {
     setEditingUser(null);
     setUserForm({
-      name: '', employeeId: '', contact: '', email: '',
+      name: '', employeeId: '', idraFaCode: '', contact: '', email: '',
       designation: '',
       role: roles.length > 0 ? roles[0].roleId : 'ADMIN',
       departmentId: departments.length > 0 ? departments[0].id : '',
@@ -478,6 +480,7 @@ export default function UserManagement() {
     setUserForm({
       name: u.name || '',
       employeeId: u.employeeId || '',
+      idraFaCode: u.idraFaCode || '',
       contact: (u as any).contact || '',
       email: u.email || '',
       designation: u.designation || '',
@@ -576,6 +579,17 @@ export default function UserManagement() {
       toast.error(`Employee ID "${cleanEmpId}" already exists.`);
       return;
     }
+    // 064: the FA code is unique when present — same client-side
+    // duplicate feedback as the Employee ID (the server enforces it).
+    const cleanFaCode = userForm.idraFaCode.trim().toUpperCase();
+    const isFaDuplicate = !!cleanFaCode && users.some(u =>
+      (u.idraFaCode || '').trim().toUpperCase() === cleanFaCode &&
+      (!editingUser || u.id !== editingUser.id)
+    );
+    if (isFaDuplicate) {
+      toast.error(`IDRA FA Code "${cleanFaCode}" already exists.`);
+      return;
+    }
 
     const genTempPw = () => {
       const c = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
@@ -593,6 +607,9 @@ export default function UserManagement() {
         id: uid,
         name: userForm.name.trim(),
         employeeId: cleanEmpId,
+        // 064: always sent ('' on an edit clears the stored code; the
+        // server stores NULL for a blank create).
+        idraFaCode: cleanFaCode,
         email: userForm.email.trim().toLowerCase(),
         contact: userForm.contact.trim() as any,
         // UM-1: the job title defaults to the access role's display
@@ -2237,6 +2254,16 @@ export default function UserManagement() {
                       value={userForm.employeeId}
                       onChange={e => setUserForm({ ...userForm, employeeId: e.target.value })}
                       placeholder="e.g. RM001"
+                      className="ep-input"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-1 block">IDRA FA Code <span className="text-xs font-normal text-slate-400">(optional — the code policy sales are booked under; also works for sign-in)</span></label>
+                    <input
+                      type="text"
+                      value={userForm.idraFaCode}
+                      onChange={e => setUserForm({ ...userForm, idraFaCode: e.target.value })}
+                      placeholder="e.g. 1101010116002"
                       className="ep-input"
                     />
                   </div>

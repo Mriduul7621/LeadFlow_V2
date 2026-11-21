@@ -80,6 +80,7 @@ describe('Access-change audit + last-administrator protection', () => {
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         employee_id VARCHAR(50) UNIQUE,
+        idra_fa_code VARCHAR(30) UNIQUE,
         full_name VARCHAR(200),
         email VARCHAR(150),
         phone VARCHAR(40),

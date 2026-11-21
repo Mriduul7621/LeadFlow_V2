@@ -113,6 +113,7 @@ import {
   logAccessChange,
   managerEmployeeId,
   mapUserRow,
+  normalizeIdraFaCode,
   normalizeRole,
   requireAdmin,
   requireAuth,
@@ -1329,6 +1330,9 @@ async function validateUserPayload(payload: any, excludeUserId?: string): Promis
   const pool = getPool();
   const employeeId = clean(payload.employeeId || payload.employee_id).toUpperCase();
   const email = clean(payload.email).toLowerCase();
+  // 064: the IDRA FA Code is unique when present (one person = one code),
+  // so a second account may never claim a code that is already stored.
+  const idraFaCode = normalizeIdraFaCode(payload.idraFaCode || payload.idra_fa_code);
   if (employeeId) {
     const dup = await pool.query(
       `SELECT id FROM users WHERE UPPER(employee_id) = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) LIMIT 1`,
@@ -1342,6 +1346,13 @@ async function validateUserPayload(payload: any, excludeUserId?: string): Promis
       [email, excludeUserId || null]
     );
     if (dup.rows[0]) return `Email "${email}" is already in use.`;
+  }
+  if (idraFaCode) {
+    const dup = await pool.query(
+      `SELECT id FROM users WHERE UPPER(idra_fa_code) = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) LIMIT 1`,
+      [idraFaCode, excludeUserId || null]
+    );
+    if (dup.rows[0]) return `IDRA FA Code "${idraFaCode}" is already in use.`;
   }
   return null;
 }
@@ -1395,6 +1406,12 @@ async function createUserHandler(
   if (!EMPLOYEE_ID_RE.test(employeeId)) {
     return sendJson(res, 400, { success: false, message: 'Employee ID may only contain letters, numbers, dot, dash and underscore (2-30 chars).' });
   }
+  // 064: the IDRA FA Code is optional; when present it shares the
+  // employee-ID charset and is stored uppercased, like the Employee ID.
+  const idraFaCode = normalizeIdraFaCode(payload.idraFaCode || payload.idra_fa_code);
+  if (idraFaCode && !EMPLOYEE_ID_RE.test(idraFaCode)) {
+    return sendJson(res, 400, { success: false, message: 'IDRA FA Code may only contain letters, numbers, dot, dash and underscore (2-30 chars).' });
+  }
 
   // A1 (DZ-4): an admin-set initial password follows the same policy
   // minimum as every other password set (blank stays blank — the
@@ -1415,10 +1432,20 @@ async function createUserHandler(
     const existing = fallbackStore.users.find(
       item => item.employeeId.toUpperCase() === employeeId || (email && item.email === email)
     );
+    // 064 (demo-mode parity): the FA code is unique when present.
+    if (idraFaCode) {
+      const faClash = fallbackStore.users.find(
+        item => item.id !== existing?.id && String((item as any).idraFaCode || '').toUpperCase() === idraFaCode
+      );
+      if (faClash) {
+        return sendJson(res, 409, { success: false, message: `IDRA FA Code "${idraFaCode}" is already in use.` });
+      }
+    }
     const createdDate = new Date().toISOString();
     const user = {
       id: existing?.id || createId('user'),
       employeeId,
+      idraFaCode,
       fullName,
       name: fullName,
       email,
@@ -1516,10 +1543,10 @@ async function createUserHandler(
     const result = await client.query(
       `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, department_id, team_id,
                           manager_id, designation, profile_photo, is_active, account_status,
-                          must_change_password, reporting_chain, subordinates, created_at, updated_at)
+                          must_change_password, reporting_chain, subordinates, idra_fa_code, created_at, updated_at)
        VALUES ($1,$2,$3,$4,COALESCE($5,''),$6,$7,$8,$9,$10,$11,$12,
                CASE WHEN $12 = FALSE THEN 'INACTIVE' ELSE 'ACTIVE' END,
-               COALESCE($13,FALSE), COALESCE($14,'[]'::jsonb), COALESCE($15,'[]'::jsonb), NOW(), NOW())
+               COALESCE($13,FALSE), COALESCE($14,'[]'::jsonb), COALESCE($15,'[]'::jsonb), $16, NOW(), NOW())
        RETURNING *`,
       [
         employeeId,
@@ -1537,6 +1564,7 @@ async function createUserHandler(
         payload.mustChangePassword === true,
         JSON.stringify(payload.reportingChain || []),
         JSON.stringify(payload.subordinates || []),
+        idraFaCode || null,
       ]
     );
     const row = result.rows[0];
@@ -1566,7 +1594,7 @@ async function createUserHandler(
     // failure — rolls the user insert back; the client is always released.
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     if (error?.code === '23505') {
-      return sendJson(res, 409, { success: false, message: 'A user with that employee ID or email already exists.' });
+      return sendJson(res, 409, { success: false, message: 'A user with that employee ID, email or IDRA FA Code already exists.' });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Create user failed' });
   } finally {
@@ -1629,6 +1657,15 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     }
   }
 
+  // 064: an FA code sent on an edit shares the employee-ID charset.
+  // (Absent = keep the stored value; an explicit empty string clears it.)
+  const incomingFaCode = payload.idraFaCode !== undefined || payload.idra_fa_code !== undefined
+    ? normalizeIdraFaCode(payload.idraFaCode ?? payload.idra_fa_code)
+    : undefined;
+  if (incomingFaCode && !EMPLOYEE_ID_RE.test(incomingFaCode)) {
+    return sendJson(res, 400, { success: false, message: 'IDRA FA Code may only contain letters, numbers, dot, dash and underscore (2-30 chars).' });
+  }
+
   if (!useDb()) {
     if (!demoModeAllowed()) return sendJson(res, 503, { success: false, message: 'Database is not configured.' });
     const existing = fallbackStore.users.find(u => u.id === req.params.id || u.employeeId === req.params.id);
@@ -1649,6 +1686,8 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     const role = payload.role ? normalizeRole(payload.role) : normalizeRole(existing.role);
     if (payload.password) existing.password = await bcrypt.hash(String(payload.password), 10);
     existing.employeeId = clean(payload.employeeId).toUpperCase() || existing.employeeId;
+    // 064 (demo-mode parity): an edit may set or clear the FA code.
+    if (incomingFaCode !== undefined) (existing as any).idraFaCode = incomingFaCode;
     existing.fullName = clean(payload.fullName || payload.name) || existing.fullName;
     existing.name = existing.fullName;
     existing.email = clean(payload.email).toLowerCase() || existing.email;
@@ -1686,7 +1725,13 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
     }
 
     const duplicateError = await validateUserPayload(
-      { employeeId: payload.employeeId || existing.employee_id, email: payload.email || existing.email },
+      {
+        employeeId: payload.employeeId || existing.employee_id,
+        email: payload.email || existing.email,
+        // 064: only the FA code actually sent on this edit is checked —
+        // an edit that carries no FA code cannot collide with anything.
+        idraFaCode: incomingFaCode,
+      },
       existing.id
     );
     if (duplicateError) {
@@ -1833,8 +1878,9 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
          account_status = CASE WHEN $12 THEN 'ACTIVE' ELSE 'INACTIVE' END,
          must_change_password = $13,
          reporting_chain = $14, subordinates = $15,
+         idra_fa_code = $16,
          updated_at = NOW()
-       WHERE id = $16
+       WHERE id = $17
        RETURNING *`,
       [
         employeeId, fullName, email,
@@ -1843,6 +1889,8 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
         clean(payload.designation), clean(payload.avatarUrl),
         status, mustChangePassword,
         JSON.stringify(existingChain), JSON.stringify(existingSubs),
+        // 064: absent = keep the stored value; explicit '' clears it.
+        incomingFaCode === undefined ? existing.idra_fa_code : (incomingFaCode || null),
         existing.id,
       ]
     );
@@ -1949,7 +1997,7 @@ router.put('/users/:id', requireAuth, requirePermissionCode('users.edit'), async
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     if (error?.code === '23505') {
-      return sendJson(res, 409, { success: false, message: 'A user with that employee ID or email already exists.' });
+      return sendJson(res, 409, { success: false, message: 'A user with that employee ID, email or IDRA FA Code already exists.' });
     }
     return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Update user failed' });
   } finally {
@@ -2186,7 +2234,7 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
      - bulk reference loads, no N+1, recompute chains once after batch
    =================================================================== */
 
-async function loadUserBulkReferenceData(pool: any, batchEmployeeIds: string[], batchEmails: string[], managerEmployeeIds: string[]) {
+async function loadUserBulkReferenceData(pool: any, batchEmployeeIds: string[], batchEmails: string[], managerEmployeeIds: string[], batchFaCodes: string[] = []) {
   // Bulk load roles, departments, teams, existing users, all users for cycle detection
   const rolesRes = await pool.query(`SELECT id, role_code, role_name, hierarchy_level, is_active FROM roles ORDER BY hierarchy_level ASC`);
   const deptsRes = await pool.query(`SELECT id, department_code, department_name, is_active FROM departments ORDER BY department_name ASC`);
@@ -2196,19 +2244,24 @@ async function loadUserBulkReferenceData(pool: any, batchEmployeeIds: string[], 
   const empUpperList = batchEmployeeIds.map(id => id.toUpperCase()).filter(Boolean);
   const emailLowerList = batchEmails.map(e => e.toLowerCase()).filter(Boolean);
   const mgrUpperList = managerEmployeeIds.map(id => id.toUpperCase()).filter(Boolean);
+  // 064: users matching a batch FA code are loaded too, so a row whose
+  // FA code already belongs to another account errors instead of
+  // colliding at commit time.
+  const faUpperList = batchFaCodes.map(c => String(c).toUpperCase()).filter(Boolean);
 
   const allLookupIds = Array.from(new Set([...empUpperList, ...mgrUpperList]));
 
   let existingUsers: any[] = [];
-  if (allLookupIds.length > 0 || emailLowerList.length > 0) {
+  if (allLookupIds.length > 0 || emailLowerList.length > 0 || faUpperList.length > 0) {
     // Build query with ANY for employee_id and email
     const existingRes = await pool.query(
       `SELECT u.id, u.employee_id, u.email, u.role_id, u.department_id, u.team_id, u.manager_id, u.is_active, u.account_status,
+              u.idra_fa_code,
               r.role_code, r.hierarchy_level
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
-       WHERE UPPER(u.employee_id) = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[])`,
-      [allLookupIds.length ? allLookupIds : ['__none__'], emailLowerList.length ? emailLowerList : ['__none__']]
+       WHERE UPPER(u.employee_id) = ANY($1::text[]) OR LOWER(u.email) = ANY($2::text[]) OR UPPER(u.idra_fa_code) = ANY($3::text[])`,
+      [allLookupIds.length ? allLookupIds : ['__none__'], emailLowerList.length ? emailLowerList : ['__none__'], faUpperList.length ? faUpperList : ['__none__']]
     );
     existingUsers = existingRes.rows;
     // Attach each existing user's active department memberships so the
@@ -2305,6 +2358,7 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
         department: r.department || r.departmentId || '',
         role: r.role || r.roleId || '',
         reportingManagerEmployeeId: r.reportingManagerEmployeeId || r.managerId || r.manager || '',
+        idraFaCode: r.idraFaCode || r.idra_fa_code || r.faCode || '',
         team: r.team || r.teamId || '',
         temporaryPassword: r.temporaryPassword || r.password || '',
         mustChangePassword: r.mustChangePassword,
@@ -2315,9 +2369,10 @@ router.post('/users/bulk/validate', requireAuth, async (req: any, res) => {
     const batchEmpIds = normalized.map(n => n.employeeId).filter(Boolean);
     const batchEmails = normalized.map(n => n.email).filter(Boolean);
     const batchMgrIds = normalized.map(n => n.reportingManagerEmployeeId).filter(Boolean);
+    const batchFaCodes = normalized.map(n => n.idraFaCode).filter(Boolean);
 
     const pool = getPool();
-    const refData = await loadUserBulkReferenceData(pool, batchEmpIds, batchEmails, batchMgrIds);
+    const refData = await loadUserBulkReferenceData(pool, batchEmpIds, batchEmails, batchMgrIds, batchFaCodes);
     const maps = buildReferenceMaps(refData);
 
     // A1 (DZ-4): bulk-import temporary passwords follow the live policy minimum.
@@ -2409,6 +2464,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
         department: r.department || r.departmentId || '',
         role: r.role || r.roleId || '',
         reportingManagerEmployeeId: r.reportingManagerEmployeeId || r.managerId || r.manager || '',
+        idraFaCode: r.idraFaCode || r.idra_fa_code || r.faCode || '',
         team: r.team || r.teamId || '',
         temporaryPassword: r.temporaryPassword || r.password || '',
         mustChangePassword: r.mustChangePassword,
@@ -2419,10 +2475,11 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
     const batchEmpIds = normalized.map(n => n.employeeId).filter(Boolean);
     const batchEmails = normalized.map(n => n.email).filter(Boolean);
     const batchMgrIds = normalized.map(n => n.reportingManagerEmployeeId).filter(Boolean);
+    const batchFaCodes = normalized.map(n => n.idraFaCode).filter(Boolean);
 
     await client.query('BEGIN');
 
-    const refData = await loadUserBulkReferenceData(client, batchEmpIds, batchEmails, batchMgrIds);
+    const refData = await loadUserBulkReferenceData(client, batchEmpIds, batchEmails, batchMgrIds, batchFaCodes);
     const maps = buildReferenceMaps(refData);
 
     const preview = validateBulkRows({
@@ -2500,10 +2557,10 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
           const insertRes = await client.query(
             `INSERT INTO users (employee_id, full_name, email, phone, password, role_id, department_id, team_id,
                                 manager_id, designation, is_active, account_status,
-                                must_change_password, reporting_chain, subordinates, created_at, updated_at)
+                                must_change_password, reporting_chain, subordinates, idra_fa_code, created_at, updated_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,
                      CASE WHEN $10 THEN 'ACTIVE' ELSE 'INACTIVE' END,
-                     $11, '[]'::jsonb, '[]'::jsonb, NOW(), NOW())
+                     $11, '[]'::jsonb, '[]'::jsonb, $12, NOW(), NOW())
              RETURNING id`,
             [
               row.employeeId,
@@ -2517,6 +2574,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
               row.normalized.designation || (await roleDisplayNameOf(client, roleId)),
               isActive,
               mustChange,
+              row.normalized.idraFaCode || null,
             ]
           );
 
@@ -2543,6 +2601,8 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
           const emailToUse = row.email || null;
 
           // Update profile/org fields, but keep manager_id unchanged for now (will be handled in Phase B)
+          // 064: a supplied FA code fills (or corrects) the stored one;
+          // a blank cell keeps it — bulk must never wipe a stored code.
           await client.query(
             `UPDATE users SET
                full_name = $1,
@@ -2554,8 +2614,9 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
                designation = COALESCE(NULLIF($7, ''), designation),
                is_active = $8,
                account_status = CASE WHEN $8 THEN 'ACTIVE' ELSE 'INACTIVE' END,
+               idra_fa_code = COALESCE(NULLIF($9, ''), idra_fa_code),
                updated_at = NOW()
-             WHERE id = $9`,
+             WHERE id = $10`,
             [
               row.fullName,
               emailToUse,
@@ -2565,6 +2626,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
               teamId,
               row.normalized.designation || '',
               isActive,
+              row.normalized.idraFaCode || '',
               row.existingUserId,
             ]
           );
@@ -2686,8 +2748,9 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
                    is_active = $9,
                    account_status = $10,
                    must_change_password = $11,
+                   idra_fa_code = $12,
                    updated_at = NOW()
-                 WHERE id = $12`,
+                 WHERE id = $13`,
                 [
                   orig.full_name,
                   orig.email,
@@ -2700,6 +2763,7 @@ router.post('/users/bulk/commit', requireAuth, async (req: any, res) => {
                   orig.is_active,
                   orig.account_status,
                   orig.must_change_password,
+                  orig.idra_fa_code,
                   orig.id,
                 ]
               );

@@ -56,6 +56,7 @@ async function setupAuxSchema(pool: any) {
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       employee_id VARCHAR(30) UNIQUE NOT NULL,
+      idra_fa_code VARCHAR(30) UNIQUE,
       full_name VARCHAR(150) NOT NULL,
       email VARCHAR(150) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
@@ -367,6 +368,6 @@ describe('059 — form_fields schema drift repair', () => {
   it('059 is registered (063 is now the migration tail)', () => {
     assert.ok(MIGRATION_IDS.includes('059_form_fields_timestamps'));
     assert.ok(MIGRATION_IDS.includes('058_user_designation_backfill'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code');
   });
 });

@@ -228,6 +228,7 @@ describe('new KPI cards — HTTP endpoints (production shape + activities)', () 
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         employee_id VARCHAR(30) UNIQUE NOT NULL,
+        idra_fa_code VARCHAR(30) UNIQUE,
         full_name VARCHAR(150) NOT NULL,
         email VARCHAR(150) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,

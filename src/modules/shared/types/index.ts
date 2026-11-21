@@ -34,6 +34,12 @@ export interface User {
   // Identity
   id: string;
   employeeId: string;
+  /**
+   * 064: the IDRA FA Code under which the person's policy sales are
+   * booked. Optional (''/undefined when not recorded yet), unique
+   * when present, and a login identifier alongside the Employee ID.
+   */
+  idraFaCode?: string;
 
   // Legacy fields (Keep for existing code)
   name: string;

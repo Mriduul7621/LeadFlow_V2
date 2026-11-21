@@ -351,6 +351,12 @@ export function mapUserRow(row: any, managerEmployeeId?: string | null) {
   return {
     id: row.id,
     employeeId: row.employee_id,
+    /**
+     * 064: the IDRA FA Code under which the person's policy sales are
+     * booked ('' when not recorded yet). Optional at creation, unique
+     * when present, and a login identifier alongside the Employee ID.
+     */
+    idraFaCode: row.idra_fa_code || '',
     fullName: row.full_name,
     name: row.full_name,
     email: row.email || '',
@@ -509,6 +515,16 @@ export async function adminExistsInDb(): Promise<boolean> {
 }
 
 export const EMPLOYEE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,29}$/;
+
+/**
+ * 064: normalize an IDRA FA Code exactly like an Employee ID —
+ * trimmed and uppercased. '' when absent (the field is optional).
+ * FA codes share the employee-ID charset (2-30 chars), so the same
+ * regex validates them.
+ */
+export function normalizeIdraFaCode(value: any): string {
+  return clean(value).toUpperCase();
+}
 
 /* ====================================================================
    CALLER AUTHORIZATION + LEAD LOOKUP (Phase 1, notifications step)

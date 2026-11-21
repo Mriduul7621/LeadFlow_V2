@@ -60,6 +60,7 @@ async function setupSchema(pool: any) {
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       employee_id VARCHAR(30) UNIQUE NOT NULL,
+      idra_fa_code VARCHAR(30) UNIQUE,
       full_name VARCHAR(150) NOT NULL,
       email VARCHAR(150) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
@@ -243,7 +244,7 @@ describe('Danger Zone DZ-0 — super-admin gate, password step-up, shell', () =>
 
   it('migration 057 is registered and creates danger_zone_unlocks (idempotent; 063 is the tail)', async () => {
     assert.ok(MIGRATION_IDS.includes('057_danger_zone_unlocks'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee', '063 is the migration tail (057 stays registered)');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 is the migration tail (057 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('057_danger_zone_unlocks'), 'runner names migration 057');
     const cols: any = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'danger_zone_unlocks' ORDER BY column_name`

@@ -7,7 +7,7 @@
  * (superseded by #165 / live via #168); only the delete-request
  * flow is.
  *
- *   1. Migration 062 — registered between 060 and 063 (063 stays
+ *   1. Migration 062 — registered between 060 and 063 (064 stays
  *      the tail), table created with the pending-unique index, up()
  *      idempotent (runs twice), excluded from legacy adoption so an
  *      adopted database still runs it once.
@@ -106,6 +106,7 @@ describe('lead delete requests — server', () => {
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         employee_id VARCHAR(30) UNIQUE NOT NULL,
+        idra_fa_code VARCHAR(30) UNIQUE,
         full_name VARCHAR(150) NOT NULL,
         email VARCHAR(150) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,
@@ -381,14 +382,14 @@ describe('lead delete requests — server', () => {
   /* 1. Migration 062                                             */
   /* ============================================================ */
 
-  it('migration 062 is registered between 060 and 063, and 063 stays the tail', () => {
+  it('migration 062 is registered between 060 and 063, and 064 stays the tail', () => {
     assert.ok(MIGRATION_IDS.includes('062_lead_delete_requests'), '062 is registered');
     const i060 = MIGRATION_IDS.indexOf('060_stage_rules_terminal');
     const i062 = MIGRATION_IDS.indexOf('062_lead_delete_requests');
     const i063 = MIGRATION_IDS.indexOf('063_users_add_employee');
     assert.ok(i060 !== -1 && i062 !== -1 && i063 !== -1, '060, 062 and 063 are all registered');
     assert.ok(i060 < i062 && i062 < i063, '062 sits between 060 and 063');
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee', '063 stays the migration tail');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 stays the migration tail');
     assert.ok(read('server/database/runMigrations.ts').includes('062_lead_delete_requests'), 'runner names migration 062');
   });
 

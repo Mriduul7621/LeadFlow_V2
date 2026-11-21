@@ -49,7 +49,7 @@ function getDesignationFromRole(role: UserRole): string {
 }
 
 const loginSchema = z.object({
-  username: z.string().min(3, 'Employee ID is required'),
+  username: z.string().min(3, 'Employee ID or FA Code is required'),
   password: z.string().min(5, 'Password must be at least 5 characters'),
 });
 
@@ -206,7 +206,7 @@ export default function Login() {
                   </form>
                 ) : (
                   <form onSubmit={handleSubmit(onSubmit)} className="leadflow-credentials-form" id="credential-form">
-                    <div className="leadflow-login-field"><label htmlFor="employee-id">Employee ID</label><input id="employee-id" {...register('username')} type="text" placeholder="Enter your employee ID" autoComplete="username" autoCapitalize="characters" />{errors.username && <p className="leadflow-field-error">{errors.username.message as string}</p>}</div>
+                    <div className="leadflow-login-field"><label htmlFor="employee-id">Employee ID / FA Code</label><input id="employee-id" {...register('username')} type="text" placeholder="Enter your employee ID or FA code" autoComplete="username" autoCapitalize="characters" />{errors.username && <p className="leadflow-field-error">{errors.username.message as string}</p>}</div>
                     <div className="leadflow-login-field"><label htmlFor="employee-password">Password</label><div className="leadflow-password-wrap"><input id="employee-password" {...register('password')} type="password" placeholder="Enter your password" autoComplete="current-password" /><Lock size={16} aria-hidden="true" /></div>{errors.password && <p className="leadflow-field-error">{errors.password.message as string}</p>}</div>
                     <div className="leadflow-login-options"><label className="leadflow-remember"><input type="checkbox" /> <span>Remember Me</span></label><button type="button" className="leadflow-forgot" onClick={() => toast.info('Please contact your administrator to reset your password.')}>Forgot Password?</button></div>
                     <button type="submit" disabled={isSubmitting || checkingSetup} className="leadflow-login-submit" id="form-submit-btn">{isSubmitting ? <span className="leadflow-spinner" /> : 'Login'}</button>

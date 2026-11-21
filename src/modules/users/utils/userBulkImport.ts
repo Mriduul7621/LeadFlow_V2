@@ -34,6 +34,8 @@ export interface TeamRef {
 
 export const USER_TEMPLATE_HEADERS = [
   'Employee ID',
+  // 064: optional — the IDRA FA Code policy sales are booked under.
+  'IDRA FA Code',
   'Full Name',
   'Email',
   'Phone',
@@ -53,6 +55,8 @@ export interface ParsedUserBulkRow {
   rowNumber: number; // 1-based data row number (first data row = 1)
   sheetRowNumber: number; // actual sheet row (header row 1 + data row)
   employeeId: string;
+  /** 064: optional IDRA FA Code (may be empty). */
+  idraFaCode: string;
   fullName: string;
   email: string;
   phone: string;
@@ -80,6 +84,10 @@ function normalizeHeaderKey(key: string): string {
 
 const FIELD_ALIASES: Record<string, string[]> = {
   employeeId: ['employeeid', 'employee_id', 'empid', 'emp_id', 'employee', 'empcode', 'employeecode'],
+  // 064: the roster/sales sheets name the person's own code 'Code' in
+  // some files and 'FA Code' in others — both map here. (Bare 'code'
+  // is claimed by no other field.)
+  idraFaCode: ['idrafacode', 'idra_fa_code', 'facode', 'fa_code', 'code', 'fa', 'idra'],
   fullName: ['fullname', 'name', 'employeename', 'full_name', 'employeefullname'],
   email: ['email', 'emailaddress', 'email_address', 'mail'],
   phone: ['phone', 'mobile', 'phonenumber', 'mobile_no', 'contact', 'phone_no', 'mobilenumber'],
@@ -96,6 +104,17 @@ const FIELD_ALIASES: Record<string, string[]> = {
     'reports_to',
     'reportsto',
     'manager_emp_id',
+    // 064: the roster sheets name the manager's code by the manager's
+    // level — UM Code / RM Code / BM Code / ASM Code / GM Code /
+    // AGM Code. Any of them maps to the reporting-manager column;
+    // when a sheet carries several, the leftmost wins (the direct
+    // manager is the lowest level, listed first in these sheets).
+    'umcode',
+    'rmcode',
+    'bmcode',
+    'asmcode',
+    'gmcode',
+    'agmcode',
   ],
   team: ['team', 'branch', 'teamname', 'branchname', 'teamcode', 'branchcode'],
   temporaryPassword: ['temporarypassword', 'temppassword', 'password', 'temp_password', 'temppass'],
@@ -115,6 +134,8 @@ const HEADER_TO_FIELD: Record<string, string> = (() => {
     map[normalizeHeaderKey(h)] = (() => {
       const lower = h.toLowerCase();
       if (lower.includes('employee id')) return 'employeeId';
+      // 064: the canonical 'IDRA FA Code' header.
+      if (lower.includes('fa code') || lower.includes('idra')) return 'idraFaCode';
       if (lower.includes('full name')) return 'fullName';
       if (lower.includes('email')) return 'email';
       if (lower.includes('phone')) return 'phone';
@@ -176,6 +197,7 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): Exce
   const exampleRows = [
     {
       'Employee ID': 'EMP001',
+      'IDRA FA Code': '1101010116001',
       'Full Name': 'John Doe',
       'Email': 'john.doe@company.com',
       'Phone': '+8801XXXXXXXXX',
@@ -190,6 +212,7 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): Exce
     },
     {
       'Employee ID': 'EMP002',
+      'IDRA FA Code': '',
       'Full Name': 'Jane Smith',
       'Email': 'jane.smith@company.com',
       'Phone': '',
@@ -208,7 +231,7 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): Exce
     name: 'Users',
     rows: exampleRows,
     headers: [...USER_TEMPLATE_HEADERS],
-    columnWidths: [16, 22, 28, 16, 20, 18, 16, 28, 16, 20, 20, 12],
+    columnWidths: [16, 18, 22, 28, 16, 20, 18, 16, 28, 16, 20, 20, 12],
   });
 
   // Sheet 2: Reference Values
@@ -242,12 +265,12 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): Exce
   const instructions = [
     { Instruction: 'BULK USER IMPORT & PROVISIONING — Instructions', Details: '' },
     { Instruction: '', Details: '' },
-    { Instruction: '1. Identity', Details: 'Employee ID is primary and must be unique. Email must also be unique if provided. Duplicates within file are errors.' },
+    { Instruction: '1. Identity', Details: 'Employee ID is primary and must be unique. Email must also be unique if provided. IDRA FA Code is optional but unique when present — one person, one code; it also works as a sign-in identifier. Duplicates within file are errors.' },
     { Instruction: '2. Required Fields', Details: 'Employee ID*, Full Name*, Department*, Role* are required.' },
-    { Instruction: '3. Normalization', Details: 'Employee ID is normalized to UPPERCASE. Email to lowercase. Role/Department/Team matched exactly (case-insensitive) against database — unknown values are row errors, not auto-created.' },
+    { Instruction: '3. Normalization', Details: 'Employee ID and IDRA FA Code are normalized to UPPERCASE. Email to lowercase. Role/Department/Team matched exactly (case-insensitive) against database — unknown values are row errors, not auto-created.' },
     { Instruction: '4. Role & Department', Details: 'Use exact Role name or code from Reference Values sheet. Same for Department and Team. Inactive values are rejected.' },
-    { Instruction: '5. Reporting Manager', Details: 'Resolved by Employee ID only. Supports same-batch managers (row order irrelevant). Validates hierarchy: manager must hold a valid higher-authority role, normally one or two hierarchy levels above the employee, subject to department and cycle rules. Level 1 (CEO) crosses departments. No self-manager, no cycles. Active employees only.' },
-    { Instruction: '6. Modes', Details: 'CREATE ONLY (default): fails if Employee ID exists. CREATE + UPDATE: updates existing users profile/org fields, never password.' },
+    { Instruction: '5. Reporting Manager', Details: 'Resolved by Employee ID only. Supports same-batch managers (row order irrelevant). Validates hierarchy: manager must hold a valid higher-authority role, normally one or two hierarchy levels above the employee, subject to department and cycle rules. Level 1 (CEO) crosses departments. No self-manager, no cycles. Active employees only. The manager column is also accepted under the roster headers UM Code / RM Code / BM Code / ASM Code / GM Code / AGM Code (leftmost wins when several are present).' },
+    { Instruction: '6. Modes', Details: 'CREATE ONLY (default): fails if Employee ID exists. CREATE + UPDATE: updates existing users profile/org fields (including filling in an IDRA FA Code for an existing user matched by Employee ID), never password. A blank FA Code cell on an update keeps the stored code.' },
     { Instruction: '7. Password Rules', Details: 'For new users: if Temporary Password supplied, min 6 chars, hashed server-side, never stored plaintext. If blank, server generates securely and returns once in final result. Existing user passwords are NEVER changed via bulk update — use admin reset.' },
     { Instruction: '8. Must Change Password', Details: 'Default TRUE (Yes). Persists to must_change_password and integrates with forced first-login flow. Use Yes/No, True/False, 1/0.' },
     { Instruction: '9. Status', Details: 'Active / Inactive only. Default Active.' },
@@ -256,7 +279,7 @@ export function buildUserImportTemplate(refData: ReferenceDataForTemplate): Exce
     { Instruction: '12. Security', Details: 'Authorization requires users.create for creates, users.edit for updates. Feature Access alone never authorizes. Admin/Superadmin bypass per PR32. Audit logs batch metadata, never plaintext passwords.' },
     { Instruction: '13. Template', Details: 'Do not rename columns. Keep Users sheet first. You may delete example rows. Reference Values and Instructions are for guidance only and not imported.' },
     { Instruction: '', Details: '' },
-    { Instruction: 'Columns', Details: 'Employee ID*, Full Name*, Email, Phone, Designation, Department*, Role*, Reporting Manager Employee ID, Team, Temporary Password, Must Change Password, Status' },
+    { Instruction: 'Columns', Details: 'Employee ID*, IDRA FA Code, Full Name*, Email, Phone, Designation, Department*, Role*, Reporting Manager Employee ID, Team, Temporary Password, Must Change Password, Status' },
   ];
 
   sheets.push({ name: 'Instructions', rows: instructions, columnWidths: [18, 120] });
@@ -298,6 +321,7 @@ export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkR
         const headerRow = Object.keys(jsonRows[0] || {});
         const parsed: ParsedUserBulkRow[] = jsonRows.map((raw, idx) => {
           const employeeId = extractField(raw, 'employeeId');
+          const idraFaCode = extractField(raw, 'idraFaCode');
           const fullName = extractField(raw, 'fullName');
           const email = extractField(raw, 'email');
           const phone = extractField(raw, 'phone');
@@ -325,6 +349,7 @@ export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkR
             rowNumber: idx + 1,
             sheetRowNumber: idx + 2,
             employeeId,
+            idraFaCode,
             fullName,
             email,
             phone,
@@ -354,6 +379,7 @@ export function parseUserImportFile(file: File): Promise<{ rows: ParsedUserBulkR
 export function mapToServerRows(parsedRows: ParsedUserBulkRow[]): Array<{
   rowNumber: number;
   employeeId: string;
+  idraFaCode: string;
   fullName: string;
   email: string;
   phone: string;
@@ -369,6 +395,7 @@ export function mapToServerRows(parsedRows: ParsedUserBulkRow[]): Array<{
   return parsedRows.map(r => ({
     rowNumber: r.rowNumber,
     employeeId: r.employeeId,
+    idraFaCode: r.idraFaCode,
     fullName: r.fullName,
     email: r.email,
     phone: r.phone,
