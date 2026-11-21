@@ -473,7 +473,9 @@ describe('enterpriseLabelForPath — breadcrumb labels', () => {
     // the sidebar prefix instead (sidebar prefix precedes the
     // fallback prefix in the resolver).
     assert.equal(enterpriseLabelForPath(groupsFor('teamLead'), '/team/kpi/overdue'), 'Team Members');
-    assert.equal(enterpriseLabelForPath(groupsFor('admin'), '/team/organogram'), 'Team Members');
+    // Organogram H1 fix (2026-11-21): the route's fallback label is
+    // the board title now, not the Team Members label it borrowed.
+    assert.equal(enterpriseLabelForPath(groupsFor('admin'), '/team/organogram'), 'Teams & Hierarchy');
   });
 
   it('returns a sensible label for an unknown path instead of a raw segment', () => {

@@ -1,31 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  Users, 
-  MapPin, 
-  Briefcase, 
-  UserCheck, 
-  ArrowRight,
-  TrendingDown,
-  TrendingUp,
-  Award,
-  Search,
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Users,
+  Briefcase,
   X,
-  ChevronRight,
   Building,
-  Plus,
-  Trash2,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  Check,
-  Save,
-  ChevronDown,
-  BarChart2,
-  Lock,
-  UserCheck2,
   Mail,
-  Phone,
-  LayoutGrid
+  Phone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../../lib/utils';
@@ -34,54 +14,178 @@ import { useTranslation } from '../../shared/utils/translations';
 import { userService } from '../../users/services/userService';
 import { leadService } from '../../leads/services/leadService';
 import { orgService } from '../services/orgService';
-import { UserRole, User, Lead } from '../../shared/types';
+import { User, Lead } from '../../shared/types';
 import { toast } from 'sonner';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
-import BackButton from '../../shared/components/BackButton';
+import {
+  buildOrganogramBoardView,
+  formatPeopleCount,
+  formatTeamCount,
+  type BoardPerson,
+  type OrganogramBoardNodeInput,
+  type OrganogramBoardView
+} from '../utils/organogramBoard';
 
-// Auto-generated organogram node (server derives the tree from users.manager_id)
-interface OrgNode {
-  employeeId: string;
-  name: string;
-  designation: string;
-  roleId: string;
-  roleName: string;
-  level: number;              // company ladder level (1 = CEO)
-  departmentId: string;
-  departmentName: string;
-  managerEmployeeId: string | null;
-  isActive: boolean;
-  directReports: number;
-}
+// Organogram board rebuild (Mahadi-approved sample, 2026-11-21):
+// the page shows the viewing user's reporting world as a board —
+// the ancestor chain (root first, viewer last), the viewer's direct
+// reports as branch cards, their reports as a flat leaf row, and the
+// downline summary card. The tree itself is unchanged: the server
+// still derives it from users.manager_id, and every person still
+// opens their team view (the detail slide-over) on tap.
+//
+// Deliberately gone (the board has none of these): the back control,
+// the Chart/List tab toggle + the entire list view, the search input
+// and the zoom controls. The shell (sidebar, topbar, bottom nav)
+// stays exactly as it is — the shell redesign is a separate
+// programme. The H1 comes from the nav label
+// (FALLBACK_LABELS['/team/organogram'] = 'Teams & Hierarchy'); it is
+// NOT hardcoded here, so the old fallback title cannot return.
 
-interface MemberStats {
-  user: User;
-  totalLeads: number;
-  contactedCalls: number;
-  meetingsCompleted: number;
-  pipelineLocked: number;
-  collectedNCP: number;
-  projectedNCP: number;
-  conversionRate: string;
+// The board markup, fed by the derived view. Exported (named) for
+// the SSR screenshot harness, which renders it directly with
+// fixture data — the page itself feeds it the live organogram.
+export function OrganogramBoard(props: {
+  view: OrganogramBoardView;
+  onSelect: (employeeId: string) => void;
+}) {
+  const { view, onSelect } = props;
+
+  return (
+    <div className="orgb-wrap">
+      <div className="orgb-tree">
+        {view.chain.map((person: BoardPerson, index: number) => (
+          <React.Fragment key={person.employeeId}>
+            {index > 0 && <div className="orgb-conn" aria-hidden="true" />}
+            <button
+              type="button"
+              onClick={() => onSelect(person.employeeId)}
+              className={cn('orgb-node', person.isCeo && 'orgb-node--ceo')}
+              aria-label={`${person.name}, ${person.roleLabel}`}
+            >
+              <span
+                className={cn('orgb-av', person.isCeo ? 'orgb-av--blue' : 'orgb-av--olive')}
+                aria-hidden="true"
+              >
+                {person.initials}
+              </span>
+              <span className="orgb-meta">
+                <span className="orgb-name">{person.name}</span>
+                <span
+                  className={cn('orgb-role', person.isCeo ? 'orgb-role--blue' : 'orgb-role--olive')}
+                >
+                  {person.roleLabel}
+                </span>
+              </span>
+              {person.downline > 0 && (
+                <span className="orgb-count">
+                  {formatPeopleCount(person.downline)}
+                  {person.teams > 0 ? ` • ${formatTeamCount(person.teams)}` : ''}
+                </span>
+              )}
+            </button>
+          </React.Fragment>
+        ))}
+
+        {view.branch.length > 0 && (
+          <React.Fragment>
+            <div className="orgb-conn orgb-conn--tall" aria-hidden="true" />
+            <div className="orgb-branch">
+              {view.branch.map((person: BoardPerson) => (
+                <button
+                  key={person.employeeId}
+                  type="button"
+                  onClick={() => onSelect(person.employeeId)}
+                  className="orgb-bnode"
+                  aria-label={`${person.name}, ${person.roleLabel}`}
+                >
+                  <span
+                    className={cn('orgb-av', person.hasReports ? 'orgb-av--blue' : 'orgb-av--grey')}
+                    aria-hidden="true"
+                  >
+                    {person.initials}
+                  </span>
+                  <span className="orgb-name">{person.name}</span>
+                  <span
+                    className={cn('orgb-role', person.hasReports ? 'orgb-role--blue' : 'orgb-role--grey')}
+                  >
+                    {person.roleLabel}
+                  </span>
+                  {person.downline > 0 && (
+                    <span className="orgb-count">{formatPeopleCount(person.downline)}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </React.Fragment>
+        )}
+
+        {view.leafRow.length > 0 && (
+          <React.Fragment>
+            <div className="orgb-conn" aria-hidden="true" />
+            <div className="orgb-branch orgb-branch--leaf">
+              {view.leafRow.map((person: BoardPerson) => (
+                <button
+                  key={person.employeeId}
+                  type="button"
+                  onClick={() => onSelect(person.employeeId)}
+                  className="orgb-fnode"
+                  aria-label={`${person.name}, ${person.roleLabel}`}
+                >
+                  <span
+                    className={cn('orgb-av', person.hasReports ? 'orgb-av--blue' : 'orgb-av--grey')}
+                    aria-hidden="true"
+                  >
+                    {person.initials}
+                  </span>
+                  <span className="orgb-name">{person.name}</span>
+                  <span
+                    className={cn('orgb-role', person.hasReports ? 'orgb-role--blue' : 'orgb-role--grey')}
+                  >
+                    {person.roleLabel}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+
+      <div className="orgb-card">
+        <div className="orgb-sum">
+          {view.viewerDownline === 0 ? (
+            <>
+              <b>No people in your downline yet</b>
+              <span className="orgb-sum-muted"> • 1 reporting line each</span>
+            </>
+          ) : (
+            <>
+              <b>{formatPeopleCount(view.viewerDownline)}</b>
+              <span className="orgb-sum-muted">
+                {' '}in your downline
+                {view.viewerTeams > 0 ? ` • ${formatTeamCount(view.viewerTeams)}` : ''}
+                {' '}• 1 reporting line each
+              </span>
+            </>
+          )}
+        </div>
+        <div className="orgb-hint">Tap a person to open their team view.</div>
+      </div>
+    </div>
+  );
 }
 
 export default function TeamHierarchy() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuthStore();
-  const isAdmin = currentUser?.role === UserRole.ADMIN;
 
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'chart' | 'list'>('chart');
-  
+
   // Master lists
   const [users, setUsers] = useState<User[]>([]);
-  const [teamMembers, setTeamMembers] = useState<MemberStats[]>([]);
-  
+
   // Org Tree state (auto-generated from reporting links)
-  const [nodes, setNodes] = useState<OrgNode[]>([]);
-  const [rootEmployeeIds, setRootEmployeeIds] = useState<string[]>([]);
-  const [zoom, setZoom] = useState(1);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [nodes, setNodes] = useState<OrganogramBoardNodeInput[]>([]);
 
   // Stats Sidebar state
   const [selectedMember, setSelectedMember] = useState<User | null>(null);
@@ -91,13 +195,13 @@ export default function TeamHierarchy() {
 
 
   // ----------------------------------------------------
-  // DATA LOADING & STATISTICS CALCULATION
+  // DATA LOADING
   // ----------------------------------------------------
   const loadAllData = async () => {
     if (!currentUser) return;
     setLoading(true);
     try {
-      // 1. Users roster (member details + stats lookups)
+      // 1. Users roster (member details for the slide-over).
       const roster = await userService.getAllUsers();
       setUsers(roster);
 
@@ -107,66 +211,13 @@ export default function TeamHierarchy() {
       setNodes(organogram.nodes.map(n => ({
         employeeId: n.employeeId,
         name: n.fullName || n.name,
-        designation: n.designation || n.roleName || 'Employee',
-        roleId: n.roleId,
-        roleName: n.roleName,
+        roleId: n.roleId || '',
+        roleName: n.roleName || '',
+        designation: n.designation || '',
         level: n.level,
-        departmentId: n.departmentId,
-        departmentName: n.departmentName,
         managerEmployeeId: n.managerEmployeeId,
         isActive: n.isActive,
-        directReports: n.directReports,
       })));
-      setRootEmployeeIds(organogram.roots);
-
-      // 3. Direct-report statistics from the real reporting tree. Lead data
-      //    comes from the (server-scoped) leads API, so members outside the
-      //    caller's visibility can never leak numbers here.
-      const allLeads = await leadService.getLeads({ 
-        employeeId: currentUser.employeeId, 
-        role: currentUser.role 
-      });
-
-      const managerOf = (u: User) => u.managerId || (u as any).reportingManagerId || '';
-      const directReports = roster.filter(u => managerOf(u) === currentUser.employeeId);
-
-      const computedMembers: MemberStats[] = directReports.map(u => {
-        const getReportingEmployeeIds = (mgrId: string): string[] => {
-          const ids = [mgrId];
-          const subordinates = roster.filter(x => managerOf(x) === mgrId);
-          subordinates.forEach(s => {
-            ids.push(...getReportingEmployeeIds(s.employeeId));
-          });
-          return Array.from(new Set(ids));
-        };
-
-        const reportingIds = getReportingEmployeeIds(u.employeeId);
-        const memberLeads = allLeads.filter(l => reportingIds.includes(l.assignedTo || ''));
-
-        const lCount = memberLeads.length;
-        const contacted = memberLeads.filter(l => l.currentStatus !== 'New').length;
-        const meetings = memberLeads.filter(l => l.currentStatus === 'Meeting Completed' || l.meetingDate).length;
-        const pipeline = memberLeads.filter(l => l.currentStatus === 'Pipeline Locked' || l.projectedNCP > 0).length;
-        const collected = memberLeads.reduce((acc, curr) => acc + (curr.collectedNCP || 0), 0);
-        const projected = memberLeads.reduce((acc, curr) => acc + (curr.projectedNCP || 0), 0);
-        const convertedCount = memberLeads.filter(l => l.currentStatus === 'Converted' || l.collectedNCP > 0).length;
-
-        const rate = lCount > 0 ? `${Math.round((convertedCount / lCount) * 100)}%` : '0%';
-
-        return {
-          user: u,
-          totalLeads: lCount,
-          contactedCalls: contacted,
-          meetingsCompleted: meetings,
-          pipelineLocked: pipeline,
-          collectedNCP: collected,
-          projectedNCP: projected,
-          conversionRate: rate
-        };
-      });
-
-      setTeamMembers(computedMembers);
-
     } catch (err) {
       console.error("Error computing team progress stats:", err);
       toast.error("Error loading data.");
@@ -179,20 +230,19 @@ export default function TeamHierarchy() {
     loadAllData();
   }, [currentUser]);
 
-  // ----------------------------------------------------
-  // HIERARCHY TREE LOGIC
-  // ----------------------------------------------------
-  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.1, 1.4));
-  const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.1, 0.6));
-  const handleZoomReset = () => setZoom(1);
+  // The board view for the viewing user, derived from the live tree.
+  const boardView = useMemo(
+    () => buildOrganogramBoardView(nodes, currentUser?.employeeId ?? ''),
+    [nodes, currentUser?.employeeId],
+  );
 
   // ----------------------------------------------------
   // INTERACTIVE STATS DRAWER (DETAILS SIDEBAR)
   // ----------------------------------------------------
-  const handleNodeClick = async (node: OrgNode) => {
-    if (!node.employeeId) return;
-    
-    const emp = users.find(u => u.employeeId === node.employeeId);
+  const handleSelect = async (employeeId: string) => {
+    if (!employeeId) return;
+
+    const emp = users.find(u => u.employeeId === employeeId);
     if (!emp) {
       toast.error('Employee details not found.');
       return;
@@ -230,307 +280,21 @@ export default function TeamHierarchy() {
     }
   };
 
-  const isNodeMatchingQuery = (node: OrgNode): boolean => {
-    if (!searchQuery) return false;
-    const q = searchQuery.toLowerCase();
-    if (node.name.toLowerCase().includes(q)) return true;
-    if (node.designation && node.designation.toLowerCase().includes(q)) return true;
-    if (node.employeeId && node.employeeId.toLowerCase().includes(q)) return true;
-    return false;
-  };
-
-  // ----------------------------------------------------
-  // RECURSIVE TREE RENDERING COMPONENT
-  // ----------------------------------------------------
-  const renderTreeNode = (node: OrgNode) => {
-    const children = nodes.filter(n => n.managerEmployeeId === node.employeeId);
-    const matches = isNodeMatchingQuery(node);
-
-    return (
-      <li key={node.employeeId}>
-        <div className="inline-block relative">
-          <div 
-            onClick={() => handleNodeClick(node)}
-            className={cn(
-              "w-56 bg-white border-2 rounded-xl shadow-xs overflow-hidden text-center transition-all duration-300 relative group cursor-pointer",
-              matches 
-                ? "border-amber-400 ring-4 ring-amber-400/30 scale-[1.05] shadow-lg" 
-                : "border-slate-200 hover:border-[#978C21] hover:shadow-md hover:scale-[1.02]",
-              node.level === 1 && "border-[#0359B3]/40 bg-gradient-to-b from-blue-50/20 to-white"
-            )}
-          >
-            {/* Header / Top label */}
-            <div className={cn(
-              "text-[10px] font-black uppercase tracking-widest py-1.5 px-3 border-b text-center font-sans",
-              node.level === 1
-                ? "bg-blue-100/80 border-blue-200 text-[#0359B3]"
-                : "bg-[#978C21]/10 border-amber-200/50 text-[#978C21]"
-            )}>
-              {node.roleName || node.designation || 'EMPLOYEE'}
-            </div>
-
-            {/* Core / Bottom label */}
-            <div className="p-3">
-              <p className="text-sm font-extrabold text-slate-800 tracking-tight block">
-                {node.name}
-              </p>
-              <span className="text-[9px] font-bold text-slate-400 mt-1 font-mono block">
-                ID: {node.employeeId}
-              </span>
-              {!node.isActive && (
-                <span className="text-[9px] font-bold text-red-500 mt-1 block uppercase tracking-widest">
-                  Inactive
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Render child nodes under the connector lines */}
-        {children.length > 0 && (
-          <ul>
-            {children.map(child => renderTreeNode(child))}
-          </ul>
-        )}
-      </li>
-    );
-  };
-
   return (
     <div className="ep-page">
-      <BackButton fallback="/" />
-      <EnterprisePageHeader
-        path="/team/organogram"
-        actions={(
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Tab selection toggle */}
-            <div className="flex p-1 bg-slate-100 rounded-lg border border-slate-200">
-              <button
-                onClick={() => setActiveTab('chart')}
-                className={cn(
-                  "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
-                  activeTab === 'chart'
-                    ? "bg-white text-[#978C21] shadow-xs"
-                    : "text-slate-600 hover:text-slate-900"
-                )}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                {t('orgChart')}
-              </button>
-              <button
-                onClick={() => setActiveTab('list')}
-                className={cn(
-                  "px-3.5 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-2",
-                  activeTab === 'list'
-                    ? "bg-white text-[#978C21] shadow-xs"
-                    : "text-slate-600 hover:text-slate-900"
-                )}
-              >
-                <Users className="w-3.5 h-3.5" />
-                {t('listView')}
-              </button>
-            </div>
-
-            {/* Search tool for Chart */}
-            {activeTab === 'chart' && (
-              <div className="flex items-center gap-2">
-                <Search className="w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder={t("searchPlaceholder")}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="ep-search"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600" aria-label="Clear search">
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* Refresh organogram */}
-            {activeTab === 'chart' && (
-              <button
-                type="button"
-                onClick={() => loadAllData()}
-                className="ep-btn ep-btn-primary"
-                title="The chart is generated automatically from reporting links"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Refresh
-              </button>
-            )}
-          </div>
-        )}
-      />
+      <EnterprisePageHeader path="/team/organogram" />
 
       {/* Loading animation */}
       {loading ? (
         <div className="flex justify-center items-center py-32">
           <div className="w-12 h-12 border-4 border-slate-100 border-t-[#978C21] rounded-full animate-spin"></div>
         </div>
+      ) : boardView.empty ? (
+        <div className="orgb-empty">
+          No organogram yet — assign reporting managers to employees in User Management.
+        </div>
       ) : (
-        <AnimatePresence mode="wait">
-          {activeTab === 'chart' ? (
-            <motion.div
-              key="chart-tab"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              className="space-y-4"
-            >
-              {/* Zoom and Drag notice toolbar */}
-              <div className="ep-card flex items-center justify-between" style={{ padding: '12px 16px' }}>
-                <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2">
-                  <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
-                  ← Scroll horizontally to explore chart →
-                </span>
-                
-                {/* Zoom Controls */}
-                <div className="flex items-center gap-1.5">
-                  <button 
-                    onClick={handleZoomOut} 
-                    className="p-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md transition-colors"
-                    title="Zoom Out"
-                  >
-                    <ZoomOut className="w-4 h-4" />
-                  </button>
-                  <span className="text-xs font-mono font-bold text-slate-500 px-2 min-w-10 text-center">
-                    {Math.round(zoom * 100)}%
-                  </span>
-                  <button 
-                    onClick={handleZoomIn} 
-                    className="p-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md transition-colors"
-                    title="Zoom In"
-                  >
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={handleZoomReset} 
-                    className="p-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md transition-colors"
-                    title="Reset Zoom"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* main Tree Stage */}
-              <div className="ep-card w-full overflow-auto custom-scrollbar" style={{ maxHeight: '75vh', background: '#F9F9F4', padding: 48 }}>
-                <div 
-                  className="org-tree transition-transform duration-200 ease-out" 
-                  style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
-                >
-                  <ul>
-                    {nodes.length === 0 && (
-                      <li className="text-center text-slate-400 font-bold uppercase tracking-widest text-[11px] italic py-16">
-                        No organogram yet — assign reporting managers to employees in User Management.
-                      </li>
-                    )}
-                    {rootEmployeeIds
-                      .map(id => nodes.find(n => n.employeeId === id))
-                      .filter((n): n is OrgNode => Boolean(n))
-                      .map(rootNode => renderTreeNode(rootNode))}
-                  </ul>
-                </div>
-              </div>
-            </motion.div>
-          ) : (
-            // Tab 2: Roster List (Original Subordinate Statistics representation)
-            <motion.div
-              key="list-tab"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              className="space-y-6"
-            >
-              {teamMembers.length === 0 ? (
-                <div className="ep-card" style={{ textAlign: 'center', padding: '48px 16px' }}>
-                  <p className="ep-empty">
-                  No direct reports in your reporting line.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {teamMembers.map((member, idx) => (
-                    <motion.div
-                      key={member.user.id}
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: idx * 0.04 }}
-                      onClick={() => {
-                        setSelectedMember(member.user);
-                        setSelectedMemberStats({
-                          totalLeads: member.totalLeads,
-                          contactedCalls: member.contactedCalls,
-                          meetingsCompleted: member.meetingsCompleted,
-                          collectedNCP: member.collectedNCP,
-                          conversionRate: member.conversionRate
-                        });
-                        // Fetch details
-                        leadService.getLeads({
-                          employeeId: member.user.employeeId,
-                          role: member.user.role
-                        }).then(leads => setSelectedMemberLeads(leads)).catch(() => setSelectedMemberLeads([]));
-                      }}
-                      className="ep-card ep-kpi-btn flex flex-col justify-between group"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between mb-4">
-                          <div className="px-2.5 py-0.5 bg-slate-900 text-[#978C21] text-[9px] font-black uppercase tracking-widest rounded-sm">
-                            {member.user.role}
-                          </div>
-                          <span className="text-[9px] font-mono font-bold text-slate-400 uppercase">
-                            ID: {member.user.employeeId}
-                          </span>
-                        </div>
-
-                        <h3 className="text-lg font-extrabold text-slate-800 uppercase tracking-tight mb-1 group-hover:text-[#978C21] transition-colors">
-                          {member.user.name}
-                        </h3>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-6 italic">
-                          {member.user.email}
-                        </p>
-
-                        <div className="grid grid-cols-3 gap-2 border-t border-slate-100 pt-4 mb-6 text-center">
-                          <div>
-                            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Leads</p>
-                            <p className="text-base font-extrabold text-slate-800">{member.totalLeads}</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Meetings</p>
-                            <p className="text-base font-extrabold text-[#0359B3]">{member.meetingsCompleted}</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Ratio</p>
-                            <p className="text-base font-extrabold text-emerald-500">{member.conversionRate}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-[#FBFAF8] p-4 rounded-lg border border-slate-100 flex items-center justify-between">
-                        <div>
-                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Collected NCP</p>
-                          <p className="text-[13px] font-extrabold text-[#978C21]">৳{member.collectedNCP.toLocaleString()}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Projected NCP</p>
-                          <p className="text-[11px] font-bold text-slate-500">৳{member.projectedNCP.toLocaleString()}</p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-end text-right text-[9px] font-bold text-[#978C21] uppercase tracking-widest italic mt-4 gap-1 group-hover:translate-x-1 transition-transform">
-                        <span>Performance Details</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <OrganogramBoard view={boardView} onSelect={handleSelect} />
       )}
 
       {/* ----------------------------------------------------
@@ -539,7 +303,7 @@ export default function TeamHierarchy() {
       <AnimatePresence>
         {selectedMember && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex justify-end">
-            <motion.div 
+            <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
@@ -561,7 +325,7 @@ export default function TeamHierarchy() {
                       </p>
                     </div>
                   </div>
-                  <button 
+                  <button
                     type="button"
                     onClick={() => {
                       setSelectedMember(null);
@@ -627,7 +391,7 @@ export default function TeamHierarchy() {
                       <h4 className="text-sm font-semibold text-slate-700 mb-3">
                         {t('latestLeads')}
                       </h4>
-                      
+
                       <div className="ep-card ep-tablecard">
                         <div className="ep-tablewrap">
                           <table>
