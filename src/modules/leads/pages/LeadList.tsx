@@ -806,51 +806,13 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           )}
         </span>
       </button>
-      {/* Quick status update straight from the list (same rule as Lead 360:
-          only when the role may edit leads). */}
-      {canEditLead && (
-        <button
-          type="button"
-          className="lf-row-action lf-row-action--primary"
-          onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}/update`)}
-          aria-label={'Update status for ' + (lead.prospectName || 'lead')}
-          title="Update status"
-        >
-          <Target size={17} />
-        </button>
-      )}
-      {canReassign && (
-        <button
-          type="button"
-          className="lf-row-action"
-          onClick={() => setReassignLead(lead)}
-          aria-label={'Reassign lead for ' + (lead.prospectName || 'lead')}
-          title="Reassign"
-        >
-          <UserCog size={17} />
-        </button>
-      )}
-      {lead.deleteRequested ? (
-        <button
-          type="button"
-          disabled
-          className="lf-row-action"
-          aria-label="Delete requested — waiting for admin review"
-          title="Delete requested"
-        >
-          <Trash2 size={17} className="text-amber-500" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="lf-row-action"
-          onClick={() => setDeleteTarget(lead)}
-          aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
-          title="Request deletion"
-        >
-          <Trash2 size={17} />
-        </button>
-      )}
+      {/* Mobile row: client info + arrow only (2026-11-21). The Update,
+          Reassign and Delete-request buttons used to sit here too, but
+          four 38px buttons ate ~176px of a ~360px screen and the name,
+          mobile and status badge truncated to unreadable stubs. All
+          three actions live on Lead 360 (compact icon buttons in both
+          headers) — the arrow below is the way in. Desktop keeps all
+          four buttons in the table. */}
       <button
         type="button"
         className="lf-row-action"
