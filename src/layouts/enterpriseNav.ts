@@ -514,7 +514,7 @@ const FALLBACK_LABELS: Record<string, string> = {
   '/settings/products-campaigns': 'Products & Campaigns',
   '/settings/performance-diagnostics': 'Performance Diagnostics',
   '/team/kpi': 'KPI detail',
-  '/team/organogram': 'Team Members',
+  '/team/organogram': 'Teams & Hierarchy',
   '/team': 'Team',
   '/users': 'Users & Roles',
   '/workbench': 'Daily Workbench',

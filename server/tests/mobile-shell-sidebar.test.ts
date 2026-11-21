@@ -100,7 +100,9 @@ describe('Mobile shell — left sidebar drawer', () => {
       'src/modules/dashboard/pages/SalesPipelinePage.tsx',
       'src/modules/leads/pages/Activities.tsx',
       'src/modules/leads/pages/FollowUpStrategy.tsx',
-      'src/modules/hierarchy/pages/TeamHierarchy.tsx',
+      // Organogram board rebuild (2026-11-21): TeamHierarchy is NOT
+      // here — the Mahadi-approved sample has no back control (a
+      // top-level screen; navigation runs through the shell).
       'src/modules/roadshows/pages/RoadshowPage.tsx',
       'src/modules/auth/pages/TaskCalendar.tsx',
       // Team Lead / Manager / Admin workspace (2026-11-20): the
