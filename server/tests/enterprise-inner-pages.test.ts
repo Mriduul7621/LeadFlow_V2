@@ -222,11 +222,13 @@ describe('inner pages — every link target is a real App.tsx route', () => {
     // link, the mobile row open, the mobile update, the mobile
     // chevron, the desktop row open, the desktop update. (The
     // Timeline and Edit buttons are gone; the quick view lives in
-    // LeadQuickViewModal.tsx.) Team Lead / Manager / Admin
-    // workspace (2026-11-20): +5 — the Manager TL-group link, the
-    // Manager member link, the two All-teams back links, and the
-    // /leads/my page-gate redirect.
-    'src/modules/leads/pages/LeadList.tsx': 11,
+    // LeadQuickViewModal.tsx.) Mobile lead row (2026-11-21): −1 —
+    // the mobile one-tap update moved to Lead 360, so the mobile
+    // row keeps only its open + chevron. Team Lead / Manager /
+    // Admin workspace (2026-11-20): +5 — the Manager TL-group
+    // link, the Manager member link, the two All-teams back links,
+    // and the /leads/my page-gate redirect.
+    'src/modules/leads/pages/LeadList.tsx': 10,
     'src/modules/leads/pages/AllLeads.tsx': 1,
     'src/modules/workbench/pages/DailyWorkbench.tsx': 16,
     'src/modules/auth/pages/TaskCalendar.tsx': 5,

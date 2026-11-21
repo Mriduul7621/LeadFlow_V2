@@ -264,10 +264,37 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     assert.ok(l.includes('aria-label="Update lead status"') && l.includes('aria-label="Edit lead"'), 'both icons keep accessible names');
   });
 
-  it('the Leads list offers a one-tap status update per row', () => {
+  it('the Leads list keeps the one-tap status update on desktop, not on mobile', () => {
     const l = leadList();
-    assert.ok(l.includes('/update`'), 'rows must link to the update page');
-    assert.ok(l.includes('lf-row-action'), 'the quick action must use the shared compact style');
-    assert.ok(l.includes('canEditLead'), 'the quick action must be permission-gated');
+    const mobile = l.slice(l.indexOf('lf-mobile-lead-list'), l.indexOf('lf-desktop-lead-table'));
+    const desktop = l.slice(l.indexOf('lf-desktop-lead-table'));
+    assert.ok(desktop.includes('/update`'), 'the desktop table must keep the update link');
+    assert.ok(desktop.includes('canEditLead'), 'the desktop quick action must stay permission-gated');
+    assert.ok(!mobile.includes('/update`'), 'the mobile row must not link to the update page — update lives on Lead 360 (2026-11-21)');
+  });
+
+  it('the mobile lead row shows client info + arrow only', () => {
+    const l = leadList();
+    const mobile = l.slice(l.indexOf('lf-mobile-lead-list'), l.indexOf('lf-desktop-lead-table'));
+    assert.ok(mobile.includes('lf-mobile-lead-avatar'), 'the row keeps the avatar');
+    assert.ok(mobile.includes('lf-mobile-lead-copy'), 'the row keeps the name + mobile copy');
+    assert.ok(mobile.includes('lf-mobile-lead-status'), 'the row keeps the status badge');
+    assert.ok(mobile.includes('ChevronRight'), 'the row keeps the arrow into Lead 360');
+    assert.ok(mobile.includes("navigate('/leads/' + lead.id)"), 'the row still opens Lead 360');
+    assert.ok(!mobile.includes('<Target'), 'no Update button on the mobile row');
+    assert.ok(!mobile.includes('<UserCog'), 'no Reassign button on the mobile row');
+    assert.ok(!mobile.includes('<Trash2'), 'no Delete-request button on the mobile row');
+    assert.ok(!mobile.includes('setReassignLead(lead)'), 'no reassign handler on the mobile row');
+    assert.ok(!mobile.includes('setDeleteTarget(lead)'), 'no delete-request handler on the mobile row');
+  });
+
+  it('Lead 360 Reassign/Request-deletion are icon-only on mobile too', () => {
+    const l = lead360();
+    const mobile = l.slice(l.indexOf('<section className="space-y-4 md:hidden">'));
+    const reassignBtn = mobile.slice(mobile.indexOf('aria-label="Reassign lead"') - 420, mobile.indexOf('aria-label="Reassign lead"') + 200);
+    const deleteBtn = mobile.slice(mobile.indexOf('aria-label="Request deletion"') - 420, mobile.indexOf('aria-label="Request deletion"') + 200);
+    assert.ok(/h-10 w-10/.test(reassignBtn), 'the mobile Reassign action must be a square icon button');
+    assert.ok(/h-10 w-10/.test(deleteBtn), 'the mobile Request-deletion action must be a square icon button');
+    assert.ok(mobile.includes('aria-label="Update lead status"'), 'the mobile header keeps Update too');
   });
 });
