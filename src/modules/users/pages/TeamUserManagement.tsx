@@ -46,6 +46,8 @@ export default function TeamUserManagement() {
 
   const [fullName, setFullName] = useState('');
   const [employeeId, setEmployeeId] = useState('');
+  // 064: optional IDRA FA Code (unique when present).
+  const [idraFaCode, setIdraFaCode] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [designation, setDesignation] = useState('');
@@ -82,6 +84,7 @@ export default function TeamUserManagement() {
       const saved = await userService.addEmployee({
         fullName: name,
         employeeId: empId,
+        idraFaCode: idraFaCode.trim().toUpperCase() || undefined,
         email: email.trim() || undefined,
         phone: phone.trim() || undefined,
         designation: designation.trim() || undefined,
@@ -91,6 +94,7 @@ export default function TeamUserManagement() {
       toast.success(`${saved.name || name} has been added. Temporary password: "${tempPassword}"`);
       setFullName('');
       setEmployeeId('');
+      setIdraFaCode('');
       setEmail('');
       setPhone('');
       setDesignation('');
@@ -147,6 +151,16 @@ export default function TeamUserManagement() {
                   value={employeeId}
                   onChange={e => setEmployeeId(e.target.value)}
                   placeholder="e.g. 2026123"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="ep-field-label">
+                IDRA FA Code (optional)
+                <input
+                  className="ep-input"
+                  value={idraFaCode}
+                  onChange={e => setIdraFaCode(e.target.value)}
+                  placeholder="e.g. 1101010116002"
                   autoComplete="off"
                 />
               </label>

@@ -57,6 +57,8 @@ export interface RawUserBulkRow {
   temporaryPassword?: string;
   mustChangePassword?: string | boolean;
   status?: string;
+  /** 064: optional IDRA FA Code (client maps the Code / FA Code headers). */
+  idraFaCode?: string;
 }
 
 export interface NormalizedUserBulkRow {
@@ -77,6 +79,8 @@ export interface NormalizedUserBulkRow {
   mustChangePassword: boolean; // default true
   isActive: boolean; // default true
   statusLabel: 'Active' | 'Inactive';
+  /** 064: normalized uppercase (may be empty — optional). */
+  idraFaCode: string;
 }
 
 export interface ReferenceMaps {
@@ -88,6 +92,8 @@ export interface ReferenceMaps {
   teamByName: Map<string, { id: string; team_code: string; team_name: string; is_active: boolean }>;
   existingByEmpId: Map<string, { id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; department_ids?: string[]; team_id: string | null; manager_id: string | null; is_active: boolean; role_code: string | null; hierarchy_level: number; department_code?: string | null }>;
   existingByEmail: Map<string, { id: string; employee_id: string; email: string }>;
+  /** 064: FA code (uppercase) -> the account that already holds it. */
+  existingByFaCode: Map<string, { id: string; employee_id: string }>;
   allUsersManagerMap: Map<string, string | null>; // employee_id uppercase -> manager employee_id uppercase or null
   allUsersById: Map<string, string>; // user id -> employee_id uppercase
   existingById: Map<string, { id: string; employee_id: string; role_id: string | null; department_id: string | null; hierarchy_level: number; role_code: string | null; is_active: boolean }>;
@@ -145,6 +151,11 @@ function clean(value: any): string {
 }
 
 export function normalizeEmployeeId(value: any): string {
+  return clean(value).toUpperCase();
+}
+
+/** 064: an FA code normalizes exactly like an Employee ID. */
+export function normalizeIdraFaCode(value: any): string {
   return clean(value).toUpperCase();
 }
 
@@ -218,6 +229,7 @@ export function normalizeUserBulkRow(raw: RawUserBulkRow): NormalizedUserBulkRow
     mustChangePassword: mustParsed.value,
     isActive: statusParsed.isActive,
     statusLabel: statusParsed.label,
+    idraFaCode: normalizeIdraFaCode((raw as any).idraFaCode || ''),
   };
 }
 
@@ -233,7 +245,7 @@ export function buildReferenceMaps(opts: {
   roles: Array<{ id: string; role_code: string; role_name: string; hierarchy_level: number; is_active?: boolean; status?: string }>;
   departments: Array<{ id: string; department_code: string; department_name: string; is_active?: boolean; status?: string }>;
   teams: Array<{ id: string; team_code: string; team_name: string; is_active?: boolean; status?: string }>;
-  existingUsers: Array<{ id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; department_ids?: string[]; team_id: string | null; manager_id: string | null; is_active?: boolean; account_status?: string; role_code?: string | null; hierarchy_level?: number | null }>;
+  existingUsers: Array<{ id: string; employee_id: string; email: string; role_id: string | null; department_id: string | null; department_ids?: string[]; team_id: string | null; manager_id: string | null; is_active?: boolean; account_status?: string; role_code?: string | null; hierarchy_level?: number | null; idra_fa_code?: string | null }>;
   allUsers: Array<{ id: string; employee_id: string; manager_id: string | null }>;
 }): ReferenceMaps {
   const roleByCode = new Map<string, any>();
@@ -284,6 +296,8 @@ export function buildReferenceMaps(opts: {
   const existingByEmpId = new Map<string, any>();
   const existingByEmail = new Map<string, any>();
   const existingById = new Map<string, any>();
+  // 064: FA code -> the account holding it, for the uniqueness check.
+  const existingByFaCode = new Map<string, { id: string; employee_id: string }>();
   for (const u of opts.existingUsers) {
     const active = u.is_active !== false && String(u.account_status || '').toUpperCase() !== 'INACTIVE';
     const empUpper = String(u.employee_id).toUpperCase();
@@ -306,6 +320,8 @@ export function buildReferenceMaps(opts: {
     existingByEmpId.set(empUpper, entry);
     if (u.email) existingByEmail.set(String(u.email).toLowerCase(), entry);
     existingById.set(u.id, entry);
+    const faCode = String((u as any).idra_fa_code || '').trim().toUpperCase();
+    if (faCode) existingByFaCode.set(faCode, { id: u.id, employee_id: u.employee_id });
   }
 
   const allUsersById = new Map<string, string>();
@@ -332,6 +348,7 @@ export function buildReferenceMaps(opts: {
     teamByName,
     existingByEmpId,
     existingByEmail,
+    existingByFaCode,
     allUsersManagerMap,
     allUsersById,
     existingById,
@@ -398,6 +415,8 @@ export function validateBulkRows(opts: {
   // duplicate detection within file
   const empIdCount = new Map<string, number[]>();
   const emailCount = new Map<string, number[]>();
+  // 064: the FA code is unique, so a duplicate inside the file is an error.
+  const faCodeCount = new Map<string, number[]>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     if (r.employeeId) {
@@ -409,6 +428,11 @@ export function validateBulkRows(opts: {
       const arr = emailCount.get(r.email) || [];
       arr.push(i);
       emailCount.set(r.email, arr);
+    }
+    if (r.idraFaCode) {
+      const arr = faCodeCount.get(r.idraFaCode) || [];
+      arr.push(i);
+      faCodeCount.set(r.idraFaCode, arr);
     }
   }
 
@@ -441,12 +465,18 @@ export function validateBulkRows(opts: {
     // Email format
     if (row.email && !EMAIL_RE.test(row.email)) errors.push(`Email \"${row.email}\" is not a valid email address`);
 
+    // 064: FA code format (same charset as the Employee ID) + file duplicates.
+    if (row.idraFaCode && !EMPLOYEE_ID_RE.test(row.idraFaCode)) errors.push(`IDRA FA Code \"${row.idraFaCode}\" is invalid (2-30 chars, letters/numbers/dot/dash/underscore)`);
+
     // Duplicate within file
     if (row.employeeId && (empIdCount.get(row.employeeId)?.length || 0) > 1) {
       errors.push(`Duplicate Employee ID \"${row.employeeId}\" within the file`);
     }
     if (row.email && (emailCount.get(row.email)?.length || 0) > 1) {
       errors.push(`Duplicate Email \"${row.email}\" within the file`);
+    }
+    if (row.idraFaCode && (faCodeCount.get(row.idraFaCode)?.length || 0) > 1) {
+      errors.push(`Duplicate IDRA FA Code \"${row.idraFaCode}\" within the file`);
     }
 
     // Must Change Password parsing
@@ -511,6 +541,13 @@ export function validateBulkRows(opts: {
       errors.push(`Email \"${row.email}\" already belongs to another user (${existingByEmail.employee_id})`);
     } else if (row.email && !existingByEmp && existingByEmail) {
       errors.push(`Email \"${row.email}\" already belongs to another user (${existingByEmail.employee_id})`);
+    }
+
+    // 064: FA-code conflict — the code belongs to another account.
+    // (An update row re-stating its OWN stored code is fine.)
+    const existingByFaCode = row.idraFaCode ? maps.existingByFaCode.get(row.idraFaCode) : undefined;
+    if (row.idraFaCode && existingByFaCode && (!existingByEmp || existingByFaCode.id !== existingByEmp.id)) {
+      errors.push(`IDRA FA Code \"${row.idraFaCode}\" already belongs to another user (${existingByFaCode.employee_id})`);
     }
 
     // Determine action based on mode

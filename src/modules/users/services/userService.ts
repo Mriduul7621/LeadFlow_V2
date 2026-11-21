@@ -97,6 +97,7 @@ export const userService = {
   async addEmployee(payload: {
     fullName: string;
     employeeId: string;
+    idraFaCode?: string;
     email?: string;
     phone?: string;
     designation?: string;

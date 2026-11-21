@@ -282,7 +282,9 @@ export default function LeadUpdate() {
     setLookupLoading(true);
     setLookupError('');
     try {
-      const matched = await leadService.lookupPolicy(key);
+      // 064: send the assignee so the server can resolve their stored
+      // FA code for the mismatch verdict.
+      const matched = await leadService.lookupPolicy(key, lead?.assignedTo || undefined);
       const filled = policyMatchToConvertedFields(matched);
       setProductName(filled.productName);
       setSumAssured(filled.sumAssured);
@@ -598,10 +600,10 @@ export default function LeadUpdate() {
                       <div className="flex justify-between gap-2"><dt className="font-semibold">FA Code</dt><dd className="font-bold text-stone-900">{matchedPolicy.faCode}</dd></div>
                     ) : null}
                   </dl>
-                  {isFaMismatch(matchedPolicy.faCode, lead.assignedTo) ? (
+                  {isFaMismatch(matchedPolicy.faCode, matchedPolicy.assigneeFaCode) ? (
                     <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 font-semibold text-amber-700">
                       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      FA Code on the policy ({matchedPolicy.faCode}) differs from this lead&apos;s assignee ({lead.assignedTo}). Please check — you can still save.
+                      FA Code on the policy ({matchedPolicy.faCode}) differs from the assignee&apos;s FA Code ({matchedPolicy.assigneeFaCode}). Please check — you can still save.
                     </p>
                   ) : null}
                   {matchedPolicy.isTermPolicy ? (

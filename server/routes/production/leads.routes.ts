@@ -3749,7 +3749,8 @@ router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
 
 /* ------------------------------------------------------------------
    POST /leads/policy-lookup — conversion auto-fill (PR sync).
-   Body: { key } — a Proposal No ("Pro-N") or a Policy No.
+   Body: { key } — a Proposal No ("Pro-N") or a Policy No, plus the
+   optional assigneeEmployeeId (the lead's assignee Employee ID).
    Returns the ONE matched policy's conversion fields (product, sum
    assured, collected premium, term, pay mode, FA code, comm. date)
    from the retail sales sheet, or 404 POLICY_NOT_FOUND when neither
@@ -3757,6 +3758,10 @@ router.get('/leads/:id/activities', requireAuth, async (req: any, res) => {
    never blocked). 503 when Sheets is unconfigured/unreachable.
    Gated by leads.edit, the same permission that gates follow-up
    writes; no lead id is needed because the lookup precedes the save.
+   064: when assigneeEmployeeId is sent, the reply also carries
+   assigneeFaCode — the assignee's STORED IDRA FA Code (null when the
+   assignee has none stored) — so the client compares the policy's FA
+   Code against the assignee's FA Code, not their Employee ID.
 ------------------------------------------------------------------- */
 router.post('/leads/policy-lookup', requireAuth, requirePermissionCode('leads.edit'), async (req: any, res) => {
   try {
@@ -3775,7 +3780,29 @@ router.post('/leads/policy-lookup', requireAuth, requirePermissionCode('leads.ed
         message: 'This policy is not in the sales sheet yet (MIS enters the first receipt after the sale). Fill in the conversion details manually — you can look it up again later.',
       });
     }
-    return sendJson(res, 200, { success: true, data: matched });
+    // 064: resolve the assignee's stored FA code for the mismatch
+    // verdict. The server owns the users table, so the client never
+    // needs a user lookup of its own — and no user record beyond the
+    // one code leaves the server. Null when no assignee was sent, the
+    // assignee has no stored code, or the database is unavailable; in
+    // all three cases the client shows no warning (nothing to
+    // compare), exactly like a policy without an FA code.
+    let assigneeFaCode: string | null = null;
+    const assigneeEmployeeId = String(req.body?.assigneeEmployeeId ?? '').trim();
+    if (assigneeEmployeeId && useDb()) {
+      try {
+        const found = await getPool().query(
+          `SELECT idra_fa_code FROM users WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+          [assigneeEmployeeId]
+        );
+        assigneeFaCode = String(found.rows[0]?.idra_fa_code || '').trim() || null;
+      } catch {
+        // The lookup itself succeeded — a failed code resolution must
+        // never turn it into an error; the warning is simply skipped.
+        assigneeFaCode = null;
+      }
+    }
+    return sendJson(res, 200, { success: true, data: { ...matched, assigneeFaCode } });
   } catch (error: any) {
     if (error instanceof PolicyLookupError) {
       return sendJson(res, error.status, { success: false, error: error.code, message: error.message });

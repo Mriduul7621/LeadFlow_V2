@@ -195,7 +195,7 @@ router.post('/auth/login', async (req, res) => {
   const password = String(req.body?.password || '');
 
   if (!loginId || !password) {
-    return sendJson(res, 400, { success: false, message: 'Employee ID and password are required' });
+    return sendJson(res, 400, { success: false, message: 'Employee ID or FA Code and password are required' });
   }
 
   if (!useDb()) {
@@ -205,7 +205,9 @@ router.post('/auth/login', async (req, res) => {
     const user = fallbackStore.users.find(
       item =>
         String(item.employeeId || '').toUpperCase() === loginId.toUpperCase() ||
-        String(item.email || '').toLowerCase() === loginId.toLowerCase()
+        String(item.email || '').toLowerCase() === loginId.toLowerCase() ||
+        // 064: the IDRA FA Code is a third login identifier.
+        String((item as any).idraFaCode || '').toUpperCase() === loginId.toUpperCase()
     );
     if (!user || !user.password) {
       logAuthLoginFailed({ reason: 'invalid_credentials' });
@@ -260,9 +262,11 @@ router.post('/auth/login', async (req, res) => {
     // compares it against, so a cold reload of an unchanged account needs no
     // state rewrite (and therefore no re-run of the [user] effects that
     // re-fetch roles/notifications/dashboard data).
+    // 064: the login identifier is the Employee ID, the email, or
+    // the IDRA FA Code — one account, three ways to name it.
     const result = await pool.query(
       `${USER_SELECT}
-       WHERE UPPER(u.employee_id) = UPPER($1) OR UPPER(u.email) = UPPER($1)
+       WHERE UPPER(u.employee_id) = UPPER($1) OR UPPER(u.email) = UPPER($1) OR UPPER(u.idra_fa_code) = UPPER($1)
        LIMIT 1`,
       [loginId]
     );

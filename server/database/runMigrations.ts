@@ -73,6 +73,7 @@ import { up as stageRulesTerminal } from "./migrations/060_stage_rules_terminal.
 import { up as rmRoleGrantScope } from "./migrations/061_rm_role_grant_scope.js";
 import { up as leadDeleteRequests } from "./migrations/062_lead_delete_requests.js";
 import { up as usersAddEmployee } from "./migrations/063_users_add_employee.js";
+import { up as usersIdraFaCode } from "./migrations/064_users_idra_fa_code.js";
 
 import {
   loadLedger,
@@ -201,6 +202,7 @@ const migrations: Migration[] = [
     // is IF NOT EXISTS, so a re-run would be a no-op anyway.
     { id: "062_lead_delete_requests", name: "Lead Delete Requests", run: leadDeleteRequests },
     { id: "063_users_add_employee", name: "Users Add-Employee Permission (TL/Manager user add)", run: usersAddEmployee },
+    { id: "064_users_idra_fa_code", name: "Users IDRA FA Code (optional, unique)", run: usersIdraFaCode },
 
 ];
 
@@ -240,20 +242,22 @@ export async function runMigrations(): Promise<MigrationRunResult> {
     if (ledger.createdNow && ledger.applied.size === 0) {
         // First boot with the ledger: adopt an already-current legacy
         // database instead of replaying 226 round trips of DDL.
-        // Migrations 061 and 062 have no adoption sentinel (the sentinels
-        // are the leads/roadshows/users tables + the 041 index), so legacy
-        // adoption must leave them pending and run them once after
-        // adopting the pre-existing schema baseline. 061 is a data-only
-        // permission correction; 062's DDL is IF NOT EXISTS, so its run
-        // is a no-op when the table is already there.
-        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope" && id !== "062_lead_delete_requests");
+        // Migrations 061, 062 and 064 have no adoption sentinel (the
+        // sentinels are the leads/roadshows/users tables + the 041
+        // index), so legacy adoption must leave them pending and run
+        // them once after adopting the pre-existing schema baseline.
+        // 061 is a data-only permission correction; 062's DDL is IF
+        // NOT EXISTS, so its run is a no-op when the table is already
+        // there; 064 only adds a nullable column + unique index.
+        const adoptionIds = MIGRATION_IDS.filter(id => id !== "061_rm_role_grant_scope" && id !== "062_lead_delete_requests" && id !== "064_users_idra_fa_code");
         result.adopted = await tryAdoptLegacySchema(adoptionIds);
         if (result.adopted) {
             console.log(
                 `✅ Schema ledger adopted ${adoptionIds.length} existing migrations; pending post-adoption migrations will now run`
             );
-            // Do not return: migrations 061 and 062 intentionally remain unrecorded.
-            // The locked pending pass below re-reads the ledger and runs it.
+            // Do not return: migrations 061, 062 and 064 intentionally
+            // remain unrecorded. The locked pending pass below re-reads
+            // the ledger and runs them.
         }
     }
 

@@ -411,13 +411,15 @@ export const leadService = {
    * Returns the ONE matched policy's conversion fields. The ApiError
    * propagates with the server's message (404 = not in the sheet yet,
    * 503 = lookup not configured) so the form can show it inline and
-   * leave manual entry working.
+   * leave manual entry working. The optional assigneeEmployeeId lets
+   * the server resolve the assignee's stored IDRA FA Code for the
+   * mismatch verdict (064).
    */
-  async lookupPolicy(key: string): Promise<MatchedPolicy> {
+  async lookupPolicy(key: string, assigneeEmployeeId?: string): Promise<MatchedPolicy> {
     return apiRequest<MatchedPolicy>('/api/leads/policy-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, ...(assigneeEmployeeId ? { assigneeEmployeeId } : {}) }),
     });
   },
 

@@ -1048,6 +1048,7 @@ describe('FCM — HTTP integration', () => {
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         employee_id VARCHAR(100) UNIQUE,
+        idra_fa_code VARCHAR(30) UNIQUE,
         full_name VARCHAR(255),
         email VARCHAR(255) UNIQUE,
         password VARCHAR(255),

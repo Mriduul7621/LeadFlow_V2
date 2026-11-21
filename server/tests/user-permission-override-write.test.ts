@@ -67,6 +67,7 @@ describe('Per-user permission overrides — write path against the shipped schem
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         employee_id VARCHAR(50) UNIQUE,
+        idra_fa_code VARCHAR(30) UNIQUE,
         email VARCHAR(150),
         role_id UUID,
         department_id UUID,

@@ -41,6 +41,8 @@ interface ServerPreview {
     isValid: boolean;
     errors: string[];
     warnings: string[];
+    /** 064: the normalized row — carries the parsed IDRA FA Code. */
+    normalized?: { idraFaCode?: string };
   }>;
   fileName?: string;
   mode: 'createOnly' | 'createAndUpdate';
@@ -319,7 +321,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                   <p className="font-semibold">How it works</p>
                   <ul className="list-disc ml-4 mt-1 space-y-1">
                     <li>Template has 3 sheets: Users (import), Reference Values (valid roles/departments/teams), Instructions (rules).</li>
-                    <li>Employee ID is primary — duplicates in file are errors. Email must be unique.</li>
+                    <li>Employee ID is primary — duplicates in file are errors. Email must be unique. IDRA FA Code (optional; also accepted under the headers “Code” or “FA Code”) is unique when present and can be filled in for existing users in Create + Update mode.</li>
                     <li>Role/Department/Team must exactly match database (case-insensitive). Unknown values are row errors.</li>
                     <li>Reporting Manager resolved by Employee ID, supports same-batch managers, order irrelevant. Manager must hold a higher-authority role one or two levels up, subject to department and cycle rules.</li>
                     <li>Passwords: blank → server generates securely and returns once. Supplied passwords min 6 chars, hashed server-side.</li>
@@ -384,6 +386,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                       <tr>
                         <th className="text-left p-2">Row</th>
                         <th className="text-left p-2">Employee ID</th>
+                        <th className="text-left p-2">FA Code</th>
                         <th className="text-left p-2">Full Name</th>
                         <th className="text-left p-2">Role</th>
                         <th className="text-left p-2">Dept</th>
@@ -397,6 +400,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                         <tr key={idx} className="border-t">
                           <td className="p-2">{r.rowNumber}</td>
                           <td className="p-2 font-medium">{r.employeeId}</td>
+                          <td className="p-2">{r.normalized?.idraFaCode || '—'}</td>
                           <td className="p-2">{r.fullName}</td>
                           <td className="p-2">{r.roleResolved || r.roleInput}</td>
                           <td className="p-2">{r.departmentResolved || r.departmentInput}</td>
@@ -427,6 +431,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                       <tr>
                         <th className="text-left p-2">Row</th>
                         <th className="text-left p-2">Employee ID</th>
+                        <th className="text-left p-2">FA Code</th>
                         <th className="text-left p-2">Full Name</th>
                         <th className="text-left p-2">Role</th>
                         <th className="text-left p-2">Dept</th>
@@ -440,6 +445,7 @@ export const UserBulkImportModal: React.FC<Props> = ({ open, onClose, onComplete
                         <tr key={idx} className="border-t">
                           <td className="p-2">{r.rowNumber}</td>
                           <td className="p-2">{r.employeeId}</td>
+                          <td className="p-2">{r.normalized?.idraFaCode || '—'}</td>
                           <td className="p-2">{r.fullName}</td>
                           <td className="p-2">{r.roleResolved || r.roleInput}</td>
                           <td className="p-2">{r.departmentResolved || r.departmentInput}</td>

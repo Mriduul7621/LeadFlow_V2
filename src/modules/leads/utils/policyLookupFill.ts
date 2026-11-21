@@ -30,6 +30,13 @@ export interface MatchedPolicy {
   commDate: string | null;
   source: 'due' | 'pr-database';
   isTermPolicy: boolean;
+  /**
+   * 064: the lead assignee's STORED IDRA FA Code, resolved by the
+   * server from the assigneeEmployeeId sent with the lookup. Null
+   * when no assignee was sent or the assignee has no code stored —
+   * the mismatch check then stays silent (nothing to compare).
+   */
+  assigneeFaCode?: string | null;
 }
 
 /** The Converted form fields a matched policy fills (string form state). */
@@ -60,14 +67,19 @@ export function policyMatchToConvertedFields(matched: MatchedPolicy): PolicyMatc
 }
 
 /**
- * Soft FA check: the sheet's FA Code vs the lead assignee's employee ID.
- * A mismatch is a NON-BLOCKING amber note only — the two systems may use
- * different identifier schemes, so this can never refuse a save.
- * Returns false when either side is missing (nothing to compare).
+ * Soft FA check: the sheet's FA Code vs the lead assignee's STORED
+ * IDRA FA Code (064 — the server resolves it from the assignee's
+ * Employee ID and returns it as MatchedPolicy.assigneeFaCode).
+ * DSF staff sell under their FA code, so comparing against the
+ * Employee ID warned on every correct conversion. A mismatch is a
+ * NON-BLOCKING amber note only — the two systems may disagree, so
+ * this can never refuse a save. Returns false when either side is
+ * missing (nothing to compare — in particular when the assignee has
+ * no FA code stored yet).
  */
-export function isFaMismatch(faCode: string | null | undefined, assignedEmployeeId: string | null | undefined): boolean {
+export function isFaMismatch(faCode: string | null | undefined, assigneeFaCode: string | null | undefined): boolean {
   const a = String(faCode ?? '').trim().toLowerCase();
-  const b = String(assignedEmployeeId ?? '').trim().toLowerCase();
+  const b = String(assigneeFaCode ?? '').trim().toLowerCase();
   if (!a || !b) return false;
   return a !== b;
 }

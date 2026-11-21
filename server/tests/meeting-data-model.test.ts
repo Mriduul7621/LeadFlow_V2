@@ -57,6 +57,7 @@ async function setupSchema(pool: any) {
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       employee_id VARCHAR(30) UNIQUE NOT NULL,
+      idra_fa_code VARCHAR(30) UNIQUE,
       full_name VARCHAR(150) NOT NULL,
       email VARCHAR(150) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
@@ -299,7 +300,7 @@ describe('Meeting data model (PR B) — lead-less events, attendees, RSVP, remin
 
   it('migration 055 is registered: lead_id nullable, attendees table, reminder column; re-run is a no-op', async () => {
     assert.ok(MIGRATION_IDS.includes('055_meeting_data_model'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '063_users_add_employee', '063 is the migration tail (056 stays registered)');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 is the migration tail (056 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('055_meeting_data_model'), 'runner names migration 055');
     const col: any = await pool.query(
       `SELECT is_nullable FROM information_schema.columns WHERE table_name = 'scheduled_activities' AND column_name = 'lead_id'`
