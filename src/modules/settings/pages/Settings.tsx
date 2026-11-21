@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../auth/store/authStore';
+import { unregisterPush } from '../../../native/pushNotifications';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { motion, AnimatePresence } from 'framer-motion';
 import { settingsService } from '../../../services/settingsService';
@@ -814,6 +815,10 @@ export default function Settings({ variant = 'system' }: { variant?: SettingsVar
   };
 
   const handleLogout = () => {
+    // Explicit sign-out: unregister push (the session-null sync must
+    // not — it cannot tell sign-out from session expiry, and an
+    // expired session keeps its device subscription).
+    void unregisterPush();
     logout();
     navigate('/login');
   };

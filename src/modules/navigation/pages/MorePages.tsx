@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuthStore } from '../../auth/store/authStore';
+import { unregisterPush } from '../../../native/pushNotifications';
 import { DIAGNOSTICS_ADMIN_ROLES } from '../../auth/components/AdminRoute';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import type { SystemNotification } from '../../shared/types';
@@ -122,7 +123,7 @@ export function MorePage() {
       <DirectoryList items={items} />
       <button
         type="button"
-        onClick={() => { logout(); navigate('/login'); }}
+        onClick={() => { void unregisterPush(); logout(); navigate('/login'); }}
         className="ep-btn ep-btn-danger"
         style={{ width: '100%', justifyContent: 'center', marginTop: 16 }}
       >

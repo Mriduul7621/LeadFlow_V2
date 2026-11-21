@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../modules/auth/store/authStore';
+import { unregisterPush } from '../native/pushNotifications';
 import { SystemNotification, RolePermission } from '../modules/shared/types';
 import { cn } from '../lib/utils';
 import { motion } from 'framer-motion';
@@ -436,7 +437,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logout stays usable even while the forced-change flag is set. */}
           <button
             type="button"
-            onClick={() => { logout(); navigate('/login'); }}
+            onClick={() => { void unregisterPush(); logout(); navigate('/login'); }}
             className="w-full text-center text-xs font-medium text-stone-400 hover:text-red-600 transition-colors cursor-pointer"
           >
             Log out
@@ -492,6 +493,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const bottomNavActivePath = enterpriseBottomNavActivePath(bottomNavTabs, location.pathname);
 
   const handleLogout = () => {
+    // Explicit sign-out: unregister push (the session-null sync must
+    // not — it cannot tell sign-out from session expiry, and an
+    // expired session keeps its device subscription).
+    void unregisterPush();
     logout();
     navigate('/login');
   };
