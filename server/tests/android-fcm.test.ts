@@ -501,6 +501,10 @@ describe('FCM topic subscribe (stubbed fetch)', () => {
     assert.equal(fcmIidCalls().length, 1);
     assert.equal(fcmIidCalls()[0].url, IID_URL);
     assert.equal(fcmIidCalls()[0].headers.Authorization, 'Bearer fake-access-token');
+    // IID requires this header for OAuth tokens — without it the
+    // subscribe call answers 401 and no device ever joins the topic
+    // (Agent Hub finding, 2026-11-21).
+    assert.equal(fcmIidCalls()[0].headers.access_token_auth, 'true');
     assert.deepEqual(fcmIidCalls()[0].body, {
       to: '/topics/user-2025019',
       registration_tokens: ['fcm-token-abc'],

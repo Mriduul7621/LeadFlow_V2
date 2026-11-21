@@ -354,6 +354,11 @@ export async function subscribeTokenToUserTopic(input: {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        // REQUIRED by the Instance ID API when authorizing with an
+        // OAuth token: without it IID answers 401 ("authorization
+        // header is invalid") and no device ever subscribes. Found
+        // on the Agent Hub first (2026-11-21) — same bug here.
+        access_token_auth: 'true',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ to: `/topics/${topic}`, registration_tokens: [token] }),
