@@ -33,6 +33,7 @@ import {
 import { useCanReassign } from '../hooks/useCanReassign';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import RequestDeleteDialog from '../components/RequestDeleteDialog';
+import DirectDeleteDialog from '../components/DirectDeleteDialog';
 import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
@@ -161,10 +162,24 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   // never deletes the lead at once. A pending lead shows a
   // "Delete requested" marker and the icon is disabled until the
   // admin reviews it.
+  //
+  // Admin direct delete (Mahadi, 2026-11-21): an ADMIN clicking the
+  // trash icon gets the direct-delete dialog instead — no approval,
+  // only a confirm click. The check is the REAL role (user.role),
+  // not the display preview: a super admin previewing as Agent
+  // still holds real admin authority, and the server enforces the
+  // same real role — routing a previewing admin to the request
+  // dialog would let them file a request they could then approve
+  // themselves, exactly what Mahadi decided against.
+  const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(String(user?.role || '').toUpperCase());
   const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
 
   const markDeleteRequested = (leadId: string) => {
     setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, deleteRequested: true } : l)));
+  };
+
+  const removeDeletedLead = (leadId: string) => {
+    setLeads(prev => prev.filter(l => l.id !== leadId));
   };
   const location = useLocation();
   const navigate = useNavigate();
@@ -936,8 +951,8 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                          <button
                            onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); }}
                            className="p-2 border border-slate-100 hover:border-red-300 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-sm shadow-xs transition-all bg-white cursor-pointer"
-                           title="Request deletion — an admin reviews it"
-                           aria-label={'Request deletion of ' + (lead.prospectName || 'lead')}
+                           title={isAdmin ? 'Delete lead' : 'Request deletion — an admin reviews it'}
+                           aria-label={(isAdmin ? 'Delete lead ' : 'Request deletion of ') + (lead.prospectName || 'lead')}
                          >
                           <Trash2 className="w-3.5 h-3.5" />
                          </button>
@@ -1115,11 +1130,19 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
         onReassigned={() => { setReassignLead(null); void loadLeads(); }}
       />
 
-      <RequestDeleteDialog
-        lead={deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        onRequested={markDeleteRequested}
-      />
+      {isAdmin ? (
+        <DirectDeleteDialog
+          lead={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={removeDeletedLead}
+        />
+      ) : (
+        <RequestDeleteDialog
+          lead={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onRequested={markDeleteRequested}
+        />
+      )}
 
       {quickViewLead && (
         <LeadQuickViewModal

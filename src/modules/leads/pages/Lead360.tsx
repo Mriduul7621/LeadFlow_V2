@@ -17,6 +17,7 @@ import WhatsAppAction from '../components/WhatsAppAction';
 import LeadQualityPanel from '../components/LeadQualityPanel';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import RequestDeleteDialog from '../components/RequestDeleteDialog';
+import DirectDeleteDialog from '../components/DirectDeleteDialog';
 import { usePermissions } from '../../shared/hooks/usePermissions';
 import { useCanReassign } from '../hooks/useCanReassign';
 
@@ -51,9 +52,21 @@ export default function Lead360() {
   // leads.view + in-scope visibility, so anyone who can see the lead
   // may ask; the approval IS the control. A pending lead shows the
   // amber marker instead of the button.
+  //
+  // Admin direct delete (Mahadi, 2026-11-21): an ADMIN gets the
+  // direct-delete dialog instead — no approval, only a confirm
+  // click — and leaves the page after the delete (the lead no
+  // longer exists). The check is the REAL role (user.role), not
+  // the display preview, for the same reason as in LeadList: a
+  // super admin previewing as Agent still holds real admin
+  // authority, and the server enforces the same real role.
+  const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(String(user?.role || '').toUpperCase());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const markDeleteRequested = () => {
     setLead(prev => prev ? { ...prev, deleteRequest: { id: 'pending', requestedBy: '', requestedAt: null } } : prev);
+  };
+  const handleDeleted = () => {
+    navigate('/leads');
   };
   // Reassign (2026-11-19, extended 2026-11-20, Mahadi): Team
   // Lead / Manager / Admin holding the leads.assign grant may move
@@ -447,8 +460,8 @@ export default function Lead360() {
                 type="button"
                 onClick={() => setDeleteDialogOpen(true)}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] border border-stone-200 bg-white text-stone-700 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
-                aria-label="Request deletion"
-                title="Request deletion — an admin reviews it"
+                aria-label={isAdmin ? 'Delete lead' : 'Request deletion'}
+                title={isAdmin ? 'Delete lead' : 'Request deletion — an admin reviews it'}
               >
                 <Trash2 className="h-[18px] w-[18px]" />
               </button>
@@ -557,8 +570,8 @@ export default function Lead360() {
                   type="button"
                   onClick={() => setDeleteDialogOpen(true)}
                   className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700"
-                  aria-label="Request deletion"
-                  title="Request deletion — an admin reviews it"
+                  aria-label={isAdmin ? 'Delete lead' : 'Request deletion'}
+                  title={isAdmin ? 'Delete lead' : 'Request deletion — an admin reviews it'}
                 >
                   <Trash2 className="h-[18px] w-[18px]" />
                 </button>
@@ -801,13 +814,19 @@ export default function Lead360() {
           onReassigned={() => void load()}
         />
       )}
-      {lead && (
+      {lead && (isAdmin ? (
+        <DirectDeleteDialog
+          lead={deleteDialogOpen ? lead : null}
+          onClose={() => setDeleteDialogOpen(false)}
+          onDeleted={handleDeleted}
+        />
+      ) : (
         <RequestDeleteDialog
           lead={deleteDialogOpen ? lead : null}
           onClose={() => setDeleteDialogOpen(false)}
           onRequested={markDeleteRequested}
         />
-      )}
+      ))}
     </div>
   );
 }

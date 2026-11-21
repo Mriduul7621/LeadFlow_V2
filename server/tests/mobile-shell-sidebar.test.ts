@@ -288,13 +288,17 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     assert.ok(!mobile.includes('setDeleteTarget(lead)'), 'no delete-request handler on the mobile row');
   });
 
-  it('Lead 360 Reassign/Request-deletion are icon-only on mobile too', () => {
+  it('Lead 360 Reassign/Delete are icon-only on mobile too', () => {
     const l = lead360();
     const mobile = l.slice(l.indexOf('<section className="space-y-4 md:hidden">'));
     const reassignBtn = mobile.slice(mobile.indexOf('aria-label="Reassign lead"') - 420, mobile.indexOf('aria-label="Reassign lead"') + 200);
-    const deleteBtn = mobile.slice(mobile.indexOf('aria-label="Request deletion"') - 420, mobile.indexOf('aria-label="Request deletion"') + 200);
+    // The delete button's label is role-conditional since admin direct
+    // delete (2026-11-21): "Delete lead" for admins, "Request
+    // deletion" for everyone else — same square icon button either way.
+    const deleteAnchor = "aria-label={isAdmin ? 'Delete lead' : 'Request deletion'}";
+    const deleteBtn = mobile.slice(mobile.indexOf(deleteAnchor) - 420, mobile.indexOf(deleteAnchor) + 200);
     assert.ok(/h-10 w-10/.test(reassignBtn), 'the mobile Reassign action must be a square icon button');
-    assert.ok(/h-10 w-10/.test(deleteBtn), 'the mobile Request-deletion action must be a square icon button');
+    assert.ok(/h-10 w-10/.test(deleteBtn), 'the mobile delete action must be a square icon button');
     assert.ok(mobile.includes('aria-label="Update lead status"'), 'the mobile header keeps Update too');
   });
 

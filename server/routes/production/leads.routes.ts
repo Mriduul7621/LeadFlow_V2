@@ -3563,6 +3563,62 @@ router.post('/leads/delete-requests/:requestId/review', requireAuth, requireAdmi
   }
 });
 
+/* POST /leads/:id/delete — ADMIN direct delete (Mahadi, 2026-11-21:
+   an admin deleting a lead needs NO approval — only a confirm
+   click; non-admins keep the request → review flow). ADMIN /
+   SUPERADMIN only, enforced twice: requireAdmin on the token claim
+   AND the DB role below (the same double gate as the review
+   endpoint's approve branch), so a stale or forged claim alone
+   cannot delete. This is deliberately a SEPARATE endpoint from
+   DELETE /leads/:id: that endpoint's gate (admin bypass OR
+   leads.delete + in-scope visibility) is pinned behaviour for
+   managers and the AllLeads pool — tightening it would remove a
+   capability Mahadi never asked to remove. The direct path is
+   role-gated, not grant-gated: an admin needs no leads.delete
+   grant, and a non-admin WITH the grant still gets 403 here.
+   Soft-deletes through the same UPDATE as DELETE /leads/:id and
+   the approve path, and logs the same audit trail with its own
+   action code (leads.delete.direct) so a direct delete is
+   distinguishable from an approved request. A pending delete
+   request for the lead is left alone — the review page already
+   shows leadDeleted and approve handles an already-deleted lead.
+   Demo mode: 503 (DB-only, like the rest of the 062 family). */
+router.post('/leads/:id/delete', requireAuth, requireAdmin, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Direct delete requires the database.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const role = normalizeRole(caller.role_code);
+    if (role !== 'ADMIN' && role !== 'SUPERADMIN') {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to delete leads directly.' });
+    }
+    const param = String(req.params.id || '').trim();
+    if (!param) return sendJson(res, 400, { success: false, message: 'Lead id is required.' });
+    const result = await getPool().query(
+      `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
+       WHERE (lead_code = $1 OR id = $3) AND is_deleted = FALSE
+       RETURNING id, lead_code`,
+      [param, caller.id, isCanonicalLowerUuid(param) ? param : null]
+    );
+    if (!result.rows[0]) return sendJson(res, 404, { success: false, message: 'Lead not found.' });
+    const leadId = String(result.rows[0].id);
+    await logAccessChange({
+      actorId: caller.id,
+      actionCode: 'leads.delete.direct',
+      entityType: 'lead',
+      entityId: leadId,
+      metadata: { leadCode: String(result.rows[0].lead_code || '') },
+    });
+    return sendJson(res, 200, { success: true, message: 'Lead deleted' });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Direct delete failed' });
+  }
+});
+
 router.get('/leads/:id', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   try {

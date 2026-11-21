@@ -654,6 +654,19 @@ export const leadService = {
     }
   },
 
+  /**
+   * Direct delete of a lead (Mahadi, 2026-11-21): ADMIN/SUPERADMIN
+   * only — no approval, only the confirm click in DirectDeleteDialog.
+   * The server enforces the role (POST /leads/:id/delete is
+   * admin-only; a non-admin gets 403 even with the leads.delete
+   * grant). The local cache drops the lead so the list reflects
+   * the delete without a refetch.
+   */
+  async deleteLeadDirect(leadId: string): Promise<void> {
+    await apiRequest(`/api/leads/${encodeURIComponent(leadId)}/delete`, { method: 'POST' });
+    localDb.deleteLead(leadId);
+  },
+
   async deleteLeadsByCampaign(campaignName: string): Promise<void> {
     // Server safety rail: the purge is refused (400) unless the body
     // repeats the exact campaign name as the typed confirmation.
