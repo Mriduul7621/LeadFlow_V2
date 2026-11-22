@@ -13,6 +13,10 @@
  *  - the pure derivation (organogramBoard.ts): chain order, branch
  *    and leaf rows, downline + front-line-team counts, role labels,
  *    initials, viewer fallbacks, cycle safety;
+ *  - drill-down re-anchoring (2026-11-22): the same derivation with
+ *    a deeper viewer id shows that person's full ladder above and
+ *    their reports + grandchildren below — the page's anchor state
+ *    is just a viewer id, so no util change was needed;
  *  - the H1 fix: the route's label and heading are now
  *    "Teams & Hierarchy" / "Review reporting lines and team
  *    structure." (the old fallback title must not return);
@@ -222,6 +226,91 @@ describe('organogram board — view derivation', () => {
   });
 });
 
+describe('organogram board — drill-down re-anchor', () => {
+  it('re-anchoring on the BE shows the ladder above and both GM branches below', () => {
+    // The admin default view stops at the BE row; drilling into the
+    // BE is how the GM level becomes visible.
+    const top = buildOrganogramBoardView(ladderNodes(), 'E999');
+    assert.deepEqual(
+      top.leafRow.map((p) => p.employeeId),
+      ['E003'],
+    );
+    const view = buildOrganogramBoardView(ladderNodes(), 'E003');
+    assert.deepEqual(
+      view.chain.map((p) => p.employeeId),
+      ['E001', 'E002', 'E003'],
+    );
+    assert.equal(view.viewer?.employeeId, 'E003');
+    assert.equal(view.viewerInTree, true);
+    // Both GMs, alphabetical: Lina (E014) before Wahid (E004).
+    assert.deepEqual(
+      view.branch.map((p) => p.employeeId),
+      ['E014', 'E004'],
+    );
+    // Grandchildren in branch order: Lina's UM, then Wahid's DGM.
+    assert.deepEqual(
+      view.leafRow.map((p) => p.employeeId),
+      ['E015', 'E005'],
+    );
+    assert.equal(view.viewerDownline, 14);
+    assert.equal(view.viewerTeams, 3);
+  });
+
+  it('re-anchoring twice reaches the FA level', () => {
+    const view = buildOrganogramBoardView(ladderNodes(), 'E014');
+    assert.deepEqual(
+      view.chain.map((p) => p.employeeId),
+      ['E001', 'E002', 'E003', 'E014'],
+    );
+    assert.deepEqual(
+      view.branch.map((p) => p.employeeId),
+      ['E015'],
+    );
+    assert.deepEqual(
+      view.leafRow.map((p) => p.employeeId),
+      ['E016', 'E017'],
+    );
+    assert.equal(view.viewerDownline, 3);
+    assert.equal(view.viewerTeams, 1);
+  });
+
+  it('re-anchoring on a GM shows one branch and one grandchild', () => {
+    const view = buildOrganogramBoardView(ladderNodes(), 'E004');
+    assert.deepEqual(
+      view.chain.map((p) => p.employeeId),
+      ['E001', 'E002', 'E003', 'E004'],
+    );
+    assert.deepEqual(
+      view.branch.map((p) => p.employeeId),
+      ['E005'],
+    );
+    assert.deepEqual(
+      view.leafRow.map((p) => p.employeeId),
+      ['E006'],
+    );
+    assert.equal(view.viewerDownline, 9);
+    assert.equal(view.viewerTeams, 2);
+  });
+
+  it('every re-anchored person keeps their downline + team counts', () => {
+    const view = buildOrganogramBoardView(ladderNodes(), 'E003');
+    const byId = new Map(
+      [...view.chain, ...view.branch, ...view.leafRow].map((p) => [p.employeeId, p]),
+    );
+    assert.equal(byId.get('E014')?.downline, 3);
+    assert.equal(byId.get('E014')?.teams, 1);
+    assert.equal(byId.get('E004')?.downline, 9);
+    assert.equal(byId.get('E004')?.teams, 2);
+    assert.equal(byId.get('E015')?.downline, 2);
+    assert.equal(byId.get('E015')?.hasReports, true);
+    assert.equal(byId.get('E005')?.downline, 8);
+    assert.equal(byId.get('E005')?.hasReports, true);
+    // The leaf row carries counts too, so the page can show them.
+    assert.equal(view.leafRow[0].downline, 2);
+    assert.equal(view.leafRow[1].downline, 8);
+  });
+});
+
 describe('organogram board — role labels and initials', () => {
   it('maps every ladder code to the board label', () => {
     const cases: Array<[string, string, string, string]> = [
@@ -304,8 +393,8 @@ describe('organogram board — page structure (source guards)', () => {
     assert.ok(page().includes('in your downline'), 'summary: downline');
     assert.ok(page().includes('1 reporting line each'), 'summary: one reporting line');
     assert.ok(
-      page().includes('Tap a person to open their team view.'),
-      'summary: tap hint',
+      page().includes('Tap a person to see their team — Details opens their team view.'),
+      'summary: tap hint (drill-down wording)',
     );
   });
 
@@ -349,7 +438,8 @@ describe('organogram board — page structure (source guards)', () => {
   });
 
   it('keeps the tap-to-detail interaction', () => {
-    assert.ok(page().includes('onSelect={handleSelect}'), 'tap opens the team view');
+    assert.ok(page().includes('onSelect={handleTap}'), 'taps go through the drill router');
+    assert.ok(page().includes('void handleSelect(employeeId)'), 'details stay on the slide-over');
     assert.ok(page().includes('setSelectedMember'), 'the detail slide-over survives');
     assert.ok(page().includes('leadService.getLeads'), 'detail stats still load per member');
   });
@@ -357,6 +447,7 @@ describe('organogram board — page structure (source guards)', () => {
   it('the board styles exist with the sample tokens', () => {
     for (const cls of [
       '.orgb-wrap',
+      '.orgb-back',
       '.orgb-tree',
       '.orgb-node',
       '.orgb-node--ceo',
@@ -369,9 +460,62 @@ describe('organogram board — page structure (source guards)', () => {
       '.orgb-bnode',
       '.orgb-fnode',
       '.orgb-card',
+      '.orgb-details',
     ]) {
       assert.ok(css().includes(cls), `${cls} must exist in index.css`);
     }
     assert.ok(css().includes('rgba(3, 89, 179, .4)'), 'CEO blue border token');
+  });
+});
+
+describe('organogram board — drill-down (source guards)', () => {
+  const page = () => read('src/modules/hierarchy/pages/TeamHierarchy.tsx');
+  const css = () => read('src/index.css');
+
+  it('carries an anchor state and derives the view from it', () => {
+    assert.ok(page().includes('anchorEmployeeId'), 'anchor state');
+    assert.ok(page().includes('setAnchorEmployeeId'), 'anchor setter');
+    assert.ok(
+      page().includes('anchorEmployeeId ?? currentUser?.employeeId'),
+      'the view re-anchors on the tapped person',
+    );
+    assert.ok(page().includes('defaultView'), 'the default view is kept for Back to top');
+  });
+
+  it('routes taps: reports re-anchor, leaves and the anchor open details', () => {
+    assert.ok(page().includes('handleTap'), 'the drill router exists');
+    assert.ok(page().includes('person?.hasReports'), 'reports decide re-anchor vs details');
+    assert.ok(page().includes('isCurrentAnchor'), 'the anchor person opens details, not a re-anchor');
+    assert.ok(page().includes('setAnchorEmployeeId(employeeId)'), 're-anchor on tap');
+    assert.ok(page().includes('boardView.leafRow.find'), 'leaf taps are routed too');
+  });
+
+  it('shows Back to top only while drilled in, and it clears the anchor', () => {
+    assert.ok(page().includes('isDrilled'), 'drilled flag');
+    assert.ok(page().includes('Back to top'), 'the back control label');
+    assert.ok(page().includes('onBackToTop'), 'the back callback');
+    assert.ok(page().includes('setAnchorEmployeeId(null)'), 'back clears the anchor');
+    assert.ok(page().includes('{isDrilled && ('), 'the button renders only while drilled');
+    assert.ok(css().includes('.orgb-back'), 'back button styles exist');
+  });
+
+  it('the summary card carries a Details button for the anchor person', () => {
+    assert.ok(page().includes('onDetails'), 'details callback');
+    assert.ok(page().includes('className="orgb-details"'), 'the Details button');
+    assert.ok(page().includes('>Details</button>'), 'the Details label');
+    assert.ok(css().includes('.orgb-details'), 'details button styles exist');
+  });
+
+  it('leaf cards show the downline count like branch cards', () => {
+    // Chain rows, branch cards and leaf cards all render the count.
+    const occurrences = page().split('formatPeopleCount(person.downline)').length - 1;
+    assert.equal(occurrences, 3, 'chain + branch + leaf all show the count');
+    assert.ok(css().includes('.orgb-fnode .orgb-count'), 'leaf count styles exist');
+  });
+
+  it('the board props carry the drill-down wiring', () => {
+    assert.ok(page().includes('isDrilled: boolean'), 'drilled prop');
+    assert.ok(page().includes('onBackToTop: () => void'), 'back callback prop');
+    assert.ok(page().includes('onDetails: (employeeId: string) => void'), 'details callback prop');
   });
 });

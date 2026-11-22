@@ -2637,6 +2637,12 @@ a.ep-atrisk-row:hover strong { color: var(--ep-deep); }
    The rows are <button>s (tap targets); the reset below keeps them
    looking like the sample's cards on every browser. */
 .orgb-wrap { max-width: 640px; }
+.orgb-back {
+  background: none; border: none; padding: 0 0 10px; font: inherit;
+  font-size: 12.5px; font-weight: 700; color: #978C21; cursor: pointer; text-align: left;
+}
+.orgb-back:hover { color: #7E771B; }
+.orgb-back:focus-visible { outline: 2px solid #0359B3; outline-offset: 2px; }
 .orgb-tree { display: flex; flex-direction: column; align-items: center; }
 .orgb-node {
   width: 100%; background: #fff; border: 1px solid #E7E5E4; border-radius: 12px;
@@ -2694,8 +2700,16 @@ a.ep-atrisk-row:hover strong { color: var(--ep-deep); }
 .orgb-fnode .orgb-av { width: 28px; height: 28px; font-size: 11px; margin-bottom: 5px; }
 .orgb-fnode .orgb-name { font-size: 12px; width: 100%; text-align: center; }
 .orgb-fnode .orgb-role { width: 100%; text-align: center; }
+.orgb-fnode .orgb-count { font-size: 10px; margin-top: 3px; text-align: center; }
 .orgb-card { background: #fff; border: 1px solid #E7E5E4; border-radius: 12px; padding: 12px 13px; margin-top: 16px; }
 .orgb-sum { font-size: 13px; color: #3C3C3C; }
 .orgb-sum-muted { color: #78716C; }
 .orgb-hint { font-size: 12px; color: #78716C; margin-top: 6px; }
+.orgb-details {
+  margin-top: 9px; background: #fff; border: 1px solid #978C21; color: #7E771B;
+  border-radius: 999px; padding: 5px 13px; font: inherit; font-size: 12px;
+  font-weight: 700; cursor: pointer;
+}
+.orgb-details:hover { background: #F2F1DC; }
+.orgb-details:focus-visible { outline: 2px solid #0359B3; outline-offset: 2px; }
 .orgb-empty { text-align: center; color: #78716C; font-size: 13px; padding: 48px 16px; }

@@ -31,14 +31,23 @@ import {
 // the ancestor chain (root first, viewer last), the viewer's direct
 // reports as branch cards, their reports as a flat leaf row, and the
 // downline summary card. The tree itself is unchanged: the server
-// still derives it from users.manager_id, and every person still
-// opens their team view (the detail slide-over) on tap.
+// still derives it from users.manager_id.
 //
-// Deliberately gone (the board has none of these): the back control,
-// the Chart/List tab toggle + the entire list view, the search input
-// and the zoom controls. The shell (sidebar, topbar, bottom nav)
-// stays exactly as it is — the shell redesign is a separate
-// programme. The H1 comes from the nav label
+// Drill-down (2026-11-22): tapping a person WITH direct reports
+// re-anchors the board on them — their chain, their reports, their
+// grandchildren — so any depth of the org is reachable from the top
+// view. Tapping a person with no reports, or the current anchor
+// person themself, opens their team view (the detail slide-over).
+// A "Back to top" button above the board (only while drilled in)
+// returns to the default view, and the summary card's Details button
+// opens the anchor person's team view. The anchor is just a viewer
+// id passed to the same pure derivation — no util change needed.
+//
+// Deliberately gone (the board has none of these): the old page back
+// control, the Chart/List tab toggle + the entire list view, the
+// search input and the zoom controls. The shell (sidebar, topbar,
+// bottom nav) stays exactly as it is — the shell redesign is a
+// separate programme. The H1 comes from the nav label
 // (FALLBACK_LABELS['/team/organogram'] = 'Teams & Hierarchy'); it is
 // NOT hardcoded here, so the old fallback title cannot return.
 
@@ -48,11 +57,23 @@ import {
 export function OrganogramBoard(props: {
   view: OrganogramBoardView;
   onSelect: (employeeId: string) => void;
+  // Drill-down: true while the board is anchored below the default
+  // view; the Back to top button returns to it.
+  isDrilled: boolean;
+  onBackToTop: () => void;
+  // Opens the stats slide-over for the given person (the summary
+  // card's Details button passes the current anchor person).
+  onDetails: (employeeId: string) => void;
 }) {
-  const { view, onSelect } = props;
+  const { view, onSelect, isDrilled, onBackToTop, onDetails } = props;
 
   return (
     <div className="orgb-wrap">
+      {isDrilled && (
+        <button type="button" onClick={onBackToTop} className="orgb-back">
+          ← Back to top
+        </button>
+      )}
       <div className="orgb-tree">
         {view.chain.map((person: BoardPerson, index: number) => (
           <React.Fragment key={person.employeeId}>
@@ -144,6 +165,9 @@ export function OrganogramBoard(props: {
                   >
                     {person.roleLabel}
                   </span>
+                  {person.downline > 0 && (
+                    <span className="orgb-count">{formatPeopleCount(person.downline)}</span>
+                  )}
                 </button>
               ))}
             </div>
@@ -169,7 +193,14 @@ export function OrganogramBoard(props: {
             </>
           )}
         </div>
-        <div className="orgb-hint">Tap a person to open their team view.</div>
+        <div className="orgb-hint">Tap a person to see their team — Details opens their team view.</div>
+        {view.viewer && (
+          <button
+            type="button"
+            onClick={() => { if (view.viewer) onDetails(view.viewer.employeeId); }}
+            className="orgb-details"
+          >Details</button>
+        )}
       </div>
     </div>
   );
@@ -192,6 +223,11 @@ export default function TeamHierarchy() {
   const [selectedMemberStats, setSelectedMemberStats] = useState<any>(null);
   const [selectedMemberLeads, setSelectedMemberLeads] = useState<Lead[]>([]);
   const [loadingStats, setLoadingStats] = useState(false);
+
+  // Drill-down anchor: null = the default view (the viewing user, or
+  // the first root for an admin). Tapping a person with reports sets
+  // this to their id; "Back to top" clears it.
+  const [anchorEmployeeId, setAnchorEmployeeId] = useState<string | null>(null);
 
 
   // ----------------------------------------------------
@@ -230,11 +266,50 @@ export default function TeamHierarchy() {
     loadAllData();
   }, [currentUser]);
 
-  // The board view for the viewing user, derived from the live tree.
-  const boardView = useMemo(
+  // The default view (the viewing user, or the first root when the
+  // viewer is not in the tree) — its anchor person is the "top" the
+  // Back to top button returns to.
+  const defaultView = useMemo(
     () => buildOrganogramBoardView(nodes, currentUser?.employeeId ?? ''),
     [nodes, currentUser?.employeeId],
   );
+
+  // The board view for the current anchor (the default view until the
+  // user drills down by tapping a person with reports).
+  const boardView = useMemo(
+    () => buildOrganogramBoardView(nodes, anchorEmployeeId ?? currentUser?.employeeId ?? ''),
+    [nodes, anchorEmployeeId, currentUser?.employeeId],
+  );
+
+  // Drilled in when an anchor is set and it is not the default
+  // anchor (tapping back up to the default anchor hides the button
+  // again — the view is already the top one).
+  const isDrilled =
+    anchorEmployeeId !== null &&
+    anchorEmployeeId !== (defaultView.viewer?.employeeId ?? null);
+
+  // ----------------------------------------------------
+  // DRILL-DOWN TAP ROUTING
+  // ----------------------------------------------------
+  // A person WITH direct reports re-anchors the board on them
+  // (unless they are already the anchor — tapping the anchor person
+  // opens their team view instead). A person with no reports opens
+  // their team view directly. Chain ancestors always have reports,
+  // so tapping one navigates back up to them.
+  const handleTap = (employeeId: string) => {
+    if (!employeeId) return;
+    const person =
+      boardView.chain.find((p) => p.employeeId === employeeId) ??
+      boardView.branch.find((p) => p.employeeId === employeeId) ??
+      boardView.leafRow.find((p) => p.employeeId === employeeId);
+    const isCurrentAnchor = boardView.viewer?.employeeId === employeeId;
+    if (person?.hasReports && !isCurrentAnchor) {
+      setAnchorEmployeeId(employeeId);
+      window.scrollTo(0, 0);
+    } else {
+      void handleSelect(employeeId);
+    }
+  };
 
   // ----------------------------------------------------
   // INTERACTIVE STATS DRAWER (DETAILS SIDEBAR)
@@ -294,7 +369,13 @@ export default function TeamHierarchy() {
           No organogram yet — assign reporting managers to employees in User Management.
         </div>
       ) : (
-        <OrganogramBoard view={boardView} onSelect={handleSelect} />
+        <OrganogramBoard
+          view={boardView}
+          onSelect={handleTap}
+          isDrilled={isDrilled}
+          onBackToTop={() => setAnchorEmployeeId(null)}
+          onDetails={(employeeId) => { void handleSelect(employeeId); }}
+        />
       )}
 
       {/* ----------------------------------------------------
