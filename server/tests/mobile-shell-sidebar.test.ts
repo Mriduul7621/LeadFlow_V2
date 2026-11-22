@@ -275,7 +275,10 @@ describe('Mobile shell — Home, My Work and Lead 360', () => {
     assert.ok(!mobile.includes('/update`'), 'the mobile row must not link to the update page — update lives on Lead 360 (2026-11-21)');
   });
 
-  it('the mobile lead row shows client info + arrow only', () => {
+  // Bulk actions (2026-11-22): the row also carries a small
+  // selection checkbox (an <input>, not an action button) — the
+  // no-action-buttons rule below is unchanged.
+  it('the mobile lead row shows client info + checkbox + arrow only', () => {
     const l = leadList();
     const mobile = l.slice(l.indexOf('lf-mobile-lead-list'), l.indexOf('lf-desktop-lead-table'));
     assert.ok(mobile.includes('lf-mobile-lead-avatar'), 'the row keeps the avatar');

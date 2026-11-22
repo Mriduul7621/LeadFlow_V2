@@ -3619,6 +3619,355 @@ router.post('/leads/:id/delete', requireAuth, requireAdmin, async (req: any, res
   }
 });
 
+/* ====================================================================
+   BULK LEAD ACTIONS (2026-11-22, Mahadi: anyone who can reassign or
+   delete must be able to mark one or more leads and act on them in
+   bulk, from the lead list).
+   ------------------------------------------------------------------
+   Both endpoints answer per-lead results — a bad lead never fails
+   the good ones — and echo the identifiers the caller sent, so the
+   client can match results to its selection exactly:
+     { success: true, reassigned: [...], failed: [{ id, reason }] }
+     { success: true, deleted|requested: [...], failed: [...] }
+   Whole-request failures are 400 (empty list, bad target, over the
+   cap), 403 (no permission / target out of scope) or 503 (demo
+   mode — both flows are DB-only, like the rest of the 062 family).
+   Unknown ids, already-deleted leads and out-of-scope leads are
+   failed ENTRIES, never a 500 — and an out-of-scope lead is
+   reported only as "not in your scope" (no existence leak).
+   ================================================================= */
+
+/** Bulk actions cap: a lead-list page shows at most a few hundred
+ *  filtered leads; 500 keeps a bulk call bounded while covering
+ *  every realistic selection. */
+const MAX_BULK_LEADS = 500;
+
+/** Dedupe a raw leadIds payload, preserving order, dropping blanks. */
+function cleanBulkLeadIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const id = String(item || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/* POST /leads/bulk-reassign — move several leads to one team member.
+   The upfront gates mirror the single reassign through POST /leads
+   exactly, in the same order: resolve the target (+ active check),
+   isAssignedToAllowed (target in the caller's visibility), the
+   leads.assign / leads.transfer permission (transfer authorises an
+   existing-owner move, never an unassigned lead — that distinction
+   is enforced per lead below), then the Team Lead / Manager team-
+   scope rule for non-admins. Each lead is then authorised
+   server-side (found, not deleted, in scope, not already with the
+   target) and moved in its own transaction with an assignment-
+   history entry ("Reassigned via bulk action") + a lead-reassigned
+   notification — the same write the single path performs, so a
+   notification failure rolls back that lead only, never the batch.
+   The history entry id carries the lead id: Date.now() alone could
+   collide within one fast loop, and a colliding id would make the
+   second notification look like a duplicate to the idempotency
+   key. Demo mode: 503. */
+router.post('/leads/bulk-reassign', requireAuth, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Bulk reassign requires the database.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const leadIds = cleanBulkLeadIds(req.body?.leadIds);
+    if (leadIds.length === 0) {
+      return sendJson(res, 400, { success: false, message: 'Select at least one lead to reassign.' });
+    }
+    if (leadIds.length > MAX_BULK_LEADS) {
+      return sendJson(res, 400, { success: false, message: `Select at most ${MAX_BULK_LEADS} leads at a time.` });
+    }
+    const toRef = clean(req.body?.toEmployeeId || '');
+    if (!toRef) {
+      return sendJson(res, 400, { success: false, message: 'Choose a team member to reassign to.' });
+    }
+    const target = await resolveAssignedTo(toRef);
+    if (!target) {
+      return sendJson(res, 400, { success: false, message: `Assigned user "${toRef}" not found.` });
+    }
+    if (!target.isActive) {
+      return sendJson(res, 400, { success: false, message: `Assigned user "${toRef}" is inactive and cannot be assigned leads.` });
+    }
+    const visibility = await resolveCallerVisibility(caller);
+    if (!isAssignedToAllowed(target, visibility, caller)) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to assign leads to that user. Assignment is limited to your authorized scope.' });
+    }
+    const [canAssign, canTransfer] = await Promise.all([
+      hasPermissionCode(caller, 'leads.assign'),
+      hasPermissionCode(caller, 'leads.transfer'),
+    ]);
+    if (!canAssign && !canTransfer) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to assign, reassign, or transfer this lead.' });
+    }
+    if (!['ADMIN', 'SUPERADMIN'].includes(normalizeRole(caller.role_code))) {
+      const scope = await callerHasTeamScope(caller);
+      if (!scope.hasTeam) {
+        return sendJson(res, 403, { success: false, message: 'Only team leads, managers and admins can reassign leads.' });
+      }
+      if (!scope.managerScope && !scope.downline.includes(target.userId)) {
+        return sendJson(res, 403, { success: false, message: 'You can only reassign leads to members of your own team.' });
+      }
+    }
+
+    const reassigned: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    // Pass 1 — authorise every lead (found, in scope, not already
+    // with the target). No writes happen here. A soft-deleted lead
+    // never reaches this loop: findLeadByIdRaw excludes is_deleted
+    // rows, so it surfaces as 'Lead not found.' — exactly like the
+    // single flows (and it never confirms the lead existed).
+    const pending: Array<{ param: string; row: any }> = [];
+    for (const param of leadIds) {
+      const row = await findLeadByIdRaw(param, false);
+      if (!row) {
+        failed.push({ id: param, reason: 'Lead not found.' });
+        continue;
+      }
+      if (!isLeadAccessible(row, visibility, caller)) {
+        failed.push({ id: param, reason: 'Lead is not in your scope.' });
+        continue;
+      }
+      if (row.assigned_to && String(row.assigned_to) === target.userId) {
+        failed.push({ id: param, reason: 'Lead is already assigned to this user.' });
+        continue;
+      }
+      pending.push({ param, row });
+    }
+    // One lookup for every current owner's employee id (the history
+    // entries need them) instead of one query per lead.
+    const ownerIds = await employeeIdsFor(pending.map(p => p.row.assigned_to).filter(Boolean));
+    const pool = getPool();
+    // Pass 2 — move each authorised lead in its own transaction.
+    for (const { param, row } of pending) {
+      const leadId = String(row.id);
+      // The transfer arm never authorises an unassigned lead (the
+      // single-path rule): routing a lead with no owner needs
+      // leads.assign.
+      if (!row.assigned_to && !canAssign) {
+        failed.push({ id: param, reason: 'Assigning an unassigned lead requires leads.assign.' });
+        continue;
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const existingHistory = Array.isArray(row.assignment_history) ? row.assignment_history : [];
+        const entry = {
+          id: `assign_${Date.now()}_${leadId.slice(0, 8)}`,
+          fromEmployeeId: row.assigned_to ? ownerIds.get(String(row.assigned_to)) || undefined : undefined,
+          toEmployeeId: target.employeeId,
+          changedBy: caller.employee_id,
+          date: new Date().toISOString(),
+          note: 'Reassigned via bulk action',
+        };
+        const nextHistory = [...existingHistory, entry];
+        const customFields = { ...(row.custom_fields && typeof row.custom_fields === 'object' ? row.custom_fields : {}) };
+        delete customFields.assignedTo;
+        delete customFields.assignedBy;
+        delete customFields.assignedDate;
+        customFields.assignedTo = target.employeeId;
+        customFields.assignedBy = caller.employee_id;
+        customFields.assignedDate = new Date().toISOString();
+        const updated = await client.query(
+          `UPDATE leads SET assigned_to = $2, assigned_by = $3, assigned_at = NOW(),
+                  assignment_history = $4::jsonb, custom_fields = $5::jsonb,
+                  updated_by = $3, updated_at = NOW()
+           WHERE id = $1 AND is_deleted = FALSE RETURNING id`,
+          [leadId, target.userId, caller.id, JSON.stringify(nextHistory), JSON.stringify(customFields)]
+        );
+        if (!updated.rows[0]) {
+          await client.query('ROLLBACK');
+          failed.push({ id: param, reason: 'Lead is already deleted.' });
+          continue;
+        }
+        await createAssignmentNotifications(client, {
+          leadId,
+          leadCode: String(row.lead_code || leadId),
+          prospectName: String(row.customer_name || 'Unknown'),
+          assignedToUserId: target.userId,
+          assignedToEmployeeId: target.employeeId,
+          changedByEmployeeId: caller.employee_id,
+          eventType: row.assigned_to ? 'lead-reassigned' : 'lead-assigned',
+          assignmentHistoryId: entry.id,
+          excludeNotifyUserId: undefined,
+        });
+        await client.query('COMMIT');
+        reassigned.push(param);
+      } catch {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        failed.push({ id: param, reason: 'Reassign failed.' });
+      } finally {
+        try { client.release(); } catch { /* ignore */ }
+      }
+    }
+    return sendJson(res, 200, { success: true, reassigned, failed });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Bulk reassign failed' });
+  }
+});
+
+/* POST /leads/bulk-delete — delete or request deletion of several
+   leads. The per-role semantics are EXACTLY the single-lead ones:
+   an ADMIN (ADMIN/SUPERADMIN DB role — the same DB re-check as
+   POST /leads/:id/delete, so no token claim alone can delete)
+   direct-deletes each selected lead (soft-delete + a
+   leads.delete.direct audit row per lead, no approval); anyone
+   else files one delete request per lead (the migration 062 rule:
+   leads.view + in-scope visibility, the one reason entered once
+   applied to all, admin notified per request, a lead with a
+   request already pending reported instead of double-filed). The
+   request block mirrors POST /leads/:id/delete-request — keep the
+   two in sync. A pending request for a direct-deleted lead is left
+   alone, like the single direct delete. Demo mode: 503. */
+router.post('/leads/bulk-delete', requireAuth, async (req: any, res) => {
+  if (!useDb()) {
+    return sendJson(res, 503, { success: false, message: 'Bulk delete requires the database.' });
+  }
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const leadIds = cleanBulkLeadIds(req.body?.leadIds);
+    if (leadIds.length === 0) {
+      return sendJson(res, 400, { success: false, message: 'Select at least one lead to delete.' });
+    }
+    if (leadIds.length > MAX_BULK_LEADS) {
+      return sendJson(res, 400, { success: false, message: `Select at most ${MAX_BULK_LEADS} leads at a time.` });
+    }
+    const isAdmin = ['ADMIN', 'SUPERADMIN'].includes(normalizeRole(caller.role_code));
+    if (!isAdmin && !(await hasPermissionCode(caller, 'leads.view'))) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const reason = clean(req.body?.reason || '').slice(0, 500) || null;
+    const visibility = await resolveCallerVisibility(caller);
+    const pool = getPool();
+    // The request path notifies every active admin per request; the
+    // admin list and the requester's name are stable within one
+    // call, so they are read once, not once per lead.
+    let admins: Array<{ id: string; employeeId: string }> = [];
+    let requesterName = '';
+    if (!isAdmin) {
+      const requesterRow = await pool.query(`SELECT full_name FROM users WHERE id = $1 LIMIT 1`, [caller.id]);
+      requesterName = String(requesterRow.rows[0]?.full_name || caller.employee_id || 'A user');
+      admins = await fetchActiveAdmins(pool);
+    }
+
+    const deleted: string[] = [];
+    const requested: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    for (const param of leadIds) {
+      // A soft-deleted lead never reaches the loop body:
+      // findLeadByIdRaw excludes is_deleted rows, so it surfaces
+      // as 'Lead not found.' — exactly like the single flows.
+      const row = await findLeadByIdRaw(param, false);
+      if (!row) {
+        failed.push({ id: param, reason: 'Lead not found.' });
+        continue;
+      }
+      if (!isLeadAccessible(row, visibility, caller)) {
+        failed.push({ id: param, reason: 'Lead is not in your scope.' });
+        continue;
+      }
+      const leadId = String(row.id);
+      const leadCode = String(row.lead_code || leadId);
+      if (isAdmin) {
+        const result = await pool.query(
+          `UPDATE leads SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $2, updated_by = $2, updated_at = NOW()
+           WHERE id = $1 AND is_deleted = FALSE RETURNING id, lead_code`,
+          [leadId, caller.id]
+        );
+        if (!result.rows[0]) {
+          failed.push({ id: param, reason: 'Lead is already deleted.' });
+          continue;
+        }
+        await logAccessChange({
+          actorId: caller.id,
+          actionCode: 'leads.delete.direct',
+          entityType: 'lead',
+          entityId: leadId,
+          metadata: { leadCode: String(result.rows[0].lead_code || ''), bulk: true },
+        });
+        deleted.push(param);
+        continue;
+      }
+      // Non-admin: one delete request per lead, in its own
+      // transaction (request + admin notifications commit together,
+      // exactly like the single request endpoint).
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const existing = await client.query(
+          `SELECT id FROM lead_delete_requests WHERE lead_id = $1 AND status = 'pending' LIMIT 1`,
+          [leadId]
+        );
+        if (existing.rows[0]) {
+          await client.query('ROLLBACK');
+          failed.push({ id: param, reason: 'A delete request for this lead is already pending.' });
+          continue;
+        }
+        const inserted = await client.query(
+          `INSERT INTO lead_delete_requests (lead_id, requested_by, reason)
+           VALUES ($1, $2, $3) RETURNING id, requested_at`,
+          [leadId, caller.id, reason]
+        );
+        const requestRow = inserted.rows[0];
+        const leadName = String(row.customer_name || 'Unknown');
+        for (const admin of admins) {
+          await insertNotificationWithIdempotency(client, {
+            userId: admin.id,
+            recipientKey: admin.employeeId,
+            title: `Delete request: ${leadName}`,
+            message: `${requesterName} (${caller.employee_id}) requested deletion of lead ${leadName} (${leadCode})${reason ? ` — "${reason}"` : ''}. Please review it in Delete Requests.`,
+            eventType: DELETE_REQUEST_EVENT,
+            idempotencyKey: buildIdempotencyKey(DELETE_REQUEST_EVENT, String(requestRow.id), admin.id),
+            leadId,
+            leadCode,
+            referenceType: 'lead_delete_request',
+          });
+        }
+        await client.query('COMMIT');
+        await logAccessChange({
+          actorId: caller.id,
+          actionCode: 'leads.delete.request',
+          entityType: 'lead',
+          entityId: leadId,
+          metadata: { requestId: String(requestRow.id), leadCode, reason, bulk: true },
+        });
+        requested.push(param);
+      } catch (error: any) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        // The partial unique index is the second line of defence
+        // against a duplicate pending request (two requests racing
+        // past the check above): report it, never 500.
+        if (String(error?.code || '') === '23505') {
+          failed.push({ id: param, reason: 'A delete request for this lead is already pending.' });
+        } else {
+          failed.push({ id: param, reason: 'Delete request failed.' });
+        }
+      } finally {
+        try { client.release(); } catch { /* ignore */ }
+      }
+    }
+    return sendJson(res, 200, isAdmin
+      ? { success: true, deleted, failed }
+      : { success: true, requested, failed });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Bulk delete failed' });
+  }
+});
+
 router.get('/leads/:id', requireAuth, async (req: any, res) => {
   if (sendDbUnavailable(res)) return;
   try {
