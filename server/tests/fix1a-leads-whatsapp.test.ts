@@ -147,7 +147,14 @@ describe('FIX-1 — source guards', () => {
     assert.ok(leadList.includes('navigate(`/leads/${lead.id}`)'), 'row click / Edit must navigate to Lead 360');
     assert.ok(leadList.includes("params.get('leadId')"), 'the ?leadId= deep link must still be honoured');
     assert.ok(leadList.includes('replace: true'), 'the deep link must redirect into Lead 360');
-    assert.ok(!leadList.includes('selectedLead'), 'the modal state must be gone');
+    // Word-boundary match, not a substring: the bulk-selection
+    // state (2026-11-22) is named selectedLeadIds / selectedLeads
+    // — a Set of ids for bulk reassign/delete, NOT the modal's
+    // single-lead state. A plain includes('selectedLead') would
+    // false-positive on it. The modal state was the standalone
+    // identifier selectedLead (setter setSelectedLead); neither
+    // may come back.
+    assert.ok(!/\b(?:setSelectedLead|selectedLead)\b/.test(leadList), 'the modal state must be gone');
     assert.ok(!leadList.includes('Lead Detail Modal'), 'the modal markup must be gone');
     assert.ok(!leadList.includes('leadListStatusForm'), 'the modal-only helper must be gone');
   });

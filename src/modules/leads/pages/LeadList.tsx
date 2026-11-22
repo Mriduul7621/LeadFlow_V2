@@ -34,6 +34,8 @@ import { useCanReassign } from '../hooks/useCanReassign';
 import ReassignLeadDialog from '../components/ReassignLeadDialog';
 import RequestDeleteDialog from '../components/RequestDeleteDialog';
 import DirectDeleteDialog from '../components/DirectDeleteDialog';
+import BulkReassignDialog from '../components/BulkReassignDialog';
+import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
 import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
@@ -181,6 +183,26 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   const removeDeletedLead = (leadId: string) => {
     setLeads(prev => prev.filter(l => l.id !== leadId));
   };
+
+  // Bulk selection (2026-11-22, Mahadi): mark one or more leads
+  // and reassign or delete them in bulk. The selection survives
+  // filter changes (it holds lead ids, not row positions); only a
+  // bulk action, Clear, or the lead disappearing from the list
+  // (pruned in loadLeads) empties it. The bulk bar renders only
+  // while the set is non-empty.
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [bulkReassignOpen, setBulkReassignOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const selectedCount = selectedLeadIds.size;
+  const toggleLeadSelected = (leadId: string) => {
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedLeadIds(new Set());
   const location = useLocation();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -248,6 +270,12 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
       // Do not send a client-selected role or employee id to widen scope.
       const visibleLeads = await leadService.getLeads();
       setLeads(visibleLeads);
+      // Prune the bulk selection to leads that still exist.
+      setSelectedLeadIds(prev => {
+        const alive = new Set(visibleLeads.map(l => String(l.id)));
+        const next = new Set([...prev].filter(id => alive.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
     } catch (err) {
       toast.error('Failed to sync lead intelligence');
     } finally {
@@ -474,6 +502,34 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
 
     return result;
   })();
+
+  // Bulk selection, derived (state above): the selected lead
+  // objects (for the dialogs) and the select-all helpers for the
+  // desktop header checkbox — "all" means all VISIBLE (filtered)
+  // rows; the list is not paginated, so that is the whole filtered
+  // set. The selection itself is keyed by lead id, so it survives
+  // filter changes.
+  const selectedLeads = useMemo(
+    () => leads.filter(l => selectedLeadIds.has(String(l.id))),
+    [leads, selectedLeadIds],
+  );
+  const visibleLeadIds = useMemo(
+    () => filteredLeads.map(l => String(l.id)),
+    [filteredLeads],
+  );
+  const allVisibleSelected = visibleLeadIds.length > 0 && visibleLeadIds.every(id => selectedLeadIds.has(id));
+  const someVisibleSelected = visibleLeadIds.some(id => selectedLeadIds.has(id));
+  const toggleAllVisible = () => {
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleLeadIds) next.delete(id);
+      } else {
+        for (const id of visibleLeadIds) next.add(id);
+      }
+      return next;
+    });
+  };
 
   // FIX-2: the Export button opens the scoped-export dialog. The
   // workbook is built on the server (POST /api/leads/export) under
@@ -743,6 +799,49 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
         onOpenChange={setMobileFiltersOpen}
       />
 
+      {/* Bulk action bar (2026-11-22): appears only while ≥1 lead
+          is selected. Reassign follows the single-button gate
+          (useCanReassign — Team Lead / Manager / Admin holding
+          leads.assign); Delete is open to everyone on this page,
+          like the single trash icon — the server enforces the
+          per-role rule (admin direct-deletes, everyone else files
+          requests). The bar sits OUTSIDE the mobile/desktop list
+          slices, so the mobile row keeps its info + checkbox +
+          arrow shape. */}
+      {selectedCount > 0 && (
+        <div className="lf-bulk-bar flex flex-wrap items-center gap-3 px-4 py-3 mb-4 rounded-xl border border-[#EAE7D6] bg-[#F7F5E9]" role="region" aria-label="Bulk actions">
+          <span className="text-[13px] font-bold text-slate-800">{selectedCount} selected</span>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ep-btn"
+            aria-label="Clear selection"
+          >
+            Clear
+          </button>
+          <span className="flex-1" aria-hidden="true" />
+          {canReassign && (
+            <button
+              type="button"
+              onClick={() => setBulkReassignOpen(true)}
+              className="ep-btn"
+            >
+              <UserCog className="w-3.5 h-3.5" />
+              Reassign
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setBulkDeleteOpen(true)}
+            className="ep-btn"
+            style={{ color: '#DC2626' }}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete
+          </button>
+        </div>
+      )}
+
       <div className="ep-card ep-tablecard">
         <div className="lf-desktop-lead-controls p-6 border-b border-slate-50 flex flex-col md:flex-row md:items-center gap-6">
           <div className="relative flex-1">
@@ -803,6 +902,18 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
         <div className="lf-mobile-lead-list" aria-label="Lead prospects">
   {filteredLeads.length > 0 ? filteredLeads.map((lead) => (
     <div key={lead.id} className="lf-mobile-lead-row">
+      {/* Bulk selection (2026-11-22): a small checkbox at the row
+          start. It sits OUTSIDE the open button (a checkbox inside
+          a <button> is invalid HTML) and stops propagation, so
+          tapping it marks the lead without opening Lead 360. */}
+      <input
+        type="checkbox"
+        checked={selectedLeadIds.has(String(lead.id))}
+        onChange={() => toggleLeadSelected(String(lead.id))}
+        onClick={(e) => e.stopPropagation()}
+        className="shrink-0 w-4 h-4 accent-[#978C21] cursor-pointer"
+        aria-label={'Select ' + (lead.prospectName || 'lead')}
+      />
       <button
         type="button"
         className="lf-mobile-lead-open"
@@ -845,6 +956,16 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   <table className="w-full text-left">
             <thead>
               <tr>
+                <th style={{ width: 36 }} aria-label="Select leads">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                    onChange={toggleAllVisible}
+                    className="w-4 h-4 accent-[#978C21] cursor-pointer align-middle"
+                    aria-label="Select all visible leads"
+                  />
+                </th>
                 <th>Lead</th>
                 <th>Source</th>
                 <th>Owner</th>
@@ -871,7 +992,19 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                       this table (the quality filter stays above, and
                       quality + history stay on Lead 360). Row click
                       still opens Lead 360; "View ↗" opens the
-                      read-only quick view instead. */}
+                      read-only quick view instead. A checkbox column
+                      leads (2026-11-22, bulk actions) — its cell
+                      stops propagation so marking a lead never
+                      navigates. */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedLeadIds.has(String(lead.id))}
+                      onChange={() => toggleLeadSelected(String(lead.id))}
+                      className="w-4 h-4 accent-[#978C21] cursor-pointer align-middle"
+                      aria-label={'Select ' + (lead.prospectName || 'lead')}
+                    />
+                  </td>
                   <td>
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl bg-[#F7F5E9] flex items-center justify-center text-[#817719] font-bold text-xs shrink-0 border border-[#EAE7D6]">
@@ -962,7 +1095,7 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                 </motion.tr>
               )) : (
                 <tr>
-                  <td colSpan={7} className="px-8 py-20 text-center">
+                  <td colSpan={8} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-3">
                        <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center">
                           <Search className="w-6 h-6 text-slate-200" />
@@ -1143,6 +1276,22 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           onRequested={markDeleteRequested}
         />
       )}
+
+      {/* Bulk actions (2026-11-22): after either bulk call the
+          list refreshes and the selection clears — the dialogs own
+          the result toasts. */}
+      <BulkReassignDialog
+        leads={bulkReassignOpen ? selectedLeads.map(l => ({ id: l.id, prospectName: l.prospectName, assignedTo: l.assignedTo })) : null}
+        onClose={() => setBulkReassignOpen(false)}
+        onDone={() => { setBulkReassignOpen(false); clearSelection(); void loadLeads(); }}
+      />
+
+      <BulkDeleteDialog
+        leads={bulkDeleteOpen ? selectedLeads : null}
+        isAdmin={isAdmin}
+        onClose={() => setBulkDeleteOpen(false)}
+        onDone={() => { setBulkDeleteOpen(false); clearSelection(); void loadLeads(); }}
+      />
 
       {quickViewLead && (
         <LeadQuickViewModal

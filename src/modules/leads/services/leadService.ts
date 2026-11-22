@@ -37,6 +37,30 @@ export interface LeadSlaInfo {
   firstContactAt: string | null;
 }
 
+/** One lead the server could not act on in a bulk call — the id
+ *  echoes the identifier the caller sent, the reason is human
+ *  readable (never an existence leak for out-of-scope leads). */
+export interface BulkLeadFailure {
+  id: string;
+  reason: string;
+}
+
+/** Result of POST /api/leads/bulk-reassign: the moved leads plus
+ *  the per-lead failures (a bad lead never fails the good ones). */
+export interface BulkReassignResult {
+  reassigned: string[];
+  failed: BulkLeadFailure[];
+}
+
+/** Result of POST /api/leads/bulk-delete: an admin gets `deleted`,
+ *  anyone else gets `requested` — the per-role semantics of the
+ *  single-lead flows, applied per lead. */
+export interface BulkDeleteResult {
+  deleted?: string[];
+  requested?: string[];
+  failed: BulkLeadFailure[];
+}
+
 /** Result of POST /api/leads/bulk (row-level partial success semantics). */
 export interface FollowUpQueueItem {
   id: string;
@@ -665,6 +689,38 @@ export const leadService = {
   async deleteLeadDirect(leadId: string): Promise<void> {
     await apiRequest(`/api/leads/${encodeURIComponent(leadId)}/delete`, { method: 'POST' });
     localDb.deleteLead(leadId);
+  },
+
+  /**
+   * Bulk reassign (2026-11-22): move several leads to one team
+   * member. The server enforces the reassign permission + team
+   * scope upfront and authorises every lead server-side, so a bad
+   * lead lands in `failed` and never fails the good ones. The
+   * caller refreshes the list afterwards (getLeads re-syncs the
+   * local cache from the cloud), so no cache surgery here.
+   */
+  async bulkReassign(leadIds: string[], toEmployeeId: string): Promise<BulkReassignResult> {
+    return apiRequest<BulkReassignResult>('/api/leads/bulk-reassign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadIds, toEmployeeId }),
+    });
+  },
+
+  /**
+   * Bulk delete (2026-11-22): an admin direct-deletes each
+   * selected lead; anyone else files one delete request per lead
+   * (one reason, entered once, applied to all). The server
+   * enforces the per-role rule per lead. The caller refreshes the
+   * list afterwards (getLeads re-syncs the local cache, so deleted
+   * leads drop out and pending request markers appear).
+   */
+  async bulkDelete(leadIds: string[], reason?: string): Promise<BulkDeleteResult> {
+    return apiRequest<BulkDeleteResult>('/api/leads/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadIds, reason: reason || undefined }),
+    });
   },
 
   async deleteLeadsByCampaign(campaignName: string): Promise<void> {
