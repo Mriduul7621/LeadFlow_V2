@@ -102,17 +102,28 @@ jobs:
       # exists ONLY under its experimental name (added v22.8.0); the stable
       # --test-isolation name arrived in Node 24 — PR #174 run #239 proved the
       # stable name fails on Node 22 with "bad option". Nothing else changes: the
-      # rest of the suite keeps the default isolation, and the two
-      # steps together still run every test file exactly once.
-      - name: Full test suite (excluding perf-final-latency-fix)
+      # rest of the suite keeps the default isolation, and the steps
+      # together still run every test file exactly once.
+      #
+      # Second file, same bug (2026-11-22, red main #278): as the suite grew
+      # (2,403 tests), offline-followups.test.ts started crashing CI with the
+      # identical IPC error — twice in a row on the merge commit (attempts #1
+      # and #2, same file, same line), while passing every local gate and the
+      # isolated in-process run (15/15). It now runs alone in its own
+      # in-process step too, for the same reason. Each heavy file gets its
+      # OWN step (separate process) so the two never share module state.
+      - name: Full test suite (excluding perf-final-latency-fix and offline-followups)
         run: |
           set -euo pipefail
-          mapfile -t files < <(ls server/tests/*.test.ts | grep -v 'perf-final-latency-fix.test.ts')
-          echo "Running ${#files[@]} test files (perf-final-latency-fix runs in the next step)"
+          mapfile -t files < <(ls server/tests/*.test.ts | grep -v -e 'perf-final-latency-fix.test.ts' -e 'offline-followups.test.ts')
+          echo "Running ${#files[@]} test files (perf-final-latency-fix + offline-followups run in the next steps)"
           npx tsx --test "${files[@]}" --run
 
       - name: Perf latency test (no test isolation)
         run: npx tsx --test --experimental-test-isolation=none server/tests/perf-final-latency-fix.test.ts --run
+
+      - name: Offline follow-ups test (no test isolation)
+        run: npx tsx --test --experimental-test-isolation=none server/tests/offline-followups.test.ts --run
 
       # Gate 3 — TypeScript, no emit.
       - name: Typecheck
