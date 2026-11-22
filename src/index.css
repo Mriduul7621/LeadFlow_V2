@@ -2627,3 +2627,89 @@ a.ep-atrisk-row:hover strong { color: var(--ep-deep); }
   .ep-health-row { grid-template-columns: 64px 1fr 38px; }
   .ep-tlgroup-count { display: none; }
 }
+
+/* ------------------------------------------------------------------
+   Organogram board (2026-11-21): /team/organogram restyled to the
+   Mahadi-approved sample — ladder rows, branch cards, leaf row and
+   the downline summary card. Tokens from the sample: olive #978C21
+   (dark #7E771B, tint #F2F1DC), blue #0359B3 (tint #E8F0FB),
+   ink #3C3C3C, muted #78716C, line #E7E5E4, grey tint #F5F5F4.
+   The rows are <button>s (tap targets); the reset below keeps them
+   looking like the sample's cards on every browser. */
+.orgb-wrap { max-width: 640px; }
+.orgb-back {
+  background: none; border: none; padding: 0 0 10px; font: inherit;
+  font-size: 12.5px; font-weight: 700; color: #978C21; cursor: pointer; text-align: left;
+}
+.orgb-back:hover { color: #7E771B; }
+.orgb-back:focus-visible { outline: 2px solid #0359B3; outline-offset: 2px; }
+.orgb-tree { display: flex; flex-direction: column; align-items: center; }
+.orgb-node {
+  width: 100%; background: #fff; border: 1px solid #E7E5E4; border-radius: 12px;
+  padding: 10px 12px; display: flex; align-items: center; gap: 11px; min-width: 0;
+  font: inherit; color: #3C3C3C; cursor: pointer; text-align: left;
+  -webkit-appearance: none; appearance: none;
+}
+.orgb-node--ceo { border-color: rgba(3, 89, 179, .4); }
+.orgb-node:hover, .orgb-bnode:hover, .orgb-fnode:hover { border-color: #978C21; }
+.orgb-node:focus-visible, .orgb-bnode:focus-visible, .orgb-fnode:focus-visible {
+  outline: 2px solid #0359B3; outline-offset: 2px;
+}
+.orgb-av {
+  width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 13px; font-weight: 700; flex: 0 0 auto;
+}
+.orgb-av--olive { background: #F2F1DC; color: #7E771B; }
+.orgb-av--blue { background: #E8F0FB; color: #0359B3; }
+.orgb-av--grey { background: #F5F5F4; color: #78716C; }
+.orgb-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.orgb-name {
+  font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; min-width: 0;
+}
+.orgb-role {
+  font-size: 10px; font-weight: 700; margin-top: 2px; letter-spacing: .4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.orgb-role--olive { color: #978C21; }
+.orgb-role--blue { color: #0359B3; }
+.orgb-role--grey { color: #78716C; }
+.orgb-count { font-size: 11px; color: #78716C; text-align: right; flex: 0 0 auto; white-space: nowrap; }
+.orgb-conn { width: 2px; height: 10px; background: #E7E5E4; flex: 0 0 auto; }
+.orgb-conn--tall { height: 12px; }
+.orgb-branch { display: flex; flex-wrap: wrap; gap: 10px; width: 100%; }
+.orgb-branch--leaf { gap: 6px; }
+.orgb-bnode {
+  background: #fff; border: 1px solid #E7E5E4; border-radius: 12px;
+  padding: 10px 6px 9px; text-align: center; display: flex; flex-direction: column;
+  align-items: center; min-width: 0; flex: 1 1 140px; max-width: calc(50% - 5px);
+  font: inherit; color: #3C3C3C; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.orgb-bnode .orgb-av { width: 32px; height: 32px; font-size: 12px; margin-bottom: 6px; }
+.orgb-bnode .orgb-name { font-size: 13px; width: 100%; text-align: center; }
+.orgb-bnode .orgb-role { width: 100%; text-align: center; }
+.orgb-bnode .orgb-count { font-size: 10.5px; margin-top: 3px; text-align: center; }
+.orgb-fnode {
+  background: #fff; border: 1px solid #E7E5E4; border-radius: 12px;
+  padding: 9px 4px 8px; text-align: center; display: flex; flex-direction: column;
+  align-items: center; min-width: 0; flex: 1 1 70px; max-width: calc(25% - 5px);
+  font: inherit; color: #3C3C3C; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.orgb-fnode .orgb-av { width: 28px; height: 28px; font-size: 11px; margin-bottom: 5px; }
+.orgb-fnode .orgb-name { font-size: 12px; width: 100%; text-align: center; }
+.orgb-fnode .orgb-role { width: 100%; text-align: center; }
+.orgb-fnode .orgb-count { font-size: 10px; margin-top: 3px; text-align: center; }
+.orgb-card { background: #fff; border: 1px solid #E7E5E4; border-radius: 12px; padding: 12px 13px; margin-top: 16px; }
+.orgb-sum { font-size: 13px; color: #3C3C3C; }
+.orgb-sum-muted { color: #78716C; }
+.orgb-hint { font-size: 12px; color: #78716C; margin-top: 6px; }
+.orgb-details {
+  margin-top: 9px; background: #fff; border: 1px solid #978C21; color: #7E771B;
+  border-radius: 999px; padding: 5px 13px; font: inherit; font-size: 12px;
+  font-weight: 700; cursor: pointer;
+}
+.orgb-details:hover { background: #F2F1DC; }
+.orgb-details:focus-visible { outline: 2px solid #0359B3; outline-offset: 2px; }
+.orgb-empty { text-align: center; color: #78716C; font-size: 13px; padding: 48px 16px; }
