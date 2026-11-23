@@ -104,9 +104,34 @@ export interface BulkImportResult {
   skipped: number;
   failed: number;
   total: number;
+  /** Rows resolved to a corporate client by code (065). */
+  corporate?: number;
   errors: Array<{ index: number; message: string }>;
   warnings?: Array<{ index: number; message: string }>;
   campaignsRegistered?: number;
+}
+
+/** One corporate client (MIS code + company name) from the sheet. */
+export interface CorporateClientOption {
+  code: string;
+  name: string;
+}
+
+/** GET /api/corporate-clients/search — available:false means the
+ *  sheet could not be read (the picker then offers manual entry). */
+export interface CorporateClientSearchResult {
+  clients: CorporateClientOption[];
+  available: boolean;
+  error: string | null;
+}
+
+/** GET /api/leads/corporate/summary. */
+export interface CorporateSummaryData {
+  period: { key: string; label: string; start: string; end: string };
+  kpis: { totalLeads: number; converted: number; conversionRatio: number; totalPremium: number };
+  byCompany: Array<{ code: string; name: string; leads: number; converted: number; conversionRatio: number; premium: number }>;
+  byAgent: Array<{ employeeId: string; name: string; companies: number; leads: number; converted: number }>;
+  policies: Array<{ policyNo: string; clientName: string; product: string; payMode: string; sumAssured: number | null; premium: number; convertedAt: string | null; companyCode: string; companyName: string }>;
 }
 
 /**
@@ -343,6 +368,28 @@ export const leadService = {
       if (err instanceof ApiError && !shouldFallBackToCache(err.status)) throw err;
       return localDb.getLeads();
     }
+  },
+
+  /**
+   * Corporate Group Leads (065): the /leads/corporate page list.
+   * Server-filtered by the existing /api/leads endpoint
+   * (corporateOnly + optional companyCode); no cache write — the
+   * page is a report view, not the offline lead book.
+   */
+  async getCorporateLeads(companyCode?: string): Promise<Lead[]> {
+    const params = new URLSearchParams({ corporateOnly: '1' });
+    if (companyCode) params.set('companyCode', companyCode);
+    return apiRequest<Lead[]>(`/api/leads?${params.toString()}`);
+  },
+
+  /** Corporate Group Leads (065): KPIs + per-company + per-agent + policies. */
+  async getCorporateSummary(period: string): Promise<CorporateSummaryData> {
+    return apiRequest<CorporateSummaryData>(`/api/leads/corporate/summary?period=${encodeURIComponent(period)}`);
+  },
+
+  /** Corporate Group Leads (065): autocomplete options for the client picker. */
+  async searchCorporateClients(query: string): Promise<CorporateClientSearchResult> {
+    return apiRequest<CorporateClientSearchResult>(`/api/corporate-clients/search?q=${encodeURIComponent(query)}`);
   },
 
   async clearAllLeads(): Promise<void> {

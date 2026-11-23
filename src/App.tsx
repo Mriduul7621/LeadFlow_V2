@@ -38,6 +38,7 @@ const EnterpriseHome = lazy(() => import('./modules/workspace/pages/EnterpriseHo
 const LeadGenerate = lazy(() => import('./modules/leads/pages/LeadGenerate'));
 const LeadList = lazy(() => import('./modules/leads/pages/LeadList'));
 const LeadUpload = lazy(() => import('./modules/leads/pages/LeadUpload'));
+const CorporateGroupLead = lazy(() => import('./modules/leads/pages/CorporateGroupLead'));
 const AllLeads = lazy(() => import('./modules/leads/pages/AllLeads'));
 const FollowUpStrategy = lazy(() => import('./modules/leads/pages/FollowUpStrategy'));
 const TaskCalendar = lazy(() => import('./modules/auth/pages/TaskCalendar'));
@@ -166,6 +167,11 @@ const router = createBrowserRouter([
     // above dynamic ones anyway, so /my can never match :id).
     path: '/leads/my',
     element: <ProtectedRoute><FeatureGate route="/leads/my"><LazyPage page={<LeadList scope="my" />} /></FeatureGate></ProtectedRoute>,  },
+  {
+    // Corporate Group Lead (065): per-company report page, declared
+    // before /leads/:id like the other static /leads/* routes.
+    path: '/leads/corporate',
+    element: <ProtectedRoute><FeatureGate route="/leads/corporate"><LazyPage page={<CorporateGroupLead />} /></FeatureGate></ProtectedRoute>,  },
   {
     path: '/leads/upload',
     element: <ProtectedRoute><FeatureGate route="/leads/upload"><LazyPage page={<LeadUpload />} /></FeatureGate></ProtectedRoute>,  },

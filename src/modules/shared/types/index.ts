@@ -281,6 +281,12 @@ export interface Lead {
   deleteRequested?: boolean;
   /** The pending delete request on this lead, if any (detail read, migration 062). */
   deleteRequest?: { id: string; requestedBy: string; requestedAt: string | null } | null;
+  /** Corporate Group Lead link (migration 065): the MIS client code. */
+  corporateClientCode?: string;
+  /** Corporate client name snapshot at lead creation (migration 065). */
+  corporateClientName?: string;
+  /** When the lead entered a won terminal status (stamped since 065). */
+  convertedAt?: string | null;
 }
 
 export interface FollowUp {

@@ -68,13 +68,15 @@ describe('buildEnterpriseNavGroups — Admin', () => {
     ]);
   });
 
-  it('WORKSPACE carries the eleven items in Mahadi\'s exact order', () => {
+  it('WORKSPACE carries the twelve items in Mahadi\'s exact order', () => {
     const work = groupsFor('admin').find(g => g.title === 'WORKSPACE')!;
     assert.deepEqual(
       work.items.map(i => [i.label, i.path]),
       [
         ['Team Overview', '/'],
         ['All Leads', '/leads'],
+        // Corporate Group Leads (065): after All Leads.
+        ['Corporate Group Lead', '/leads/corporate'],
         ['Lead Intake', '/leads/upload'],
         ['Lead Pool', '/leads/all'],
         ['Follow-up Monitor', '/follow-up'],
@@ -147,13 +149,15 @@ describe('buildEnterpriseNavGroups — Manager', () => {
     assert.deepEqual(titles(groupsFor('manager')), ['WORKSPACE']);
   });
 
-  it('WORKSPACE carries the ten items in Mahadi\'s exact order (User Management is grant-gated)', () => {
+  it('WORKSPACE carries the eleven items in Mahadi\'s exact order (User Management is grant-gated)', () => {
     const work = groupsFor('manager').find(g => g.title === 'WORKSPACE')!;
     assert.deepEqual(
       work.items.map(i => [i.label, i.path]),
       [
         ['Team Overview', '/'],
         ['Team Leads', '/leads'],
+        // Corporate Group Leads (065): after Team Leads.
+        ['Corporate Group Lead', '/leads/corporate'],
         ['Lead Intake', '/leads/upload'],
         ['Follow-up Monitor', '/follow-up'],
         ['Team Members', '/team'],
@@ -201,7 +205,7 @@ describe('buildEnterpriseNavGroups — Team Lead', () => {
     assert.deepEqual(titles(groupsFor('teamLead')), ['WORKSPACE']);
   });
 
-  it('WORKSPACE carries the eleven items in Mahadi\'s exact order (User Management is grant-gated)', () => {
+  it('WORKSPACE carries the twelve items in Mahadi\'s exact order (User Management is grant-gated)', () => {
     const work = groupsFor('teamLead').find(g => g.title === 'WORKSPACE')!;
     assert.deepEqual(
       work.items.map(i => [i.label, i.path]),
@@ -209,6 +213,8 @@ describe('buildEnterpriseNavGroups — Team Lead', () => {
         ['Team Overview', '/'],
         ['Team Leads', '/leads'],
         ['My Leads', '/leads/my'],
+        // Corporate Group Leads (065): after My Leads.
+        ['Corporate Group Lead', '/leads/corporate'],
         ['Lead Intake', '/leads/upload'],
         ['Follow-up Monitor', '/follow-up'],
         ['Team Members', '/team'],
@@ -263,7 +269,7 @@ describe('buildEnterpriseNavGroups — Agent', () => {
     assert.deepEqual(titles(groupsFor('agent')), ['WORKSPACE']);
   });
 
-  it('WORKSPACE carries the seven items in Mahadi\'s exact order', () => {
+  it('WORKSPACE carries the eight items in Mahadi\'s exact order', () => {
     const work = groupsFor('agent').find(g => g.title === 'WORKSPACE')!;
     assert.deepEqual(
       work.items.map(i => [i.label, i.path]),
@@ -271,6 +277,8 @@ describe('buildEnterpriseNavGroups — Agent', () => {
         ['My Work', '/'],
         ['Activities', '/activities'],
         ['My Leads', '/leads'],
+        // Corporate Group Leads (065): after My Leads.
+        ['Corporate Group Lead', '/leads/corporate'],
         ['Follow-up Queue', '/follow-up'],
         ['My Performance', '/execution-intelligence'],
         ['Task Calendar', '/task-calendar'],

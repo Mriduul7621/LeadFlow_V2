@@ -371,7 +371,7 @@ describe('migration 045 — default role access', () => {
       runner.includes('id !== "061_rm_role_grant_scope"'),
       'legacy adoption must exclude 061 so it still runs on adopted databases'
     );
-    // 061 sits in chronological order (between 060 and 063); 064 stays the tail.
+    // 061 sits in chronological order (between 060 and 063); 065 stays the tail.
     const { MIGRATION_IDS } = await import('../database/runMigrations.js');
     assert.ok(MIGRATION_IDS.includes('061_rm_role_grant_scope'), '061 must be a known migration id');
     assert.ok(
@@ -382,6 +382,6 @@ describe('migration 045 — default role access', () => {
       MIGRATION_IDS.indexOf('061_rm_role_grant_scope') < MIGRATION_IDS.indexOf('063_users_add_employee'),
       '061 must run before 063'
     );
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 stays the migration tail');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '065_leads_corporate_client', '065 stays the migration tail');
   });
 });

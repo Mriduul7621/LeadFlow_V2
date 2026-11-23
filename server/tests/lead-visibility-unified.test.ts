@@ -142,7 +142,10 @@ async function setupSchema(pool: any) {
       updated_at TIMESTAMP DEFAULT NOW(),
       is_deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMP,
-      deleted_by UUID
+      deleted_by UUID,
+      corporate_client_code VARCHAR(50),
+      corporate_client_name VARCHAR(200),
+      converted_at TIMESTAMP
     );
   `);
   await pool.query(`

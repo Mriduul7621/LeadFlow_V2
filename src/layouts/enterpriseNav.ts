@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  Building2,
   CalendarDays,
   ClipboardList,
   Clock,
@@ -213,6 +214,9 @@ export const ENTERPRISE_PAGE_DESCRIPTIONS: Record<string, string> = {
   // plain descriptions in the sample's voice, so their headings never
   // render an empty subtitle.
   Administration: 'Manage access and lead operations.',
+  // Corporate Group Leads (065): group-insurance companies' employee
+  // leads, per-company conversion and premium.
+  'Corporate Group Lead': 'Track group-insurance leads by company — conversion and premium.',
   More: 'More pages and account actions.',
   Help: 'Guidance for everyday LeadFlow tasks.',
   About: 'What LeadFlow helps your team do.',
@@ -265,6 +269,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         items: [
           { label: 'Team Overview', path: '/', icon: LayoutDashboard },
           { label: 'All Leads', path: '/leads', icon: ClipboardList },
+          { label: 'Corporate Group Lead', path: '/leads/corporate', icon: Building2 },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
           { label: 'Lead Pool', path: '/leads/all', icon: ClipboardList },
           { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
@@ -302,6 +307,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         items: [
           { label: 'Team Overview', path: '/', icon: LayoutDashboard },
           { label: 'Team Leads', path: '/leads', icon: ClipboardList },
+          { label: 'Corporate Group Lead', path: '/leads/corporate', icon: Building2 },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
           { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
           { label: 'Team Members', path: '/team', icon: Users },
@@ -333,6 +339,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
           { label: 'Team Overview', path: '/', icon: LayoutDashboard },
           { label: 'Team Leads', path: '/leads', icon: ClipboardList },
           { label: 'My Leads', path: '/leads/my', icon: ClipboardList },
+          { label: 'Corporate Group Lead', path: '/leads/corporate', icon: Building2 },
           { label: 'Lead Intake', path: '/leads/upload', icon: Upload },
           { label: 'Follow-up Monitor', path: '/follow-up', icon: FileText },
           { label: 'Team Members', path: '/team', icon: Users },
@@ -365,6 +372,7 @@ function navItemsFor(role: EnterpriseRole): Array<{ title: string; items: NavIte
         { label: 'My Work', path: '/', icon: LayoutDashboard },
         { label: 'Activities', path: '/activities', icon: Activity },
         { label: 'My Leads', path: '/leads', icon: ClipboardList },
+        { label: 'Corporate Group Lead', path: '/leads/corporate', icon: Building2 },
         { label: 'Follow-up Queue', path: '/follow-up', icon: FileText },
         { label: 'My Performance', path: '/execution-intelligence', icon: BarChart3, permission: 'execution_intelligence' },
         { label: 'Task Calendar', path: '/task-calendar', icon: CalendarDays },

@@ -37,8 +37,10 @@
 import type { Lead } from '../../shared/types';
 import { dhakaDayStartMs } from '../../workspace/utils/enterpriseData';
 
-/** The six sortable columns of the desktop lead table. */
-export type ColumnSortKey = 'lead' | 'source' | 'owner' | 'priority' | 'stage' | 'created';
+/** The sortable columns of the desktop lead tables — the seventh,
+ *  Company, is the Corporate Group Lead page's column (065); the
+ *  All Leads table does not render it. */
+export type ColumnSortKey = 'lead' | 'source' | 'owner' | 'priority' | 'stage' | 'created' | 'company';
 
 export type ColumnSortDir = 'asc' | 'desc';
 
@@ -78,6 +80,7 @@ export const COLUMN_SORT_LABELS: Record<ColumnSortKey, string> = {
   priority: 'Priority',
   stage: 'Stage',
   created: 'Created',
+  company: 'Company',
 };
 
 /**
@@ -92,6 +95,7 @@ const FIRST_DIR: Record<ColumnSortKey, ColumnSortDir> = {
   priority: 'asc',
   stage: 'asc',
   created: 'desc',
+  company: 'asc',
 };
 
 /**
@@ -193,6 +197,13 @@ export function compareLeadsByColumn(
       return compareText(a.currentStatus, b.currentStatus, dir);
     case 'created':
       return compareCreated(a, b, dir);
+    case 'company': {
+      // Corporate page (065): by company name, code as the tiebreak
+      // (two clients can share a display name; codes are unique).
+      const byName = compareText(a.corporateClientName, b.corporateClientName, dir);
+      if (byName !== 0) return byName;
+      return compareText(a.corporateClientCode, b.corporateClientCode, dir);
+    }
   }
 }
 

@@ -415,14 +415,14 @@ describe('IDRA FA Code (migration 064)', () => {
   /* 1. Migration 064                                                 */
   /* ================================================================ */
 
-  it('064 is registered as the migration tail, after 063, and excluded from legacy adoption', async () => {
+  it('064 is registered, after 063, and excluded from legacy adoption (065 is now the tail)', async () => {
     const { MIGRATION_IDS } = await import('../database/runMigrations.js');
     assert.ok(MIGRATION_IDS.includes('064_users_idra_fa_code'), '064 is registered');
     assert.ok(
       MIGRATION_IDS.indexOf('064_users_idra_fa_code') > MIGRATION_IDS.indexOf('063_users_add_employee'),
       '064 runs after 063',
     );
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 stays the migration tail');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '065_leads_corporate_client', '065 is the migration tail');
     const runner = read('server/database/runMigrations.ts');
     assert.ok(runner.includes('064_users_idra_fa_code'), 'runner names migration 064');
     assert.ok(

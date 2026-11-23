@@ -83,7 +83,7 @@ async function setupSchema(pool: any) {
       status_history JSONB DEFAULT '[]'::jsonb, assignment_history JSONB DEFAULT '[]'::jsonb,
       documents JSONB DEFAULT '[]'::jsonb, custom_fields JSONB DEFAULT '{}'::jsonb, tags JSONB DEFAULT '[]'::jsonb,
       created_by UUID, updated_by UUID, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(),
-      is_deleted BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMP, deleted_by UUID, follow_up_count INT DEFAULT 0
+      is_deleted BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMP, deleted_by UUID, corporate_client_code VARCHAR(50), corporate_client_name VARCHAR(200), converted_at TIMESTAMP, follow_up_count INT DEFAULT 0
     )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lead_activities (
