@@ -363,6 +363,8 @@ describe('Agent workspace — sidebar', () => {
         ['My Work', '/'],
         ['Activities', '/activities'],
         ['My Leads', '/leads'],
+        // Corporate Group Leads (065): after My Leads.
+        ['Corporate Group Lead', '/leads/corporate'],
         ['Follow-up Queue', '/follow-up'],
         ['My Performance', '/execution-intelligence'],
         ['Task Calendar', '/task-calendar'],

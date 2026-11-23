@@ -85,6 +85,16 @@ import {
   PolicyLookupError,
 } from '../../services/PolicyLookupService.js';
 import {
+  CORPORATE_SOURCE,
+  listCorporateClients,
+  matchCorporateCode,
+  searchCorporateClients,
+} from '../../services/CorporateClientsService.js';
+import {
+  computeCorporateSummary,
+  parseCorporatePeriod,
+} from '../../utils/corporateSummary.js';
+import {
   AUTO_ASSIGN_AUDIT_ACTION,
   AUTO_ASSIGN_RULE,
   buildAutoAssignHistoryEntry,
@@ -191,6 +201,15 @@ function mapLeadRow(row: any) {
     district: row.district || '',
     division: row.division || '',
     source: row.source || '',
+    // Corporate Group Lead link (migration 065): the MIS client code
+    // + the name snapshot. The spread above already carries the same
+    // keys for rows that hold them in custom_fields; the canonical
+    // columns win on DB rows.
+    corporateClientCode: row.corporate_client_code || spread.corporateClientCode || '',
+    corporateClientName: row.corporate_client_name || spread.corporateClientName || '',
+    // Stamped when the lead enters a won terminal status (065) — the
+    // conversion date the Corporate summary's premium basis reads.
+    convertedAt: row.converted_at || spread.convertedAt || null,
     priority: row.priority || spread.priority || 'NORMAL',
     notes: row.notes || '',
     assignedTo: assignedToEmp || spread.assignedTo || '',
@@ -322,6 +341,10 @@ export interface LeadRecord {
   createdAt: string | null;
   /** Resolved Previously Assigned user id (previous_assigned_to FK). */
   previousAssignedTo: string | null;
+  /** Corporate Group Lead link (migration 065): the MIS client code. */
+  corporateClientCode: string | null;
+  /** Corporate client name snapshot at lead creation (migration 065). */
+  corporateClientName: string | null;
 }
 
 const LEAD_IGNORED_KEYS = new Set([
@@ -334,6 +357,7 @@ const LEAD_IGNORED_KEYS = new Set([
   'statusHistory', 'assignmentHistory', 'documents', 'currentStatus', 'customFields',
   'createdBy', 'updatedBy', 'created_by', 'updated_by', 'assigned_by', 'assigned_to',
   'created_at', 'updated_at', 'is_deleted', 'deleted_at', 'deleted_by',
+  'corporateClientCode', 'corporate_client_code', 'corporateClientName', 'corporate_client_name',
   '_preserveAssignment',
 ]);
 
@@ -481,6 +505,16 @@ export async function buildSecureLeadRecord(
     createdAt: dateOrNull(lead.leadDate || lead.creationDate),
     // Resolved Previously Assigned reference (uuid) when supplied by the import
     previousAssignedTo: asUuid(lead.previousAssignedTo) || asUuid(lead.previous_assigned_to),
+    // Corporate Group Lead link (migration 065): the MIS client code
+    // (picker-selected, bulk-resolved, or hand-typed when the sheet
+    // is unavailable) + the company name snapshot. The code is NOT
+    // re-validated against the sheet here — the picker guarantees a
+    // real client on the normal path, the manual fallback is allowed
+    // by design, and lead creation must never depend on Sheets
+    // availability. The corporate-source-without-client rule is
+    // enforced by the create/bulk handlers, not here.
+    corporateClientCode: clean(lead.corporateClientCode || lead.corporate_client_code).slice(0, 50) || null,
+    corporateClientName: clean(lead.corporateClientName || lead.corporate_client_name).slice(0, 200) || null,
   };
 }
 
@@ -578,6 +612,8 @@ async function buildLeadRecord(lead: any, resolveRefs = true): Promise<LeadRecor
     updatedBy: null,
     createdAt: null,
     previousAssignedTo: null,
+    corporateClientCode: null,
+    corporateClientName: null,
   };
 }
 
@@ -644,16 +680,25 @@ router.get('/leads', requireAuth, async (req: any, res) => {
       )
     );
     const visible = scope(fallbackStore.leads || []);
+    // Corporate filters (065), demo mirror of the DB branch below.
+    const corporateOnlyDemo = String(req.query?.corporateOnly || '').trim() === '1';
+    const companyCodeDemo = String(req.query?.companyCode || '').trim().toUpperCase();
+    const corporateVisible = visible.filter((l: any) => {
+      const code = String((l as any).corporateClientCode || (l as any).corporate_client_code || '').trim();
+      if (corporateOnlyDemo && !code) return false;
+      if (companyCodeDemo && code.toUpperCase() !== companyCodeDemo) return false;
+      return true;
+    });
     // DZ-3: the stored Lead Quality config (code defaults when unset).
     const qualityConfig = await getLeadQualityConfig();
     const qualityById = compactQualityForFallbackLeads(
-      visible,
+      corporateVisible,
       (fallbackStore as any).leadActivities || [],
       (fallbackStore as any).scheduledActivities || [],
       undefined,
       qualityConfig
     );
-    const scored = visible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)), deleteRequested: false }));
+    const scored = corporateVisible.map((l: any) => ({ ...l, leadQuality: qualityById.get(String(l.id)), deleteRequested: false }));
     return sendJson(res, 200, applyQualityListOptions(scored, req.query || {}));
   }
   const perf = createPerf('leads.list');
@@ -698,6 +743,17 @@ router.get('/leads', requireAuth, async (req: any, res) => {
     if (search) {
       params.push(`%${String(search)}%`);
       where.push(`(l.customer_name ILIKE $${params.length} OR l.mobile ILIKE $${params.length} OR l.email ILIKE $${params.length} OR l.occupation ILIKE $${params.length})`);
+    }
+    // Corporate Group Lead list (065): the /leads/corporate page
+    // reuses this endpoint — corporateOnly narrows to leads carrying
+    // a client code, companyCode to one client. Both narrow AFTER
+    // the visibility predicate below; they can never widen scope.
+    if (String(req.query?.corporateOnly || '').trim() === '1') {
+      where.push(`l.corporate_client_code IS NOT NULL AND l.corporate_client_code <> ''`);
+    }
+    if (req.query?.companyCode) {
+      params.push(String(req.query.companyCode).trim());
+      where.push(`UPPER(l.corporate_client_code) = UPPER($${params.length})`);
     }
     perf.span('authz.visibility');
     // THE lead-visibility predicate — one shared definition
@@ -1212,7 +1268,8 @@ const LEAD_UPSERT_SQL = `
     address, area, district, division, source, priority, expected_premium, expected_value,
     notes, assigned_to, assigned_by, assigned_at, last_contacted_at, next_follow_up_at,
     current_status, status_history, assignment_history, documents, custom_fields, tags,
-    created_by, updated_by, created_at, updated_at, previous_assigned_to
+    created_by, updated_by, created_at, updated_at, previous_assigned_to,
+    corporate_client_code, corporate_client_name
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12, COALESCE(NULLIF($13, ''), 'NORMAL'), $14, $15, $16,
@@ -1222,7 +1279,7 @@ const LEAD_UPSERT_SQL = `
     COALESCE($25::jsonb, '[]'::jsonb),
     COALESCE($26::jsonb, '{}'::jsonb), COALESCE($27::jsonb, '[]'::jsonb),
     $28, $29,
-    COALESCE($30::timestamp, NOW()), NOW(), $31
+    COALESCE($30::timestamp, NOW()), NOW(), $31, $32, $33
   )
   ON CONFLICT (lead_code) DO UPDATE SET
     customer_name = EXCLUDED.customer_name,
@@ -1252,6 +1309,11 @@ const LEAD_UPSERT_SQL = `
     custom_fields = leads.custom_fields || EXCLUDED.custom_fields,
     tags = EXCLUDED.tags,
     previous_assigned_to = COALESCE($31::uuid, leads.previous_assigned_to),
+    -- Corporate link (065): COALESCE-preserve, like previous_assigned_to
+    -- — a bulk re-import that does not mention the client must never
+    -- silently strip the link. A row that DOES carry a code updates it.
+    corporate_client_code = COALESCE(EXCLUDED.corporate_client_code, leads.corporate_client_code),
+    corporate_client_name = COALESCE(EXCLUDED.corporate_client_name, leads.corporate_client_name),
     updated_by = EXCLUDED.updated_by,
     -- created_at is IMMUTABLE on conflict/update: the historical Lead Date
     -- is written on INSERT only (COALESCE($30, NOW()) in the VALUES above).
@@ -1489,6 +1551,29 @@ router.post('/leads', requireAuth, async (req: any, res) => {
       return sendJson(res, 400, { success: false, message: record.error });
     }
 
+    // Corporate Group Leads (065): a lead whose source is the
+    // corporate source MUST carry a client — without the link the
+    // per-company tracking the feature exists for breaks. An edit
+    // that does not mention the client (reassign, or a partial
+    // update merged from a stale cache) keeps the stored link:
+    // fill it from the existing lead so the rule below only fires
+    // for a lead that genuinely has no client anywhere.
+    if (!record.corporateClientCode && existingLead) {
+      const existingCode = existingLeadIsDbRow
+        ? String((existingLead as any).corporate_client_code || '')
+        : String((existingLead as any).corporateClientCode || '');
+      if (existingCode) {
+        (record as any).corporateClientCode = existingCode;
+        const existingName = existingLeadIsDbRow
+          ? String((existingLead as any).corporate_client_name || '')
+          : String((existingLead as any).corporateClientName || '');
+        if (existingName && !record.corporateClientName) (record as any).corporateClientName = existingName;
+      }
+    }
+    if (record.source === CORPORATE_SOURCE && !record.corporateClientCode) {
+      return sendJson(res, 400, { success: false, message: 'Select the corporate client for a Corporate Client Group Insurance lead.' });
+    }
+
     // For explicit routing actions, merge assignment history server-side.
     // This also records an explicit unassignment and removes any stale
     // custom-field owner shadow.
@@ -1573,6 +1658,8 @@ router.post('/leads', requireAuth, async (req: any, res) => {
         occupation: record.occupation || 'Unknown',
         area: record.area || 'Unknown',
         source: record.source || 'Unknown',
+        corporateClientCode: record.corporateClientCode || '',
+        corporateClientName: record.corporateClientName || '',
         currentStatus: record.currentStatus || 'New',
         projectedNCP: record.projectedNCP ?? 0,
         collectedNCP: record.collectedNCP ?? 0,
@@ -1814,6 +1901,11 @@ interface PlannedImportRow {
   amountValue: number | null;
   customFields: Record<string, any>;
   fingerprint: string;
+  /** Corporate Group Leads (065): the Source cell carried a client
+   *  code — the final source (the corporate source value) and the
+   *  matched client. Null when the row is an ordinary lead. */
+  resolvedSource: string | null;
+  corporateClient: { code: string; name: string } | null;
 }
 
 interface PlannedImportAction {
@@ -1836,7 +1928,11 @@ function importRowPayload(p: PlannedImportRow): any {
     mobile: row.phone,
     email: row.email,
     area: row.area,
-    source: row.source,
+    source: p.resolvedSource ?? row.source,
+    // Corporate Group Leads (065): the resolved client, or blank for
+    // an ordinary row (buildSecureLeadRecord turns '' into null).
+    corporateClientCode: p.corporateClient?.code || '',
+    corporateClientName: p.corporateClient?.name || '',
     productName: row.product,
     campaignName: row.campaign,
     otherInfo: row.otherInfo,
@@ -1932,6 +2028,10 @@ const LEAD_BULK_UPDATE_SQL = `
     tags = CASE WHEN jsonb_array_length(COALESCE($27::jsonb, '[]'::jsonb)) > 0 THEN $27::jsonb ELSE leads.tags END,
     custom_fields = leads.custom_fields || COALESCE($26::jsonb, '{}'::jsonb),
     updated_by = $28,
+    -- Corporate link (065): COALESCE-preserve, like every other
+    -- column here — a blank cell never strips the stored link.
+    corporate_client_code = COALESCE(NULLIF($29, ''), leads.corporate_client_code),
+    corporate_client_name = COALESCE(NULLIF($30, ''), leads.corporate_client_name),
     is_deleted = FALSE,
     deleted_at = NULL,
     updated_at = NOW()
@@ -1968,6 +2068,8 @@ function bulkUpdateParams(record: LeadRecord, existingId: string): any[] {
     JSON.stringify(record.customFields || {}),
     JSON.stringify(record.tags || []),
     record.updatedBy,
+    record.corporateClientCode || '',
+    record.corporateClientName || '',
   ];
 }
 
@@ -2075,6 +2177,33 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
         .forEach((o: any) => existingCampaigns.add(String(o.value).toLowerCase()));
     }
 
+    // Corporate Group Leads (065): the Source cell may carry a
+    // corporate client CODE instead of a source name. Both reference
+    // lists are fetched ONCE for the whole request — the client list
+    // from the sheet (cached in the service; never throws) and the
+    // known Source options from the options table (same shape as the
+    // status list above). An empty Source list means the dictionary
+    // cannot arbitrate (unconfigured DB / test schema) — see the
+    // step-3 rule for what that implies.
+    const corporateList = await listCorporateClients();
+    const corporateClients = corporateList.clients;
+    const corporateAvailable = corporateList.available;
+    const sourceOptions = new Set<string>();
+    if (useDb()) {
+      try {
+        const srcRes = await getPool().query(
+          `SELECT option_value FROM options WHERE field_key = 'Source' AND COALESCE(is_active, TRUE) = TRUE`
+        );
+        srcRes.rows.forEach((r: any) => sourceOptions.add(String(r.option_value).toLowerCase()));
+      } catch {
+        // options table not migrated - treat as empty (see step 3)
+      }
+    } else {
+      fallbackStore.options
+        .filter((o: any) => o.type === 'Source' && o.status !== 'Inactive')
+        .forEach((o: any) => sourceOptions.add(String(o.value).toLowerCase()));
+    }
+
     /* ---- 3. Validate every row (pure, no writes) ---- */
     const errors: Array<{ index: number; message: string }> = [];
     const warnings: Array<{ index: number; message: string }> = [];
@@ -2143,6 +2272,39 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       }
       const currentStatus = followUpStatus || initialStatus || legacyStatus; // latest known state wins
 
+      // Corporate Group Leads (065): the Source cell may carry a
+      // corporate client CODE. Resolution order — a code wins over
+      // a same-spelled source name (Mahadi: a code in the Source
+      // column MEANS a corporate lead):
+      //   1. value matches a client code (case-insensitive) ->
+      //      corporate lead: source auto-set, code + name stored.
+      //   2. value matches a known Source option -> normal lead.
+      //   3. value IS the corporate source name but no code was
+      //      given -> error (a corporate lead needs a client).
+      //   4. value matches neither AND the source dictionary is
+      //      populated -> error naming the row (unknown source/code).
+      //   5. source dictionary empty (unconfigured DB / test
+      //      schema) -> existing handling: the value passes through
+      //      as-is, exactly as before this feature.
+      let resolvedSource: string | null = null;
+      let corporateClient: { code: string; name: string } | null = null;
+      const sourceValue = String(row.source || '').trim();
+      if (sourceValue) {
+        const codeHit = matchCorporateCode(corporateClients, sourceValue);
+        if (codeHit) {
+          corporateClient = codeHit;
+          resolvedSource = CORPORATE_SOURCE;
+        } else if (sourceValue.toLowerCase() === CORPORATE_SOURCE.toLowerCase()) {
+          rowErrors.push(`Source "${row.source}" needs a corporate client code — put the client code in the Source column instead of the source name`);
+        } else if (sourceOptions.size > 0 && !sourceOptions.has(sourceValue.toLowerCase())) {
+          rowErrors.push(
+            corporateAvailable
+              ? `Source "${row.source}" is not a known source or corporate client code`
+              : `Source "${row.source}" is not a known source, and the corporate client list could not be read to check it as a code`
+          );
+        }
+      }
+
       const tatValue = parseTat(row.tat);
       const amountValue = parseAmount(row.interestedAmount);
 
@@ -2171,6 +2333,8 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
           amountValue,
           customFields,
           fingerprint: rowFingerprint(row, assigned ? assigned.employeeId : ''),
+          resolvedSource,
+          corporateClient,
         });
       } else {
         for (const message of rowErrors) errors.push({ index: row.index, message });
@@ -2358,13 +2522,15 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       let inserted = 0;
       let updated = 0;
       let skipped = 0;
+      let corporate = 0;
       for (const action of actions) {
         if (action.action === 'insert') inserted++;
         else if (action.action === 'skip') skipped++;
         else if (action.action === 'update' || action.action === 'upsertByCode') updated++;
+        if (action.planned.corporateClient) corporate++;
       }
       const failed = rows.length - inserted - updated - skipped;
-      return { inserted, updated, skipped, failed, total: rows.length, errors, warnings, ...extra };
+      return { inserted, updated, skipped, failed, total: rows.length, corporate, errors, warnings, ...extra };
     };
 
     /* ---- 5. Dry run: report the plan without writing anything ---- */
@@ -2478,8 +2644,13 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       let inserted = 0;
       let updated = 0;
       let skipped = 0;
+      // Corporate Group Leads (065): the commit report carries the
+      // same corporate count as the dry-run summary — counted from
+      // the plan, so a skipped corporate row still reports as one.
+      let corporate = 0;
       for (const action of actions) {
         const p = action.planned;
+        if (p.corporateClient) corporate++;
         if (action.action === 'skip') { skipped++; continue; }
         let rowAutoPick: AutoAssignPick | null = null;
         try {
@@ -2622,6 +2793,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
           skipped,
           failed,
           total: rows.length,
+          corporate,
           errors,
           warnings,
           campaignsRegistered,
@@ -2635,7 +2807,7 @@ router.post('/leads/bulk', requireAuth, async (req: any, res) => {
       return sendJson(res, 500, {
         success: false,
         message: error?.message || 'Bulk import failed - no rows were committed.',
-        data: { inserted: 0, updated: 0, skipped: 0, failed: rows.length, total: rows.length, errors, warnings, dryRun: false },
+        data: { inserted: 0, updated: 0, skipped: 0, failed: rows.length, total: rows.length, corporate: 0, errors, warnings, dryRun: false },
       });
     } finally {
       client.release();
@@ -2723,6 +2895,8 @@ function leadParams(record: LeadRecord, leadCode: string): any[] {
     record.updatedBy,
     record.createdAt,
     record.previousAssignedTo,
+    record.corporateClientCode,
+    record.corporateClientName,
   ];
 }
 
@@ -4217,6 +4391,114 @@ router.post('/leads/policy-lookup', requireAuth, requirePermissionCode('leads.ed
   }
 });
 
+/* ------------------------------------------------------------------
+   GET /corporate-clients/search — Corporate Group Leads (065)
+   Autocomplete for the Add Lead corporate client picker. Query
+   param `q` is the typed name fragment. Exact name match first,
+   then partial matches (rankCorporateSearch in the service). Always
+   200: when the sheet cannot be read the response carries
+   available:false + the reason and an empty list — the picker then
+   offers the manual code input. requireAuth only (any lead creator
+   may search); no lead data leaves here, only the MIS company list.
+------------------------------------------------------------------- */
+router.get('/corporate-clients/search', requireAuth, async (req: any, res) => {
+  try {
+    const q = String(req.query?.q ?? '').trim();
+    if (q.length > 200) {
+      return sendJson(res, 400, { success: false, message: 'That search is too long.' });
+    }
+    const result = await searchCorporateClients(q);
+    return sendJson(res, 200, {
+      success: true,
+      data: { clients: result.clients, available: result.available, error: result.error || null },
+    });
+  } catch (error: any) {
+    console.error('[corporate-clients/search] unexpected failure:', error?.message || error);
+    return sendJson(res, 200, { success: true, data: { clients: [], available: false, error: 'The Corporate Clients sheet could not be read. Enter the client code manually.' } });
+  }
+});
+
+/* ------------------------------------------------------------------
+   GET /leads/corporate/summary — Corporate Group Leads (065)
+   KPIs + per-company + per-agent + converted policies for the
+   /leads/corporate page. Query param `period` (THIS_MONTH default,
+   LAST_MONTH, LAST_3_MONTHS, THIS_YEAR). Scoped by THE
+   lead-visibility predicate — an agent sees only their own
+   corporate leads. Demo mode aggregates the fallback store with
+   the same pure function (computeCorporateSummary), so both modes
+   share exactly the same maths.
+------------------------------------------------------------------- */
+router.get('/leads/corporate/summary', requireAuth, async (req: any, res) => {
+  if (sendDbUnavailable(res)) return;
+  try {
+    const caller = await getCallerDbInfo(req);
+    if (!caller) {
+      return sendJson(res, 403, { success: false, message: 'Your account was not found. Please log in again.' });
+    }
+    const [canViewLeads, visibility] = await Promise.all([
+      hasPermissionCode(caller, 'leads.view'),
+      resolveCallerVisibility(caller),
+    ]);
+    if (!canViewLeads) {
+      return sendJson(res, 403, { success: false, message: 'You do not have permission to view leads.' });
+    }
+    const period = parseCorporatePeriod(req.query || {});
+    let wonNames: string[] = ['Converted'];
+    try {
+      const terminalInfo = await getTerminalStatusInfo();
+      if (terminalInfo.wonNames.length > 0) wonNames = terminalInfo.wonNames;
+    } catch {
+      // Dictionary unreadable: the code default stands.
+    }
+    if (!useDb()) {
+      const scope = (list: any[]) => list.filter((l: any) =>
+        isLeadAccessible(
+          { assignedTo: (l as any).assignedTo, createdBy: (l as any).createdBy ?? null } as any,
+          visibility,
+          caller
+        )
+      );
+      const visible = scope(fallbackStore.leads || []);
+      const summary = computeCorporateSummary(visible, period, wonNames);
+      return sendJson(res, 200, { success: true, data: summary });
+    }
+    const pool = getPool();
+    const params: any[] = [];
+    const where: string[] = [
+      'l.is_deleted = FALSE',
+      `l.corporate_client_code IS NOT NULL AND l.corporate_client_code <> ''`,
+    ];
+    where.push(buildDashboardVisibilitySql(visibility, params));
+    const maxRows = resolveLeadsListMaxRows();
+    const result = await pool.query(
+      `${LEAD_SELECT} WHERE ${where.join(' AND ')} ORDER BY l.created_at DESC LIMIT ${maxRows}`,
+      params
+    );
+    const mapped = (result.rows || []).map((row: any) => mapLeadRow(row));
+    // Agent display names for the per-agent table (one bulk lookup;
+    // display-only — the table falls back to employee ids on failure).
+    const agentNames = new Map<string, string>();
+    const assigneeIds = [...new Set(mapped.map((l: any) => String(l.assignedTo || '')).filter(Boolean))];
+    if (assigneeIds.length > 0) {
+      try {
+        const usersRes = await pool.query(
+          `SELECT employee_id, full_name FROM users WHERE UPPER(employee_id) = ANY($1::text[])`,
+          [assigneeIds.map(id => id.toUpperCase())]
+        );
+        for (const u of usersRes.rows || []) {
+          agentNames.set(String(u.employee_id), String(u.full_name || u.employee_id));
+        }
+      } catch {
+        // Names are display-only; the table falls back to employee ids.
+      }
+    }
+    const summary = computeCorporateSummary(mapped, period, wonNames, agentNames);
+    return sendJson(res, 200, { success: true, data: summary });
+  } catch (error: any) {
+    return sendJson(res, dbErrorStatus(error), { success: false, message: error?.message || 'Corporate summary failed' });
+  }
+});
+
 /**
  * T-series exemption (PR sync) for the F6 required-field check.
  * ------------------------------------------------------------------
@@ -4257,6 +4539,27 @@ async function applyTermPolicyExemption(
     // Dictionary unreadable: keep the code-default fast path.
   }
   return exempt ? violations.filter(v => v.field !== 'sumAssured') : violations;
+}
+
+/**
+ * Won-terminal check (065): is this status a conversion?
+ * Rename-proof via the dictionary's won names, with the 'Converted'
+ * fast path when the dictionary is unreadable — the same pattern as
+ * applyTermPolicyExemption above. Used by the follow-up endpoint to
+ * stamp converted_at, the Corporate summary's conversion date.
+ */
+async function isWonTerminalStatus(status: string): Promise<boolean> {
+  const key = normalizeStatusKey(status);
+  let won = key === 'converted';
+  try {
+    const terminalInfo = await getTerminalStatusInfo();
+    won = terminalInfo.wonNames
+      .map((name: string) => normalizeStatusKey(name))
+      .includes(key);
+  } catch {
+    // Dictionary unreadable: keep the code-default fast path.
+  }
+  return won;
 }
 
 /* ------------------------------------------------------------------
@@ -4511,6 +4814,13 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       const existingHistory: any[] = Array.isArray((lead as any).statusHistory) ? (lead as any).statusHistory : [];
       (lead as any).statusHistory = [...existingHistory, historyEntry];
 
+      // converted_at mirror (065): first stamp only, same rule as the
+      // DB branch — the Corporate summary reads it as the conversion
+      // date (falling back to the history entry above when absent).
+      if (validatedStatus !== undefined && (await isWonTerminalStatus(newStatus)) && !(lead as any).convertedAt) {
+        (lead as any).convertedAt = nowIso;
+      }
+
       // Insert append-only activity (in-memory)
       const activity: any = {
         id: createId('activity'),
@@ -4589,6 +4899,17 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
     }
 
     // ---------- PostgreSQL path (transactional atomic) ----------
+    // converted_at (065): resolve whether the new status is a won
+    // terminal status BEFORE the transaction opens. The dictionary
+    // read goes to the pool, and a failing pool query inside an open
+    // transaction aborts it — the perf fixture has no options table,
+    // and PGlite shares one connection, so the failed read poisons
+    // the tx and the UPDATE then dies with "current transaction is
+    // aborted" (UTC gate, perf 4.1). The F6 validation above already
+    // resolved the same dictionary, so this costs one cached read.
+    const enteringWonStatus = validatedStatus !== undefined
+      ? await isWonTerminalStatus(validatedStatus)
+      : false;
     const pool = getPool();
     const client = await pool.connect();
     try {
@@ -4729,6 +5050,17 @@ router.post('/leads/:id/follow-up', requireAuth, async (req: any, res) => {
       if (validatedStatus !== undefined) {
         setClauses.push(`current_status = $${idx++}`);
         params.push(newStatus);
+      }
+      // converted_at (065): stamp the conversion instant when the
+      // lead ENTERS a won terminal status — the Corporate summary's
+      // premium-by-conversion-date basis reads it. COALESCE keeps
+      // the FIRST stamp: a re-save of an already-converted lead
+      // never moves its conversion date. enteringWonStatus was
+      // resolved BEFORE the transaction opened (see above) — never
+      // query the dictionary from inside the tx.
+      if (enteringWonStatus) {
+        setClauses.push(`converted_at = COALESCE(converted_at, $${idx++})`);
+        params.push(nowForDb);
       }
       // notes / remarks
       if (remarksInput !== undefined) {

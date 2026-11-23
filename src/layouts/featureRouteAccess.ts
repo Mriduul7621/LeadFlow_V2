@@ -147,6 +147,11 @@ export const FEATURE_ROUTES: Record<string, FeatureRouteEntry> = {
   '/task-calendar': { route: '/task-calendar', path: '/task-calendar', roles: EVERYONE },
   '/follow-up': { route: '/follow-up', path: '/follow-up', roles: EVERYONE },
   '/leads': { route: '/leads', path: '/leads', roles: EVERYONE },
+  // Corporate Group Lead (065): the per-company report page.
+  // EVERYONE at the route level — the page inherits the Lead
+  // Workspace module and the summary/list endpoints enforce the
+  // caller's lead-visibility scope server-side.
+  '/leads/corporate': { route: '/leads/corporate', path: '/leads', roles: EVERYONE },
   // Team Lead My Leads (2026-11-20): own-only list. EVERYONE at the
   // route level — the page itself gates to the Team Lead display
   // role (other roles are redirected to /leads), because the route

@@ -224,7 +224,10 @@ async function setupSchema(pool: any) {
       current_status VARCHAR(100) DEFAULT 'New',
       is_deleted BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
+      updated_at TIMESTAMP DEFAULT NOW(),
+      corporate_client_code VARCHAR(50),
+      corporate_client_name VARCHAR(200),
+      converted_at TIMESTAMP
     );
   `);
   await pool.query(`

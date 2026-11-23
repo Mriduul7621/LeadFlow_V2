@@ -120,6 +120,11 @@ export default function LeadUpload() {
         'E-mail': 'ranjanchakama@gmail.com',
         'Area': 'CTG',
         'Interested amount of investment': 500000,
+        // Corporate Group Leads (065): a corporate client CODE in
+        // this column (e.g. from the MIS Corporate Clients sheet)
+        // uploads the row as a corporate lead — source auto-set,
+        // client linked. The example stays a normal source so a
+        // first-time user still sees the plain shape.
         'Source': 'Social media',
         'Product': 'SCEP',
         'Other Info': '',
@@ -495,7 +500,7 @@ export default function LeadUpload() {
                   <div className="flex items-center gap-6 bg-[#978C21]/5 p-6 rounded-sm border border-[#978C21]/10">
                     <Info className="w-6 h-6 text-[#978C21] shrink-0" />
                     <p className="text-[11px] font-black text-brand-text leading-relaxed italic uppercase tracking-tight">
-                      <strong>Assignment Logic:</strong> "Assigned To" must match an ACTIVE employee ID of this workspace (see Administration → Users) — otherwise the row is rejected. Blank leaves the lead unassigned, which is what the sample file does. Statuses must match your configured Lead Status options, and historical dates are preserved exactly.
+                      <strong>Assignment Logic:</strong> "Assigned To" must match an ACTIVE employee ID of this workspace (see Administration → Users) — otherwise the row is rejected. Blank leaves the lead unassigned, which is what the sample file does. Statuses must match your configured Lead Status options, and historical dates are preserved exactly. <strong>Corporate leads:</strong> put the company's MIS code in the Source column — the row uploads as a Corporate Client Group Insurance lead linked to that company; a code that matches no client is a dry-run error naming the row.
                     </p>
                   </div>
 

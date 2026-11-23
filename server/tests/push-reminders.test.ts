@@ -543,6 +543,9 @@ describe('push reminders — HTTP integration', () => {
         is_deleted BOOLEAN DEFAULT FALSE,
         deleted_at TIMESTAMP,
         deleted_by UUID,
+        corporate_client_code VARCHAR(50),
+        corporate_client_name VARCHAR(200),
+        converted_at TIMESTAMP,
         follow_up_count INT DEFAULT 0
       );
     `);

@@ -147,6 +147,9 @@ async function setupSchema(pool: any) {
       is_deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMP,
       deleted_by UUID,
+      corporate_client_code VARCHAR(50),
+      corporate_client_name VARCHAR(200),
+      converted_at TIMESTAMP,
       follow_up_count INT DEFAULT 0
     );
   `);
@@ -361,7 +364,7 @@ describe('Next-step calendar sync (PR A) — status-update next steps land on th
 
   it('migration 054 is registered and adds the link columns + unique partial index', async () => {
     assert.ok(MIGRATION_IDS.includes('054_next_step_calendar_sync'));
-    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '064_users_idra_fa_code', '064 is the migration tail (056 stays registered)');
+    assert.equal(MIGRATION_IDS[MIGRATION_IDS.length - 1], '065_leads_corporate_client', '065 is the migration tail (056 stays registered)');
     assert.ok(readFileSync('server/database/runMigrations.ts', 'utf8').includes('054_next_step_calendar_sync'), 'runner names migration 054');
     const cols: any = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'scheduled_activities' AND column_name IN ('source_activity_id', 'source_kind')`

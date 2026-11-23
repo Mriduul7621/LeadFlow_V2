@@ -15,6 +15,7 @@ import { motion } from 'framer-motion';
 import { leadService } from '../services/leadService';
 import { buildLeadSchema } from '../utils/leadFormSchema';
 import CreatableSelect from '../components/CreatableSelect';
+import CorporateClientPicker from '../components/CorporateClientPicker';
 import { metadataService } from '../../metadata/services/metadataService';
 import { formBuilderService } from '../../forms/services/formBuilderService';
 import { FormField } from '../../shared/types';
@@ -24,6 +25,12 @@ import { useCallerTeam } from '../../team/hooks/useCallerTeam';
 import { downlineOf } from '../../team/services/teamOverviewService';
 import { BANGLADESH_GEOGRAPHY } from '../../shared/utils/bangladeshGeography';
 import { EnterprisePageHeader } from '../../workspace/components/EnterprisePrimitives';
+
+// Corporate Group Leads (065): the metadata Source value that
+// opens the Corporate Client picker. Must match the server's
+// CORPORATE_SOURCE (CorporateClientsService) + the migration 065
+// options seed exactly.
+export const CORPORATE_SOURCE = 'Corporate Client Group Insurance';
 
 // System fields whose presence/format is essential to a lead record -
 // these stay in the form regardless of admin visibility settings, so
@@ -112,6 +119,13 @@ export default function LeadGenerate() {
   // overview. Both hooks sit here, BEFORE the capability gate
   // below, so the hook order never changes (React #310).
   const [showMoreDetails, setShowMoreDetails] = useState(isEditMode);
+  // Corporate Group Leads (065): the picker selection + the manual
+  // code fallback (sheet unavailable). Both live OUTSIDE react-hook-
+  // form: the picker is a search control, not a form field, and the
+  // server re-validates the rule anyway.
+  const [corpClient, setCorpClient] = useState<{ code: string; name: string } | null>(null);
+  const [corpManualCode, setCorpManualCode] = useState('');
+  const [corpError, setCorpError] = useState<string | null>(null);
   const callerTeam = useCallerTeam();
   const assignOptions = useMemo(() => {
     if (!user || !callerTeam.overview) return [];
@@ -190,6 +204,19 @@ export default function LeadGenerate() {
   const maritalStatus = watch('maritalStatus');
   const selectedDivision = watch('division');
   const selectedDistrict = watch('district');
+  const selectedSource = watch('source');
+  const isCorporateSource = selectedSource === CORPORATE_SOURCE;
+
+  // Corporate Group Leads (065): leaving the corporate source clears
+  // the picker — a stale client must never ride along on a lead
+  // whose source no longer names it.
+  useEffect(() => {
+    if (!isCorporateSource) {
+      setCorpClient(null);
+      setCorpManualCode('');
+      setCorpError(null);
+    }
+  }, [isCorporateSource]);
 
   useEffect(() => {
     // While a pre-fill reset is landing, the cascade must not wipe
@@ -270,6 +297,11 @@ export default function LeadGenerate() {
       familyMember: editLead.familyMember || '',
       customFields: custom,
     });
+    // Corporate Group Leads (065): pre-fill the picker from the
+    // stored link (code + name snapshot).
+    if (editLead.corporateClientCode) {
+      setCorpClient({ code: String(editLead.corporateClientCode), name: String(editLead.corporateClientName || '') });
+    }
     // The division/district cascade effects run on the same render
     // cycle as this reset — keep the guard up until they have run.
     setTimeout(() => { prefillingRef.current = false; }, 0);
@@ -376,6 +408,20 @@ export default function LeadGenerate() {
     const combinedArea = `${data.thana}, ${data.district}, ${data.division}`;
     const childPresence = ['Married', 'Divorced', 'Widowed', 'Widow'].includes(data.maritalStatus);
 
+    // Corporate Group Leads (065): the corporate source requires a
+    // client — the picker selection, or the hand-typed code when the
+    // sheet is unavailable. The server enforces the same rule.
+    const corpCode = (corpClient?.code || corpManualCode.trim()).slice(0, 50);
+    if (data.source === CORPORATE_SOURCE && !corpCode) {
+      setCorpError('Select the corporate client for this lead.');
+      toast.error('Select the corporate client for this lead.');
+      return;
+    }
+    setCorpError(null);
+    const corpFields = data.source === CORPORATE_SOURCE
+      ? { corporateClientCode: corpCode, corporateClientName: (corpClient?.name || '').slice(0, 200) }
+      : {};
+
     // Edit mode: customer information only — no status, no
     // assignment, no creation fields. updateLead merges these onto
     // the loaded lead and POSTs the full record to the server
@@ -400,6 +446,7 @@ export default function LeadGenerate() {
           thana: data.thana,
           area: combinedArea,
           source: data.source,
+          ...corpFields,
           productName: data.productName,
           campaignName: data.campaignName,
           residenceAddress: data.residenceAddress,
@@ -425,6 +472,7 @@ export default function LeadGenerate() {
       await leadService.createLead(
         {
           ...data,
+          ...corpFields,
           area: combinedArea,
           hasChild: childPresence && Number(data.noOfChildren) > 0,
           noOfChildren: childPresence ? data.noOfChildren : '0',
@@ -451,6 +499,9 @@ export default function LeadGenerate() {
         toast.success(t('leadCreatedSuccess'));
       }
       reset();
+      setCorpClient(null);
+      setCorpManualCode('');
+      setCorpError(null);
       setShowMoreDetails(false);
     } catch (err) {
       toast.error(t('leadCreatedError'));
@@ -554,6 +605,18 @@ export default function LeadGenerate() {
                 />
                 {errors.source && <p className="text-xs text-red-500">{errors.source.message as string}</p>}
               </div>
+            )}
+
+            {/* Corporate Group Leads (065): the client picker shows
+                ONLY while the corporate source is selected. */}
+            {isFieldVisible('source') && isCorporateSource && (
+              <CorporateClientPicker
+                value={corpClient}
+                onChange={setCorpClient}
+                manualCode={corpManualCode}
+                onManualCodeChange={setCorpManualCode}
+                error={corpError || undefined}
+              />
             )}
 
             {isFieldVisible('priority') && (

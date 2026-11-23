@@ -268,6 +268,17 @@ async function readSheetCached(range: string): Promise<string[][]> {
   return values;
 }
 
+/**
+ * Shared cached sheet read for other services that live in the same
+ * workbook (Corporate Clients, migration 065). Same auth, same
+ * 10-minute per-range cache, same test seam — no second auth path.
+ * Throws PolicyLookupError (503/502) when Sheets is unconfigured or
+ * unreachable; callers that must degrade gracefully catch it.
+ */
+export async function readGoogleSheetRange(range: string): Promise<string[][]> {
+  return readSheetCached(range);
+}
+
 /* ------------------------------------------------------------------ */
 /* Matching                                                            */
 /* ------------------------------------------------------------------ */
