@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
@@ -38,6 +38,21 @@ import BulkReassignDialog from '../components/BulkReassignDialog';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import { LeadQuickViewModal } from '../components/LeadQuickViewModal';
 import { getLeadStatusColorClasses, getLeadStatusOrder } from '../../workflow/utils/leadStatusMeta';
+import {
+  COLUMN_SORT_SELECT_VALUE,
+  CREATED_PRESET_LABELS,
+  applyColumnFilters,
+  columnSortLabel,
+  distinctColumnValues,
+  hasActiveColumnFilters,
+  nextColumnSort,
+  sortLeadsByColumn,
+  toggleFilterValue,
+  type ColumnFilters,
+  type ColumnSort,
+  type ColumnSortKey,
+  type CreatedPreset,
+} from '../utils/leadColumnSort';
 import { dhakaDayKey, formatDhakaShort } from '../../workspace/utils/enterpriseData';
 import { isTerminalStatus } from '../../workspace/utils/agentWorkspaceData';
 import type { TeamOverviewPerson } from '../../team/services/teamOverviewService';
@@ -143,6 +158,64 @@ function ManagerTlMembers(props: {
   );
 }
 
+/**
+ * Sortable desktop table header cell (2026-11-23). The label is a
+ * real button (keyboard accessible); the active column shows ↑/↓.
+ * Source / Owner / Created also carry a funnel button that opens
+ * the column filter panel — Priority / Stage / Lead deliberately
+ * have NO funnel: their quick filters already exist above the
+ * table (the PRIORITY dropdown, the status chips, the search box).
+ */
+function ColumnHeader(props: {
+  label: string;
+  sortKey: ColumnSortKey;
+  columnSort: ColumnSort | null;
+  onSort: (key: ColumnSortKey) => void;
+  filter?: {
+    activeCount: number;
+    isOpen: boolean;
+    onToggle: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  };
+}) {
+  const { label, sortKey, columnSort, onSort, filter } = props;
+  const active = columnSort?.key === sortKey;
+  return (
+    <th>
+      <span className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onSort(sortKey)}
+          aria-label={`Sort by ${label}`}
+          title={`Sort by ${label}`}
+          className={cn(
+            'inline-flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer uppercase tracking-[0.06em] font-bold text-inherit',
+            active ? 'text-[#817719]' : 'hover:text-[#817719]',
+          )}
+        >
+          {label}
+          {active && <span aria-hidden="true">{columnSort.dir === 'asc' ? '↑' : '↓'}</span>}
+        </button>
+        {filter && (
+          <button
+            type="button"
+            onClick={filter.onToggle}
+            aria-label={`Filter by ${label}`}
+            aria-expanded={filter.isOpen}
+            title={`Filter by ${label}`}
+            className={cn(
+              'inline-flex items-center gap-0.5 rounded p-0.5 cursor-pointer bg-transparent border-0',
+              filter.activeCount > 0 ? 'text-[#817719] bg-[#F7F5E9]' : 'text-slate-300 hover:text-slate-500',
+            )}
+          >
+            <Filter size={12} aria-hidden="true" />
+            {filter.activeCount > 0 && <span className="text-[9px] font-black leading-none">{filter.activeCount}</span>}
+          </button>
+        )}
+      </span>
+    </th>
+  );
+}
+
 export default function LeadList(props: { scope?: 'default' | 'my' }) {
   const listScope = props.scope ?? 'default';
   const { user } = useAuthStore();
@@ -208,6 +281,52 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [advancedFilteredLeads, setAdvancedFilteredLeads] = useState<Lead[]>([]);
   const [sortLogic, setSortLogic] = useState<'Recency' | 'Economic Potential' | 'Priority Status' | 'Quality: High to Low' | 'Quality: Low to High'>('Recency');
+  // Column sort + filter (2026-11-23, Mahadi: per-column Filter By
+  // / Sort By on the desktop table — a user asked for it). While
+  // columnSort is set it OVERRIDES sortLogic in the sort pipeline;
+  // choosing any SORT BY preset clears it (handlePresetSortChange),
+  // so the two controls never disagree. The filters combine (AND)
+  // with every existing filter. Desktop table only — the mobile
+  // rows have no column headers and are untouched.
+  const [columnSort, setColumnSort] = useState<ColumnSort | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [ownerFilter, setOwnerFilter] = useState<string[]>([]);
+  const [createdFilter, setCreatedFilter] = useState<CreatedPreset>('all');
+  // One filter panel open at a time; the anchor is the funnel
+  // button's viewport rect (the panel is position: fixed — the
+  // table wrapper scrolls, so an absolute panel would clip).
+  const [openFilter, setOpenFilter] = useState<'source' | 'owner' | 'created' | null>(null);
+  const [filterPanelAnchor, setFilterPanelAnchor] = useState<{ top: number; left: number } | null>(null);
+  const columnFilters: ColumnFilters = useMemo(
+    () => ({ sources: sourceFilter, owners: ownerFilter, created: createdFilter }),
+    [sourceFilter, ownerFilter, createdFilter],
+  );
+  const hasColumnFilters = hasActiveColumnFilters(columnFilters);
+  const handleColumnSort = (key: ColumnSortKey) => setColumnSort(prev => nextColumnSort(prev, key));
+  const handlePresetSortChange = (value: string) => {
+    if (value === COLUMN_SORT_SELECT_VALUE) return;
+    setSortLogic(value as typeof sortLogic);
+    setColumnSort(null);
+  };
+  const closeFilterPanel = () => {
+    setOpenFilter(null);
+    setFilterPanelAnchor(null);
+  };
+  const toggleFilterPanel = (key: 'source' | 'owner' | 'created', e: React.MouseEvent<HTMLButtonElement>) => {
+    if (openFilter === key) {
+      closeFilterPanel();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    // Clamp the 240px panel inside the viewport's right edge.
+    setFilterPanelAnchor({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 248)) });
+    setOpenFilter(key);
+  };
+  const clearAllColumnFilters = () => {
+    setSourceFilter([]);
+    setOwnerFilter([]);
+    setCreatedFilter('all');
+  };
   // Lead Quality band filter — compares the SERVER-computed band only.
   const [qualityBand, setQualityBand] = useState<string>('All');
   const [search, setSearch] = useState('');
@@ -261,6 +380,23 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
   useEffect(() => {
     if (mobileSearchOpen) mobileSearchRef.current?.focus();
   }, [mobileSearchOpen]);
+
+  // The open column-filter panel closes on Escape, on any scroll
+  // (the anchor rect would go stale) and on resize; an outside
+  // click is caught by the transparent overlay under the panel.
+  useEffect(() => {
+    if (!openFilter) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeFilterPanel(); };
+    const onScrollOrResize = () => closeFilterPanel();
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }, [openFilter]);
 
   const loadLeads = async () => {
     if (!user) return;
@@ -404,10 +540,10 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
     if (user?.employeeId) map.set(String(user.employeeId).toUpperCase(), user.name);
     return map;
   }, [callerTeam.overview, user]);
-  const ownerName = (lead: Lead): string => {
+  const ownerName = useCallback((lead: Lead): string => {
     if (!lead.assignedTo) return 'Unassigned';
     return ownerNameById.get(String(lead.assignedTo).toUpperCase()) || lead.assignedTo;
-  };
+  }, [ownerNameById]);
 
   // Priority options come from the visible leads themselves (the
   // Priority list is configurable metadata, so no hardcoded set).
@@ -426,7 +562,12 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
       : formatDhakaShort(lead.creationDate);
   };
 
-  const filteredLeads = (() => {
+  // Pre-column-filter set: every EXISTING filter (advanced rules,
+  // member drill-down, status chips, quality, priority, search) —
+  // but NOT the column filters and NOT the sort yet. The distinct
+  // Source/Owner options derive from this set so they stay
+  // relevant to what the user already sees.
+  const preColumnLeads = (() => {
     // Authoritative source of rules-filtered leads from dynamic query builder
     const baseList = advancedFilteredLeads.length > 0 || scopedLeads.length === 0 ? advancedFilteredLeads : scopedLeads;
 
@@ -450,7 +591,7 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
         : qualityScoped.filter(lead => lead.priority === priorityFilter);
 
     // Filter using fast text search across demographics
-    let result = priorityScoped.filter(lead => {
+    return priorityScoped.filter(lead => {
       const prospectName = String(lead.prospectName || '').toLowerCase();
       const mobile = String(lead.mobile || '');
       const mobileNum = String(lead.mobileNumber || '').toLowerCase();
@@ -460,11 +601,11 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
       const sourceVal = String(lead.source || '').toLowerCase();
       const searchTerm = search.toLowerCase();
 
-      const matchesRemarks = (lead.statusHistory || []).some(h => 
+      const matchesRemarks = (lead.statusHistory || []).some(h =>
         String(h.remarks || '').toLowerCase().includes(searchTerm)
       );
 
-      return prospectName.includes(searchTerm) || 
+      return prospectName.includes(searchTerm) ||
              mobile.includes(search) ||
              mobileNum.includes(search) ||
              leadId.includes(searchTerm) ||
@@ -473,9 +614,28 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
              sourceVal.includes(searchTerm) ||
              matchesRemarks;
     });
+  })();
 
+  // Distinct column-filter options over the pre-column set (with
+  // counts) — see leadColumnSort.ts.
+  const sourceOptions = useMemo(
+    () => distinctColumnValues(preColumnLeads, lead => lead.source || ''),
+    [preColumnLeads],
+  );
+  const ownerOptions = useMemo(
+    () => distinctColumnValues(preColumnLeads, lead => ownerName(lead)),
+    [preColumnLeads, ownerName],
+  );
+
+  // The rendered list: column filters (AND) on top of every
+  // existing filter, then the sort — the column sort while set,
+  // else the SORT BY preset (the preset block below is unchanged
+  // from before the column sort existed).
+  const filteredLeads = useMemo(() => {
+    const columnFiltered = applyColumnFilters(preColumnLeads, columnFilters, ownerName);
+    if (columnSort) return sortLeadsByColumn(columnFiltered, columnSort, ownerName);
     // Apply sort criteria
-    result = [...result].sort((a, b) => {
+    return [...columnFiltered].sort((a, b) => {
       if (sortLogic === 'Recency') {
         const keyA = new Date(a.timestamp || a.creationDate || 0).getTime();
         const keyB = new Date(b.timestamp || b.creationDate || 0).getTime();
@@ -499,9 +659,7 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
       }
       return 0;
     });
-
-    return result;
-  })();
+  }, [preColumnLeads, columnFilters, columnSort, sortLogic, ownerName]);
 
   // Bulk selection, derived (state above): the selected lead
   // objects (for the dialogs) and the select-all helpers for the
@@ -746,9 +904,10 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           <label>
             <span>Sort leads</span>
             <select
-              value={sortLogic}
-              onChange={(e) => setSortLogic(e.target.value as typeof sortLogic)}
+              value={columnSort ? COLUMN_SORT_SELECT_VALUE : sortLogic}
+              onChange={(e) => handlePresetSortChange(e.target.value)}
             >
+              {columnSort && <option value={COLUMN_SORT_SELECT_VALUE}>{columnSortLabel(columnSort)}</option>}
               <option value="Recency">Most recent</option>
               <option value="Economic Potential">Economic potential</option>
               <option value="Priority Status">Priority status</option>
@@ -885,11 +1044,12 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
               <option value="Not Interested">Not Interested</option>
             </select>
             <label className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sort by</label>
-            <select 
-              value={sortLogic}
-              onChange={(e) => setSortLogic(e.target.value as any)}
+            <select
+              value={columnSort ? COLUMN_SORT_SELECT_VALUE : sortLogic}
+              onChange={(e) => handlePresetSortChange(e.target.value)}
               className="ep-select"
             >
+              {columnSort && <option value={COLUMN_SORT_SELECT_VALUE}>{columnSortLabel(columnSort)}</option>}
               <option value="Recency">Recency</option>
               <option value="Economic Potential">Economic Potential</option>
               <option value="Priority Status">Priority Status</option>
@@ -953,6 +1113,52 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
 </div>
 
 <div className="lf-desktop-lead-table ep-tablewrap">
+  {/* Active column filters (2026-11-23): one removable chip per
+      active filter + Clear all. Desktop only — the column
+      controls live on the desktop table. */}
+  {hasColumnFilters && (
+    <div className="flex flex-wrap items-center gap-2 px-4 pt-4" role="region" aria-label="Active column filters">
+      {sourceFilter.map(value => (
+        <button
+          key={`source-${value}`}
+          type="button"
+          onClick={() => setSourceFilter(prev => prev.filter(v => v !== value))}
+          aria-label={`Remove Source filter ${value}`}
+          className="inline-flex items-center gap-1 rounded-full border border-[#EAE7D6] bg-[#F7F5E9] px-2.5 py-1 text-[11px] font-semibold text-[#817719] cursor-pointer"
+        >
+          Source: {value} <span aria-hidden="true">×</span>
+        </button>
+      ))}
+      {ownerFilter.map(value => (
+        <button
+          key={`owner-${value}`}
+          type="button"
+          onClick={() => setOwnerFilter(prev => prev.filter(v => v !== value))}
+          aria-label={`Remove Owner filter ${value}`}
+          className="inline-flex items-center gap-1 rounded-full border border-[#EAE7D6] bg-[#F7F5E9] px-2.5 py-1 text-[11px] font-semibold text-[#817719] cursor-pointer"
+        >
+          Owner: {value} <span aria-hidden="true">×</span>
+        </button>
+      ))}
+      {createdFilter !== 'all' && (
+        <button
+          type="button"
+          onClick={() => setCreatedFilter('all')}
+          aria-label="Remove Created filter"
+          className="inline-flex items-center gap-1 rounded-full border border-[#EAE7D6] bg-[#F7F5E9] px-2.5 py-1 text-[11px] font-semibold text-[#817719] cursor-pointer"
+        >
+          Created: {CREATED_PRESET_LABELS[createdFilter]} <span aria-hidden="true">×</span>
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={clearAllColumnFilters}
+        className="text-[11px] font-bold text-slate-500 underline underline-offset-2 cursor-pointer bg-transparent border-0"
+      >
+        Clear all
+      </button>
+    </div>
+  )}
   <table className="w-full text-left">
             <thead>
               <tr>
@@ -966,12 +1172,18 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
                     aria-label="Select all visible leads"
                   />
                 </th>
-                <th>Lead</th>
-                <th>Source</th>
-                <th>Owner</th>
-                <th>Priority</th>
-                <th>Stage</th>
-                <th>Created</th>
+                {/* Column sort + filter (2026-11-23): every column
+                    sorts on header click (3-click cycle — natural
+                    order, reverse, clear); Source / Owner /
+                    Created also filter via the funnel. Priority /
+                    Stage / Lead have no funnel — their quick
+                    filters already exist above the table. */}
+                <ColumnHeader label="Lead" sortKey="lead" columnSort={columnSort} onSort={handleColumnSort} />
+                <ColumnHeader label="Source" sortKey="source" columnSort={columnSort} onSort={handleColumnSort} filter={{ activeCount: sourceFilter.length, isOpen: openFilter === 'source', onToggle: (e) => toggleFilterPanel('source', e) }} />
+                <ColumnHeader label="Owner" sortKey="owner" columnSort={columnSort} onSort={handleColumnSort} filter={{ activeCount: ownerFilter.length, isOpen: openFilter === 'owner', onToggle: (e) => toggleFilterPanel('owner', e) }} />
+                <ColumnHeader label="Priority" sortKey="priority" columnSort={columnSort} onSort={handleColumnSort} />
+                <ColumnHeader label="Stage" sortKey="stage" columnSort={columnSort} onSort={handleColumnSort} />
+                <ColumnHeader label="Created" sortKey="created" columnSort={columnSort} onSort={handleColumnSort} filter={{ activeCount: createdFilter === 'all' ? 0 : 1, isOpen: openFilter === 'created', onToggle: (e) => toggleFilterPanel('created', e) }} />
                 <th style={{ textAlign: 'right' }}>Action</th>
               </tr>
             </thead>
@@ -1256,6 +1468,86 @@ export default function LeadList(props: { scope?: 'default' | 'my' }) {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Column filter panel (2026-11-23): fixed to the funnel
+          button's rect — the table wrapper scrolls, so an absolute
+          panel would clip. One panel at a time; the overlay
+          catches outside clicks, Escape / scroll / resize close it
+          (see the effect above). Source + Owner are multi-select
+          with counts; Created is a preset list. */}
+      {openFilter && filterPanelAnchor && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={closeFilterPanel} aria-hidden="true" />
+          <div
+            className="fixed z-30 w-60 rounded-xl border border-[#EAE7D6] bg-white shadow-xl"
+            style={{ top: filterPanelAnchor.top, left: filterPanelAnchor.left }}
+            role="dialog"
+            aria-label={`Filter by ${openFilter === 'source' ? 'Source' : openFilter === 'owner' ? 'Owner' : 'Created'}`}
+          >
+            <div className="flex items-center justify-between px-3 pt-3 pb-2">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                {openFilter === 'source' ? 'Source' : openFilter === 'owner' ? 'Owner' : 'Created'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (openFilter === 'source') setSourceFilter([]);
+                  else if (openFilter === 'owner') setOwnerFilter([]);
+                  else setCreatedFilter('all');
+                }}
+                className="text-[11px] font-bold text-[#817719] cursor-pointer bg-transparent border-0"
+              >
+                Clear
+              </button>
+            </div>
+            {openFilter === 'created' ? (
+              <div className="px-3 pb-3 flex flex-col gap-1">
+                {(['all', 'today', '7d', '30d'] as CreatedPreset[]).map(preset => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setCreatedFilter(preset)}
+                    aria-pressed={createdFilter === preset}
+                    className={cn(
+                      'text-left text-[13px] px-2.5 py-2 rounded-lg cursor-pointer border-0',
+                      createdFilter === preset ? 'bg-[#F7F5E9] text-[#817719] font-bold' : 'bg-transparent text-slate-700 hover:bg-slate-50',
+                    )}
+                  >
+                    {preset === 'all' ? 'All dates' : CREATED_PRESET_LABELS[preset]}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="px-3 pb-3 max-h-72 overflow-y-auto flex flex-col gap-0.5">
+                {(openFilter === 'source' ? sourceOptions : ownerOptions).length === 0 ? (
+                  <p className="text-xs text-slate-400 px-1 py-2">No values in the current list.</p>
+                ) : (
+                  (openFilter === 'source' ? sourceOptions : ownerOptions).map(option => {
+                    const selected = openFilter === 'source'
+                      ? sourceFilter.includes(option.value)
+                      : ownerFilter.includes(option.value);
+                    return (
+                      <label key={option.value} className="flex items-center gap-2 px-1.5 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => {
+                            if (openFilter === 'source') setSourceFilter(prev => toggleFilterValue(prev, option.value));
+                            else setOwnerFilter(prev => toggleFilterValue(prev, option.value));
+                          }}
+                          className="w-4 h-4 accent-[#978C21] cursor-pointer shrink-0"
+                        />
+                        <span className="text-[13px] text-slate-700 flex-1 truncate">{option.value}</span>
+                        <span className="text-[11px] text-slate-400">{option.count}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <ReassignLeadDialog
         lead={reassignLead ? { id: reassignLead.id, prospectName: reassignLead.prospectName, assignedTo: reassignLead.assignedTo } : null}

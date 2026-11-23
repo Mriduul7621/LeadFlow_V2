@@ -501,12 +501,15 @@ describe('Agent workspace — source guards (no demo data, real vocabulary)', ()
 
   it('LeadList has the demo columns, the priority filter and the quick view', () => {
     const list = stripComments(readSrc('modules/leads/pages/LeadList.tsx'));
-    assert.ok(list.includes('<th>Lead</th>'));
-    assert.ok(list.includes('<th>Source</th>'));
-    assert.ok(list.includes('<th>Owner</th>'));
-    assert.ok(list.includes('<th>Priority</th>'));
-    assert.ok(list.includes('<th>Stage</th>'));
-    assert.ok(list.includes('<th>Created</th>'));
+    // Column sort (2026-11-23): the six demo columns are
+    // sort-button headers now (ColumnHeader usages), not plain
+    // <th> text — the columns themselves are unchanged.
+    assert.ok(list.includes('<ColumnHeader label="Lead" sortKey="lead"'));
+    assert.ok(list.includes('<ColumnHeader label="Source" sortKey="source"'));
+    assert.ok(list.includes('<ColumnHeader label="Owner" sortKey="owner"'));
+    assert.ok(list.includes('<ColumnHeader label="Priority" sortKey="priority"'));
+    assert.ok(list.includes('<ColumnHeader label="Stage" sortKey="stage"'));
+    assert.ok(list.includes('<ColumnHeader label="Created" sortKey="created"'));
     assert.ok(list.includes('Search name, phone or lead ID'));
     assert.ok(list.includes('priorityFilter'));
     assert.ok(list.includes('<LeadQuickViewModal'));
